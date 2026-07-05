@@ -1,26 +1,23 @@
 [package]
-name = "crabka-throttle"
+name = "crabka-verified"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Shared token-bucket throttling primitives for Crabka"
+description = "Formally verified pure kernels (Creusot) shared by Crabka's consensus and log crates"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-throttle"
-keywords = ["throttle", "rate-limit", "crabka"]
-categories = ["concurrency"]
+documentation = "https://docs.rs/crabka-verified"
+keywords = ["kafka", "verification", "creusot", "crabka"]
+categories = ["algorithms"]
 
 [lints]
 workspace = true
 
 [dependencies]
 creusot-std = "0.12.0"
-derive_more = { workspace = true }
-qubit-clock = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
 proptest = { workspace = true }
-stateright = { workspace = true }
