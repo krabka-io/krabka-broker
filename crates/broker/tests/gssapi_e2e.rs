@@ -33,6 +33,8 @@
 //!   cargo test -p crabka-broker --test gssapi_e2e -- --ignored
 //! ```
 
+mod support;
+
 use std::{
     io::Write,
     path::PathBuf,
@@ -56,19 +58,7 @@ const BOOTSTRAP: &str = "host.docker.internal:9092";
 
 /// Absolute path to the KDC fixture dir, which holds `kafka.keytab` and
 /// `alice.keytab`.
-/// This crate's directory, read from the environment at run time.
-///
-/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
-/// path the `env!` macro would have produced. It is read rather than expanded
-/// because `env!` bakes an absolute build path into the binary, which ties the
-/// test to the directory it was compiled in -- `rules_rust` rejects such a
-/// binary outright. Only the Docker-driven suites below use it, and they are
-/// `#[ignore]`d without that environment.
-fn manifest_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
-    )
-}
+use support::manifest_dir;
 
 fn kdc_fixtures() -> PathBuf {
     manifest_dir().join("tests/fixtures/security/kdc")

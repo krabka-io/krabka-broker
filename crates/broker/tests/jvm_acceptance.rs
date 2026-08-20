@@ -147,19 +147,7 @@ const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka:3.1.2";
 /// Spawn the broker on `broker0_listen()`. The advertised listener is
 /// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
-/// This crate's directory, read from the environment at run time.
-///
-/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
-/// path the `env!` macro would have produced. It is read rather than expanded
-/// because `env!` bakes an absolute build path into the binary, which ties the
-/// test to the directory it was compiled in -- `rules_rust` rejects such a
-/// binary outright. Only the Docker-driven suites below use it, and they are
-/// `#[ignore]`d without that environment.
-fn manifest_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
-    )
-}
+use support::manifest_dir;
 
 async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()

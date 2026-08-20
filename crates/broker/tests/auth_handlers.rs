@@ -8,6 +8,8 @@
 //! SASL/PLAIN, SASL/SCRAM, and `AlterUserScramCredentials` cases to this
 //! file.
 
+mod support;
+
 use std::{io, net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
@@ -53,19 +55,7 @@ const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
 /// The value is a non-secret test fixture. But a literal that goes into the
 /// client SASL-auth calls trips GitHub's default code-scanning credential
 /// query. This function keeps those call sites free of literals.
-/// This crate's directory, read from the environment at run time.
-///
-/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
-/// path the `env!` macro would have produced. It is read rather than expanded
-/// because `env!` bakes an absolute build path into the binary, which ties the
-/// test to the directory it was compiled in -- `rules_rust` rejects such a
-/// binary outright. Only the Docker-driven suites below use it, and they are
-/// `#[ignore]`d without that environment.
-fn manifest_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
-    )
-}
+use support::manifest_dir;
 
 fn alice_password() -> String {
     ['w', 'o', 'n', 'd', 'e', 'r', 'l', 'a', 'n', 'd']

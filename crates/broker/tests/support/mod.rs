@@ -749,3 +749,33 @@ pub fn unique_container_name(prefix: &str) -> String {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
+
+/// This crate's directory, wherever the test is running from.
+///
+/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so under Cargo this is
+/// the path `env!` would have produced. It is read rather than expanded because
+/// `env!` bakes an absolute build path into the binary, which ties the test to
+/// the directory it was compiled in -- `rules_rust` rejects such a binary
+/// outright, and under Cargo it only works when launched from that same path.
+///
+/// Bazel sets no such variable; it stages a target's `data` under
+/// `$TEST_SRCDIR/$TEST_WORKSPACE/<package>`. Falling back to that is what lets
+/// the TLS suites find their fixtures under both.
+///
+/// # Panics
+///
+/// Panics when neither Cargo's variable nor Bazel's pair is set, which means the
+/// test was launched by something that stages fixtures differently again.
+#[must_use]
+pub fn manifest_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let srcdir = std::env::var("TEST_SRCDIR")
+        .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
+    let workspace =
+        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
+    std::path::PathBuf::from(srcdir)
+        .join(workspace)
+        .join("crates/broker")
+}
