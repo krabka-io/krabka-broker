@@ -44,6 +44,11 @@ build:lint --@rules_rust//:clippy_flags=-Dwarnings
 # instrumenting the whole dependency closure is most of the run.
 coverage --combined_report=lcov
 coverage --instrumentation_filter=^//crates[:/]
+# Profiling instrumentation slows every test enough to trip the wall-clock
+# assertions in the consensus and replication suites -- they pass in the test
+# run and fail here, which is a statement about the instrumentation rather than
+# the code. They gate in `bazel test`; this run exists for the report.
+coverage --test_tag_filters=-timing-sensitive
 
 # Download a JDK rather than resolving the machine's. `jvm_tiered_storage` runs
 # a small Java probe against Kafka's own storage classes; without this the

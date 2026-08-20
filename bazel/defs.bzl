@@ -205,7 +205,7 @@ def crate_tests(
             rustc_env = rustc_env,
             rustc_flags = WORKSPACE_RUSTC_FLAGS,
             tags = (["manual"] if stem in manual else []) +
-                   (["cpu:4"] if stem in cpu_heavy else []),
+                   (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
             use_libtest_harness = stem not in no_harness,
             # One call, not two concatenated: an integration test links the
             # crate's normal *and* dev dependencies, and several crates list the
