@@ -115,6 +115,22 @@ use_repo(
 # the build's own rules_rust keeps one toolchain and one resolution.
 # ---------------------------------------------------------------------------
 bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
+
+# Supplies a clippy aspect shaped the way `aspect lint` expects -- it writes the
+# `rules_lint_machine` output group, which the aspect from @rules_rust does not.
+# It also registers a Rust toolchain of its own, pinned to 1.92.0 / edition 2021
+# for its own tests; see the toolchain block below for how the two coexist.
+bazel_dep(name = "aspect_rules_lint_rust", version = "0.0.2")
+
+# See the patch header: that module registers `@default_rust_toolchains//:all`,
+# a package rules_rs 0.0.106 does not create.
+single_version_override(
+    module_name = "aspect_rules_lint_rust",
+    patch_strip = 1,
+    patches = ["//bazel/patches:aspect-rules-lint-rust-toolchain-pattern.patch"],
+    version = "0.0.2",
+)
+
 bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.3")
 
 # rules_rs vends its own patched @rules_rust. `rust_doc_test` has no rules_rs
@@ -126,7 +142,14 @@ use_repo(rules_rust, "rules_rust")
 # Rust toolchain — pinned to the same channel as rust-toolchain.toml.
 # ---------------------------------------------------------------------------
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
+
+# Named rather than left as `default_rust_toolchains`, which
+# aspect_rules_lint_rust also claims: rules_rs refuses two configurations under
+# one repo name, and that module wants 1.92.0 / edition 2021 while this
+# repository is 1.97.0 / edition 2024. Both toolchains get registered; ours is
+# registered from the root module, which is what makes it the one that resolves.
 toolchains.toolchain(
+    name = "krabka_rust_toolchains",
     edition = "2024",
     # rustfmt.toml sets `format_code_in_doc_comments`, `group_imports` and
     # `imports_granularity`, all still nightly-gated. Stable rustfmt does not
@@ -137,9 +160,9 @@ toolchains.toolchain(
     rustfmt_version = "nightly/2026-08-14",
     version = "1.97.0",
 )
-use_repo(toolchains, "default_rust_toolchains")
+use_repo(toolchains, "krabka_rust_toolchains")
 
-register_toolchains("@default_rust_toolchains//...")
+register_toolchains("@krabka_rust_toolchains//...")
 
 # ---------------------------------------------------------------------------
 # Third-party crates, resolved from the Cargo workspace.

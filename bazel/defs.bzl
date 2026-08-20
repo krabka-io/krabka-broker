@@ -15,6 +15,7 @@ load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("@rules_rs_mutants//mutants:cargo_mutants_test.bzl", "cargo_mutants_test")
 load("@rules_rust//rust:defs.bzl", "rust_doc", "rust_doc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/lint:linters.bzl", "clippy_test")
 
 # `[workspace.lints.rust] unsafe_code = "forbid"`. rules_rs 0.0.106 does not
 # yet plumb Cargo lint tables into the Bazel build, and this is the one lint
@@ -68,6 +69,14 @@ def crate_library(name, srcs = None, **kwargs):
         visibility = ["//visibility:public"],
         deps = all_crate_deps(normal = True),
         **kwargs
+    )
+
+    # Clippy as a test, so `bazel test //...` gates on it the way `cargo clippy
+    # -- -D warnings` used to. The aspect alone only writes a report: it is
+    # `lint_test` that turns a finding into a failure.
+    clippy_test(
+        name = name + "_clippy",
+        srcs = [":" + name],
     )
 
     # `bazel build //crates/<x>:<x>_doc` renders this crate's rustdoc. The
