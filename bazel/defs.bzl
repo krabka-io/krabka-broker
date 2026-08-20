@@ -204,6 +204,14 @@ def crate_tests(
             env = env,
             rustc_env = rustc_env,
             rustc_flags = WORKSPACE_RUSTC_FLAGS,
+            # `flaky`: these assert on wall-clock behaviour, so a loaded runner
+            # can fail them without the code being wrong. `cpu:4` keeps Bazel
+            # from creating that load locally, but a 4-core CI runner has no
+            # headroom to give. A retry separates a timing hiccup from a real
+            # break, and Bazel reports the result as FLAKY rather than passing it
+            # off as a clean run -- so the flakiness stays visible instead of
+            # being hidden by a `#[ignore]`.
+            flaky = stem in cpu_heavy,
             tags = (["manual"] if stem in manual else []) +
                    (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
             use_libtest_harness = stem not in no_harness,
