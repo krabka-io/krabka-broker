@@ -135,23 +135,34 @@ jobs:
         name: select impacted container targets
         run: |
           set -euo pipefail
+          all() { bazel query 'attr(tags, "docker", //crates/...)' | tr '\n' ' '; }
+
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
           if [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             # No usable base (first push on a branch, force-push): run them all
             # rather than silently skipping.
-            targets="$(bazel query 'attr(tags, "docker", //crates/...)' | tr '\n' ' ')"
+            targets="$(all)"
           else
-            mapfile -t changed < <(
-              git diff --name-only "${base}...HEAD" -- crates bazel MODULE.bazel Cargo.lock |
-                while read -r f; do [ -e "${f}" ] && printf '%s\n' "${f}"; done
-            )
-            if [ "${#changed[@]}" -eq 0 ]; then
-              targets=""
+            changed="$(git diff --name-only "${base}...HEAD")"
+
+            # Build-wide inputs reach every target, and most are not Bazel
+            # targets at all -- `rdeps` takes a target set, and `//:MODULE.bazel`
+            # is a source file no rule exports. Treat them as "everything" rather
+            # than trying to name them.
+            if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
+              targets="$(all)"
             else
-              targets="$(
-                bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${changed[*]})))" |
-                  tr '\n' ' '
-              )"
+              mapfile -t files < <(grep -E '^crates/' <<<"${changed}" | while read -r f; do
+                [ -e "${f}" ] && printf '%s\n' "${f}"
+              done)
+              if [ "${#files[@]}" -eq 0 ]; then
+                targets=""
+              else
+                targets="$(
+                  bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${files[*]})))" |
+                    tr '\n' ' '
+                )"
+              fi
             fi
           fi
           echo "targets=${targets}" >>"${GITHUB_OUTPUT}"
