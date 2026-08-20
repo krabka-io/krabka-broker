@@ -48,7 +48,10 @@ coverage --instrumentation_filter=^//crates[:/]
 # assertions in the consensus and replication suites -- they pass in the test
 # run and fail here, which is a statement about the instrumentation rather than
 # the code. They gate in `bazel test`; this run exists for the report.
-coverage --test_tag_filters=-timing-sensitive
+# Both exclusions, because `--test_tag_filters` is last-wins rather than
+# additive: naming only `-timing-sensitive` here replaced the `-docker` set for
+# `test` above, and the coverage run started trying to drive containers.
+coverage --test_tag_filters=-docker,-timing-sensitive
 
 # Download a JDK rather than resolving the machine's. `jvm_tiered_storage` runs
 # a small Java probe against Kafka's own storage classes; without this the
