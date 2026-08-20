@@ -62,6 +62,20 @@ const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka:3.1.2";
 /// Spawn the broker on `LISTEN`. The advertised listener is
 /// `host.docker.internal:9092`. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
+/// This crate's directory, read from the environment at run time.
+///
+/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
+/// path the `env!` macro would have produced. It is read rather than expanded
+/// because `env!` bakes an absolute build path into the binary, which ties the
+/// test to the directory it was compiled in -- `rules_rust` rejects such a
+/// binary outright. Only the Docker-driven suites below use it, and they are
+/// `#[ignore]`d without that environment.
+fn manifest_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
+    )
+}
+
 async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -3196,7 +3210,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
 
 /// Spawn the broker with a single `SSL` listener on `0.0.0.0:9092`
 /// (advertised as `host.docker.internal:9092`) with the dev cert/key from
-/// `crates/security/tests/fixtures/`. No SASL. Mirrors
+/// `crates/broker/tests/fixtures/security/`. No SASL. Mirrors
 /// [`start_host_broker`] otherwise, but flips the protocol to `Ssl` and
 /// supplies a [`TlsConfig`].
 async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
@@ -3214,20 +3228,19 @@ async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) 
     let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
     let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
 
-    // Resolve the on-disk paths of the dev fixture certs. Relative to this
-    // crate's manifest dir, the fixture lives in the security crate.
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Resolve the on-disk paths of the dev fixture certs, which live under this
+    // crate's own tests/fixtures/security since crabka-security moved to the
+    // krabka-protocol repository.
+    let manifest_dir = manifest_dir();
     let cert_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_cert.pem");
     let key_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_key.pem");
     assert!(
         cert_path.exists(),
@@ -3303,12 +3316,11 @@ fn prepare_jks_truststore() -> std::path::PathBuf {
 
     // Stage the cert in the cache dir so the bind mount is a directory we
     // control. This sidesteps mount-path quoting on /mnt/c under WSL.
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = manifest_dir();
     let cert_src = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_cert.pem");
     let cert_staged = cache_dir.join("dev_cert.pem");
     std::fs::copy(&cert_src, &cert_staged).expect("copy dev_cert.pem to cache");
@@ -3486,18 +3498,16 @@ fn start_sasl_ssl_broker(
     let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
     let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = manifest_dir();
     let cert_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_cert.pem");
     let key_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_key.pem");
 
     let mut config = BrokerConfig {
@@ -4063,18 +4073,16 @@ async fn start_two_sasl_ssl_brokers_with_controller_protocol(
     let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = manifest_dir();
     let cert_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_cert.pem");
     let key_path = manifest_dir
-        .join("..")
-        .join("security")
         .join("tests")
         .join("fixtures")
+        .join("security")
         .join("dev_key.pem");
 
     let mk_cfg = |idx: u64,

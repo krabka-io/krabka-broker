@@ -38,12 +38,11 @@ use uuid::Uuid;
 
 /// Load and hex-decode one named golden vector from the committed fixture.
 fn golden(name: &str) -> Vec<u8> {
-    let raw = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/rlmm_golden.json"
-    ))
-    .expect("read rlmm_golden.json");
-    let map: HashMap<String, String> = serde_json::from_str(&raw).expect("parse rlmm_golden.json");
+    // Embedded rather than read at run time: it is a committed constant, and a
+    // test binary that resolves `CARGO_MANIFEST_DIR` at run time only works when
+    // it is launched from the absolute path it was compiled in.
+    let raw = include_str!("fixtures/rlmm_golden.json");
+    let map: HashMap<String, String> = serde_json::from_str(raw).expect("parse rlmm_golden.json");
     let hex = map
         .get(name)
         .unwrap_or_else(|| panic!("no golden case {name}"));

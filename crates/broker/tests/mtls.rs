@@ -44,14 +44,11 @@ use tokio_rustls::{
     },
 };
 
-const DEV_CERT: &str = include_str!("../../../crates/security/tests/fixtures/dev_cert.pem");
-const DEV_KEY: &str = include_str!("../../../crates/security/tests/fixtures/dev_key.pem");
-const DEV_CLIENT_CA: &str =
-    include_str!("../../../crates/security/tests/fixtures/dev_client_ca.pem");
-const DEV_CLIENT_CERT: &str =
-    include_str!("../../../crates/security/tests/fixtures/dev_client_cert.pem");
-const DEV_CLIENT_KEY: &str =
-    include_str!("../../../crates/security/tests/fixtures/dev_client_key.pem");
+const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
+const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
+const DEV_CLIENT_CA: &str = include_str!("fixtures/security/dev_client_ca.pem");
+const DEV_CLIENT_CERT: &str = include_str!("fixtures/security/dev_client_cert.pem");
+const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem");
 
 /// Subject DN of the fixture client cert as rendered by `x509-parser`.
 /// It must match `extract_principal_from_cert` exactly, because operators pin

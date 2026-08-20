@@ -1,0 +1,35 @@
+"""Root package: the public krabka broker surface."""
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+alias(
+    name = "broker",
+    actual = "//crates/broker",
+)
+
+# The broker server. `bazel run //:broker_bin -- --help`.
+alias(
+    name = "broker_bin",
+    actual = "//crates/broker:crabka-broker",
+)
+
+alias(
+    name = "raft",
+    actual = "//crates/raft",
+)
+
+alias(
+    name = "log",
+    actual = "//crates/log",
+)
+
+alias(
+    name = "audit",
+    actual = "//crates/audit",
+)

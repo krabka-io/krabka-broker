@@ -45,14 +45,28 @@ use tokio_rustls::{
     },
 };
 
-const DEV_CERT: &str = include_str!("../../../crates/security/tests/fixtures/dev_cert.pem");
-const DEV_KEY: &str = include_str!("../../../crates/security/tests/fixtures/dev_key.pem");
+const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
+const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
 
 /// alice's SCRAM test password, built from characters at runtime.
 ///
 /// The value is a non-secret test fixture. But a literal that goes into the
 /// client SASL-auth calls trips GitHub's default code-scanning credential
 /// query. This function keeps those call sites free of literals.
+/// This crate's directory, read from the environment at run time.
+///
+/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
+/// path the `env!` macro would have produced. It is read rather than expanded
+/// because `env!` bakes an absolute build path into the binary, which ties the
+/// test to the directory it was compiled in -- `rules_rust` rejects such a
+/// binary outright. Only the Docker-driven suites below use it, and they are
+/// `#[ignore]`d without that environment.
+fn manifest_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
+    )
+}
+
 fn alice_password() -> String {
     ['w', 'o', 'n', 'd', 'e', 'r', 'l', 'a', 'n', 'd']
         .iter()
@@ -2848,8 +2862,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
     cfg.gssapi = Some(crabka_security::gssapi::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
         // it (the acceptor is built lazily on the first SaslAuthenticate).
-        keytab_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../security/tests/fixtures/kdc/kafka.keytab"),
+        keytab_path: manifest_dir().join("tests/fixtures/security/kdc/kafka.keytab"),
         service_name: "kafka".to_string(),
         principal_to_local_rules: vec![],
         realm: Some("CRABKA.TEST".to_string()),
@@ -2911,15 +2924,14 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// provider contract test:
 ///
 /// ```text
-/// cd crates/security/tests/fixtures/kdc && docker compose up --build -d
-/// KRB5_CONFIG=crates/security/tests/fixtures/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
+/// cd crates/broker/tests/fixtures/security/kdc && docker compose up --build -d
+/// KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
 ///   cargo test -p crabka-broker gssapi_inter_broker -- --ignored
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the MIT KDC fixture (docker compose up) + exported KRB5_CONFIG/SSPI_KDC_URL"]
 async fn gssapi_inter_broker_client_authenticates_from_keytab() {
-    let fixtures =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../security/tests/fixtures/kdc");
+    let fixtures = manifest_dir().join("tests/fixtures/security/kdc");
     let kdc_url =
         std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());
 

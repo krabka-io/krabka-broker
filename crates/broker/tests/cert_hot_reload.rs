@@ -27,10 +27,10 @@ use tokio_rustls::{
     },
 };
 
-const DEV_CERT_A: &str = include_str!("../../../crates/security/tests/fixtures/dev_cert.pem");
-const DEV_KEY_A: &str = include_str!("../../../crates/security/tests/fixtures/dev_key.pem");
-const DEV_CERT_B: &str = include_str!("../../../crates/security/tests/fixtures/dev_cert_alt.pem");
-const DEV_KEY_B: &str = include_str!("../../../crates/security/tests/fixtures/dev_key_alt.pem");
+const DEV_CERT_A: &str = include_str!("fixtures/security/dev_cert.pem");
+const DEV_KEY_A: &str = include_str!("fixtures/security/dev_key.pem");
+const DEV_CERT_B: &str = include_str!("fixtures/security/dev_cert_alt.pem");
+const DEV_KEY_B: &str = include_str!("fixtures/security/dev_key_alt.pem");
 
 fn write(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
     let p = dir.join(name);

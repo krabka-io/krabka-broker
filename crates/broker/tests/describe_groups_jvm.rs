@@ -39,7 +39,7 @@
 //! it is the group coordinator, so no `FindCoordinator` redirect is needed.
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
     time::{Duration, Instant},
 };
@@ -67,8 +67,22 @@ const TOPIC: &str = "t";
 
 // ── fixture ─────────────────────────────────────────────────────────────────
 
+/// This crate's directory, read from the environment at run time.
+///
+/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
+/// path the `env!` macro would have produced. It is read rather than expanded
+/// because `env!` bakes an absolute build path into the binary, which ties the
+/// test to the directory it was compiled in -- `rules_rust` rejects such a
+/// binary outright. Only the Docker-driven suites below use it, and they are
+/// `#[ignore]`d without that environment.
+fn manifest_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
+    )
+}
+
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    manifest_dir()
         .join("tests")
         .join("fixtures")
         .join("describe_groups")

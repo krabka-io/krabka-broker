@@ -78,6 +78,9 @@ fn run_crabka_format(log_dir: &std::path::Path, add_scram: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
+           robot-head/crabka: that crate depends on the gres layer, so it could not \
+           follow the broker into this repository. See README, `Storage formatting`."]
 async fn bootstrap_records_provisions_scram_user() {
     // The broker installs the rustls crypto provider in `Broker::start`,
     // but the SCRAM client side of this test also performs PBKDF2 / SHA

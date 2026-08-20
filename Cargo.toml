@@ -1,0 +1,180 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "crates/broker/test-helpers"]
+# The cargo-mutants pin that Bazel builds //tools/mutants from is not a member.
+exclude = ["tools/mutants"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["The Crabka Authors"]
+rust-version = "1.97.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# These three opt-outs are intentional while the public API is still pre-1.0;
+# re-evaluate once API surfaces stabilise.
+clone_on_copy = "warn"
+
+[profile.mutants]
+inherits = "test"
+debug = "none"
+
+[profile.dev]
+# Split debug info into a separate file (reduces linker work)
+split-debuginfo = "packed"
+
+[workspace.dependencies]
+arc-swap = "1"
+# Expressive test assertions: `assert!(a == b)` / `check!(..)` with
+# captured-expression diagnostics. Used for all test assertions workspace-wide.
+assert2 = "0.4"
+async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.23"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+crc32c = "0.6"
+crc32fast = "1"
+dashmap = "6"
+# Derive boilerplate for domain newtypes (Display/From/Into/Deref/AsRef/
+# Constructor/FromStr and numeric ops) so wrappers over wire/domain primitives
+# stay one-liners. See docs/style_guides/code_style_guide.md#newtypes-for-domain-values.
+derive_more = { version = "2", features = ["display", "from", "into", "deref", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+futures = "0.3"
+futures-util = { version = "0.3", features = ["sink"] }
+hex = "0.4"
+# KIP-664's ListTransactions filter accepts the full java.util.regex Pattern
+# grammar (including lookaround and backreferences).
+java_regex = "0.1"
+jsonpath-rust = "1.0"
+# Linux kTLS: offload TLS record encryption to the kernel so `sendfile(2)`
+# works THROUGH TLS (zero-copy fetch over encrypted connections). v6 tracks
+# rustls ^0.23.12 + tokio-rustls ^0.26.0 (the workspace pins above). Safe
+# wrapper — no raw `setsockopt` FFI — so it satisfies `unsafe_code = "forbid"`.
+# Consumed Linux-only; gated under `[target.'cfg(target_os="linux")']` in the
+# broker so non-Linux builds never pull it.
+ktls = "6"
+# Slice 53: bounded decision cache for the OPA authorizer. `lru` provides
+# an O(1) LRU with a non-zero capacity invariant; pair it with our own
+# TTL field on the value (no built-in expiry).
+lru = "0.18"
+# mockall: generate test mocks for trait seams so engine-IO decision logic is
+# unit-testable (and mutation-killable) without a live broker/quorum/database.
+# Dev-dependency only — `#[cfg_attr(test, mockall::automock)]` keeps it out of
+# shipped builds.
+mockall = "0.15"
+# mutants: `#[cfg_attr(test, mutants::skip)]` attribute for cargo-mutants. Used
+# only where `exclude_re` cannot reliably suppress a mutant (struct-field-deletion
+# mutants on a live-IO adapter). Dev-dependency only; expands to nothing.
+mutants = "0.0.4"
+num-traits = "0.2.19"
+# `object_store` is the Apache-stewarded multi-backend object-store client used
+# across the Rust data ecosystem (DataFusion, Polars, Delta-rs). Crabka's
+# S3-compatible and native-GCS RemoteStorageManagers (KIP-405) are built on it.
+#
+# Pinned to 0.13 in lock-step with the datafusion git rev and `parquet 59`: both
+# depend on `object_store ^0.13` and pass its `ObjectStore`/`Path` types across
+# the `ParquetObjectReader` / `register_object_store` boundary in crabka-blockstore.
+# Bumping object_store alone to 0.14 splits the dependency graph (blockstore on
+# 0.14, parquet/datafusion on 0.13) and fails to compile — exactly what the
+# auto-merged renovate bump #644 did to main. Move it only together with the
+# datafusion rev; the renovate rule below holds it to enforce that.
+object_store = { version = "0.13", features = ["aws", "gcp"] }
+# Slice 42: OTLP distributed tracing. opentelemetry-otlp 0.32 lines up with
+# the tonic 0.14 / prost 0.14 / reqwest 0.13 stack already in the dep graph.
+opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+# Bridges `tracing` events → OTLP log records so services emit logs over OTLP
+# (alloy:4317 → logs-distributor) rather than relying on container-stdout tailing
+# (which doesn't stream on Docker Desktop). Version tracks the opentelemetry 0.32 stack.
+opentelemetry-appender-tracing = { version = "0.32", default-features = false }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
+# Slice KIP-714: prost-generated OTLP MetricsData / MetricsService types
+# (opentelemetry 0.32 stack). `gen-tonic` exposes the OTLP gRPC service traits the
+# metrics distributor implements; `gen-tonic-messages` + `trace` serve the traces
+# signal; `tonic-prost` carries the prost codec for tonic 0.14.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "gen-tonic-messages", "metrics", "trace"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
+prometheus-client = "0.25"
+proptest = "1"
+prost = "0.14"
+# Thread-safe clock abstraction (rs-clock). Production code reads time through
+# its `Clock`/`NanoClock`/`Sleeper` traits so tests can drive time deterministically
+# with `MockClock`/`MockTime` instead of `thread::sleep`/`tokio::time::sleep`.
+# Enable the `tokio` feature per-crate where async `AsyncSleeper` is needed.
+# 0.9+ replaced this API with wall/monotonic clocks and timers; keep the
+# compatible release line until consumers are migrated to that new API.
+qubit-clock = "~0.8.1"
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
+refined_type = "0.6"
+# KIP-848: client-supplied `subscribed_topic_regex` matched against the
+# metadata image. Uses RE2-compatible syntax (same regex engine family as
+# the JVM's `java.util.regex` for the cases KIP-848 expects to portably
+# support); diverges on lookahead/lookbehind which aren't in the KIP-848
+# operator-readable subset.
+regex = "1"
+ring = "0.17"
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+# rustls-pemfile retired upstream (RUSTSEC-2025-0134, archived 2025-08).
+# Use the PEM parsers in `rustls-pki-types` (same code; pull explicitly).
+rustls-pki-types = { version = "1.15", features = ["alloc"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde-wincode = "=0.1.2"
+serde_json = "1"
+sha2 = "0.11"
+# Jepsen-style exhaustive concurrency-correctness model checking (KRaft
+# consensus). Dev-dependency only — never linked into a shipped binary.
+# Pinned: pre-1.0, minor bumps can be breaking.
+stateright = "=0.31.0"
+tempfile = "3"
+testcontainers = "0.28"
+# The latest crates.io release still requires testcontainers 0.27, whose
+# bollard-stubs version conflicts with testcontainers 0.28. Pin the upstream
+# compatibility update until the next testcontainers-modules release.
+testcontainers-modules = { git = "https://github.com/testcontainers/testcontainers-rs-modules-community", rev = "d69e3a09397532accea9d9e907fecc280b1513a8", features = ["kafka"] }
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tokio-metrics = { version = "0.5", default-features = false }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+tokio-util = { version = "0.7", default-features = false }
+toml = "1.1"
+tonic = "0.14"
+tower = "0.5"
+tracing = "0.1"
+tracing-opentelemetry = { version = "0.33", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+# wincode + serde-wincode replace bincode for serde-derived wire shapes.
+# Keep these paired so `SerdeCompat` implements this wincode's traits.
+wincode = "=0.6"
+zerocopy = { version = "0.8", features = ["derive"] }
+
+# First-party crates inherited by more than one member.
+crabka-audit = { path = "crates/audit", version = "0.4.0" }
+crabka-security = "0.4.0"
+crabka-units = "0.4.0"
+
+# Sibling repositories, pinned by revision. These crates are declared
+# against crates.io above and in the member manifests; the patch below is
+# the single place a sibling revision is bumped.
+[patch.crates-io]
+crabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "24215f9768f31cf957bbdbca5e00e951137e9416" }
+crabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "24215f9768f31cf957bbdbca5e00e951137e9416" }
+crabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "24215f9768f31cf957bbdbca5e00e951137e9416" }
+crabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "24215f9768f31cf957bbdbca5e00e951137e9416" }
+crabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }
+crabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "eef1e4c598e2a08a3a73a4b73e6ee1c13c276c80" }

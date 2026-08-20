@@ -82,6 +82,9 @@ fn version_returns_zero() {
 /// assert that the process binds the listener declared in the file. The port
 /// comes from the file, not from a CLI flag.
 #[test]
+#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
+           robot-head/crabka: that crate depends on the gres layer, so it could not \
+           follow the broker into this repository. See README, `Storage formatting`."]
 fn boots_with_config_file_listener() {
     use std::io::Write as _;
 

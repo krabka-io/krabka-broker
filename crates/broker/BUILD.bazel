@@ -1,0 +1,30 @@
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "broker")
+
+# The broker server. `bazel run //crates/broker:crabka-broker -- --help`.
+crate_binary(
+    name = "crabka-broker",
+    crate_root = "src/bin/broker.rs",
+    lib = ":broker",
+)
+
+crate_tests(
+    lib = "broker",
+    # TLS certificates, Kerberos keytabs and captured Kafka frames. The TLS
+    # material is `include_str!`ed by the suites that serve it and the keytabs
+    # are opened at run time, so both lists are needed.
+    compile_data = glob(["tests/fixtures/**"]),
+    data = glob(["tests/fixtures/**"]) + [":crabka-broker"],
+    # `cli_smoke` boots the real binary and finds it through the variable Cargo
+    # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
+    # so the same name is set here from the binary's own target.
+    env = {"CARGO_BIN_EXE_crabka-broker": "$(rootpath :crabka-broker)"},
+    # 212k lines: a full sweep is nightly-sized even sharded this far.
+    mutants_shards = 32,
+)

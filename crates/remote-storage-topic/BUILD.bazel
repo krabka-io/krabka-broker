@@ -1,0 +1,15 @@
+load("//bazel:defs.bzl", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "remote-storage-topic")
+
+crate_tests(
+    lib = "remote-storage-topic",
+    # `jvm_serde_golden` embeds rlmm_golden.json with `include_str!`, so the
+    # fixture has to be readable at compile time rather than staged at run time.
+    compile_data = glob(["tests/fixtures/**"]),
+)

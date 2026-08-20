@@ -14,7 +14,7 @@
 //! method.
 //!
 //! The KDC runs in its own container, see
-//! `crates/security/tests/fixtures/kdc`, and maps `88/tcp+udp` to the host.
+//! `crates/broker/tests/fixtures/security/kdc`, and maps `88/tcp+udp` to the host.
 //! From inside the CLI containers it is reachable at `host.docker.internal:88`,
 //! which `tests/fixtures/gssapi/krb5.conf` configures.
 //!
@@ -26,9 +26,9 @@
 //! # Running
 //!
 //! ```bash
-//! docker compose -f crates/security/tests/fixtures/kdc/docker-compose.yml up --build -d
+//! docker compose -f crates/broker/tests/fixtures/security/kdc/docker-compose.yml up --build -d
 //! # wait for KDC_READY in the logs
-//! KRB5_CONFIG=crates/security/tests/fixtures/kdc/krb5.conf \
+//! KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf \
 //!   SSPI_KDC_URL=tcp://localhost:88 \
 //!   cargo test -p crabka-broker --test gssapi_e2e -- --ignored
 //! ```
@@ -56,14 +56,28 @@ const BOOTSTRAP: &str = "host.docker.internal:9092";
 
 /// Absolute path to the KDC fixture dir, which holds `kafka.keytab` and
 /// `alice.keytab`.
+/// This crate's directory, read from the environment at run time.
+///
+/// Cargo exports `CARGO_MANIFEST_DIR` to a test process, so this is the same
+/// path the `env!` macro would have produced. It is read rather than expanded
+/// because `env!` bakes an absolute build path into the binary, which ties the
+/// test to the directory it was compiled in -- `rules_rust` rejects such a
+/// binary outright. Only the Docker-driven suites below use it, and they are
+/// `#[ignore]`d without that environment.
+fn manifest_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("cargo exports CARGO_MANIFEST_DIR to tests"),
+    )
+}
+
 fn kdc_fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../security/tests/fixtures/kdc")
+    manifest_dir().join("tests/fixtures/security/kdc")
 }
 
 /// Absolute path to the GSSAPI client config dir, which holds `krb5.conf`,
 /// `client_jaas.conf`, and `client.properties`.
 fn gssapi_fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gssapi")
+    manifest_dir().join("tests/fixtures/gssapi")
 }
 
 /// Spawn an in-process Crabka broker on `LISTEN`.

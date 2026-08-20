@@ -64,6 +64,9 @@ fn run_crabka_format_with_features(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
+           robot-head/crabka: that crate depends on the gres layer, so it could not \
+           follow the broker into this repository. See README, `Storage formatting`."]
 async fn standalone_format_feature_overrides_surface_in_api_versions() {
     support::init_tracing();
 

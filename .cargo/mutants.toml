@@ -1,0 +1,36 @@
+# cargo-mutants configuration — https://mutants.rs
+#
+# Read both by a local `cargo mutants` run and by the `cargo_mutants_test`
+# targets, which shell out to a real cargo-mutants binary (see //tools/mutants).
+
+test_tool = "nextest"
+profile = "mutants"
+
+# A surviving mutant deep in the broker / log / raft paths is often only caught
+# by the slower in-process suites under each crate's tests/ dir. Give every
+# mutant a generous timeout relative to the unmutated baseline so a
+# legitimately-slower-but-correct run is not misreported as a timeout survivor.
+timeout_multiplier = 5.0
+minimum_test_timeout = 120
+
+exclude_globs = [
+    # `crabka-broker`'s `main` is pure entrypoint glue: parse CLI args, derive
+    # the controller listener and self single-voter set, build `BrokerConfig`,
+    # hand it to `Broker::start`, then wait for a termination signal and
+    # controlled-shutdown. No unit-testable signal -- no test constructs the
+    # live broker from CLI args -- and it is exercised end to end by
+    # `tests/cli_smoke.rs`, which boots the real binary. A file glob rather than
+    # an `exclude_re` because name-regex exclusions do not reliably match
+    # struct-field-deletion mutants here.
+    "crates/broker/src/bin/**",
+    # crabka-audit's `verify` CLI: clap arg-parse plus VerifyReport->ExitCode
+    # glue. The verification logic lives in verify.rs and IS mutation-tested.
+    "crates/audit/src/bin/**",
+]
+
+exclude_re = [
+    # Removing the client-metrics shutdown call leaves the live OTLP worker
+    # waiting forever. The drain test detects that, but cargo-mutants can only
+    # classify the deliberately stuck process as a timeout.
+    "broker/src/client_metrics/mod\\.rs.*replace ClientMetrics::shutdown with \\(\\)",
+]

@@ -1,0 +1,16 @@
+load("//bazel:defs.bzl", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "raft")
+
+crate_tests(
+    lib = "raft",
+    # The consensus engine is the highest-value mutation target here: its
+    # decision logic is pure and almost entirely unit-tested, so a survivor is a
+    # real gap rather than an artifact of the unit-tests-only sweep.
+    mutants_shards = 16,
+)
