@@ -8,30 +8,24 @@ fn broker_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(exe)
 }
 
-/// Format a fresh standalone log directory with `crabka format`.
+/// Formats a fresh standalone log directory.
 ///
-/// KIP-853 needs every node to be formatted before `crabka-broker` boots. The
-/// format step seeds `meta.properties.json` and the singleton
-/// `VotersRecord`. The broker treats an unformatted dir as operator error and
-/// aborts startup.
+/// KIP-853 needs every node formatted before `crabka-broker` boots: the step
+/// seeds `meta.properties.json` and the singleton `VotersRecord`, and the broker
+/// treats an unformatted dir as operator error and aborts startup.
 ///
-/// `crabka` lives in the `crabka-cli` package, so its `CARGO_BIN_EXE_*` is
-/// not exported to this crate's test env. This function therefore shells out
-/// with `env!("CARGO")`, as `bootstrap_consumption.rs` does. The `crabka-cli`
-/// dev-dep keeps `crabka` in the compile graph, so this is a cache hit and
-/// not a rebuild.
+/// Called in process rather than spawned. The formatting is setup for the boot
+/// test below, not the thing under test -- `crabka-format`'s own `format_smoke`
+/// suite runs the real binary -- and a subprocess would need a Cargo working
+/// tree to build from, which a Bazel test sandbox does not have. This test is
+/// synchronous, so it drives the async formatter on a current-thread runtime.
 fn run_crabka_format(log_dir: &std::path::Path, node_id: u32, controller_listener: &str) {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let out = Command::new(cargo)
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "crabka-cli",
-            "--bin",
-            "crabka",
-            "--",
-            "format",
+    let code = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime")
+        .block_on(crabka_format::run_from_args([
+            "crabka-format",
             "--log-dir",
             log_dir.to_str().unwrap(),
             "--standalone",
@@ -39,15 +33,8 @@ fn run_crabka_format(log_dir: &std::path::Path, node_id: u32, controller_listene
             &node_id.to_string(),
             "--controller-listener",
             controller_listener,
-        ])
-        .output()
-        .expect("spawn crabka format");
-    assert!(
-        out.status.success(),
-        "crabka format failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+        ]));
+    assert!(code == 0, "crabka-format exited {code}");
 }
 
 #[test]
@@ -82,9 +69,6 @@ fn version_returns_zero() {
 /// assert that the process binds the listener declared in the file. The port
 /// comes from the file, not from a CLI flag.
 #[test]
-#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
-           robot-head/crabka: that crate depends on the gres layer, so it could not \
-           follow the broker into this repository. See README, `Storage formatting`."]
 fn boots_with_config_file_listener() {
     use std::io::Write as _;
 

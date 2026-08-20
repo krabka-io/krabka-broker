@@ -1,0 +1,48 @@
+[package]
+name = "crabka-format"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Formats a krabka broker log directory: meta.properties.json, the bootstrap records, and the singleton VotersRecord"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+# `crabka format` in the monorepo's `crabka-cli`. That crate also drives the gres
+# layer, so it could not follow the broker out; the command itself needs only the
+# metadata and security crates, so it lives here and `crabka-cli` can depend on
+# this library rather than carrying a second copy.
+[lib]
+name = "crabka_format"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crabka-format"
+path = "src/main.rs"
+
+[dependencies]
+crabka-metadata = { version = "0.4.0" }
+crabka-security = { workspace = true }
+# The singleton VotersRecord this writes is the one the consensus engine reads
+# back on the node's first boot.
+crabka-raft = { version = "0.4.0", path = "../raft" }
+clap = { workspace = true, features = ["env"] }
+derive_more = { workspace = true }
+ring = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde-wincode = { workspace = true }
+wincode = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+assert2 = { workspace = true }
+
+[dev-dependencies]
+crabka-broker = { version = "0.4.0", path = "../broker" }
+tempfile = { workspace = true }

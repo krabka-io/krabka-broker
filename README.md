@@ -23,6 +23,7 @@ for the Kafka client the broker and its tests use.
 | `crabka-object-store` | Object-store abstraction shared by the tiered paths. |
 | `crabka-authz` | Authorizer traits, ACL evaluation, and the OPA client. |
 | `crabka-audit` | Audit event model, OCSF serialization, and the `crabka-audit verify` CLI. |
+| `crabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
 | `crabka-throttle` | Quota token buckets (Creusot-verified). |
 | `crabka-verified` | Formally verified pure kernels shared by consensus and log. |
 | `crabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
@@ -51,7 +52,7 @@ bazel run //:broker_bin -- --help
 cargo nextest run --workspace
 ```
 
-Both run the same 3350 tests. Bazel additionally runs the 9 rustdoc examples,
+Both run the same 3392 tests. Bazel additionally runs the 9 rustdoc examples,
 which `cargo nextest` cannot; `cargo test --workspace --doc` covers those.
 
 ## Depending on the siblings
@@ -87,17 +88,18 @@ the full sweep. Two things to know about the results:
 
 A KRaft node must have its log directory formatted before the broker will boot —
 that step seeds `meta.properties.json` and the singleton `VotersRecord`, and the
-broker treats an unformatted directory as operator error. The command that does
-it, `crabka format`, lives in `crabka-cli`, which stayed in
-[`robot-head/crabka`](https://github.com/robot-head/crabka) because it depends on
-the gres layer.
+broker treats an unformatted directory as operator error.
 
-Three tests are `#[ignore]`d for that reason and say so in their attribute:
-`bootstrap_consumption::bootstrap_records_provisions_scram_user`,
-`cli_smoke::boots_with_config_file_listener`, and
-`format_features::standalone_format_feature_overrides_surface_in_api_versions`.
-Splitting the `format` subcommand out of `crabka-cli` so it can live beside the
-broker would close this.
+```
+bazel run //:format_bin -- --log-dir /var/lib/krabka --standalone \
+    --node-id 1 --controller-listener 0.0.0.0:9093
+```
+
+The monorepo spells this `crabka format`, as a subcommand of the operator CLI.
+That CLI also drives the gres layer, so it could not follow the broker out; the
+command needs only the metadata and security crates, so it lives here as
+`crabka-format` — a library as well as a binary, so `crabka-cli` can call it
+rather than carry a second copy.
 
 ## Docker-driven suites
 

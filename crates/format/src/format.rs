@@ -538,6 +538,18 @@ struct BootstrapManifest {
 // (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
 // The body yields an `i32` (not a future), so `#[instrument]` is safe here
 // w.r.t. `clippy::async_yields_async`.
+/// Formats `args.log_dir`, returning the process exit code.
+///
+/// Every failure a caller can cause -- an unwritable directory, a malformed
+/// `--add-scram` spec, an unknown feature -- is reported on stderr and returned
+/// as a non-zero code rather than raised.
+///
+/// # Panics
+///
+/// Panics if `--initial-controllers` was given without the node's own identity
+/// appearing in it. `is_dynamic_format` rejects that combination before this
+/// point, so reaching the panic means that validation and this branch have
+/// drifted apart.
 #[tracing::instrument(
     level = "info",
     name = "cli.format",

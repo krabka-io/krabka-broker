@@ -20,7 +20,7 @@
 //! keeps the blast radius small and leaves the auth test file, over 1500
 //! lines, untouched.
 
-use std::{io, net::SocketAddr, process::Command};
+use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
@@ -42,45 +42,25 @@ use tokio::{
     net::TcpStream,
 };
 
-/// Runs the `crabka format` binary as a subprocess.
+/// Formats `log_dir`, seeding one SCRAM credential.
 ///
-/// Cargo populates `CARGO_BIN_EXE_<name>` only for integration tests inside
-/// the package that declares the binary. This function therefore shells out
-/// through the parent `cargo` invocation, `env!("CARGO")`, and lets cargo find
-/// or rebuild the `crabka-cli` binary. The `crabka-cli` dev-dependency in this
-/// crate's `Cargo.toml` puts the binary in this test's compile graph, so the
-/// inner `cargo run` is a cache hit instead of a fresh build.
-fn run_crabka_format(log_dir: &std::path::Path, add_scram: &str) {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let out = Command::new(cargo)
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "crabka-cli",
-            "--bin",
-            "crabka",
-            "--",
-            "format",
-            "--log-dir",
-            log_dir.to_str().unwrap(),
-            "--add-scram",
-            add_scram,
-        ])
-        .output()
-        .expect("spawn crabka format");
-    assert!(
-        out.status.success(),
-        "crabka format failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+/// Calls the formatter in process rather than spawning it. The formatting is
+/// setup for the test below, not the thing under test -- `crabka-format`'s own
+/// `format_smoke` suite runs the real binary -- and a subprocess would need a
+/// Cargo working tree to build from, which a Bazel test sandbox does not have.
+async fn run_crabka_format(log_dir: &std::path::Path, add_scram: &str) {
+    let code = crabka_format::run_from_args([
+        "crabka-format",
+        "--log-dir",
+        log_dir.to_str().unwrap(),
+        "--add-scram",
+        add_scram,
+    ])
+    .await;
+    assert!(code == 0, "crabka-format exited {code}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
-           robot-head/crabka: that crate depends on the gres layer, so it could not \
-           follow the broker into this repository. See README, `Storage formatting`."]
 async fn bootstrap_records_provisions_scram_user() {
     // The broker installs the rustls crypto provider in `Broker::start`,
     // but the SCRAM client side of this test also performs PBKDF2 / SHA
@@ -96,7 +76,8 @@ async fn bootstrap_records_provisions_scram_user() {
     run_crabka_format(
         &boot_dir,
         "SCRAM-SHA-512=[name=alice,password=wonderland,iterations=4096]",
-    );
+    )
+    .await;
 
     let mut cfg = BrokerConfig::for_tests(boot_dir.clone());
     cfg.listeners = vec![ListenerSpec {

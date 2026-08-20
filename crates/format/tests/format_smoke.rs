@@ -9,13 +9,16 @@ use std::process::Command;
 use crabka_metadata::MetadataRecord;
 
 fn run_format(dir: &tempfile::TempDir, args: &[&str]) -> std::process::Output {
-    let bin = env!("CARGO_BIN_EXE_crabka");
+    // The monorepo spells this `crabka format`; here the command is its own
+    // binary, so the `format` subcommand argument is gone and the rest is the
+    // same. `CARGO_BIN_EXE_<bin>` is set because the binary is in this package.
+    let bin = env!("CARGO_BIN_EXE_crabka-format");
     let mut command = Command::new(bin);
     command
-        .args(["format", "--log-dir", dir.path().to_str().unwrap()])
+        .args(["--log-dir", dir.path().to_str().unwrap()])
         .args(args)
         .output()
-        .expect("run crabka format")
+        .expect("run crabka-format")
 }
 
 fn bootstrap_records(dir: &tempfile::TempDir) -> Vec<MetadataRecord> {

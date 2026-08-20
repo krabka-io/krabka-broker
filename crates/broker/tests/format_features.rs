@@ -7,8 +7,6 @@
 //! would otherwise re-seed every feature at the latest release. That proves the
 //! `--feature` overrides survive boot and nothing overwrites them.
 
-use std::process::Command;
-
 use assert2::{assert, check};
 use crabka_broker::{Broker, BrokerConfig};
 use crabka_client_core::Client;
@@ -18,55 +16,38 @@ mod support;
 
 /// Run `crabka format --standalone … --feature …` as a subprocess. The test
 /// shells out through `env!("CARGO")`, because this crate does not get the
-/// `crabka-cli` `CARGO_BIN_EXE_*` variable. The `crabka-cli` dev-dep keeps the
-/// build a cache hit.
-fn run_crabka_format_with_features(
+/// `crabka-format` `CARGO_BIN_EXE_*` variable. The dev-dep keeps the
+/// Formats a standalone log directory with explicit `--feature` overrides.
+///
+/// Called in process rather than spawned: the formatting is setup for the
+/// `ApiVersions` assertion below, not the thing under test, and a subprocess would
+/// need a Cargo working tree to build from, which a Bazel test sandbox does not
+/// have. `crabka-format`'s own `format_smoke` suite runs the real binary.
+async fn run_crabka_format_with_features(
     log_dir: &std::path::Path,
     node_id: u64,
     controller_listener: &str,
     features: &[&str],
 ) {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let mut args: Vec<String> = [
-        "run",
-        "--quiet",
-        "-p",
-        "crabka-cli",
-        "--bin",
-        "crabka",
-        "--",
-        "format",
-        "--log-dir",
-        log_dir.to_str().unwrap(),
-        "--standalone",
-        "--node-id",
-        &node_id.to_string(),
-        "--controller-listener",
-        controller_listener,
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
+    let mut argv = vec![
+        "crabka-format".to_string(),
+        "--log-dir".to_string(),
+        log_dir.to_str().unwrap().to_string(),
+        "--standalone".to_string(),
+        "--node-id".to_string(),
+        node_id.to_string(),
+        "--controller-listener".to_string(),
+        controller_listener.to_string(),
+    ];
     for f in features {
-        args.push("--feature".to_string());
-        args.push((*f).to_string());
+        argv.push("--feature".to_string());
+        argv.push((*f).to_string());
     }
-    let out = Command::new(cargo)
-        .args(&args)
-        .output()
-        .expect("spawn crabka format");
-    assert!(
-        out.status.success(),
-        "crabka format failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+    let code = crabka_format::run_from_args(argv).await;
+    assert!(code == 0, "crabka-format exited {code}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the `crabka format` binary from `crabka-cli`, which stayed in \
-           robot-head/crabka: that crate depends on the gres layer, so it could not \
-           follow the broker into this repository. See README, `Storage formatting`."]
 async fn standalone_format_feature_overrides_surface_in_api_versions() {
     support::init_tracing();
 
@@ -87,7 +68,8 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
         // transaction.version pinned to 1 (default at the latest release is 2);
         // group.version pinned to 0 (default is 1) → omitted → not finalized.
         &["transaction.version=1", "group.version=0"],
-    );
+    )
+    .await;
 
     let mut cfg = BrokerConfig::for_tests(boot_dir.clone());
     cfg.broker_id = 1;

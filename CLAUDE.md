@@ -60,9 +60,12 @@ both files.
 a git crate's path by matching the crate name against the workspace `members`
 list, and both siblings' members is the glob `crates/*`, which it skips.
 
-`crabka format` is not here: it lives in `crabka-cli`, which stayed in the
-monorepo because it depends on the gres layer. Three tests are `#[ignore]`d for
-that reason -- see the README.
+`crabka format` lives here as the `crabka-format` crate, extracted from the
+monorepo's `crabka-cli` because that crate also drives the gres layer and could
+not follow the broker out. It is a library as well as a binary: broker tests that
+need a formatted log directory call `crabka_format::run_from_args` in process
+rather than spawning it, because a subprocess needs a Cargo working tree and a
+Bazel test sandbox has none.
 
 ## Code & Documentation Style
 

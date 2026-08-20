@@ -149,6 +149,11 @@ stateright = { workspace = true }
 # complementing the exhaustive stateright model (`producer_state_model.rs`).
 proptest = { workspace = true }
 crabka-broker-test-helpers = { path = "test-helpers" }
+# `bootstrap_consumption`, `cli_smoke` and `format_features` format a log
+# directory before booting a broker. They call the library rather than spawn the
+# binary: the formatting is setup, not the thing under test, and a subprocess
+# would need a Cargo working tree, which a Bazel test sandbox does not have.
+crabka-format = { version = "0.4.0", path = "../format" }
 # Drives the relocated `client_admin_*` suites, which boot an in-process
 # broker to exercise the admin client end to end.
 crabka-client-admin = { version = "0.4" }

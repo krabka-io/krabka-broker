@@ -1035,6 +1035,7 @@ dependencies = [
  "crabka-client-core",
  "crabka-client-producer",
  "crabka-compression",
+ "crabka-format",
  "crabka-ids",
  "crabka-kraft-core",
  "crabka-log",
@@ -1214,6 +1215,29 @@ dependencies = [
  "snap",
  "thiserror 2.0.20",
  "zstd",
+]
+
+[[package]]
+name = "crabka-format"
+version = "0.4.0"
+dependencies = [
+ "assert2",
+ "clap",
+ "crabka-broker",
+ "crabka-metadata",
+ "crabka-raft",
+ "crabka-security",
+ "derive_more",
+ "ring",
+ "serde",
+ "serde-wincode",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wincode",
 ]
 
 [[package]]

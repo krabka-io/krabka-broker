@@ -19,6 +19,13 @@ alias(
     actual = "//crates/broker:crabka-broker",
 )
 
+# Formats a fresh log directory. A KRaft node will not boot without this having
+# been run against its data directory first.
+alias(
+    name = "format_bin",
+    actual = "//crates/format:crabka-format",
+)
+
 alias(
     name = "raft",
     actual = "//crates/raft",
