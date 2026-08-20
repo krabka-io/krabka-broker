@@ -66,9 +66,6 @@ build --java_runtime_version=remotejdk_21
 #     bazel test --config=docker //...
 test --test_tag_filters=-docker
 test:docker --test_tag_filters=docker
-# One container set at a time: several of these bind fixed host ports so the
-# JVM tools have a known bootstrap target.
-test:docker --local_test_jobs=1
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.

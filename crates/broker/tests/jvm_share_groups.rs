@@ -25,6 +25,8 @@
 //! `host.docker.internal:9092`. The container reaches it through
 //! `--add-host=host.docker.internal:host-gateway`.
 
+mod support;
+
 use std::{
     process::{Command, Stdio},
     time::Duration,
@@ -46,9 +48,44 @@ use crabka_protocol::{
 
 /// Port that the broker binds on the host, and that the container reaches
 /// through `host.docker.internal`.
-const HOST_PORT: u16 = 9092;
-const BOOTSTRAP: &str = "host.docker.internal:9092";
-const LISTEN: &str = "0.0.0.0:9092";
+/// Ports for this test process, allocated once rather than fixed at 9092.
+///
+/// Every container suite used to hard-code 9092/9093, so two could not run at
+/// the same time: the second to start lost the bind and reported `Address
+/// already in use` as a test failure. That is why these targets ran one at a
+/// time. A port per process lets them overlap.
+///
+/// `&'static str`, so these read as the constants they replaced.
+fn ports() -> &'static (String, String, String) {
+    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
+    PORTS.get_or_init(|| {
+        let (client, controller) = (support::free_port(), support::free_port());
+        (
+            format!("host.docker.internal:{client}"),
+            format!("0.0.0.0:{client}"),
+            format!("0.0.0.0:{controller}"),
+        )
+    })
+}
+
+fn bootstrap_addr() -> &'static str {
+    &ports().0
+}
+
+fn listen_addr() -> &'static str {
+    &ports().1
+}
+
+fn controller_listen() -> &'static str {
+    &ports().2
+}
+
+/// The broker over loopback, which is how the test's own client reaches it.
+/// Only the containers use the advertised `host.docker.internal` name.
+fn client_addr() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| listen_addr().replace("0.0.0.0", "127.0.0.1"))
+}
 /// Official Apache Kafka image. It ships KIP-932 share groups, which are GA in
 /// 4.x, and the `kafka-console-share-consumer.sh` and `kafka-share-groups.sh`
 /// tools.
@@ -64,6 +101,8 @@ const SHARE_STATE_PARTITIONS: i32 = 50;
 /// then targets a hostname it can resolve. This mirrors
 /// `jvm_consumer_group_next_gen.rs::start_host_broker`.
 async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
+    let bootstrap = bootstrap_addr();
+    let listen = listen_addr();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -72,12 +111,13 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_listen().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -92,15 +132,13 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!(
-        "CRABKA[test] broker started listen={LISTEN} advertised={BOOTSTRAP} port={HOST_PORT}"
-    );
+    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
 async fn connect() -> Client {
     Client::builder()
-        .bootstrap(format!("127.0.0.1:{HOST_PORT}"))
+        .bootstrap(client_addr().to_string())
         .client_id("crabka-share-test")
         .build()
         .await
@@ -252,6 +290,7 @@ fn docker_run(args: &[&str]) -> std::process::Output {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_share_consumer_reads_crabka() {
+    let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     let topic = "kip932-jvm";
     let group = "jvm-share-g";
@@ -271,7 +310,7 @@ async fn jvm_share_consumer_reads_crabka() {
         "-c",
         &format!(
             "{SHARE_CONSUMER} \
-                --bootstrap-server {BOOTSTRAP} \
+                --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
                 --consumer-property group.share.auto.offset.reset=earliest \
@@ -300,6 +339,7 @@ async fn jvm_share_consumer_reads_crabka() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_share_groups_describe_state() {
+    let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     let topic = "kip932-jvm-d";
     let group = "jvm-share-gd";
@@ -316,7 +356,7 @@ async fn jvm_share_groups_describe_state() {
         "-c",
         &format!(
             "{SHARE_CONSUMER} \
-                --bootstrap-server {BOOTSTRAP} \
+                --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
                 --consumer-property group.share.auto.offset.reset=earliest \
@@ -333,7 +373,7 @@ async fn jvm_share_groups_describe_state() {
         "bash",
         "-c",
         &format!(
-            "{SHARE_GROUPS} --bootstrap-server {BOOTSTRAP} --describe --state --group {group}"
+            "{SHARE_GROUPS} --bootstrap-server {bootstrap} --describe --state --group {group}"
         ),
     ]);
     let state_out = String::from_utf8_lossy(&state.stdout);
@@ -356,6 +396,7 @@ async fn jvm_share_groups_describe_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_share_groups_list() {
+    let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     let topic = "kip932-jvm-l";
     let group = "jvm-share-gl";
@@ -375,7 +416,7 @@ async fn jvm_share_groups_list() {
         "-c",
         &format!(
             "{SHARE_CONSUMER} \
-                --bootstrap-server {BOOTSTRAP} \
+                --bootstrap-server {bootstrap} \
                 --topic {topic} \
                 --group {group} \
                 --consumer-property group.share.auto.offset.reset=earliest \
@@ -390,7 +431,7 @@ async fn jvm_share_groups_list() {
     let listed = docker_run(&[
         "bash",
         "-c",
-        &format!("{SHARE_GROUPS} --bootstrap-server {BOOTSTRAP} --list"),
+        &format!("{SHARE_GROUPS} --bootstrap-server {bootstrap} --list"),
     ]);
     let list_out = String::from_utf8_lossy(&listed.stdout);
     eprintln!("CRABKA[test] share-groups --list stdout:\n{list_out}");

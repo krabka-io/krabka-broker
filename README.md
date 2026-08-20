@@ -119,15 +119,34 @@ They run nightly rather than per-PR — the images alone are a few gigabytes.
 Bazel test cannot write to the source tree, and should not want to. It stays
 `#[ignore]`d under Cargo, which is where fixtures get regenerated.
 
+### Ports and concurrency
+
+These suites used to hard-code `9092`/`9093`, so two of them could not run at
+once: the second to start lost the bind and reported `Address already in use` as
+a test failure. Each test process allocates its own ports now, and the targets
+run concurrently -- six of them at four jobs, where before they ran one at a
+time.
+
+The tests reach the broker over loopback; only the containers use the advertised
+`host.docker.internal` name, which they resolve through
+`--add-host=host.docker.internal:host-gateway`. CI additionally maps that name to
+`127.0.0.1` in `/etc/hosts`, because `jvm_acceptance` and
+`jvm_kip320_divergence` still bind fixed ports and use it from the host side.
+
+Those two are the remaining work: `jvm_acceptance` threads its bootstrap address
+through 182 references and `jvm_kip320_divergence` names two containers, so
+neither converts as mechanically as the rest. Within one binary a suite's tests
+still share that process's ports and run one at a time; per-test ports would lift
+that too.
+
 ### Known-failing on some hosts
 
 `jvm_acceptance`, `jvm_features` and `jvm_kip320_divergence` fail on a
 development machine here. They fail identically under `cargo nextest run
---run-ignored ignored-only`, so this is not a property of the Bazel targets —
-whatever it is, both build systems hit it. The cause is not established; these
-suites bind fixed host ports and reach the host back through
-`host.docker.internal`, and CI maps that name to `127.0.0.1` before running them.
-Treat a local failure in these three as unconfirmed until it reproduces in CI.
+--run-ignored ignored-only`, so this is not a property of the Bazel targets --
+whatever it is, both build systems hit it, and it is not the port sharing above,
+which is fixed. Treat a local failure in these three as unconfirmed until it
+reproduces in CI.
 
 ## Delivery
 

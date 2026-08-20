@@ -54,9 +54,9 @@ fi
 # `--ignored`: under Cargo these cases are `#[ignore]`d, because they need the
 # daemon this script just checked for. This is the target that runs them.
 #
-# `--test-threads=1`: several of these bind a fixed host port, so the JVM tools
-# in the container have a known bootstrap target. Run in parallel they collide
-# with "Address already in use". The monorepo serialises them the same way, with
-# nextest test-groups capped at one thread; libtest has no group concept, so the
-# whole binary goes single-threaded.
+# `--test-threads=1`: a suite's tests share one port per process, so they still
+# run one at a time *within* a binary. Different binaries no longer collide --
+# each allocates its own -- which is why the targets themselves can now overlap.
+# Per-test ports would lift this too; `jvm_acceptance` threads its address
+# through 182 references, so that is a larger change than this one.
 exec "${binary}" --ignored --test-threads=1 "$@"

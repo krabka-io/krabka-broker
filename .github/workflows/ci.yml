@@ -102,26 +102,64 @@ jobs:
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
 
-  # The container-driven suites. Nightly rather than per-PR: they start real
-  # Kafka brokers, and the images alone are a few gigabytes. The images
-  # themselves are digest-pinned Bazel inputs (see //bazel/images), so this
-  # pulls from the repository cache rather than a registry.
+  # Container suites, run when a change actually reaches them.
+  #
+  # `aspect test` does not narrow to impacted targets -- that is an Aspect
+  # Workflows feature, not part of the open-source CLI -- so the impacted set is
+  # computed here: reverse dependencies of the files the pull request touched,
+  # intersected with the targets tagged `docker`. A change to a crate nothing
+  # container-driven depends on selects nothing and the job is a no-op.
   docker:
     name: container suites
-    if: github.event_name == 'schedule'
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+        with:
+          # rdeps needs the merge base, not just the tip.
+          fetch-depth: 0
       - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-docker
           repository-cache: true
-      # The Rust side of several suites runs on the host and dials the broker
-      # back through the name the containers use for it.
+
+      # The host side of these suites reaches the broker over loopback, but the
+      # advertised name has to resolve on the host too -- `jvm_acceptance` and
+      # `jvm_kip320_divergence` still bind fixed ports and use it. Containers
+      # resolve it separately, through `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
-      - run: bazel test --config=docker //crates/...
+
+      - id: impacted
+        name: select impacted container targets
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            # No usable base (first push on a branch, force-push): run them all
+            # rather than silently skipping.
+            targets="$(bazel query 'attr(tags, "docker", //crates/...)' | tr '\n' ' ')"
+          else
+            mapfile -t changed < <(
+              git diff --name-only "${base}...HEAD" -- crates bazel MODULE.bazel Cargo.lock |
+                while read -r f; do [ -e "${f}" ] && printf '%s\n' "${f}"; done
+            )
+            if [ "${#changed[@]}" -eq 0 ]; then
+              targets=""
+            else
+              targets="$(
+                bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${changed[*]})))" |
+                  tr '\n' ' '
+              )"
+            fi
+          fi
+          echo "targets=${targets}" >>"${GITHUB_OUTPUT}"
+          echo "Impacted container targets: ${targets:-<none>}"
+
+      - if: steps.impacted.outputs.targets != ''
+        name: run impacted container suites
+        run: bazel test --config=docker ${{ steps.impacted.outputs.targets }}
 
   # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
   # so it is far too slow to gate a pull request.

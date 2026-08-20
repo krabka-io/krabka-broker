@@ -19,28 +19,71 @@
 //! 9092, so it must not run concurrently with `jvm_acceptance` (single test
 //! here keeps it self-contained).
 
+mod support;
+
 use std::process::Command;
 
 use assert2::assert;
 use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use crabka_log::LogConfig;
 
-const BOOTSTRAP: &str = "host.docker.internal:9092";
-const LISTEN: &str = "0.0.0.0:9092";
+/// Ports for this test process, allocated once rather than fixed at 9092.
+///
+/// Every container suite used to hard-code 9092/9093, so two could not run at
+/// the same time: the second to start lost the bind and reported `Address
+/// already in use` as a test failure. That is why these targets ran one at a
+/// time. A port per process lets them overlap.
+///
+/// `&'static str`, so these read as the constants they replaced.
+fn ports() -> &'static (String, String, String) {
+    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
+    PORTS.get_or_init(|| {
+        let (client, controller) = (support::free_port(), support::free_port());
+        (
+            format!("host.docker.internal:{client}"),
+            format!("0.0.0.0:{client}"),
+            format!("0.0.0.0:{controller}"),
+        )
+    })
+}
+
+fn bootstrap_addr() -> &'static str {
+    &ports().0
+}
+
+fn listen_addr() -> &'static str {
+    &ports().1
+}
+
+fn controller_listen() -> &'static str {
+    &ports().2
+}
+
+/// The controller as the containers address it.
+fn controller_bootstrap() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| controller_listen().replace("0.0.0.0", "host.docker.internal"))
+}
+
+/// A second controller port, for the node that joins the quorum.
+fn joiner_controller() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| format!("host.docker.internal:{}", support::free_port()))
+}
 /// Kafka 4.3.1 is the compatibility oracle for KIP-853 and KIP-1186.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
-const CONTROLLER_BOOTSTRAP: &str = "host.docker.internal:9093";
 const DIRECTORY_ID: uuid::Uuid = uuid::Uuid::from_u128(1);
 const DIRECTORY_ID_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAQ";
-const JOINER_CONTROLLER: &str = "host.docker.internal:9094";
 const JOINER_DIRECTORY_ID: uuid::Uuid = uuid::Uuid::from_u128(2);
 const JOINER_DIRECTORY_ID_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAg";
 
-/// Boot an in-process Crabka broker listening on `LISTEN`, advertised as
+/// Boot an in-process Crabka broker listening on `listen_addr()`, advertised as
 /// `host.docker.internal:9092`. A standalone self-bootstrap finalizes the
 /// latest-release feature defaults (metadata.version=25, group.version=1,
 /// transaction.version=2).
 async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
+    let bootstrap = bootstrap_addr();
+    let listen = listen_addr();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -49,12 +92,13 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_listen().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -62,7 +106,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         controller_listen_addr: controller_addr,
         controller_quorum_voters: vec![(
             crabka_broker::NodeId(1),
-            CONTROLLER_BOOTSTRAP.to_string(),
+            controller_bootstrap().to_string(),
         )],
         heartbeat_interval: crabka_units::millis(3_000),
         heartbeat_timeout: crabka_units::millis(9_000),
@@ -73,7 +117,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
@@ -86,7 +130,10 @@ async fn start_host_observer() -> (crabka_raft::ControllerHandle, tempfile::Temp
         dir.path().join("__cluster_metadata"),
     );
     config.directory_id = JOINER_DIRECTORY_ID;
-    config.controller_listen_addr = "0.0.0.0:9094".parse().expect("static addr");
+    config.controller_listen_addr = joiner_controller()
+        .replace("host.docker.internal", "0.0.0.0")
+        .parse()
+        .expect("allocated addr");
     config.bootstrap_mode = crabka_raft::BootstrapMode::Join;
     config.cluster_id = Some(uuid::Uuid::nil());
     config.initial_voters = crabka_metadata::VoterSet::from_voters([crabka_metadata::Voter {
@@ -115,7 +162,7 @@ fn kafka_features(args: &[&str]) -> std::process::Output {
         KAFKA_IMAGE,
         "/opt/kafka/bin/kafka-features.sh",
         "--bootstrap-server",
-        BOOTSTRAP,
+        bootstrap_addr(),
     ];
     full.extend_from_slice(args);
     let out = Command::new("docker")
@@ -140,7 +187,7 @@ fn kafka_metadata_quorum(args: &[&str]) -> std::process::Output {
         KAFKA_IMAGE,
         "/opt/kafka/bin/kafka-metadata-quorum.sh",
         "--bootstrap-controller",
-        CONTROLLER_BOOTSTRAP,
+        controller_bootstrap(),
     ];
     full.extend_from_slice(args);
     let output = Command::new("docker")
@@ -162,13 +209,15 @@ fn kafka_add_controller() -> std::process::Output {
     let mount_dir = tempfile::tempdir().expect("controller command config dir");
     let metadata_dir = mount_dir.path().join("metadata");
     std::fs::create_dir(&metadata_dir).expect("create metadata dir");
+    let joiner = joiner_controller();
+    let quorum = controller_bootstrap();
     let properties = format!(
         "process.roles=controller\n\
          node.id=2\n\
          controller.listener.names=CONTROLLER\n\
-         listeners=CONTROLLER://{JOINER_CONTROLLER}\n\
+         listeners=CONTROLLER://{joiner}\n\
          listener.security.protocol.map=CONTROLLER:PLAINTEXT\n\
-         controller.quorum.bootstrap.servers={CONTROLLER_BOOTSTRAP}\n\
+         controller.quorum.bootstrap.servers={quorum}\n\
          log.dirs=/tmp/kraft-controller-2\n"
     );
     let properties_path = mount_dir.path().join("controller.properties");
@@ -197,7 +246,7 @@ fn kafka_add_controller() -> std::process::Output {
             KAFKA_IMAGE,
             "/opt/kafka/bin/kafka-metadata-quorum.sh",
             "--bootstrap-controller",
-            CONTROLLER_BOOTSTRAP,
+            controller_bootstrap(),
             "--command-config",
             "/tmp/controller.properties",
             "add-controller",
@@ -344,9 +393,9 @@ async fn kafka_features_describe_and_round_trip() {
         quorum_text.lines().any(|line| {
             line.starts_with("CurrentVoters:")
                 && line.contains("\"id\": 1")
-                && line.contains("CONTROLLER://host.docker.internal:9093")
+                && line.contains(&format!("CONTROLLER://{}", controller_bootstrap()))
                 && line.contains("\"id\": 2")
-                && line.contains(JOINER_CONTROLLER)
+                && line.contains(joiner_controller())
         }),
         "unexpected voter projection:\n{quorum_text}"
     );

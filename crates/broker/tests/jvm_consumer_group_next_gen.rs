@@ -2,18 +2,51 @@
 //! against an in-process Crabka broker. `group.protocol=consumer`
 //! activates the next-gen heartbeat path on the client.
 
+mod support;
+
 use std::process::{Command, Stdio};
 
 use assert2::assert;
 use crabka_broker::{Broker, BrokerConfig};
 use crabka_log::LogConfig;
 
-const BOOTSTRAP: &str = "host.docker.internal:9092";
-const LISTEN: &str = "0.0.0.0:9092";
+/// Ports for this test process, allocated once rather than fixed at 9092.
+///
+/// Every container suite used to hard-code 9092/9093, so two could not run at
+/// the same time: the second to start lost the bind and reported `Address
+/// already in use` as a test failure. That is why these targets ran one at a
+/// time. A port per process lets them overlap.
+///
+/// `&'static str`, so these read as the constants they replaced.
+fn ports() -> &'static (String, String, String) {
+    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
+    PORTS.get_or_init(|| {
+        let (client, controller) = (support::free_port(), support::free_port());
+        (
+            format!("host.docker.internal:{client}"),
+            format!("0.0.0.0:{client}"),
+            format!("0.0.0.0:{controller}"),
+        )
+    })
+}
+
+fn bootstrap_addr() -> &'static str {
+    &ports().0
+}
+
+fn listen_addr() -> &'static str {
+    &ports().1
+}
+
+fn controller_listen() -> &'static str {
+    &ports().2
+}
 const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
 async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+    let bootstrap = bootstrap_addr();
+    let listen = listen_addr();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -22,12 +55,13 @@ async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir)
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_listen().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -42,7 +76,7 @@ async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir)
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
@@ -57,7 +91,7 @@ fn create_topic(name: &str, partitions: i32) {
             "--create",
             "--if-not-exists",
             "--bootstrap-server",
-            BOOTSTRAP,
+            bootstrap_addr(),
             "--topic",
             name,
             "--partitions",
@@ -144,6 +178,7 @@ fn docker_run(image: &str, args: &[&str]) -> std::process::Output {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kip848_single_consumer_round_trip() {
+    let bootstrap = bootstrap_addr();
     let (_broker, _dir) = start_host_broker().await;
     create_topic("kip848-rt", 1);
     let produced = docker_run(
@@ -152,7 +187,7 @@ async fn jvm_kip848_single_consumer_round_trip() {
             "bash",
             "-c",
             &format!(
-                "printf 'a\\nb\\nc\\n' | kafka-console-producer --bootstrap-server {BOOTSTRAP} --topic kip848-rt --producer-property max.block.ms=10000"
+                "printf 'a\\nb\\nc\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-rt --producer-property max.block.ms=10000"
             ),
         ],
     );
@@ -164,7 +199,7 @@ async fn jvm_kip848_single_consumer_round_trip() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {BOOTSTRAP} --topic kip848-rt --group g-rt --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 3"
+                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-rt --group g-rt --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 3"
             ),
         ],
     );
@@ -178,6 +213,7 @@ async fn jvm_kip848_single_consumer_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kip848_describe_group() {
+    let bootstrap = bootstrap_addr();
     let (_broker, _dir) = start_host_broker().await;
     create_topic("kip848-d", 1);
     docker_run(
@@ -186,7 +222,7 @@ async fn jvm_kip848_describe_group() {
             "bash",
             "-c",
             &format!(
-                "printf '1\\n2\\n' | kafka-console-producer --bootstrap-server {BOOTSTRAP} --topic kip848-d"
+                "printf '1\\n2\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-d"
             ),
         ],
     );
@@ -196,7 +232,7 @@ async fn jvm_kip848_describe_group() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {BOOTSTRAP} --topic kip848-d --group g-d --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
+                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-d --group g-d --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
             ),
         ],
     );
@@ -206,7 +242,7 @@ async fn jvm_kip848_describe_group() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {BOOTSTRAP} --describe --group g-d"
+                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --describe --group g-d"
             ),
         ],
     );
@@ -220,6 +256,7 @@ async fn jvm_kip848_describe_group() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kip848_delete_group() {
+    let bootstrap = bootstrap_addr();
     let (_broker, _dir) = start_host_broker().await;
     create_topic("kip848-del", 1);
     docker_run(
@@ -228,7 +265,7 @@ async fn jvm_kip848_delete_group() {
             "bash",
             "-c",
             &format!(
-                "printf 'x\\n' | kafka-console-producer --bootstrap-server {BOOTSTRAP} --topic kip848-del"
+                "printf 'x\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-del"
             ),
         ],
     );
@@ -238,7 +275,7 @@ async fn jvm_kip848_delete_group() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {BOOTSTRAP} --topic kip848-del --group g-del --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 1"
+                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-del --group g-del --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 1"
             ),
         ],
     );
@@ -248,7 +285,7 @@ async fn jvm_kip848_delete_group() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {BOOTSTRAP} --delete --group g-del"
+                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --delete --group g-del"
             ),
         ],
     );
@@ -258,6 +295,7 @@ async fn jvm_kip848_delete_group() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kip848_coexists_with_classic() {
+    let bootstrap = bootstrap_addr();
     let (_broker, _dir) = start_host_broker().await;
     create_topic("kip848-coex", 1);
     docker_run(
@@ -266,7 +304,7 @@ async fn jvm_kip848_coexists_with_classic() {
             "bash",
             "-c",
             &format!(
-                "printf 'p\\nq\\n' | kafka-console-producer --bootstrap-server {BOOTSTRAP} --topic kip848-coex"
+                "printf 'p\\nq\\n' | kafka-console-producer --bootstrap-server {bootstrap} --topic kip848-coex"
             ),
         ],
     );
@@ -276,7 +314,7 @@ async fn jvm_kip848_coexists_with_classic() {
             "bash",
             "-c",
             &format!(
-                "kafka-console-consumer --bootstrap-server {BOOTSTRAP} --topic kip848-coex --group g-classic --from-beginning --timeout-ms 10000 --max-messages 2"
+                "kafka-console-consumer --bootstrap-server {bootstrap} --topic kip848-coex --group g-classic --from-beginning --timeout-ms 10000 --max-messages 2"
             ),
         ],
     );
@@ -289,7 +327,7 @@ async fn jvm_kip848_coexists_with_classic() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {BOOTSTRAP} --topic kip848-coex --group g-next --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
+                "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic kip848-coex --group g-next --consumer-property group.protocol=consumer --from-beginning --timeout-ms 10000 --max-messages 2"
             ),
         ],
     );
@@ -320,6 +358,7 @@ async fn jvm_kip848_coexists_with_classic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
+    let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     create_topic("mig", 4);
     let group = "g-migrate";
@@ -336,7 +375,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
                 "-c",
                 &format!(
                     "printf '0:a\\n4:b\\n5:c\\n1:d\\n0:e\\n4:f\\n5:g\\n1:h\\n' | \
-                     kafka-console-producer --bootstrap-server {BOOTSTRAP} --topic mig \
+                     kafka-console-producer --bootstrap-server {bootstrap} --topic mig \
                      --property parse.key=true --property key.separator=: \
                      --producer-property max.block.ms=15000"
                 ),
@@ -350,7 +389,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     let classic_out = spawn_consumer(
         KAFKA_IMAGE_CLASSIC,
         format!(
-            "kafka-console-consumer --bootstrap-server {BOOTSTRAP} --topic mig --group {group} \
+            "kafka-console-consumer --bootstrap-server {bootstrap} --topic mig --group {group} \
              --from-beginning --property print.partition=true --timeout-ms 25000 --max-messages 8"
         ),
     )
@@ -370,7 +409,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     let nextgen_out = spawn_consumer(
         KAFKA_IMAGE_NEXT_GEN,
         format!(
-            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {BOOTSTRAP} --topic mig \
+            "/opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server {bootstrap} --topic mig \
              --group {group} --consumer-property group.protocol=consumer --from-beginning \
              --property print.partition=true --timeout-ms 25000 --max-messages 8"
         ),
@@ -391,7 +430,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
             "bash",
             "-c",
             &format!(
-                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {BOOTSTRAP} --describe --group {group}"
+                "/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server {bootstrap} --describe --group {group}"
             ),
         ],
     );
