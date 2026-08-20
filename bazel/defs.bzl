@@ -264,6 +264,13 @@ def crate_tests(
         sh_test(
             name = stem + "_docker_test",
             size = "enormous",
+            # These form real Kafka clusters and assert that a leader is elected
+            # and an ISR populated inside a timeout. On a loaded runner that can
+            # miss without the code being wrong -- `jvm_kip320_divergence` failed
+            # one job and passed another on the same commit, with `Leader: none`
+            # and an empty ISR. A retry separates that from a real break, and
+            # Bazel reports FLAKY rather than PASSED, so it stays visible.
+            flaky = True,
             srcs = ["//bazel:docker_test.sh"],
             args = ["$(rootpath :%s_docker_bin)" % stem],
             # The caller's `data` comes along because its `env` may name those
