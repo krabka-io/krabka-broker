@@ -15,8 +15,8 @@ crate_binary(
 )
 
 crate_tests(
-    lib = "format",
     # `format_smoke` runs the binary and reads back what it wrote.
     data = [":crabka-format"],
     env = {"CARGO_BIN_EXE_crabka-format": "$(rootpath :crabka-format)"},
+    lib = "format",
 )

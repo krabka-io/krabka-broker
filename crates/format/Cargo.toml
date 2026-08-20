@@ -7,7 +7,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Formats a krabka broker log directory: meta.properties.json, the bootstrap records, and the singleton VotersRecord"
-readme = "README.md"
 
 [lints]
 workspace = true

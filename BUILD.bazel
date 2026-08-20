@@ -2,10 +2,12 @@
 
 package(default_visibility = ["//visibility:public"])
 
-# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+# Cargo.lock/Cargo.toml are consumed by `crate.from_cargo` (see //MODULE.bazel);
+# clippy.toml by the lint aspect in //tools/lint.
 exports_files([
     "Cargo.lock",
     "Cargo.toml",
+    "clippy.toml",
 ])
 
 alias(

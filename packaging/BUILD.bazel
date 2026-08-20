@@ -1,0 +1,46 @@
+"""The broker container image.
+
+`aspect delivery` pushes this only when its built output actually changed, which
+for a repository where most commits touch one crate is most pushes avoided.
+
+    bazel run //packaging:image_load     # load into the local daemon
+    bazel run //packaging:push           # push to the registry
+
+The monorepo builds the equivalent with apko from Wolfi. This layers the
+Bazel-built binary onto a digest-pinned distroless base instead: same shape --
+glibc, ca-certificates, nonroot -- without a second package manager inside the
+build, and reproducible from the digest in //MODULE.bazel.
+"""
+
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+pkg_tar(
+    name = "broker_layer",
+    srcs = ["//crates/broker:crabka-broker"],
+    package_dir = "/usr/bin",
+)
+
+oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    entrypoint = ["/usr/bin/crabka-broker"],
+    tars = [":broker_layer"],
+    # 65532 is distroless' `nonroot`. The broker needs no privilege: it binds
+    # 9092/9093, both above 1024, and writes only its data directory.
+    user = "65532:65532",
+)
+
+oci_load(
+    name = "image_load",
+    image = ":image",
+    repo_tags = ["krabka-io/crabka-broker:dev"],
+)
+
+oci_push(
+    name = "push",
+    image = ":image",
+    repository = "ghcr.io/krabka-io/crabka-broker",
+)

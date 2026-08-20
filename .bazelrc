@@ -6,12 +6,61 @@
 # Keep the action environment hermetic so build-script outputs are reproducible.
 build --incompatible_strict_action_env
 
+# The @llvm toolchain passes `--unwindlib=none` on link actions deliberately, to
+# stop clang picking a libunwind for itself. clang then reports the argument as
+# unused, and rustc's `linker_messages` lint surfaces that on stderr -- one
+# warning per link, which is most of a CI log. The toolchain already suppresses
+# the same complaint for its header-parsing and LTO actions and carries a TODO
+# about rules_cc passing extra args; this extends that to linking.
+build --linkopt=-Wno-unused-command-line-argument
+
 # Keep the autodetected host C++ toolchain from outranking the hermetic @llvm one
 # registered in MODULE.bazel.
 common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
 
 test --test_output=errors
+
+# Clippy, as an aspect over the targets the build already has.
+#
+#     bazel build --config=lint //...    # report
+#     bazel test //...                   # fail on a violation
+#
+# It sees the crates, features and dependencies the build sees, rather than a
+# second `cargo clippy` resolution that can disagree with it.
+build:lint --aspects=//tools/lint:linters.bzl%clippy
+build:lint --output_groups=clippy_checks
+build:lint --@rules_rust//:clippy.toml=//:clippy.toml
+# `clippy::pedantic` is a warning by workspace policy, and CLAUDE.md forbids
+# suppressing it. Warnings therefore have to fail, or the policy is decorative.
+build:lint --@rules_rust//:clippy_flags=-Dwarnings
+
+# Coverage. rules_rust emits LLVM source-based coverage, which Bazel merges into
+# one LCOV file at bazel-out/_coverage/_coverage_report.dat.
+#
+#     bazel coverage //crates/...
+#
+# Only first-party crates are instrumented: third-party coverage is noise, and
+# instrumenting the whole dependency closure is most of the run.
+coverage --combined_report=lcov
+coverage --instrumentation_filter=^//crates[:/]
+
+# Download a JDK rather than resolving the machine's. `jvm_tiered_storage` runs
+# a small Java probe against Kafka's own storage classes; without this the
+# toolchain resolves to `local_jdk` and fails on a machine with no JDK, which is
+# how that suite fails under Cargo today.
+build --java_runtime_version=remotejdk_21
+
+# Container-driven suites are opt-in. They start real Kafka brokers through
+# testcontainers, so they need a Docker daemon and several hundred megabytes of
+# images; `bazel test //...` on a machine without one should not fail.
+#
+#     bazel test --config=docker //...
+test --test_tag_filters=-docker
+test:docker --test_tag_filters=docker
+# One container set at a time: several of these bind fixed host ports so the
+# JVM tools have a known bootstrap target.
+test:docker --local_test_jobs=1
 
 # The mutation rules ship no cargo-mutants binary of their own; point them at
 # the one built from //tools/mutants' lockfile.

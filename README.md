@@ -55,14 +55,93 @@ cargo nextest run --workspace
 Both run the same 3392 tests. Bazel additionally runs the 9 rustdoc examples,
 which `cargo nextest` cannot; `cargo test --workspace --doc` covers those.
 
-## Depending on the siblings
+### Everything CI does, locally
 
-Both siblings are pinned by revision in exactly one place, the
-`[patch.crates-io]` block at the bottom of the root `Cargo.toml`. Member
-manifests declare those crates as ordinary `crabka-x = "0.4.0"` requirements and
-the patch redirects them at the git checkouts, so a manifest still reads as a
-normal Cargo manifest. To move to a newer sibling, change the revision there and
-re-run `cargo generate-lockfile`.
+The [Aspect CLI](https://github.com/aspect-build/aspect-cli) narrows each task to
+what a change actually touched, which for a repository this size is the
+difference between a minute and most of an hour. Every one has a plain-Bazel
+equivalent, so the CLI is a convenience rather than a requirement:
+
+| | Aspect CLI | Plain Bazel |
+| --- | --- | --- |
+| Build | `aspect build //...` | `bazel build //...` |
+| Test | `aspect test //...` | `bazel test //...` |
+| Lint | `aspect lint` | `bazel build --config=lint //...` |
+| Format | `aspect format` | `bazel run //tools/format` |
+| Coverage | `aspect test --coverage` | `bazel coverage //crates/...` |
+| Docs | — | `bazel build //crates/audit:audit_doc` |
+| Delivery | `aspect delivery` | `bazel run //packaging:push` |
+
+Formatting and linting are Bazel targets rather than a separate `cargo fmt` /
+`cargo clippy` pass, so they see exactly the files and crates the build sees. A
+file in no target cannot drift unnoticed, and clippy resolves the same features
+the build resolves.
+
+Two details worth knowing:
+
+* **rustfmt runs on a pinned nightly.** `rustfmt.toml` uses
+  `format_code_in_doc_comments`, `group_imports` and `imports_granularity`, all
+  still nightly-gated; stable rustfmt warns and silently skips them. The nightly
+  is pinned in `MODULE.bazel`, so formatting is reproducible rather than a
+  function of whichever nightly is installed.
+* **`rustfmt.toml` states its edition.** `cargo fmt` passes `--edition` from
+  `Cargo.toml`; rustfmt invoked directly defaults to 2015 and sorts `use` lists
+  differently. Stating it makes formatting a property of the repository rather
+  than of how rustfmt was launched.
+
+## Container suites
+
+The JVM acceptance, tiered-storage and Kerberos suites drive real Kafka
+containers. They are `#[ignore]`d under Cargo, and under Bazel they are separate
+targets tagged `docker`, which the default `bazel test` filters out:
+
+```
+bazel test --config=docker //crates/...
+```
+
+The images are **pinned by digest in `MODULE.bazel` and fetched by Bazel**, not
+pulled by testcontainers mid-test. `//bazel/images` turns each into a
+`docker load`-able tarball, and `//bazel:docker_test.sh` loads them before the
+suite runs. So the bytes a suite runs against are the bytes the build pinned, the
+network is out of the test itself, and the repository cache carries the images
+between CI runs. The JDK that `jvm_tiered_storage`'s probe needs is downloaded by
+Bazel too, rather than resolved from the machine — under Cargo that suite simply
+fails on a host with no JDK.
+
+The Docker daemon is the one thing Bazel cannot own, so it is the one thing left
+undeclared: those targets are tagged `no-sandbox` for the socket and `external`
+so a pass is never cached against inputs that do not describe the daemon's state.
+
+They run nightly rather than per-PR — the images alone are a few gigabytes.
+
+`describe_groups_jvm` is *not* among them. It records a real-Kafka fixture into
+`tests/fixtures/` rather than reading one, which makes it a recording tool: a
+Bazel test cannot write to the source tree, and should not want to. It stays
+`#[ignore]`d under Cargo, which is where fixtures get regenerated.
+
+### Known-failing on some hosts
+
+`jvm_acceptance`, `jvm_features` and `jvm_kip320_divergence` fail on a
+development machine here. They fail identically under `cargo nextest run
+--run-ignored ignored-only`, so this is not a property of the Bazel targets —
+whatever it is, both build systems hit it. The cause is not established; these
+suites bind fixed host ports and reach the host back through
+`host.docker.internal`, and CI maps that name to `127.0.0.1` before running them.
+Treat a local failure in these three as unconfirmed until it reproduces in CI.
+
+## Delivery
+
+```
+bazel run //packaging:image_load    # load into the local daemon
+bazel run //packaging:push          # push to ghcr.io
+```
+
+The broker binary is layered onto a digest-pinned distroless base and runs as
+`nonroot` (65532). The monorepo builds the equivalent with apko from Wolfi; this
+keeps the same shape — glibc, ca-certificates, unprivileged — without a second
+package manager inside the build. `aspect delivery` pushes only when the built
+output actually changed, which for a commit touching one crate is usually not at
+all.
 
 ## Mutation testing
 
@@ -100,12 +179,6 @@ That CLI also drives the gres layer, so it could not follow the broker out; the
 command needs only the metadata and security crates, so it lives here as
 `crabka-format` — a library as well as a binary, so `crabka-cli` can call it
 rather than carry a second copy.
-
-## Docker-driven suites
-
-The JVM acceptance, tiered-storage and Kerberos suites are `#[ignore]`d, exactly
-as in the monorepo: they need Docker, a `cp-kafka` image, or an MIT KDC. They
-build under both Cargo and Bazel and are skipped by both unless run explicitly.
 
 ## Publishing
 

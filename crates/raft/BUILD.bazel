@@ -8,6 +8,12 @@ exports_files(["Cargo.toml"])
 crate_library(name = "raft")
 
 crate_tests(
+    # The engine simulation drives real elections against real timers. Starved
+    # of CPU it reports a timed-out election as a failure, which is a statement
+    # about the machine rather than the code -- it failed 7 of 7 at twelve
+    # concurrent runs and passed at six. Declaring the cores keeps Bazel from
+    # creating that starvation.
+    cpu_heavy = ["kraft_engine_sim"],
     lib = "raft",
     # The consensus engine is the highest-value mutation target here: its
     # decision logic is pure and almost entirely unit-tested, so a survivor is a

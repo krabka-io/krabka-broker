@@ -1,11 +1,10 @@
 name: ci
-
 on:
   pull_request:
   push:
     branches: [main]
   schedule:
-    # Nightly, 05:00 UTC. Only the mutation sweep runs on this trigger.
+    # Nightly, 05:00 UTC: the mutation sweep and the container suites.
     - cron: "0 5 * * *"
 
 permissions:
@@ -17,29 +16,120 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  bazel:
-    name: bazel test //...
+  # Build, test, lint and format. The Aspect CLI narrows each of these to what
+  # the change actually touched; `bazel build|test //...` is the equivalent for
+  # anyone without the CLI, and is what the nightly job runs.
+  ci:
+    name: build · test · lint · format
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          # Change detection needs the merge base, not just the tip.
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}
           repository-cache: true
-      - run: bazel test //...
+
+      # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
+      # and `info` off it -- so this gates here and only reports locally.
+      - name: format
+        run: aspect format
+
+      # Plain Bazel rather than `aspect lint`: that task requires an aspect from
+      # aspect_rules_lint, and this repository's clippy aspect comes from the
+      # @rules_rust that rules_rs vends. aspect_rules_lint_rust would supply a
+      # conforming one, but it registers a Rust toolchain of its own pinned to
+      # 1.92.0 / edition 2021 and rules_rs refuses two configurations under one
+      # repo name -- so the choice is one toolchain or `aspect lint`'s PR
+      # annotations, and one toolchain matters more. Clippy still gates CI.
+      - name: lint
+        run: bazel build --config=lint //...
+
+      - name: build
+        run: aspect build //...
+
+      - name: test
+        run: aspect test //...
+
+  # LCOV over the first-party crates. Separate from `ci` because instrumented
+  # binaries are a different build, so sharing that job's cache would only
+  # evict it.
+  coverage:
+    name: coverage
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-coverage
+          repository-cache: true
+      - run: bazel coverage //crates/...
+      - uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: bazel-out/_coverage/_coverage_report.dat
+          disable_search: true
+          fail_ci_if_error: false
+
+  # rustdoc for every crate, kept as an artifact. The `ci` job already builds
+  # these -- a `rust_doc` per crate is an ordinary target -- so this exists to
+  # publish the output, and to keep rendering the whole set even when `aspect
+  # build` narrowed to the crates a change touched.
+  docs:
+    name: docgen
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-docs
+          repository-cache: true
+      - run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdoc
+          path: bazel-bin/crates/**/*.rustdoc
+          if-no-files-found: error
+
+  # The container-driven suites. Nightly rather than per-PR: they start real
+  # Kafka brokers, and the images alone are a few gigabytes. The images
+  # themselves are digest-pinned Bazel inputs (see //bazel/images), so this
+  # pulls from the repository cache rather than a registry.
+  docker:
+    name: container suites
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-docker
+          repository-cache: true
+      # The Rust side of several suites runs on the host and dials the broker
+      # back through the name the containers use for it.
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+      - run: bazel test --config=docker //crates/...
 
   # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
-  # so it is far too slow to gate a pull request. The targets carry `manual`
-  # tags to stay out of `//...`; this job names them explicitly.
+  # so it is far too slow to gate a pull request.
   #
-  # `continue-on-error`: a surviving mutant fails the test target, and survivors
-  # are expected here rather than exceptional -- `cargo_mutants_test` runs only
-  # `#[cfg(test)]` unit tests, so every mutant that the `tests/*.rs` suites would
-  # have killed is reported as a survivor. The job exists to produce that list to
-  # read, not to gate. Make it blocking once the score is one worth defending.
+  # `continue-on-error`: survivors are the expected state, not an exception --
+  # `cargo_mutants_test` runs only `#[cfg(test)]` unit tests, so every mutant the
+  # `tests/*.rs` suites would have killed is reported as one. The job exists to
+  # produce a list to read. Make it blocking once the score is worth defending.
   mutants:
     name: mutation sweep
     if: github.event_name == 'schedule'
@@ -48,13 +138,12 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-mutants
           repository-cache: true
-      - name: Collect mutation targets
-        id: targets
+      - id: targets
         run: |
           {
             echo 'targets<<EOF'
@@ -62,3 +151,30 @@ jobs:
             echo EOF
           } >>"${GITHUB_OUTPUT}"
       - run: bazel test ${{ steps.targets.outputs.targets }}
+
+  # Push the broker image, but only when its built output actually changed --
+  # which for a commit touching one crate is usually not at all.
+  delivery:
+    name: delivery
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: aspect delivery

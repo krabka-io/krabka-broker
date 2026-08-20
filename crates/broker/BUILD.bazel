@@ -15,16 +15,49 @@ crate_binary(
 )
 
 crate_tests(
-    lib = "broker",
     # TLS certificates, Kerberos keytabs and captured Kafka frames. The TLS
     # material is `include_str!`ed by the suites that serve it and the keytabs
     # are opened at run time, so both lists are needed.
     compile_data = glob(["tests/fixtures/**"]),
     data = glob(["tests/fixtures/**"]) + [":crabka-broker"],
+    docker = {
+        "jvm_acceptance": [
+            "cp_kafka_3_1_2",
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
+            "cp_kafka_7_8_8",
+            "minio",
+            "minio_mc",
+        ],
+        "jvm_consumer_group_next_gen": [
+            "apache_kafka_4_0_0",
+            "cp_kafka_7_4_0",
+        ],
+        "jvm_features": ["apache_kafka_4_3_1"],
+        "jvm_kip320_divergence": [
+            "apache_kafka_4_0_0",
+            "apache_kafka_4_3_1",
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
+        ],
+        "jvm_share_groups": ["apache_kafka_4_1_0"],
+        "jvm_static_quorum_spike": ["apache_kafka_4_0_0"],
+        "jvm_streams_groups": ["apache_kafka_4_1_0"],
+        "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
+    },
     # `cli_smoke` boots the real binary and finds it through the variable Cargo
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
     env = {"CARGO_BIN_EXE_crabka-broker": "$(rootpath :crabka-broker)"},
+    lib = "broker",
+    # Suites whose `#[ignore]`d cases drive real containers, and the images
+    # each one starts. //bazel/images pins those by digest and //bazel/defs.bzl
+    # loads them before the suite runs, so nothing is pulled mid-test.
+    # `describe_groups_jvm` records a real-Kafka fixture into `tests/fixtures/`
+    # rather than reading one, so it is a recording tool and not a test: a Bazel
+    # test cannot write to the source tree, and should not want to. It still
+    # runs under Cargo, which is where fixtures get regenerated.
+    manual = ["describe_groups_jvm"],
     # 212k lines: a full sweep is nightly-sized even sharded this far.
     mutants_shards = 32,
 )

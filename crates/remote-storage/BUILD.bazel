@@ -7,4 +7,7 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "remote-storage")
 
-crate_tests(lib = "remote-storage")
+crate_tests(
+    docker = {"jvm_tiered_storage": ["apache_kafka_4_0_0"]},
+    lib = "remote-storage",
+)

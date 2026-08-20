@@ -17,9 +17,9 @@ bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
 # `bazel_dep` above has nothing to resolve against without this override.
 git_override(
     module_name = "rules_rs_mutants",
-    remote = "https://github.com/robot-head/rules_rs_mutants",
     # v0.0.1, resolved to a commit so the checkout is reproducible.
     commit = "fbc5c265b268cd050f2b392fbbf7ea4fb5b1a656",
+    remote = "https://github.com/robot-head/rules_rs_mutants",
 )
 
 # A hermetic C++ toolchain rather than the host's.
@@ -35,6 +35,85 @@ bazel_dep(name = "llvm", version = "0.8.18")
 
 register_toolchains("@llvm//toolchain:all")
 
+# ---------------------------------------------------------------------------
+# Kafka images for the container-driven suites.
+#
+# Pinned by digest and fetched by Bazel, so a test loads known bytes from the
+# repository cache instead of pulling a mutable tag over the network mid-run.
+# See //bazel/images, which turns each into a `docker load`-able tarball.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "rules_oci", version = "2.3.0")
+
+# `sh_test`, for the wrapper that loads those images before a suite runs.
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+# A hermetic JDK. `jvm_tiered_storage` drives a small Java probe against Kafka's
+# own storage classes, so it needs a `java` on PATH; without one it fails
+# identically under Cargo, which is how the monorepo leaves it. Declaring the
+# runtime makes the suite a function of the build rather than of whether the
+# machine happens to have a JDK installed.
+bazel_dep(name = "rules_java", version = "9.8.0")
+
+# `pkg_tar`, for the layer //packaging puts the broker binary in.
+bazel_dep(name = "rules_pkg", version = "1.1.0")
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+
+[
+    oci.pull(
+        name = name,
+        digest = digest,
+        image = image,
+        platforms = ["linux/amd64"],
+    )
+    for name, image, digest in [
+        ("apache_kafka_4_0_0", "mirror.gcr.io/apache/kafka", "sha256:3f7b939115cd4872e9cee9369d80bd69712fde55f9902f46d793f64848dedc75"),
+        ("apache_kafka_4_1_0", "mirror.gcr.io/apache/kafka", "sha256:bff074a5d0051dbc0bbbcd25b045bb1fe84833ec0d3c7c965d1797dd289ec88f"),
+        ("apache_kafka_4_3_1", "mirror.gcr.io/apache/kafka", "sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837"),
+        ("cp_kafka_3_1_2", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:f49a936269d36434ee29ca2c53876d891aee9a4ff7750147ded38db2b31c2c9a"),
+        ("cp_kafka_6_1_1", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:537c303f182ff6ba665f324520105c44970c97d7ef94b306709a5d68b8c1aed7"),
+        ("cp_kafka_7_4_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63"),
+        ("cp_kafka_7_5_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:fbbb6fa11b258a88b83f54d4f0bddfcffbf2279f99d66a843486e3da7bdfbf41"),
+        ("cp_kafka_7_8_8", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:6ed4c074b8169cd0e280350c41cddf1495a2ce4bf144d90f68b3a8856369ccd7"),
+        # The base //packaging ships the broker on: glibc and ca-certificates,
+        # a nonroot user, and nothing else. The monorepo builds the equivalent
+        # with apko from Wolfi; this pins a prebuilt one by digest instead, so
+        # the image is reproducible without a second package manager in the
+        # build.
+        ("distroless_cc", "gcr.io/distroless/cc-debian12", "sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77"),
+        # jvm_acceptance's tiered-storage cases back the remote tier with MinIO.
+        ("minio", "mirror.gcr.io/minio/minio", "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"),
+        ("minio_mc", "mirror.gcr.io/minio/mc", "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"),
+    ]
+]
+
+use_repo(
+    oci,
+    "apache_kafka_4_0_0",
+    "apache_kafka_4_1_0",
+    "apache_kafka_4_3_1",
+    "cp_kafka_3_1_2",
+    "cp_kafka_6_1_1",
+    "cp_kafka_7_4_0",
+    "cp_kafka_7_5_0",
+    "cp_kafka_7_8_8",
+    "distroless_cc",
+    "minio",
+    "minio_mc",
+)
+
+# ---------------------------------------------------------------------------
+# Format. See //tools/format.
+#
+# Formatting only: clippy comes from the @rules_rust that rules_rs already vends,
+# through its own aspect. aspect_rules_lint_rust would supply one too, but it
+# registers a Rust toolchain of its own pinned to 1.92.0 / edition 2021, and
+# rules_rs refuses two configurations under one repo name. Taking the aspect from
+# the build's own rules_rust keeps one toolchain and one resolution.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
+bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.3")
+
 # rules_rs vends its own patched @rules_rust. `rust_doc_test` has no rules_rs
 # wrapper, so it is loaded from there directly rather than from a second copy.
 rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
@@ -46,6 +125,13 @@ use_repo(rules_rust, "rules_rust")
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
+    # rustfmt.toml sets `format_code_in_doc_comments`, `group_imports` and
+    # `imports_granularity`, all still nightly-gated. Stable rustfmt does not
+    # fail on them, it warns and silently skips them -- so a stable formatter
+    # would quietly disagree with the tree, which CI formats with
+    # `cargo +nightly fmt`. rules_rs pins rustfmt separately from rustc for
+    # exactly this.
+    rustfmt_version = "nightly/2026-08-14",
     version = "1.97.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
@@ -79,6 +165,7 @@ crate.from_cargo(
     cargo_toml = "//tools/mutants:Cargo.toml",
     platform_triples = PLATFORM_TRIPLES,
 )
+
 # The wire-layer and client crates come from two sibling repositories, each a
 # Cargo workspace whose `members` is the glob `crates/*`. rules_rs resolves a git
 # crate's directory by matching the crate name against the members list, and it
@@ -119,7 +206,6 @@ crate.annotation(
     strip_prefix = "crates/protocol",
     workspace_cargo_toml = "Cargo.toml",
 )
-
 crate.annotation(
     crate = "cargo-mutants",
     gen_binaries = ["cargo-mutants"],
