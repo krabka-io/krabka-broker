@@ -106,13 +106,7 @@ use_repo(
 )
 
 # ---------------------------------------------------------------------------
-# Format. See //tools/format.
-#
-# Formatting only: clippy comes from the @rules_rust that rules_rs already vends,
-# through its own aspect. aspect_rules_lint_rust would supply one too, but it
-# registers a Rust toolchain of its own pinned to 1.92.0 / edition 2021, and
-# rules_rs refuses two configurations under one repo name. Taking the aspect from
-# the build's own rules_rust keeps one toolchain and one resolution.
+# Format and lint. See //tools/format and //tools/lint.
 # ---------------------------------------------------------------------------
 bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
 
