@@ -4,8 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly, 05:00 UTC: the mutation sweep and the container suites.
+    # Nightly, 05:00 UTC: the full container run and the mutation sweep.
     - cron: "0 5 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -161,6 +162,27 @@ jobs:
         name: run impacted container suites
         run: bazel test --config=docker ${{ steps.impacted.outputs.targets }}
 
+  # Every container suite, not just the impacted ones.
+  #
+  # The `docker` job above runs what a change reaches, which is the right gate
+  # for a pull request but means a suite nothing touched can stay broken and
+  # invisible -- a green `docker` job says "nothing impacted broke", not "the
+  # container suites pass". This says the second thing.
+  docker-full:
+    name: container suites (full)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-docker
+          repository-cache: true
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+      - run: bazel test --config=docker //crates/...
+
   # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
   # so it is far too slow to gate a pull request.
   #
@@ -170,7 +192,7 @@ jobs:
   # produce a list to read. Make it blocking once the score is worth defending.
   mutants:
     name: mutation sweep
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 360
