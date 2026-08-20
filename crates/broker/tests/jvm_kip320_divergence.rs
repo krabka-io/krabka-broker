@@ -346,13 +346,16 @@ public class Kip320Probe {
 #[ignore = "requires Docker; Linux-bound (host.docker.internal bridge)"]
 async fn kip320_wire_conformance_offset_for_leader_epoch() {
     const TOPIC: &str = "crabka-kip320-wire";
-    const CONTAINER: &str = "crabka-kip320-wire-helper";
-    const CLIENT_PORT: u16 = 10692;
-    const CONTROLLER_PORT: u16 = 10693;
-    const BOOTSTRAP: &str = "host.docker.internal:10692";
+    let container = support::unique_container_name("crabka-kip320-wire-helper");
+    // Allocated rather than fixed at 10692/10693: two runs of this suite would
+    // otherwise race for the same bind, and the loser reports `Address already
+    // in use` as a test failure.
+    let client_port = support::free_port();
+    let controller_port = support::free_port();
+    let bootstrap = format!("host.docker.internal:{client_port}");
 
-    docker_rm(CONTAINER);
-    let (broker, _dir) = start_host_broker_on(CLIENT_PORT, CONTROLLER_PORT).await;
+    docker_rm(&container);
+    let (broker, _dir) = start_host_broker_on(client_port, controller_port).await;
 
     // 1. Create topic (1 partition, RF=1).
     let out = docker_run_kafka_tool_with_image(
@@ -368,14 +371,14 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            bootstrap.as_str(),
         ],
     );
     assert!(out.status.success(), "create topic failed");
 
     // 2. Produce a first batch at the current (epoch 0) leadership.
     produce_lines_via_jvm(
-        BOOTSTRAP,
+        bootstrap.as_str(),
         TOPIC,
         &(0..5).map(|i| format!("e0-{i}")).collect::<Vec<_>>(),
     );
@@ -411,7 +414,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
         tokio::task::yield_now().await;
     }
     produce_lines_via_jvm(
-        BOOTSTRAP,
+        bootstrap.as_str(),
         TOPIC,
         &(0..5).map(|i| format!("e1-{i}")).collect::<Vec<_>>(),
     );
@@ -421,7 +424,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
     //    truth the JVM helper is validated against.
     {
         let client = crabka_client_core::Client::builder()
-            .bootstrap(format!("127.0.0.1:{CLIENT_PORT}"))
+            .bootstrap(format!("127.0.0.1:{client_port}"))
             .build()
             .await
             .expect("rust probe client");
@@ -467,14 +470,14 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
         "set -e; cp /helper/Kip320Probe.java /tmp/Kip320Probe.java; \
          CP=$(ls /usr/share/java/kafka/*.jar 2>/dev/null | tr '\\n' ':')$(ls /usr/share/java/cp-base-new/*.jar 2>/dev/null | tr '\\n' ':'); \
          javac -cp \"$CP\" -d /tmp /tmp/Kip320Probe.java; \
-         java -cp \"/tmp:$CP\" Kip320Probe {BOOTSTRAP} {TOPIC} {epoch0_end}"
+         java -cp \"/tmp:$CP\" Kip320Probe {bootstrap} {TOPIC} {epoch0_end}"
     );
     let helper_out = Command::new("docker")
         .args([
             "run",
             "--rm",
             "--name",
-            CONTAINER,
+            &container,
             "--add-host=host.docker.internal:host-gateway",
             "-v",
             &format!("{}:/helper", helper_dir.path().display()),
@@ -506,7 +509,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
         "JVM OffsetForLeaderEpoch / Fetch v12 conformance probe did not pass: stdout={stdout} stderr={stderr}"
     );
 
-    docker_rm(CONTAINER);
+    docker_rm(&container);
     broker.shutdown().await;
 }
 
@@ -941,10 +944,11 @@ async fn wait_for_voter_registrations(cluster: &MixedCluster) {
 #[ignore = "requires Docker + published controller/data ports; Linux-bound"]
 async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
     const EXISTING_TOPIC: &str = "crabka-mv-capability-existing";
-    const CONTAINER: &str = "crabka-mv-capability-jvm-broker";
     const UPPER_LEVEL: i16 = 25; // 4.0-IV3.
 
-    let cluster = start_mixed_cluster(CONTAINER, false).await;
+    let container = support::unique_container_name("crabka-mv-capability-jvm-broker");
+
+    let cluster = start_mixed_cluster(&container, false).await;
     assert!(
         cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
         "JVM broker never joined the mixed cluster"
@@ -1029,9 +1033,9 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
 #[ignore = "requires Docker + a published controller/data port; Linux-bound"]
 async fn kip320_jvm_follower_truncates_from_crabka_leader() {
     const TOPIC: &str = "crabka-kip320-jvm-follower";
-    const CONTAINER: &str = "crabka-kip320-jvm-follower-broker";
+    let container = support::unique_container_name("crabka-kip320-jvm-follower-broker");
 
-    let cluster = start_mixed_cluster(CONTAINER, true).await;
+    let cluster = start_mixed_cluster(&container, true).await;
     let c1 = &cluster.crabka[0].0; // Crabka broker_id 1
     let bootstrap_all = cluster.bootstrap_all.clone();
 
@@ -1140,7 +1144,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
     produce_lines_via_jvm(&bootstrap_all, TOPIC, &jvm_suffix);
     c1.wait_until_local_log_end_offset(TOPIC, 0, prefix_leo + 4)
         .await;
-    let jvm_before = dump_log_in_container(CONTAINER, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
+    let jvm_before = dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
     assert!(
         jvm_before.contains("jvm-divergent-3"),
         "JVM dump did not contain the suffix that must later be truncated:\n{jvm_before}"
@@ -1150,7 +1154,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
     // metadata cancels replication cooperatively, so an already in-flight
     // response from the former JVM leader could otherwise reset the test log
     // during this deliberately out-of-band mutation.
-    set_container_paused(CONTAINER, true);
+    set_container_paused(&container, true);
 
     // Take the partition offline behind a dead phantom leader (id 99). Keep
     // the assignment and directory vector intact so this record changes only
@@ -1224,7 +1228,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
         .await
         .expect("restore Crabka leader");
 
-    set_container_paused(CONTAINER, false);
+    set_container_paused(&container, false);
 
     wait_for_described_leader(&bootstrap_all, TOPIC, 1, Duration::from_secs(45)).await;
 
@@ -1233,7 +1237,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
     //    truncation because both divergent tails contain four records.
     let convergence_deadline = Instant::now() + Duration::from_mins(1);
     let jvm_dump = loop {
-        let dump = dump_log_in_container(CONTAINER, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
+        let dump = dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
         if dump.contains("test-record-3") && !dump.contains("jvm-divergent-") {
             break dump;
         }
@@ -1314,9 +1318,9 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
 #[ignore = "requires Docker + a published controller/data port; Linux-bound"]
 async fn kip320_crabka_follower_truncates_from_jvm_leader() {
     const TOPIC: &str = "crabka-kip320-crabka-follower";
-    const CONTAINER: &str = "crabka-kip320-crabka-follower-broker";
+    let container = support::unique_container_name("crabka-kip320-crabka-follower-broker");
 
-    let cluster = start_mixed_cluster(CONTAINER, true).await;
+    let cluster = start_mixed_cluster(&container, true).await;
     let c1 = &cluster.crabka[0].0;
     let bootstrap_all = cluster.bootstrap_all.clone();
 
@@ -1383,7 +1387,7 @@ async fn kip320_crabka_follower_truncates_from_jvm_leader() {
     // Freeze the JVM replica before parking replication. Otherwise it can
     // copy part of the deliberately forged suffix while the phantom-leader
     // metadata is still propagating, making its authoritative prefix longer.
-    set_container_paused(CONTAINER, true);
+    set_container_paused(&container, true);
 
     c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
         topic: TOPIC.to_string(),
@@ -1432,7 +1436,7 @@ async fn kip320_crabka_follower_truncates_from_jvm_leader() {
     .await
     .expect("promote JVM broker for reverse-direction recovery");
 
-    set_container_paused(CONTAINER, false);
+    set_container_paused(&container, false);
 
     wait_for_described_leader(&bootstrap_all, TOPIC, 3, Duration::from_secs(45)).await;
 
@@ -1453,7 +1457,7 @@ async fn kip320_crabka_follower_truncates_from_jvm_leader() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     let jvm_prefix_dump =
-        dump_log_in_container(CONTAINER, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
+        dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
     assert2::assert!(
         max_offset_in_dump(&jvm_prefix_dump) == Some(prefix_leo - 1),
         "JVM leader should retain exactly the shared prefix:\n{jvm_prefix_dump}"
