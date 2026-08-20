@@ -12,6 +12,7 @@ glibc, ca-certificates, nonroot -- without a second package manager inside the
 build, and reproducible from the digest in //MODULE.bazel.
 """
 
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
@@ -39,8 +40,17 @@ oci_load(
     repo_tags = ["krabka-io/crabka-broker:dev"],
 )
 
+# `remote_tags` takes a file rather than a list; CI adds the commit SHA on the
+# command line, which `oci_push` accepts in addition to these.
+write_file(
+    name = "remote_tags",
+    out = "remote_tags.txt",
+    content = ["latest"],
+)
+
 oci_push(
     name = "push",
     image = ":image",
+    remote_tags = ":remote_tags",
     repository = "ghcr.io/krabka-io/crabka-broker",
 )

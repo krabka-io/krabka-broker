@@ -152,8 +152,16 @@ jobs:
           } >>"${GITHUB_OUTPUT}"
       - run: bazel test ${{ steps.targets.outputs.targets }}
 
-  # Push the broker image, but only when its built output actually changed --
-  # which for a commit touching one crate is usually not at all.
+  # Push the broker image.
+  #
+  # Not `aspect delivery`: its "only what changed" tracking needs
+  # `ASPECT_WORKFLOWS_DELIVERY_API_ENDPOINT`, a state backend that comes with
+  # Aspect Workflows rather than the open-source CLI. Without it the task refuses
+  # to run except with `--mode=always`, which is what a plain push already is.
+  #
+  # Pushing unconditionally costs less than it sounds: the image is
+  # content-addressed, so a registry that already holds these layers takes the
+  # manifest and skips the blobs. Revisit if Workflows is ever adopted.
   delivery:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -177,4 +185,5 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: aspect delivery
+      - name: push
+        run: bazel run //packaging:push -- --tag "${GITHUB_SHA}" --tag latest
