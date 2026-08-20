@@ -5,12 +5,12 @@
 //! Both tests are gated `#[ignore = "requires Docker"]` so `cargo test`
 //! does not pull Docker by default. Run with `--ignored`.
 //!
-//! Networking: the Rust broker listens on `0.0.0.0:9092` of the host. The
+//! Networking: the Rust broker listens on an allocated port of the host. The
 //! Kafka CLI containers use Docker's default bridge network plus
 //! `--add-host=host.docker.internal:host-gateway`. On Docker Desktop and on
 //! Linux Docker 20.10+, that flag maps `host.docker.internal` to the bridge
-//! gateway IP that the host binds `0.0.0.0:9092` on. The broker advertises
-//! `host.docker.internal:9092`. The `AdminClient` connects a second time
+//! gateway IP that the host binds an allocated port on. The broker advertises
+//! an allocated port. The `AdminClient` connects a second time
 //! after Metadata, and that connect targets a hostname the container can
 //! resolve.
 //!
@@ -24,6 +24,8 @@
 // `if l.is_some() && l != Some(1)` in `jvm_kafka_leader_election_preferred`
 // and its span computation ICEs in annotate-snippets on Rust 1.95.
 
+mod support;
+
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -33,14 +35,97 @@ use assert2::{assert, check};
 use crabka_broker::{Broker, BrokerConfig};
 use crabka_log::LogConfig;
 
-const HOST_PORT: u16 = 9092;
+/// Ports for this test process, allocated once rather than fixed at 9092-9097.
+///
+/// This suite runs up to three brokers, each with a client and a controller
+/// listener, plus `MinIO` for the tiered-storage cases. Fixed ports meant no two
+/// container suites could run at once -- the second to start lost the bind and
+/// reported `Address already in use` as a test failure.
+///
+/// Accessors return `&'static str` so ordinary use sites read as the constants
+/// they replaced, and are named apart from the locals a format string binds.
+struct Ports {
+    client: [String; 3],
+    advertised: [String; 3],
+    controller: [String; 3],
+    loopback: String,
+    minio: u16,
+}
+
+fn ports() -> &'static Ports {
+    static PORTS: std::sync::OnceLock<Ports> = std::sync::OnceLock::new();
+    PORTS.get_or_init(|| {
+        let client: [u16; 3] = std::array::from_fn(|_| support::free_port());
+        let controller: [u16; 3] = std::array::from_fn(|_| support::free_port());
+        Ports {
+            client: client.map(|p| format!("0.0.0.0:{p}")),
+            advertised: client.map(|p| format!("host.docker.internal:{p}")),
+            controller: controller.map(|p| format!("0.0.0.0:{p}")),
+            loopback: format!("127.0.0.1:{}", client[0]),
+            minio: support::free_port(),
+        }
+    })
+}
+
+fn broker0_advertised() -> &'static str {
+    &ports().advertised[0]
+}
+
+fn broker0_listen() -> &'static str {
+    &ports().client[0]
+}
+
+fn controller_addr_0() -> &'static str {
+    &ports().controller[0]
+}
+
+fn broker1_advertised() -> &'static str {
+    &ports().advertised[1]
+}
+
+fn broker1_listen() -> &'static str {
+    &ports().client[1]
+}
+
+fn controller_addr_1() -> &'static str {
+    &ports().controller[1]
+}
+
+fn broker2_advertised() -> &'static str {
+    &ports().advertised[2]
+}
+
+fn broker2_listen() -> &'static str {
+    &ports().client[2]
+}
+
+fn controller_addr_2() -> &'static str {
+    &ports().controller[2]
+}
+
+/// Broker 0 over loopback. The tests' own clients use this; only the containers
+/// use the advertised `host.docker.internal` name.
+fn rlmm_broker0_advertised() -> &'static str {
+    &ports().loopback
+}
+
+fn host_port() -> u16 {
+    ports().client[0]
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .expect("client addr has a numeric port")
+}
+
+fn minio_port() -> u16 {
+    ports().minio
+}
+
 /// Address the Kafka CLI containers use for bootstrap AND that the broker
 /// advertises in `Metadata`. [`docker_run_kafka_tool`] resolves it with
 /// `--add-host=host.docker.internal:host-gateway`.
-const BOOTSTRAP: &str = "host.docker.internal:9092";
 /// Bind to all interfaces so the Docker bridge can reach the broker at the
 /// host gateway IP.
-const LISTEN: &str = "0.0.0.0:9092";
 const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka:6.1.1";
 /// Newer Kafka image for tests that need tools or client APIs not bundled in
 /// [`KAFKA_IMAGE`]. These tests use it:
@@ -59,8 +144,8 @@ const KAFKA_IMAGE_TXN: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.5.0";
 /// up/down-conversion paths from slices 2b+2c (#226).
 const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka:3.1.2";
 
-/// Spawn the broker on `LISTEN`. The advertised listener is
-/// `host.docker.internal:9092`. Inside the cp-kafka containers, the test
+/// Spawn the broker on `broker0_listen()`. The advertised listener is
+/// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
 /// This crate's directory, read from the environment at run time.
 ///
@@ -85,12 +170,13 @@ async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir)
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -105,8 +191,12 @@ async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir)
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={LISTEN} advertised={BOOTSTRAP}");
-    tracing::info!(listen = %LISTEN, advertised = %BOOTSTRAP, "broker started for jvm acceptance");
+    eprintln!(
+        "CRABKA[test] broker started listen={listen} advertised={bootstrap}",
+        bootstrap = broker0_advertised(),
+        listen = broker0_listen()
+    );
+    tracing::info!(listen = %broker0_listen(), advertised = %broker0_advertised(), "broker started for jvm acceptance");
     (handle, dir)
 }
 
@@ -121,7 +211,11 @@ fn nc_check_connectivity() {
             "alpine",
             "sh",
             "-c",
-            "apk add --no-cache netcat-openbsd >/dev/null 2>&1 && nc -zv host.docker.internal 9092",
+            &format!(
+                "apk add --no-cache netcat-openbsd >/dev/null 2>&1 && nc -zv {} {}",
+                "host.docker.internal",
+                host_port()
+            ),
         ])
         .output()
         .expect("spawn nc check");
@@ -194,7 +288,7 @@ async fn console_producer_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 2. Produce 3 records via stdin.
@@ -207,7 +301,7 @@ async fn console_producer_round_trip() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -234,7 +328,7 @@ async fn console_producer_round_trip() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -276,7 +370,7 @@ async fn kafka_topics_describe_smokes_metadata() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     let out = docker_run_kafka_tool(&[
@@ -285,7 +379,7 @@ async fn kafka_topics_describe_smokes_metadata() {
         "--topic",
         "described",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -298,7 +392,6 @@ async fn kafka_topics_describe_smokes_metadata() {
     );
 
     broker.shutdown().await;
-    let _ = HOST_PORT; // silence dead_code on Windows builds
 }
 
 // Same multi-thread runtime caveat as `console_producer_round_trip`:
@@ -325,12 +418,12 @@ async fn rust_producer_to_console_consumer() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 2. Build a Rust producer pointed at the host broker and produce 3 records.
     let producer = Producer::builder()
-        .bootstrap(BOOTSTRAP.to_string())
+        .bootstrap(broker0_advertised().to_string())
         .enable_idempotence(true)
         .acks(Acks::All)
         .compression(Compression::Lz4)
@@ -355,7 +448,7 @@ async fn rust_producer_to_console_consumer() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -397,7 +490,7 @@ async fn console_consumer_with_group_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 2. Produce records via kafka-console-producer over stdin.
@@ -410,7 +503,7 @@ async fn console_consumer_with_group_round_trip() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -439,7 +532,7 @@ async fn console_consumer_with_group_round_trip() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--from-beginning",
@@ -486,7 +579,7 @@ async fn console_consumer_with_static_membership() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce three records.
@@ -499,7 +592,7 @@ async fn console_consumer_with_static_membership() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -529,7 +622,7 @@ async fn console_consumer_with_static_membership() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--from-beginning",
@@ -556,7 +649,7 @@ async fn console_consumer_with_static_membership() {
         "--group",
         GROUP,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(s.contains(TOPIC), "describe missing topic {TOPIC}: {s}");
@@ -1838,7 +1931,7 @@ async fn kafka_configs_alter_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     docker_run_kafka_tool(&[
@@ -1851,7 +1944,7 @@ async fn kafka_configs_alter_round_trip() {
         "--add-config",
         "retention.ms=60000",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     let out = docker_run_kafka_tool(&[
@@ -1862,7 +1955,7 @@ async fn kafka_configs_alter_round_trip() {
         "--entity-name",
         TOPIC,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -1893,7 +1986,7 @@ async fn kafka_topics_alter_partitions() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     docker_run_kafka_tool(&[
@@ -1904,7 +1997,7 @@ async fn kafka_topics_alter_partitions() {
         "--partitions",
         "3",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     let out = docker_run_kafka_tool(&[
@@ -1913,7 +2006,7 @@ async fn kafka_topics_alter_partitions() {
         "--topic",
         TOPIC,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -1943,7 +2036,7 @@ async fn kafka_delete_records_trims_log() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce 20 records via console-producer stdin.
@@ -1956,7 +2049,7 @@ async fn kafka_delete_records_trims_log() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -2011,7 +2104,7 @@ async fn kafka_delete_records_trims_log() {
             KAFKA_IMAGE,
             "kafka-delete-records",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--offset-json-file",
             "/offsets.json",
         ])
@@ -2052,7 +2145,7 @@ async fn kafka_consumer_groups_list_describe() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce one record so the consumer has something to settle on.
@@ -2065,7 +2158,7 @@ async fn kafka_consumer_groups_list_describe() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -2085,7 +2178,7 @@ async fn kafka_consumer_groups_list_describe() {
     docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--group",
@@ -2101,7 +2194,7 @@ async fn kafka_consumer_groups_list_describe() {
         "kafka-consumer-groups",
         "--list",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let s = String::from_utf8_lossy(&list_out.stdout);
     assert!(s.contains(GROUP), "list output missing {GROUP}: {s}");
@@ -2112,7 +2205,7 @@ async fn kafka_consumer_groups_list_describe() {
         "--group",
         GROUP,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let s = String::from_utf8_lossy(&desc_out.stdout);
     assert!(
@@ -2147,7 +2240,7 @@ async fn kafka_consumer_groups_delete_offsets() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce one record so the consumer has something to commit on.
@@ -2160,7 +2253,7 @@ async fn kafka_consumer_groups_delete_offsets() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -2183,7 +2276,7 @@ async fn kafka_consumer_groups_delete_offsets() {
     docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--group",
@@ -2204,7 +2297,7 @@ async fn kafka_consumer_groups_delete_offsets() {
         "--group",
         GROUP,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let pre_s = String::from_utf8_lossy(&pre_desc.stdout);
     assert!(
@@ -2225,7 +2318,7 @@ async fn kafka_consumer_groups_delete_offsets() {
             KAFKA_IMAGE,
             "kafka-consumer-groups",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--delete-offsets",
             "--group",
             GROUP,
@@ -2269,7 +2362,7 @@ async fn kafka_consumer_groups_delete_offsets() {
         "--group",
         GROUP,
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
     let post_s = String::from_utf8_lossy(&post_desc.stdout);
     let leaked = post_s
@@ -2299,7 +2392,7 @@ async fn kafka_cluster_describe() {
             "kafka-cluster",
             "cluster-id",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
         ],
     );
     let s = String::from_utf8_lossy(&out.stdout);
@@ -2334,7 +2427,7 @@ fn scram_jaas(user: &str, pass: &str) -> String {
 }
 
 /// Spawn the broker with a single `SASL_PLAINTEXT` listener on
-/// `0.0.0.0:9092`, advertised as `host.docker.internal:9092`. The listener
+/// an allocated port, advertised as an allocated port. The listener
 /// starts with the given PLAIN `users` already installed. Mirrors
 /// [`start_host_broker`] otherwise.
 fn start_sasl_plaintext_broker(
@@ -2351,12 +2444,13 @@ fn start_sasl_plaintext_broker(
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let mut config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -2371,7 +2465,7 @@ fn start_sasl_plaintext_broker(
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
@@ -2387,10 +2481,14 @@ fn start_sasl_plaintext_broker(
     }
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start sasl broker");
-        eprintln!("CRABKA[test] sasl broker started listen={LISTEN} advertised={BOOTSTRAP}");
+        eprintln!(
+            "CRABKA[test] sasl broker started listen={listen} advertised={bootstrap}",
+            bootstrap = broker0_advertised(),
+            listen = broker0_listen()
+        );
         tracing::info!(
-            listen = %LISTEN,
-            advertised = %BOOTSTRAP,
+            listen = %broker0_listen(),
+            advertised = %broker0_advertised(),
             "sasl broker started for jvm acceptance"
         );
         (handle, dir)
@@ -2422,12 +2520,13 @@ fn start_dual_mech_broker(
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let mut config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -2442,7 +2541,7 @@ fn start_dual_mech_broker(
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
@@ -2464,10 +2563,14 @@ fn start_dual_mech_broker(
         .insert(admin.to_string(), admin_pass.to_string());
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start dual-mech broker");
-        eprintln!("CRABKA[test] dual-mech broker started listen={LISTEN} advertised={BOOTSTRAP}");
+        eprintln!(
+            "CRABKA[test] dual-mech broker started listen={listen} advertised={bootstrap}",
+            bootstrap = broker0_advertised(),
+            listen = broker0_listen()
+        );
         tracing::info!(
-            listen = %LISTEN,
-            advertised = %BOOTSTRAP,
+            listen = %broker0_listen(),
+            advertised = %broker0_advertised(),
             "dual-mech broker started for jvm acceptance"
         );
         (handle, dir)
@@ -2589,7 +2692,7 @@ async fn jvm_sasl_plain_produce_consume() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -2608,7 +2711,7 @@ async fn jvm_sasl_plain_produce_consume() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -2644,7 +2747,7 @@ async fn jvm_sasl_plain_produce_consume() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -2695,12 +2798,13 @@ async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, tempfile::T
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -2715,7 +2819,7 @@ async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, tempfile::T
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
@@ -2727,7 +2831,11 @@ async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, tempfile::T
     let handle = Broker::start(config)
         .await
         .expect("start oauthbearer broker");
-    eprintln!("CRABKA[test] oauthbearer broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!(
+        "CRABKA[test] oauthbearer broker started listen={listen} advertised={bootstrap}",
+        bootstrap = broker0_advertised(),
+        listen = broker0_listen()
+    );
     (handle, dir)
 }
 
@@ -2770,7 +2878,7 @@ async fn jvm_sasl_oauthbearer_produce_consume() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -2787,7 +2895,7 @@ async fn jvm_sasl_oauthbearer_produce_consume() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -2822,7 +2930,7 @@ async fn jvm_sasl_oauthbearer_produce_consume() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -2898,7 +3006,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
             "--add-config",
             &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -2936,7 +3044,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -2961,7 +3069,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
                 "--topic",
                 TOPIC,
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--command-config",
                 "/client.properties",
             ],
@@ -2981,7 +3089,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -3018,7 +3126,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -3076,7 +3184,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
             "--add-config",
             &format!("SCRAM-SHA-256=[password={ALICE_PASS}]"),
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -3107,7 +3215,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -3129,7 +3237,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
                 "--topic",
                 TOPIC,
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--command-config",
                 "/client.properties",
             ],
@@ -3148,7 +3256,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -3185,7 +3293,7 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -3208,8 +3316,8 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
     broker.shutdown().await;
 }
 
-/// Spawn the broker with a single `SSL` listener on `0.0.0.0:9092`
-/// (advertised as `host.docker.internal:9092`) with the dev cert/key from
+/// Spawn the broker with a single `SSL` listener on an allocated port
+/// (advertised as an allocated port) with the dev cert/key from
 /// `crates/broker/tests/fixtures/security/`. No SASL. Mirrors
 /// [`start_host_broker`] otherwise, but flips the protocol to `Ssl` and
 /// supplies a [`TlsConfig`].
@@ -3225,8 +3333,9 @@ async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) 
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
 
     // Resolve the on-disk paths of the dev fixture certs, which live under this
     // crate's own tests/fixtures/security since crabka-security moved to the
@@ -3256,7 +3365,7 @@ async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) 
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -3271,7 +3380,7 @@ async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) 
         listeners: vec![ListenerSpec {
             name: "SSL".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::Ssl,
             tls_config: None,
             sasl_mechanisms: None,
@@ -3287,10 +3396,14 @@ async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) 
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start ssl broker");
-    eprintln!("CRABKA[test] ssl broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!(
+        "CRABKA[test] ssl broker started listen={listen} advertised={bootstrap}",
+        bootstrap = broker0_advertised(),
+        listen = broker0_listen()
+    );
     tracing::info!(
-        listen = %LISTEN,
-        advertised = %BOOTSTRAP,
+        listen = %broker0_listen(),
+        advertised = %broker0_advertised(),
         "ssl broker started for jvm acceptance"
     );
     (handle, dir)
@@ -3411,7 +3524,7 @@ async fn jvm_ssl_handshake_succeeds() {
             KAFKA_IMAGE,
             "kafka-broker-api-versions",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -3495,8 +3608,9 @@ fn start_sasl_ssl_broker(
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
 
     let manifest_dir = manifest_dir();
     let cert_path = manifest_dir
@@ -3513,7 +3627,7 @@ fn start_sasl_ssl_broker(
     let mut config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -3528,7 +3642,7 @@ fn start_sasl_ssl_broker(
         listeners: vec![ListenerSpec {
             name: "SASL_SSL".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::SaslSsl,
             tls_config: None,
             sasl_mechanisms: None,
@@ -3553,10 +3667,14 @@ fn start_sasl_ssl_broker(
         .insert(admin.to_string(), admin_pass.to_string());
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start sasl_ssl broker");
-        eprintln!("CRABKA[test] sasl_ssl broker started listen={LISTEN} advertised={BOOTSTRAP}");
+        eprintln!(
+            "CRABKA[test] sasl_ssl broker started listen={listen} advertised={bootstrap}",
+            bootstrap = broker0_advertised(),
+            listen = broker0_listen()
+        );
         tracing::info!(
-            listen = %LISTEN,
-            advertised = %BOOTSTRAP,
+            listen = %broker0_listen(),
+            advertised = %broker0_advertised(),
             "sasl_ssl broker started for jvm acceptance"
         );
         (handle, dir)
@@ -3611,7 +3729,7 @@ async fn jvm_sasl_ssl_full_stack() {
             "--add-config",
             &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -3651,7 +3769,7 @@ async fn jvm_sasl_ssl_full_stack() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -3670,7 +3788,7 @@ async fn jvm_sasl_ssl_full_stack() {
                 "--topic",
                 TOPIC,
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--command-config",
                 "/client.properties",
             ],
@@ -3691,7 +3809,7 @@ async fn jvm_sasl_ssl_full_stack() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -3728,7 +3846,7 @@ async fn jvm_sasl_ssl_full_stack() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -3752,15 +3870,10 @@ async fn jvm_sasl_ssl_full_stack() {
 }
 
 /// Host port assignments for the two-broker JVM inter-broker test. The
-/// `SASL_PLAINTEXT` listener of broker 0 binds `0.0.0.0:9092` (advertised as
-/// `host.docker.internal:9092`) and broker 1 binds `0.0.0.0:9094`
-/// (advertised as `host.docker.internal:9094`). Inter-broker traffic flows
+/// `SASL_PLAINTEXT` listener of broker 0 binds an allocated port (advertised as
+/// an allocated port) and broker 1 binds an allocated port
+/// (advertised as an allocated port). Inter-broker traffic flows
 /// over the same listeners. Each broker uses the host's resolver to resolve
-/// `host.docker.internal` to its peer's bound port.
-const HOST_PORT_B1: u16 = 9094;
-const BOOTSTRAP_B1: &str = "host.docker.internal:9094";
-const LISTEN_B1: &str = "0.0.0.0:9094";
-
 /// Spawn two in-process brokers that share a single inter-broker SASL
 /// credential. Each broker has one `SASL_PLAINTEXT` listener. Both set
 /// `plain_credentials[admin] = admin_pass`, so each broker can authenticate
@@ -3792,10 +3905,10 @@ async fn start_two_sasl_brokers(
 
     let dir0 = tempfile::tempdir().expect("tempdir b0");
     let dir1 = tempfile::tempdir().expect("tempdir b1");
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
 
     let mk_cfg = |idx: u64,
@@ -3852,7 +3965,7 @@ async fn start_two_sasl_brokers(
         1,
         listen0,
         ctrl0,
-        BOOTSTRAP,
+        broker0_advertised(),
         dir0.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -3868,7 +3981,7 @@ async fn start_two_sasl_brokers(
         2,
         listen1,
         ctrl1,
-        BOOTSTRAP_B1,
+        broker1_advertised(),
         dir1.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -3884,10 +3997,12 @@ async fn start_two_sasl_brokers(
         .expect("broker 1 start");
 
     eprintln!(
-        "CRABKA[test] two-broker sasl: b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1}"
+        "CRABKA[test] two-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1}",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen()
     );
-    let _ = HOST_PORT;
-    let _ = HOST_PORT_B1;
     (broker0, broker1, dir0, dir1)
 }
 
@@ -3966,7 +4081,7 @@ async fn jvm_inter_broker_replication_authed() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -3992,7 +4107,7 @@ async fn jvm_inter_broker_replication_authed() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -4067,10 +4182,10 @@ async fn start_two_sasl_ssl_brokers_with_controller_protocol(
 
     let dir0 = tempfile::tempdir().expect("tempdir b0");
     let dir1 = tempfile::tempdir().expect("tempdir b1");
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
 
     let manifest_dir = manifest_dir();
@@ -4156,7 +4271,7 @@ async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         1,
         listen0,
         ctrl0,
-        BOOTSTRAP,
+        broker0_advertised(),
         dir0.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -4172,7 +4287,7 @@ async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         2,
         listen1,
         ctrl1,
-        BOOTSTRAP_B1,
+        broker1_advertised(),
         dir1.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -4188,10 +4303,12 @@ async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         .expect("broker 1 start");
 
     eprintln!(
-        "CRABKA[test] two-broker sasl_ssl: b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1} ctrl_protocol={ctrl_protocol:?}"
+        "CRABKA[test] two-broker sasl_ssl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} ctrl_protocol={ctrl_protocol:?}",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen()
     );
-    let _ = HOST_PORT;
-    let _ = HOST_PORT_B1;
     (broker0, broker1, dir0, dir1)
 }
 
@@ -4261,7 +4378,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
             "--add-config",
             &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -4301,7 +4418,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
             "--replication-factor",
             "2",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -4320,7 +4437,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
                 "--topic",
                 TOPIC,
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--command-config",
                 "/client.properties",
             ],
@@ -4345,7 +4462,7 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -4409,12 +4526,13 @@ fn start_sasl_plaintext_broker_with_super_user(
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
     let super_user = super_user.to_string();
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let mut config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -4429,7 +4547,7 @@ fn start_sasl_plaintext_broker_with_super_user(
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
-            advertised: BOOTSTRAP.to_string(),
+            advertised: broker0_advertised().to_string(),
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: None,
@@ -4452,7 +4570,9 @@ fn start_sasl_plaintext_broker_with_super_user(
             .await
             .expect("start sasl broker with super-user");
         eprintln!(
-            "CRABKA[test] sasl super-user broker started listen={LISTEN} advertised={BOOTSTRAP} super_user={super_user}"
+            "CRABKA[test] sasl super-user broker started listen={listen} advertised={bootstrap} super_user={super_user}",
+            bootstrap = broker0_advertised(),
+            listen = broker0_listen()
         );
         (handle, dir)
     })
@@ -4495,7 +4615,7 @@ async fn jvm_kafka_acls_provision_via_cli() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -4515,7 +4635,7 @@ async fn jvm_kafka_acls_provision_via_cli() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--list",
@@ -4544,7 +4664,7 @@ async fn jvm_kafka_acls_provision_via_cli() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--remove",
@@ -4564,7 +4684,7 @@ async fn jvm_kafka_acls_provision_via_cli() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--list",
@@ -4639,7 +4759,7 @@ async fn jvm_authorized_produce_consume() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -4654,7 +4774,7 @@ async fn jvm_authorized_produce_consume() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -4678,7 +4798,7 @@ async fn jvm_authorized_produce_consume() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -4721,7 +4841,7 @@ async fn jvm_authorized_produce_consume() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -4759,7 +4879,7 @@ async fn jvm_authorized_produce_consume() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--group",
@@ -4837,7 +4957,7 @@ async fn jvm_unauthorized_produce_fails() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -4852,7 +4972,7 @@ async fn jvm_unauthorized_produce_fails() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -4890,7 +5010,7 @@ async fn jvm_unauthorized_produce_fails() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -4973,7 +5093,7 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -4987,7 +5107,7 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -5019,7 +5139,7 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
             KAFKA_IMAGE_TXN,
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--group",
@@ -5107,7 +5227,7 @@ async fn jvm_prefixed_topic_acl_works() {
                 "--replication-factor",
                 "1",
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--command-config",
                 "/client.properties",
             ],
@@ -5122,7 +5242,7 @@ async fn jvm_prefixed_topic_acl_works() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -5145,7 +5265,7 @@ async fn jvm_prefixed_topic_acl_works() {
         &[
             "kafka-acls",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--add",
@@ -5181,7 +5301,7 @@ async fn jvm_prefixed_topic_acl_works() {
                 KAFKA_IMAGE_TXN,
                 "kafka-console-producer",
                 "--bootstrap-server",
-                BOOTSTRAP,
+                broker0_advertised(),
                 "--topic",
                 topic,
                 "--producer.config",
@@ -5222,7 +5342,7 @@ async fn jvm_prefixed_topic_acl_works() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC_OK,
             "--group",
@@ -5254,7 +5374,7 @@ async fn jvm_prefixed_topic_acl_works() {
             KAFKA_IMAGE_TXN,
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC_DENIED,
             "--group",
@@ -5290,12 +5410,7 @@ async fn jvm_prefixed_topic_acl_works() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Third broker for the 3-broker `SASL_PLAINTEXT` JVM cluster.
-/// Broker 2 (`node_id`=2) lives on 9094/9095 (`HOST_PORT_B1` / `BOOTSTRAP_B1`).
-/// Broker 3 (`node_id`=3) lives on 9096/9097.
-const HOST_PORT_B2: u16 = 9096;
-const BOOTSTRAP_B2: &str = "host.docker.internal:9096";
-const LISTEN_B2: &str = "0.0.0.0:9096";
-
+/// Broker 2 (`node_id`=2) lives on `broker1_listen()` / `broker1_advertised()`.
 /// Spawn three in-process brokers that share one inter-broker SASL credential.
 ///
 /// * Broker 1: 0.0.0.0:9092 (data) / 0.0.0.0:9093 (controller)
@@ -5335,13 +5450,13 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster(
     let dir1 = tempfile::tempdir().expect("tempdir b1");
     let dir2 = tempfile::tempdir().expect("tempdir b2");
 
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let listen2: std::net::SocketAddr = LISTEN_B2.parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let listen2: std::net::SocketAddr = broker2_listen().parse().expect("static addr");
 
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
-    let ctrl2: std::net::SocketAddr = "0.0.0.0:9097".parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
+    let ctrl2: std::net::SocketAddr = controller_addr_2().parse().expect("allocated addr");
 
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1), (3_u64, ctrl2)];
 
@@ -5399,7 +5514,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster(
         1,
         listen0,
         ctrl0,
-        BOOTSTRAP,
+        broker0_advertised(),
         dir0.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -5415,7 +5530,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster(
         2,
         listen1,
         ctrl1,
-        BOOTSTRAP_B1,
+        broker1_advertised(),
         dir1.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -5423,7 +5538,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster(
         3,
         listen2,
         ctrl2,
-        BOOTSTRAP_B2,
+        broker2_advertised(),
         dir2.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -5453,11 +5568,14 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster(
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl: b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1} b2={LISTEN_B2} adv={BOOTSTRAP_B2}"
+        "CRABKA[test] three-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        bootstrap_b2 = broker2_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen(),
+        listen_b2 = broker2_listen()
     );
-    let _ = HOST_PORT;
-    let _ = HOST_PORT_B1;
-    let _ = HOST_PORT_B2;
     (
         broker0, broker1, broker2, cfg0, cfg1, cfg2, dir0, dir1, dir2,
     )
@@ -5579,7 +5697,7 @@ async fn jvm_kafka_leader_election_preferred() {
             "--replication-factor",
             "2",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -5667,7 +5785,7 @@ async fn jvm_kafka_leader_election_preferred() {
             "--partition",
             "0",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--admin.config",
             "/client.properties",
         ])
@@ -5767,7 +5885,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             "--replication-factor",
             "2",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -5812,7 +5930,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             "--reassignment-json-file",
             "/reassignment.json",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -5894,7 +6012,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             "--reassignment-json-file",
             "/reassignment.json",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -5959,7 +6077,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
             "--replication-factor",
             "2",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6004,7 +6122,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
             "--throttle",
             "1024",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -6038,7 +6156,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
             "--entity-name",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -6121,7 +6239,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
             "--reassignment-json-file",
             "/reassignment.json",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ])
@@ -6189,13 +6307,13 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
     let dir1 = tempfile::tempdir().expect("tempdir b1");
     let dir2 = tempfile::tempdir().expect("tempdir b2");
 
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let listen2: std::net::SocketAddr = LISTEN_B2.parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let listen2: std::net::SocketAddr = broker2_listen().parse().expect("static addr");
 
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
-    let ctrl2: std::net::SocketAddr = "0.0.0.0:9097".parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
+    let ctrl2: std::net::SocketAddr = controller_addr_2().parse().expect("allocated addr");
 
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1), (3_u64, ctrl2)];
 
@@ -6257,7 +6375,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         1,
         listen0,
         ctrl0,
-        BOOTSTRAP,
+        broker0_advertised(),
         dir0.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -6273,7 +6391,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         2,
         listen1,
         ctrl1,
-        BOOTSTRAP_B1,
+        broker1_advertised(),
         dir1.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -6281,7 +6399,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         3,
         listen2,
         ctrl2,
-        BOOTSTRAP_B2,
+        broker2_advertised(),
         dir2.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -6311,11 +6429,14 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl (with_users): b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1} b2={LISTEN_B2} adv={BOOTSTRAP_B2}"
+        "CRABKA[test] three-broker sasl (with_users): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        bootstrap_b2 = broker2_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen(),
+        listen_b2 = broker2_listen()
     );
-    let _ = HOST_PORT;
-    let _ = HOST_PORT_B1;
-    let _ = HOST_PORT_B2;
     (
         broker0, broker1, broker2, cfg0, cfg1, cfg2, dir0, dir1, dir2,
     )
@@ -6366,7 +6487,7 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
             "--add-config",
             "producer_byte_rate=1024",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6397,7 +6518,7 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
             "--entity-name",
             ALICE,
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6427,7 +6548,7 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
             "--delete-config",
             "producer_byte_rate",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6494,7 +6615,7 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
             "--add-config",
             "connection_creation_rate=2.0",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6525,7 +6646,7 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
             "--entity-name",
             "127.0.0.1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6555,7 +6676,7 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
             "--delete-config",
             "connection_creation_rate",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6631,7 +6752,7 @@ async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
             "--add-config",
             "controller_mutation_rate=2.0",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6662,7 +6783,7 @@ async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
             "--entity-name",
             ALICE,
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6692,7 +6813,7 @@ async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
             "--delete-config",
             "controller_mutation_rate",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6757,7 +6878,7 @@ async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
             "--add-config",
             "SCRAM-SHA-512=[iterations=4096,password=alice-secret]",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6780,7 +6901,7 @@ async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
             "--entity-name",
             "alice",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -6829,12 +6950,13 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: crabka_log::LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -6851,7 +6973,11 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         ..BrokerConfig::default()
     };
     let broker = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] compaction broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!(
+        "CRABKA[test] compaction broker started listen={listen} advertised={bootstrap}",
+        bootstrap = broker0_advertised(),
+        listen = broker0_listen()
+    );
     nc_check_connectivity();
 
     // 1. Create the topic with cleanup.policy=compact and tiny segment.bytes
@@ -6871,7 +6997,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "--config",
         "segment.bytes=256",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 1b. Wait for cleanup.policy=compact + segment.bytes=256 to propagate
@@ -6907,7 +7033,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--property",
@@ -6985,7 +7111,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -7032,12 +7158,13 @@ async fn start_host_broker_jbod() -> (
         .try_init();
     let primary = tempfile::tempdir().expect("tempdir");
     let extra = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: primary.path().to_path_buf(),
         extra_log_dirs: vec![extra.path().to_path_buf()],
         log_config: LogConfig::default(),
@@ -7075,7 +7202,7 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Wait for the local writer-actor of every partition to materialize on
@@ -7090,7 +7217,7 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
         "kafka-log-dirs",
         "--describe",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--broker-list",
         "1",
     ]);
@@ -7167,13 +7294,13 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
     let dir1 = tempfile::tempdir().expect("tempdir b1");
     let dir2 = tempfile::tempdir().expect("tempdir b2");
 
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let listen2: std::net::SocketAddr = LISTEN_B2.parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let listen2: std::net::SocketAddr = broker2_listen().parse().expect("static addr");
 
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
-    let ctrl2: std::net::SocketAddr = "0.0.0.0:9097".parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
+    let ctrl2: std::net::SocketAddr = controller_addr_2().parse().expect("allocated addr");
 
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1), (3_u64, ctrl2)];
 
@@ -7235,7 +7362,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
         1,
         listen0,
         ctrl0,
-        BOOTSTRAP,
+        broker0_advertised(),
         dir0.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -7251,7 +7378,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
         2,
         listen1,
         ctrl1,
-        BOOTSTRAP_B1,
+        broker1_advertised(),
         dir1.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -7259,7 +7386,7 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
         3,
         listen2,
         ctrl2,
-        BOOTSTRAP_B2,
+        broker2_advertised(),
         dir2.path().to_path_buf(),
         crabka_broker::BootstrapMode::Bootstrap,
     );
@@ -7289,11 +7416,14 @@ async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens(
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl (delegation tokens): b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1} b2={LISTEN_B2} adv={BOOTSTRAP_B2}"
+        "CRABKA[test] three-broker sasl (delegation tokens): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        bootstrap_b2 = broker2_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen(),
+        listen_b2 = broker2_listen()
     );
-    let _ = HOST_PORT;
-    let _ = HOST_PORT_B1;
-    let _ = HOST_PORT_B2;
     (
         broker0, broker1, broker2, cfg0, cfg1, cfg2, dir0, dir1, dir2,
     )
@@ -7414,7 +7544,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
         &[
             "kafka-delegation-tokens",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--create",
@@ -7462,7 +7592,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
             "--replication-factor",
             "1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
         ],
@@ -7480,7 +7610,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
             KAFKA_IMAGE_TXN,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer.config",
@@ -7513,7 +7643,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
         &[
             "kafka-delegation-tokens",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--describe",
@@ -7534,7 +7664,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
         &[
             "kafka-delegation-tokens",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--command-config",
             "/client.properties",
             "--expire",
@@ -7584,7 +7714,7 @@ async fn cooperative_sticky_kafka_console_consumer() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 2. Produce 3 records via stdin.
@@ -7597,7 +7727,7 @@ async fn cooperative_sticky_kafka_console_consumer() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -7628,7 +7758,7 @@ async fn cooperative_sticky_kafka_console_consumer() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--group",
@@ -7669,7 +7799,6 @@ async fn cooperative_sticky_kafka_console_consumer() {
 
 const MINIO_IMAGE: &str = "mirror.gcr.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
 const MINIO_CLIENT_IMAGE: &str = "mirror.gcr.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
-const MINIO_PORT: u16 = 9000;
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
 const MINIO_BUCKET: &str = "crabka-tiered";
@@ -7695,6 +7824,7 @@ impl MinioContainer {
     fn start() -> Self {
         // Unique name per test invocation so back-to-back runs don't see a
         // stale container squatting on port 9000.
+        let minio_port = minio_port();
         let name = format!("crabka-minio-test-{}", uuid::Uuid::new_v4().simple());
         // Best-effort orphan reap from a prior aborted run.
         let _ = Command::new("docker")
@@ -7710,7 +7840,7 @@ impl MinioContainer {
                 "--name",
                 &name,
                 "-p",
-                &format!("{MINIO_PORT}:9000"),
+                &format!("{minio_port}:9000"),
                 "-e",
                 &format!("MINIO_ROOT_USER={MINIO_ACCESS_KEY}"),
                 "-e",
@@ -7732,7 +7862,8 @@ impl MinioContainer {
 /// Poll the published host port until `MinIO`'s HTTP listener answers. This
 /// avoids a race with the first health check of the fast-starting image.
 fn wait_for_minio_ready() {
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{MINIO_PORT}")
+    let minio_port = minio_port();
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{minio_port}")
         .parse()
         .expect("static addr");
     for _ in 0..60 {
@@ -7748,16 +7879,17 @@ fn wait_for_minio_ready() {
         // no crabka metric reflects its TCP/S3 listener coming up.
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    panic!("MinIO never accepted TCP on 127.0.0.1:{MINIO_PORT}");
+    panic!("MinIO never accepted TCP on 127.0.0.1:{minio_port}");
 }
 
 fn minio_make_bucket(bucket: &str) {
     // `mc mb -p` is idempotent and creates parent prefixes; the inner
     // loop retries the `alias set` so a slow MinIO startup doesn't fail
     // the test on the first probe.
+    let minio_port = minio_port();
     let script = format!(
         "for i in 1 2 3 4 5 6 7 8 9 10; do \
-           mc alias set local http://host.docker.internal:{MINIO_PORT} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null 2>&1 && break; \
+           mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null 2>&1 && break; \
            sleep 1; \
          done && mc mb -p local/{bucket}"
     );
@@ -7784,8 +7916,9 @@ fn minio_make_bucket(bucket: &str) {
 
 /// `mc ls --recursive local/<bucket>` for assertion-side bucket inspection.
 fn minio_list_objects(bucket: &str) -> String {
+    let minio_port = minio_port();
     let script = format!(
-        "mc alias set local http://host.docker.internal:{MINIO_PORT} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \
+        "mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \
          mc ls --recursive local/{bucket}"
     );
     let out = Command::new("docker")
@@ -7849,12 +7982,13 @@ fn start_host_broker_with_minio_tier(
         .with_test_writer()
         .try_init();
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
+    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let controller_addr: std::net::SocketAddr =
+        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         broker_id: 1,
         listen_addr,
-        advertised_listener: BOOTSTRAP.into(),
+        advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -7876,7 +8010,9 @@ fn start_host_broker_with_minio_tier(
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");
         eprintln!(
-            "CRABKA[test] broker started listen={LISTEN} advertised={BOOTSTRAP} (tiered S3 backend)"
+            "CRABKA[test] broker started listen={listen} advertised={bootstrap} (tiered S3 backend)",
+            bootstrap = broker0_advertised(),
+            listen = broker0_listen()
         );
         (handle, dir, config)
     })
@@ -7926,7 +8062,7 @@ async fn create_tiered_topic(broker: &crabka_broker::BrokerHandle, topic: &str) 
             "--config",
             "retention.ms=-1",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
         ],
     );
 
@@ -7973,7 +8109,7 @@ fn produce_records(topic: &str, n: usize) {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             topic,
             "--producer-property",
@@ -8040,8 +8176,8 @@ async fn wait_for_minio_segments(bucket: &str, min_log_objects: usize) -> String
 /// lines.
 ///
 /// `bootstrap_host_port` is the Kafka bootstrap address that is visible from
-/// inside the Docker container, for example `host.docker.internal:9092`.
-/// Single-broker callers should pass `BOOTSTRAP`.
+/// inside the Docker container, for example an allocated port.
+/// Single-broker callers should pass `broker0_advertised()`.
 fn consume_records(topic: &str, max: usize, timeout_ms: u64, bootstrap_host_port: &str) -> usize {
     let consumer_out = docker_run_kafka_tool_with_image(
         KAFKA_IMAGE_TIERED,
@@ -8076,6 +8212,7 @@ async fn tiered_storage_round_trip_through_minio() {
     // exercise the copy path multiple times.
     const RECORDS: usize = 200;
 
+    let minio_port = minio_port();
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
@@ -8083,7 +8220,7 @@ async fn tiered_storage_round_trip_through_minio() {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{MINIO_PORT}")),
+        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
         access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
         secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
         allow_http: true,
@@ -8116,7 +8253,7 @@ async fn tiered_storage_round_trip_through_minio() {
     // Spot-check a sample across the offset range — the very first records
     // are guaranteed to come from MinIO because their segment was evicted
     // before consume started.
-    let consumed = consume_records(TOPIC, RECORDS, 20_000, BOOTSTRAP);
+    let consumed = consume_records(TOPIC, RECORDS, 20_000, broker0_advertised());
     assert!(
         consumed >= RECORDS,
         "expected >={RECORDS} records from remote tier, got {consumed}"
@@ -8145,6 +8282,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // exercise the copy path multiple times.
     const RECORDS: usize = 200;
 
+    let minio_port = minio_port();
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
@@ -8152,7 +8290,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{MINIO_PORT}")),
+        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
         access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
         secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
         allow_http: true,
@@ -8225,7 +8363,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
         &[
             "kafka-console-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -8289,7 +8427,7 @@ async fn jvm_legacy_010_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 2. Produce 3 records via the 0.10.1 console-producer.
@@ -8302,7 +8440,7 @@ async fn jvm_legacy_010_round_trip() {
             KAFKA_IMAGE_LEGACY,
             "kafka-console-producer",
             "--broker-list",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -8342,7 +8480,7 @@ async fn jvm_legacy_010_round_trip() {
             "kafka-console-consumer",
             "--new-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -8396,7 +8534,7 @@ async fn jvm_legacy_010_produce_modern_consume() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce via legacy.
@@ -8409,7 +8547,7 @@ async fn jvm_legacy_010_produce_modern_consume() {
             KAFKA_IMAGE_LEGACY,
             "kafka-console-producer",
             "--broker-list",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -8437,7 +8575,7 @@ async fn jvm_legacy_010_produce_modern_consume() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -8486,7 +8624,7 @@ async fn jvm_modern_produce_legacy_010_consume() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // Produce via modern (cp-kafka:6.1.1, Produce v9).
@@ -8499,7 +8637,7 @@ async fn jvm_modern_produce_legacy_010_consume() {
             KAFKA_IMAGE,
             "kafka-console-producer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
         ])
@@ -8536,7 +8674,7 @@ async fn jvm_modern_produce_legacy_010_consume() {
             "kafka-console-consumer",
             "--new-consumer",
             "--bootstrap-server",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--partition",
@@ -8592,7 +8730,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 50 newline-separated records to give gzip something to compress.
@@ -8614,7 +8752,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
             KAFKA_IMAGE_LEGACY,
             "kafka-console-producer",
             "--broker-list",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer-property",
@@ -8648,7 +8786,7 @@ async fn jvm_legacy_010_compressed_round_trip() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -8702,7 +8840,7 @@ async fn jvm_legacy_010_snappy_round_trip() {
         "--replication-factor",
         "1",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
     ]);
 
     // 50 newline-separated records to give snappy something to compress.
@@ -8724,7 +8862,7 @@ async fn jvm_legacy_010_snappy_round_trip() {
             KAFKA_IMAGE_LEGACY,
             "kafka-console-producer",
             "--broker-list",
-            BOOTSTRAP,
+            broker0_advertised(),
             "--topic",
             TOPIC,
             "--producer-property",
@@ -8758,7 +8896,7 @@ async fn jvm_legacy_010_snappy_round_trip() {
     let consumer_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
-        BOOTSTRAP,
+        broker0_advertised(),
         "--topic",
         TOPIC,
         "--partition",
@@ -8807,7 +8945,7 @@ async fn jvm_legacy_010_snappy_round_trip() {
 //
 // Work-around used here: the `__remote_log_metadata` topic is created with
 // `num_partitions=1, replication=1`, hosted entirely on broker 1. Both
-// brokers' RLMM clients are bootstrapped explicitly to `127.0.0.1:9092`
+// brokers' RLMM clients are bootstrapped explicitly to an allocated port
 // (broker 1's loopback). This ensures:
 //   • Broker 1's RLMM producer always reaches partition 0's leader directly.
 //   • Broker 2's RLMM consumer reads partition 0 from broker 1 over loopback,
@@ -8820,18 +8958,15 @@ async fn jvm_legacy_010_snappy_round_trip() {
 /// Loopback address of broker 1's data listener. The RLMM clients of both
 /// brokers use it as their bootstrap, so they reach the single
 /// `__remote_log_metadata` partition on broker 1 without
-/// `host.docker.internal`.
-const RLMM_BOOTSTRAP: &str = "127.0.0.1:9092";
-
 /// Boot a two-broker plaintext cluster with an S3 tiered-storage backend and a
 /// topic-backed RLMM.
 ///
 /// Port assignment mirrors [`start_two_sasl_brokers`]:
-///   broker 1: data `0.0.0.0:9092` / `host.docker.internal:9092`, controller `0.0.0.0:9093`
-///   broker 2: data `0.0.0.0:9094` / `host.docker.internal:9094`, controller `0.0.0.0:9095`
+///   broker 1: `broker0_listen()` / `broker0_advertised()`, controller `controller_addr_0()`
+///   broker 2: `broker1_listen()` / `broker1_advertised()`, controller `controller_addr_1()`
 ///
 /// The RLMM clients of both brokers bootstrap explicitly to
-/// `127.0.0.1:9092`, broker 1's loopback. See the module-level routing note
+/// `broker0_loopback()`, broker 1's loopback. See the module-level routing note
 /// above.
 ///
 /// The heartbeat and replica-lag timers are shortened to 200 ms / 2 s / 2 s,
@@ -8860,10 +8995,10 @@ async fn start_two_brokers_with_minio_tier(
     let dir0 = tempfile::tempdir().expect("tempdir b0");
     let dir1 = tempfile::tempdir().expect("tempdir b1");
 
-    let listen0: std::net::SocketAddr = LISTEN.parse().expect("static addr");
-    let listen1: std::net::SocketAddr = LISTEN_B1.parse().expect("static addr");
-    let ctrl0: std::net::SocketAddr = "0.0.0.0:9093".parse().expect("static addr");
-    let ctrl1: std::net::SocketAddr = "0.0.0.0:9095".parse().expect("static addr");
+    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
+    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
+    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
+    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
     let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
 
     // Both brokers point their RLMM client at broker 1's loopback so that
@@ -8876,7 +9011,7 @@ async fn start_two_brokers_with_minio_tier(
     // `replication=1` keeps that partition exclusively on broker 1, so both
     // RLMM clients reach it by going directly to 127.0.0.1:9092.
     let rlmm_cfg = crabka_broker::KafkaRlmmConfig {
-        bootstrap: RLMM_BOOTSTRAP.to_string(),
+        bootstrap: rlmm_broker0_advertised().to_string(),
         num_partitions: 1,
         replication: 1,
         snapshot_interval: crabka_units::secs(2),
@@ -8893,7 +9028,7 @@ async fn start_two_brokers_with_minio_tier(
     let cfg0 = BrokerConfig {
         broker_id: 1,
         listen_addr: listen0,
-        advertised_listener: BOOTSTRAP.to_string(),
+        advertised_listener: broker0_advertised().to_string(),
         log_dir: dir0.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(1),
@@ -8918,7 +9053,7 @@ async fn start_two_brokers_with_minio_tier(
     let cfg1 = BrokerConfig {
         broker_id: 2,
         listen_addr: listen1,
-        advertised_listener: BOOTSTRAP_B1.to_string(),
+        advertised_listener: broker1_advertised().to_string(),
         log_dir: dir1.path().to_path_buf(),
         log_config: LogConfig::default(),
         node_id: crabka_broker::NodeId(2),
@@ -8957,8 +9092,13 @@ async fn start_two_brokers_with_minio_tier(
         .expect("start broker 1");
 
     eprintln!(
-        "CRABKA[test] two-broker tiered: b0={LISTEN} adv={BOOTSTRAP} b1={LISTEN_B1} adv={BOOTSTRAP_B1} \
-         (MinIO S3 + topic-backed RLMM num_partitions=1 replication=1 bootstrap={RLMM_BOOTSTRAP})"
+        "CRABKA[test] two-broker tiered: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} \
+         (MinIO S3 + topic-backed RLMM num_partitions=1 replication=1 bootstrap={rlmm_bootstrap})",
+        bootstrap = broker0_advertised(),
+        bootstrap_b1 = broker1_advertised(),
+        listen = broker0_listen(),
+        listen_b1 = broker1_listen(),
+        rlmm_bootstrap = rlmm_broker0_advertised()
     );
     (broker0, broker1, dir0, dir1)
 }
@@ -8994,6 +9134,9 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     const TOPIC: &str = "crabka-tiered-multi-itest";
     const RECORDS: usize = 200;
 
+    let bootstrap_b1 = broker1_advertised();
+    let minio_port = minio_port();
+
     // Env-gated out of the default `--ignored` CI sweep (broker-jvm-acceptance):
     // this JVM 3-broker + MinIO failover scenario is timing-sensitive under CI
     // load — the survivor's RLMM catch-up, leader failover, and remote read must
@@ -9001,6 +9144,7 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     // The in-process `tiered_storage_metadata_sharing_via_survivor` test
     // (tests/tiered_storage_multi_broker.rs) is the deterministic, CI-validated
     // multi-broker proof; this JVM variant is opt-in for manual verification.
+    let bootstrap = broker0_advertised();
     if std::env::var("CRABKA_RUN_JVM_MULTI_BROKER_TIER").is_err() {
         eprintln!(
             "Skipping tiered_storage_topic_rlmm_multi_broker_metadata_sharing: set \
@@ -9017,7 +9161,7 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{MINIO_PORT}")),
+        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
         access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
         secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
         allow_http: true,
@@ -9034,7 +9178,7 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     //
     // Bootstrap against both brokers so the JVM tool can reach the cluster
     // even if b1 hasn't won the controller election yet.
-    let bootstrap_both = format!("{BOOTSTRAP},{BOOTSTRAP_B1}");
+    let bootstrap_both = format!("{bootstrap},{bootstrap_b1}");
     docker_run_kafka_tool_with_image(
         KAFKA_IMAGE_TIERED,
         &[
@@ -9125,8 +9269,11 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     // Consume from offset 0 via the SURVIVING broker (b2, port 9094).
     // Older offsets only exist in MinIO; b2 serves them via the RLMM metadata
     // it consumed off __remote_log_metadata.
-    eprintln!("CRABKA[test] consuming from surviving broker 2 ({BOOTSTRAP_B1})");
-    let consumed = consume_records(TOPIC, RECORDS, 40_000, BOOTSTRAP_B1);
+    eprintln!(
+        "CRABKA[test] consuming from surviving broker 2 ({bootstrap_b1})",
+        bootstrap_b1 = broker1_advertised()
+    );
+    let consumed = consume_records(TOPIC, RECORDS, 40_000, broker1_advertised());
     eprintln!("CRABKA[test] consumed {consumed} records from surviving broker 2");
 
     assert!(
