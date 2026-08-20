@@ -65,6 +65,17 @@ fn controller_bootstrap() -> &'static str {
     V.get_or_init(|| controller_listen().replace("0.0.0.0", "host.docker.internal"))
 }
 
+/// The controller's port on its own, for callers that need the number rather
+/// than the address -- a `VoterEndpoint` carries host and port separately.
+fn controller_port() -> u16 {
+    controller_listen()
+        .rsplit(':')
+        .next()
+        .expect("controller addr has a port")
+        .parse()
+        .expect("controller port is numeric")
+}
+
 /// A second controller port, for the node that joins the quorum.
 fn joiner_controller() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -142,7 +153,7 @@ async fn start_host_observer() -> (crabka_raft::ControllerHandle, tempfile::Temp
         endpoints: vec![crabka_metadata::VoterEndpoint {
             name: "CONTROLLER".into(),
             host: "127.0.0.1".into(),
-            port: 9093,
+            port: controller_port(),
         }],
         kraft_version: crabka_metadata::KRaftVersionRange { min: 0, max: 1 },
     }]);
