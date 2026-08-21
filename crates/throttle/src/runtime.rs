@@ -398,6 +398,35 @@ mod tests {
         }
     }
 
+    /// The event pair exists separately from the byte pair because a token
+    /// means a different thing in each -- the API's own warning is that mixing
+    /// them "compiles but the result is wrong". Only the byte pair was round
+    /// tripped, so nothing checked that an event rate reads back as one, nor
+    /// that the raw token primitive underneath both publishes what it is given.
+    #[test]
+    fn event_and_token_rates_round_trip_through_the_accessors() {
+        // (rate per second, independent burst in whole events)
+        let cases = [(0u64, 0u64), (1, 1), (10, 100), (1_000, 250)];
+
+        for (per_sec, burst) in cases {
+            let rate = Frequency::from_per_sec_u64(per_sec);
+
+            let b = TokenBucket::new();
+            b.set_event_rate_with_burst(rate, burst);
+            check!((b.event_rate(), b.token_burst()) == (rate, burst));
+
+            // `set_event_rate` bursts one second of the rate, as the byte pair does.
+            let b = TokenBucket::new();
+            b.set_event_rate(rate);
+            check!((b.event_rate(), b.token_burst()) == (rate, per_sec));
+
+            // The untyped primitive both pairs delegate to.
+            let b = TokenBucket::new();
+            b.set_token_rate(per_sec);
+            check!((b.token_rate(), b.token_burst()) == (per_sec, per_sec));
+        }
+    }
+
     // `set_rate` derives the burst from one second's worth of the rate, so the
     // burst it publishes must be the byte count the rate delivers in that
     // second — not the rate's bare number in some other unit.

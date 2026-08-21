@@ -119,8 +119,10 @@ impl Message {
     /// This method extends `buf`. It writes nothing before the CRC.
     pub fn encode_into<B: BufMut>(&self, buf: &mut B) {
         // Build the CRC-covered payload first, then prefix it with the CRC.
-        let body_len = self.encoded_len() - 4;
-        let mut body = Vec::with_capacity(body_len);
+        // `encoded_len` counts the 4-byte CRC this body excludes; reserving it
+        // anyway costs four bytes and keeps arithmetic out of a capacity hint,
+        // where a wrong answer is invisible and so untestable.
+        let mut body = Vec::with_capacity(self.encoded_len());
         body.push(self.magic.as_i8().cast_unsigned());
         body.push(self.attributes.cast_unsigned());
         if matches!(self.magic, Magic::V1) {

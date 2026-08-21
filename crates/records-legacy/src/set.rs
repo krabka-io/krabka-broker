@@ -146,14 +146,13 @@ fn decode_into(
             // wrapper_offset - (count-1) + i. v0 wrappers always carry
             // absolute inner offsets, so leave them as-is.
             if matches!(msg.magic, Magic::V1) {
-                let count = out.len() - start_len;
-                if count > 0 {
-                    let last_abs = offset;
-                    let count = i64::try_from(count).unwrap_or(i64::MAX);
-                    let base_abs = last_abs - (count - 1);
-                    for (i, rec) in out[start_len..].iter_mut().enumerate() {
-                        rec.offset = Offset(base_abs + i64::try_from(i).unwrap_or(i64::MAX));
-                    }
+                // No `count > 0` guard: at zero the loop below has nothing to
+                // walk and `base_abs` goes unread, so the guard only decided
+                // whether to compute a value nobody looks at.
+                let count = i64::try_from(out.len() - start_len).unwrap_or(i64::MAX);
+                let base_abs = offset - (count - 1);
+                for (i, rec) in out[start_len..].iter_mut().enumerate() {
+                    rec.offset = Offset(base_abs + i64::try_from(i).unwrap_or(i64::MAX));
                 }
             }
         }
