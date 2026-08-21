@@ -1596,6 +1596,176 @@ mod tests {
         );
     }
 
+    /// `AddRaftVoter` refuses a candidate it cannot place: an unusable
+    /// listener set is as disqualifying as a bad id.
+    ///
+    /// A voter with no reachable endpoint cannot be fetched from, so admitting
+    /// one puts a member in the quorum that can never catch up -- and the
+    /// majority it counts toward is computed from the set, not from who
+    /// answers.
+    #[tokio::test]
+    async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
+        use crabka_protocol::{
+            Encode as _,
+            owned::{
+                add_raft_voter_request::{self, AddRaftVoterRequest, Listener},
+                add_raft_voter_response::AddRaftVoterResponse,
+            },
+        };
+
+        const INVALID_REQUEST: i16 = 42;
+        let version = add_raft_voter_request::MAX_VERSION;
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+
+        let good_listener = || Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "host-b".to_owned(),
+            port: 9093,
+            ..Default::default()
+        };
+        let directory = crabka_protocol::primitives::uuid::Uuid([9u8; 16]);
+
+        // (what it is, voter id, directory id, listeners)
+        let cases: Vec<(
+            &str,
+            i32,
+            crabka_protocol::primitives::uuid::Uuid,
+            Vec<Listener>,
+        )> = vec![
+            ("a negative voter id", -1, directory, vec![good_listener()]),
+            (
+                "a zero directory id",
+                2,
+                crabka_protocol::primitives::uuid::Uuid::ZERO,
+                vec![good_listener()],
+            ),
+            ("no listeners at all", 2, directory, vec![]),
+            (
+                "a listener on port zero",
+                2,
+                directory,
+                vec![Listener {
+                    port: 0,
+                    ..good_listener()
+                }],
+            ),
+            (
+                "a listener with no host",
+                2,
+                directory,
+                vec![Listener {
+                    host: String::new(),
+                    ..good_listener()
+                }],
+            ),
+        ];
+
+        for (what, voter_id, voter_directory_id, listeners) in cases {
+            let request = AddRaftVoterRequest {
+                cluster_id: None,
+                voter_id,
+                voter_directory_id,
+                listeners,
+                ..Default::default()
+            };
+            let mut body = BytesMut::new();
+            request.encode(&mut body, version).expect("encode");
+            let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+                .await
+                .expect("a refusal is still a response");
+            let mut cursor = &bytes[..];
+            let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+            check!(decoded.error_code == INVALID_REQUEST, "{what}");
+            check!(decoded.error_message.is_some(), "{what}: says why");
+        }
+    }
+
+    /// `UpdateRaftVoter` additionally requires the caller to name the cluster,
+    /// to be at the leader's epoch, and to advertise a coherent
+    /// `kraft.version` range.
+    ///
+    /// The epoch check is what stops a stale caller rewriting a voter's
+    /// endpoints against a quorum that has since moved on, and an inverted
+    /// version range advertises support for nothing.
+    #[tokio::test]
+    async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
+        use crabka_protocol::{
+            Encode as _,
+            owned::{
+                update_raft_voter_request::{
+                    self, KRaftVersionFeature, Listener, UpdateRaftVoterRequest,
+                },
+                update_raft_voter_response::UpdateRaftVoterResponse,
+            },
+        };
+
+        // `UpdateRaftVoter` reports a malformed request as 141, where the add
+        // and remove paths use 42.
+        const INVALID_UPDATE: i16 = 141;
+        let version = update_raft_voter_request::MAX_VERSION;
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+        let cluster_id = engine.current_image().cluster_id().to_string();
+        let epoch = i32::try_from(engine.quorum_state().await.expect("quorum").leader_epoch)
+            .expect("epoch fits i32");
+        let directory = crabka_protocol::primitives::uuid::Uuid([9u8; 16]);
+        let listener = || Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "host-b".to_owned(),
+            port: 9093,
+            ..Default::default()
+        };
+        let range = |min: i16, max: i16| KRaftVersionFeature {
+            min_supported_version: min,
+            max_supported_version: max,
+            ..Default::default()
+        };
+
+        // (what it is, cluster id, epoch offered, version range)
+        let cases: Vec<(&str, Option<String>, i32, KRaftVersionFeature)> = vec![
+            ("no cluster id at all", None, epoch, range(0, 1)),
+            (
+                "another cluster's id",
+                Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+                epoch,
+                range(0, 1),
+            ),
+            (
+                "an epoch the quorum has left behind",
+                Some(cluster_id.clone()),
+                epoch + 1,
+                range(0, 1),
+            ),
+            (
+                "an inverted kraft.version range",
+                Some(cluster_id.clone()),
+                epoch,
+                range(2, 1),
+            ),
+        ];
+
+        for (what, request_cluster_id, current_leader_epoch, k_raft_version_feature) in cases {
+            let request = UpdateRaftVoterRequest {
+                cluster_id: request_cluster_id,
+                voter_id: 1,
+                voter_directory_id: directory,
+                current_leader_epoch,
+                k_raft_version_feature,
+                listeners: vec![listener()],
+                ..Default::default()
+            };
+            let mut body = BytesMut::new();
+            request.encode(&mut body, version).expect("encode");
+            let bytes = update_raft_voter_response(version, &body.freeze(), &engine)
+                .await
+                .expect("response");
+            let mut cursor = &bytes[..];
+            let decoded = UpdateRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+            check!(decoded.error_code == INVALID_UPDATE, "{what}");
+        }
+    }
+
     /// `DescribeQuorum` answers for `__cluster_metadata` partition 0 and
     /// refuses everything else with a partition-level error.
     ///
