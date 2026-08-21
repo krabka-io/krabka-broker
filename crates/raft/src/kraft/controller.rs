@@ -4569,6 +4569,57 @@ mod tests {
         ));
     }
 
+    /// A reconfiguration is refused before it is proposed when this node is
+    /// not the leader, or when the quorum cannot support the change.
+    ///
+    /// Each refusal names a different cause, and the caller acts on which one:
+    /// `NotLeader` says where to go instead, while the rest say the request
+    /// itself will not do. Collapsing them loses the redirect.
+    #[test]
+    fn a_reconfiguration_is_refused_with_the_reason_it_was_refused_for() {
+        use crate::reconfig::{AddVoter, ReconfigOutcome, VoterChange};
+
+        fn add_of(id: u64) -> VoterChange {
+            VoterChange::Add(AddVoter {
+                voter: crabka_metadata::Voter {
+                    id: NodeId(id),
+                    directory_id: uuid::Uuid::nil(),
+                    endpoints: vec![],
+                    kraft_version: crabka_metadata::KRaftVersionRange::default(),
+                },
+                ack_when_committed: true,
+            })
+        }
+
+        // A follower redirects rather than refusing outright: it knows the
+        // request is legitimate, just not addressed to it.
+        let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let (reply, mut rx) = oneshot::channel();
+        follower.on_reconfigure(add_of(3), reply);
+        check!(
+            matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::NotLeader { .. }))),
+            "a non-leader redirects"
+        );
+
+        // A leader whose quorum is still at kraft.version 0 has no mechanism to
+        // add a voter with: dynamic membership is what version 1 introduces.
+        let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        elect_single_voter_engine(&mut leader);
+        check!(
+            leader.controls.committed_version == 0,
+            "a fresh quorum starts at version 0"
+        );
+        let (reply, mut rx) = oneshot::channel();
+        leader.on_reconfigure(add_of(2), reply);
+        check!(
+            matches!(
+                rx.try_recv(),
+                Ok(Err(RaftError::UnsupportedKraftVersion(0)))
+            ),
+            "adding a voter at version 0 is refused as unsupported"
+        );
+    }
+
     #[test]
     fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
