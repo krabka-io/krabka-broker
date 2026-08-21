@@ -17,8 +17,11 @@ bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
 # `bazel_dep` above has nothing to resolve against without this override.
 git_override(
     module_name = "rules_rs_mutants",
-    # v0.0.1, resolved to a commit so the checkout is reproducible.
-    commit = "fbc5c265b268cd050f2b392fbbf7ea4fb5b1a656",
+    # Resolved to a commit so the checkout is reproducible. Past v0.0.1 for
+    # `//mutants:config`, without which the sweep enumerates from a synthetic
+    # workspace where this repo's `.cargo/mutants.toml` is not in scope -- so the
+    # exclusions written there did not exclude.
+    commit = "fd8902e425382aaa58490c22721f563127ab9467",
     remote = "https://github.com/robot-head/rules_rs_mutants",
 )
 

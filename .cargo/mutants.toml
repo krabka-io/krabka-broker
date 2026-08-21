@@ -45,4 +45,16 @@ exclude_re = [
     # waiting forever. The drain test detects that, but cargo-mutants can only
     # classify the deliberately stuck process as a timeout.
     "broker/src/client_metrics/mod\\.rs.*replace ClientMetrics::shutdown with \\(\\)",
+    # `capped` is `#[cfg(creusot)] #[logic]`: a specification function that a
+    # normal build does not compile, so mutating it changes nothing that runs
+    # and no test can tell. Creusot discharges it instead, under verif/.
+    # Matched on path and function rather than on the mutation's wording: a
+    # whole-function mutant reads "replace capped Int with ..." (the return type
+    # is in there) and an operator one reads "replace + with * in capped", so
+    # anything tighter matches one genre and silently misses the other.
+    "throttle/src/lib\\.rs.*capped",
+    # `(byte & !COMPRESSION_MASK) | code` with codes 0..=3 and a 0x07 mask: the
+    # mask clears exactly the bits the code sets, so `|` and `^` compute the
+    # same function. An equivalent mutant, not a gap.
+    "replace \\| with \\^ in attrs_with_compression",
 ]

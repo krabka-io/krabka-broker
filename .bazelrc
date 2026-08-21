@@ -70,5 +70,11 @@ test:docker --test_tag_filters=docker
 # the one built from //tools/mutants' lockfile.
 build --@rules_rs_mutants//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants
 
+# The sweep's own config. Without this the enumeration step runs unconfigured:
+# it lists mutants from a synthetic workspace in a temp dir, where a
+# `.cargo/mutants.toml` sitting in this one is not in scope, so the exclusions
+# written there do not exclude and mutants no test can kill cannot be marked.
+build --@rules_rs_mutants//mutants:config=//:.cargo/mutants.toml
+
 # Optional developer-local overrides (registry mirrors, remote cache, etc.).
 try-import %workspace%/user.bazelrc

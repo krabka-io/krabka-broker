@@ -3,8 +3,10 @@
 package(default_visibility = ["//visibility:public"])
 
 # Cargo.lock/Cargo.toml are consumed by `crate.from_cargo` (see //MODULE.bazel);
-# clippy.toml by the lint aspect in //tools/lint.
+# clippy.toml by the lint aspect in //tools/lint; .cargo/mutants.toml by the
+# mutation sweep, via `--@rules_rs_mutants//mutants:config` in //.bazelrc.
 exports_files([
+    ".cargo/mutants.toml",
     "Cargo.lock",
     "Cargo.toml",
     "clippy.toml",
