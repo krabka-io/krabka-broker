@@ -474,6 +474,100 @@ mod tests {
         }
     }
 
+    /// The candidate's `kraft.version` support, read off its `ApiVersions`.
+    ///
+    /// A candidate is admitted only when it advertises the feature *and* the
+    /// cluster's finalized version falls inside the range it advertises. Both
+    /// halves are silent alone: matching any feature name would read some
+    /// other feature's range, and accepting a version on either side of the
+    /// range would admit a voter that cannot speak the protocol in force.
+    #[tokio::test]
+    async fn probe_reports_kraft_support_only_within_the_advertised_range() {
+        /// An `ApiVersions` response advertising one supported feature.
+        fn response_with_feature(name: &str, min: i16, max: i16) -> Vec<u8> {
+            let response = ApiVersionsResponse {
+                error_code: 0,
+                api_keys: vec![WireApiVersion {
+                    api_key: 18,
+                    min_version: 0,
+                    max_version: 4,
+                    ..Default::default()
+                }],
+                supported_features: vec![
+                    crabka_protocol::owned::api_versions_response::SupportedFeatureKey {
+                        name: name.to_owned(),
+                        min_version: min,
+                        max_version: max,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            };
+            let mut buf = bytes::BytesMut::new();
+            response.encode(&mut buf, 3).expect("encode api versions");
+            buf.to_vec()
+        }
+
+        const KRAFT: &str = crabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
+        // (what it is, feature advertised, range, finalized version, supported?)
+        let cases: [(&str, &str, i16, i16, u16, bool); 5] = [
+            (
+                "the version at the bottom of the range",
+                KRAFT,
+                1,
+                3,
+                1,
+                true,
+            ),
+            ("the version inside the range", KRAFT, 1, 3, 2, true),
+            ("the version at the top of the range", KRAFT, 1, 3, 3, true),
+            ("a version above the range", KRAFT, 1, 3, 4, false),
+            (
+                "some other feature entirely",
+                "metadata.version",
+                1,
+                3,
+                2,
+                false,
+            ),
+        ];
+
+        for (what, feature, min, max, finalized, supported) in cases {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let body = response_with_feature(feature, min, max);
+
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                // The dialer's own handshake first, then the probe's request.
+                let handshake = read_frame(&mut stream).await;
+                let (_, _, corr, _, _) = parse_request_header(&handshake);
+                write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
+
+                let probe = read_frame(&mut stream).await;
+                let (key, _, corr, client_id, _) = parse_request_header(&probe);
+                assert2::assert!(key == ApiKey(18));
+                assert2::assert!(client_id == "crabka-voter-probe");
+                write_response_frame(&mut stream, corr, false, &body).await;
+            });
+
+            let voters = voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port());
+            let sender = RealPeerSender::new(
+                voters,
+                &[],
+                "raft-client".into(),
+                Arc::new(PlaintextDialer),
+                crabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
+                crabka_client_core::ClientFrameMax::try_from(crabka_units::kibibytes(32)).unwrap(),
+            );
+            let got = PeerSender::probe_kraft_version(&sender, &addr.to_string(), finalized)
+                .await
+                .expect("probe");
+            assert2::check!(got == supported, "{what}");
+            server.await.expect("fake peer");
+        }
+    }
+
     #[tokio::test]
     async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
