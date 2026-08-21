@@ -123,9 +123,8 @@ Bazel test cannot write to the source tree, and should not want to. It stays
 
 These suites used to hard-code `9092`/`9093`, so two of them could not run at
 once: the second to start lost the bind and reported `Address already in use` as
-a test failure. Each test process allocates its own ports now, and the targets
-run concurrently -- six of them at four jobs, where before they ran one at a
-time.
+a test failure. Each test process allocates its own ports now, so any two suites
+can run side by side.
 
 The tests reach the broker over loopback; only the containers use the advertised
 `host.docker.internal` name, which they resolve through
@@ -133,14 +132,25 @@ The tests reach the broker over loopback; only the containers use the advertised
 `127.0.0.1` in `/etc/hosts`, because a few host-side Rust clients bootstrap
 through the advertised name rather than over loopback.
 
-`jvm_acceptance` was the long pole at roughly nine minutes: 48 tests in one
-binary, serialised by that process's single port allocation. It is now eight
-`jvm_acceptance_*` targets grouped by the cluster each one boots -- CLI
-round-trips, legacy 0.10 clients, durability, SASL, TLS, reassignment, quotas and
-tiered storage -- over one harness in `tests/jvm_acceptance/mod.rs`. Each target
-is its own process, so each gets its own ports for free and Bazel runs them
-concurrently. Within a single binary the tests still share that process's ports
-and run one at a time; per-test ports would lift that too.
+`jvm_acceptance` was the long pole at 552s: 48 tests in one binary, serialised
+by that process's single port allocation. It is now eight `jvm_acceptance_*`
+targets grouped by the cluster each one boots -- CLI round-trips, legacy 0.10
+clients, durability, SASL, TLS, reassignment, quotas and tiered storage -- over
+one harness in `tests/jvm_acceptance/mod.rs`. Each is its own process, so each
+gets its own ports for free.
+
+Splitting alone made CI *slower*, which is worth recording because the reasoning
+looks sound until you measure it. The critical path did fall, 552s to 150s, but
+the job went 852s to 1059s: these suites saturate a runner, so Bazel got about
+1.2x concurrency both before and after, while eight binaries paid the image-load
+and broker-boot cost eight times instead of once. Target granularity was never
+the limit -- the box was.
+
+The shard is therefore across runners, not within one. `docker-select` computes
+the suite set once and emits a matrix, and each suite gets its own job, so the
+wall clock is the slowest suite rather than the sum: 1179s to 355s end to end,
+for about 2.7x the runner-minutes. Within a single binary the tests still share
+that process's ports and run one at a time; per-test ports would lift that too.
 
 ### Docker Desktop hosts
 
