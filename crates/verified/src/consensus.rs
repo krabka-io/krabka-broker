@@ -335,6 +335,23 @@ mod tests {
 
     use super::*;
 
+    /// The leader's own log end counts toward a candidate's majority only when
+    /// it actually reaches that candidate.
+    ///
+    /// `count < majority` guards the increment so the tally saturates, which
+    /// makes it invisible on its own -- the answer is `count >= majority`
+    /// either way. What is visible is joining the two conditions with `||`
+    /// instead of `&&`: an empty tally satisfies `count < majority` for any
+    /// majority, so the leader would be counted for a candidate its log has
+    /// not reached, and one follower would look like two.
+    #[test]
+    fn leader_counts_toward_a_candidate_only_when_its_log_reaches_it() {
+        // One follower at 5 and a leader at 0, needing two of the three.
+        check!(!candidate_has_majority(0, &[5], 5, 2));
+        // The same shape with the leader's log at the candidate: now it counts.
+        check!(candidate_has_majority(5, &[5], 5, 2));
+    }
+
     /// The production implementation that this kernel replaced: sort
     /// descending, take the majority-th largest, gate on `epoch_start`, and
     /// clamp monotonic.

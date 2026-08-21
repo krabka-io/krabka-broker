@@ -7,4 +7,10 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "log")
 
-crate_tests(lib = "log")
+crate_tests(
+    lib = "log",
+    # 833 mutants. At the default 8 shards each carries ~104, and every one is a
+    # rebuild plus a test run against a 3.9s baseline -- all eight shards ran out
+    # the 900s bound. A quarter of the work each fits with room to spare.
+    mutants_shards = 32,
+)

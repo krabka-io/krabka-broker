@@ -53,6 +53,34 @@ exclude_re = [
     # is in there) and an operator one reads "replace + with * in capped", so
     # anything tighter matches one genre and silently misses the other.
     "throttle/src/lib\\.rs.*capped",
+    # `base64_encode` packs three bytes into one u32 as
+    # `(b0 << 16) | (b1 << 8) | b2`. The shifts put each byte in its own eight
+    # bits, so no two operands share a set bit and `|` and `^` agree on every
+    # input. Equivalent mutants, not a gap: the encoder is covered.
+    "replace \\| with \\^ in base64_encode",
+    # `crates/verified` carries its Creusot specification beside the executable
+    # code. These are `#[cfg(creusot)] #[logic]` functions and the `lemma_*`
+    # proof obligations: a normal build does not compile them, so mutating one
+    # changes nothing that runs and no test can tell. Creusot discharges them,
+    # under verif/.
+    "verified/src/(consensus|compaction)\\.rs.*(hwm_member_at|count_ge|least_hwm_member_ge_index|lemma_|compute_horizon_model)",
+    # The rest of `verified`'s survivors are equivalent mutants: a comparison
+    # whose two branches yield the same value at the boundary the mutation
+    # moves. Left as they are rather than rewritten -- these bodies carry
+    # Creusot contracts, and a refactor invalidates a proof session that cannot
+    # be re-discharged here.
+    #
+    # `if lso < hw { lso } else { hw }` -- at equality both arms are the same.
+    "replace < with <= in fetch_visibility",
+    # `spso > log_start` picking the larger, and `difference > 0` clamping at
+    # zero: at equality each yields the value the other branch would.
+    "replace > with >= in effective_share_backlog",
+    # `count < majority` only saturates the tally; the answer is
+    # `count >= majority`, which one extra increment does not move.
+    "replace < with <= in candidate_has_majority",
+    # `cand > majority_offset` guards an assignment of `cand`; at equality it
+    # assigns the value already there.
+    "replace > with >= in recompute_high_watermark",
     # `(byte & !COMPRESSION_MASK) | code` with codes 0..=3 and a 0x07 mask: the
     # mask clears exactly the bits the code sets, so `|` and `^` compute the
     # same function. An equivalent mutant, not a gap.
