@@ -50,6 +50,7 @@ pub struct Spool {
     max_bytes: MaxSpoolBytes,
     bytes: SpoolBytes,
     count: RecordCount,
+    recovered_torn_tail: bool,
 }
 
 impl Spool {
@@ -81,10 +82,12 @@ impl Spool {
             max_bytes: MaxSpoolBytes(max_size.bytes_u64()),
             bytes: SpoolBytes(0),
             count: RecordCount(0),
+            recovered_torn_tail: false,
         };
         let (records, valid_bytes) = s.scan()?;
         let physical = s.file.metadata().map_err(io)?.len();
-        if valid_bytes.0 < physical {
+        s.recovered_torn_tail = valid_bytes.0 < physical;
+        if s.recovered_torn_tail {
             s.file.set_len(valid_bytes.0).map_err(io)?;
             tracing::warn!(
                 physical,
@@ -114,6 +117,17 @@ impl Spool {
     #[must_use]
     pub fn size(&self) -> ByteSize {
         ByteSize::from_bytes(self.bytes.0)
+    }
+
+    /// Whether [`Spool::open`] found a torn tail frame and cut it off.
+    ///
+    /// A crash partway through an append leaves a frame whose length prefix
+    /// promises more bytes than follow it. `open` heals that, and this reports
+    /// whether it had to -- healing a spool that was intact would mean
+    /// discarding good bytes, so the two cases are worth telling apart.
+    #[must_use]
+    pub fn recovered_torn_tail(&self) -> bool {
+        self.recovered_torn_tail
     }
 
     /// Append a record to the spool.
@@ -496,6 +510,63 @@ mod tests {
         let r1 = chained_record(1, &GENESIS_HEAD, b"more");
         assert2::check!(s.append(&r1).unwrap());
         assert2::check!(s.read_all().unwrap() == vec![r0, r1]);
+    }
+
+    /// `open` heals a torn tail and reports that it did. Opening an intact
+    /// spool must report the opposite: healing one that was whole would mean
+    /// cutting good bytes off the end.
+    #[test]
+    fn open_reports_whether_it_healed_a_torn_tail() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let spool_file = dir.path().join(SPOOL_FILE);
+        let r0 = chained_record(0, &GENESIS_HEAD, b"good");
+        {
+            let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+            s.append(&r0).unwrap();
+        }
+
+        let intact_len = std::fs::metadata(&spool_file).unwrap().len();
+        {
+            let intact = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+            check!(!intact.recovered_torn_tail());
+        }
+        check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
+
+        // A crash mid-append: a length prefix promising 100 bytes, 3 behind it.
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&spool_file)
+                .unwrap();
+            f.write_all(&100u32.to_be_bytes()).unwrap();
+            f.write_all(b"abc").unwrap();
+        }
+        let healed = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(healed.recovered_torn_tail());
+        check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
+    }
+
+    /// Four bytes is the boundary: exactly four is a readable `u32`, and fewer
+    /// must yield `None` rather than index past the end.
+    #[test]
+    fn take_u32_reads_at_the_four_byte_boundary() {
+        // (input, decoded, bytes left unread)
+        let cases: &[(&[u8], Option<u32>, usize)] = &[
+            (&[], None, 0),
+            (&[0x00], None, 1),
+            (&[0x00, 0x00, 0x01], None, 3),
+            (&[0x00, 0x00, 0x01, 0x00], Some(256), 0),
+            (&[0x00, 0x00, 0x01, 0x00, 0xff], Some(256), 1),
+        ];
+        for (input, want, want_left) in cases {
+            let mut b: &[u8] = input;
+            let got = take_u32(&mut b);
+            check!(
+                (got, b.len()) == (*want, *want_left),
+                "take_u32({input:x?})"
+            );
+        }
     }
 
     #[test]

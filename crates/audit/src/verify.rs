@@ -352,6 +352,37 @@ mod tests {
         batch
     }
 
+    /// Several records inside one batch, each at its own `offset_delta`.
+    ///
+    /// [`audit_record_to_batch`] puts one record per batch at delta 0, where a
+    /// record's offset is its batch's base offset. This is the other shape: the
+    /// offset is the base plus the delta, and the two differ.
+    fn audit_records_to_batch(recs: &[AuditRecord], base_offset: i64) -> RecordBatch {
+        let last = i32::try_from(recs.len()).expect("record count fits i32") - 1;
+        let mut batch = RecordBatch {
+            base_offset,
+            last_offset_delta: last,
+            ..RecordBatch::default()
+        };
+        for (i, rec) in recs.iter().enumerate() {
+            let headers = rec
+                .headers
+                .iter()
+                .map(|(k, v)| RecordHeader {
+                    key: k.clone(),
+                    value: Some(Bytes::from(v.clone())),
+                })
+                .collect();
+            batch.records.push(Record {
+                offset_delta: i32::try_from(i).expect("delta fits i32"),
+                value: Some(Bytes::from(rec.value.clone())),
+                headers,
+                ..Default::default()
+            });
+        }
+        batch
+    }
+
     /// Build a valid chained and checkpointed partition on disk, and return the
     /// public key.
     fn build_partition(tmp: &std::path::Path) -> Vec<u8> {
@@ -583,6 +614,52 @@ mod tests {
         check!(
             reason.contains("prev_hash"),
             "reason should mention prev_hash, got: {reason}"
+        );
+    }
+
+    /// A break in the second record of a batch is reported at
+    /// `base_offset + offset_delta`.
+    ///
+    /// Every other test writes one record per batch at delta 0, where the base
+    /// alone is the offset and so a sum is indistinguishable from a difference
+    /// or a product. Here the record sits at base 1, delta 1: the offset is 2,
+    /// and 1 and 0 are what the other arithmetic would give.
+    #[test]
+    fn break_offset_within_a_batch_is_base_plus_delta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+        let mut chain = ChainState::new();
+
+        let mut record = |value: &str, chain: &mut ChainState, tamper: bool| {
+            let mut rec = AuditRecord {
+                class: crate::event::AuditEventClass::ApplicationLifecycle,
+                value: value.as_bytes().to_vec(),
+                headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
+            };
+            let (seq, prev) = chain.extend(&rec.value);
+            rec.push_chain_headers(seq, if tamper { &GENESIS_HEAD } else { &prev });
+            rec
+        };
+
+        // Offset 0, its own batch, chain intact.
+        let rec0 = record("{\"i\":0}", &mut chain, false);
+        log.append(&mut audit_record_to_batch(&rec0, 0)).unwrap();
+
+        // Offsets 1 and 2 in one batch. The second carries a wrong prev hash,
+        // so the walk breaks on it rather than on the batch's first record.
+        let rec1 = record("{\"i\":1}", &mut chain, false);
+        let rec2 = record("{\"i\":2}", &mut chain, true);
+        log.append(&mut audit_records_to_batch(&[rec1, rec2], 1))
+            .unwrap();
+
+        let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+        check!(!report.ok, "a wrong prev_hash must break the walk");
+        let brk = report.first_break.expect("a break was reported");
+        check!(brk.offset == 2, "break offset, got {}", brk.offset);
+        check!(
+            brk.reason.contains("prev_hash"),
+            "reason should name prev_hash, got: {}",
+            brk.reason
         );
     }
 
