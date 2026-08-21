@@ -553,6 +553,16 @@ fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
     );
 }
 
+/// How long to wait for an external metadata request to report a leader.
+///
+/// This gates on a *resumed* JVM broker in two of the three call sites: the
+/// container is SIGSTOPped, so its KRaft session expires, and on unpause it must
+/// re-register before the partition has any eligible leader at all. CI caught the
+/// gap at 45s -- `Leader: none` with an empty ISR after the full budget -- while
+/// the same commit passed elsewhere. The wait returns as soon as the leader
+/// appears, so a higher ceiling costs a healthy run nothing.
+const LEADER_WAIT: Duration = Duration::from_secs(120);
+
 /// Wait until an external Kafka metadata request observes `expected` as the
 /// partition leader. This gates producer/follower steps on the JVM broker's
 /// view, rather than only on Crabka's already-applied metadata image.
@@ -1136,7 +1146,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
     }))
     .await
     .expect("promote JVM broker for divergent suffix");
-    wait_for_described_leader(&bootstrap_all, TOPIC, 3, Duration::from_secs(45)).await;
+    wait_for_described_leader(&bootstrap_all, TOPIC, 3, LEADER_WAIT).await;
 
     let jvm_suffix = (0..4)
         .map(|i| format!("jvm-divergent-{i}"))
@@ -1230,7 +1240,7 @@ async fn kip320_jvm_follower_truncates_from_crabka_leader() {
 
     set_container_paused(&container, false);
 
-    wait_for_described_leader(&bootstrap_all, TOPIC, 1, Duration::from_secs(45)).await;
+    wait_for_described_leader(&bootstrap_all, TOPIC, 1, LEADER_WAIT).await;
 
     // 5. Poll the JVM broker's actual on-disk bytes until its old suffix is
     //    gone and the Crabka suffix is present. Equal LEOs alone cannot prove
@@ -1438,7 +1448,7 @@ async fn kip320_crabka_follower_truncates_from_jvm_leader() {
 
     set_container_paused(&container, false);
 
-    wait_for_described_leader(&bootstrap_all, TOPIC, 3, Duration::from_secs(45)).await;
+    wait_for_described_leader(&bootstrap_all, TOPIC, 3, LEADER_WAIT).await;
 
     // 5. Observe the truncation itself, before adding any new leader records.
     //    Equal final LEOs alone would not distinguish truncate-and-refetch from
