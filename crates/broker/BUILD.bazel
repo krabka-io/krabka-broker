@@ -88,4 +88,8 @@ crate_tests(
     manual = ["describe_groups_jvm"],
     # 212k lines: a full sweep is nightly-sized even sharded this far.
     mutants_shards = 32,
+    # Every mutant rebuilds 212k lines, so a shard is dominated by rustc, not by
+    # the 20.5s test baseline: a full sweep is hours of work however it is split.
+    # This is the one crate that needs the longer per-shard bound.
+    mutants_timeout = "eternal",
 )

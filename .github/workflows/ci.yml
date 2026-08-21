@@ -215,16 +215,24 @@ jobs:
   # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
   # so it is far too slow to gate a pull request.
   #
+  # One job per crate. As a single job over all fifteen targets there was no
+  # bound that meant anything: one `broker_mutants` shard sat at 3557s against
+  # Bazel's 3600s ceiling while the other fourteen crates waited behind it, and
+  # a sweep that overran said nothing about which crate was responsible. Per
+  # crate each is bounded on its own, reports its own result, and the wall clock
+  # is the slowest crate rather than the sum.
+  #
   # `continue-on-error`: survivors are the expected state, not an exception --
   # `cargo_mutants_test` runs only `#[cfg(test)]` unit tests, so every mutant the
   # `tests/*.rs` suites would have killed is reported as one. The job exists to
   # produce a list to read. Make it blocking once the score is worth defending.
-  mutants:
-    name: mutation sweep
+  mutants-select:
+    name: select mutants targets
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 20
+    outputs:
+      crates: ${{ steps.select.outputs.crates }}
     steps:
       - uses: actions/checkout@v7
       - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
@@ -232,18 +240,41 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-mutants
           repository-cache: true
-      # One line, not a heredoc: a multi-line step output expands into the `run:`
-      # block as further script lines, so `bazel test` took the first target and
-      # the rest became commands of their own. Under `bash -e` the first target
-      # failing masked that, and had it passed the next line would have been an
-      # unknown command -- so the sweep covered one crate of fifteen and could
-      # not have gone green either way.
-      - id: targets
+      - id: select
         run: |
-          echo "targets=$(
-            bazel query 'kind("cargo_mutants_test rule", //crates/...)' | tr '\n' ' '
-          )" >>"${GITHUB_OUTPUT}"
-      - run: bazel test ${{ steps.targets.outputs.targets }}
+          set -euo pipefail
+          # `crates/broker` is the outlier: every mutant rebuilds 212k lines, so
+          # its sweep is hours where the rest are minutes. It gets the long
+          # budget; nothing else is allowed to want one.
+          crates="$(
+            bazel query 'kind("cargo_mutants_test rule", //crates/...)' |
+              jq -R -s -c 'split("\n") | map(select(length > 0)) |
+                map({target: ., name: (. | split("/")[3] | split(":")[0])}) |
+                map(. + {minutes: (if .name == "broker" then 300 else 60 end)})'
+          )"
+          echo "crates=${crates}" >>"${GITHUB_OUTPUT}"
+          echo "Selected: ${crates}"
+
+  mutants:
+    name: mutants · ${{ matrix.crate.name }}
+    needs: mutants-select
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    # A bound, not an estimate. A crate that cannot finish inside it is saying
+    # its shard count is too low, and that is worth being told.
+    timeout-minutes: ${{ matrix.crate.minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJSON(needs.mutants-select.outputs.crates) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-mutants
+          repository-cache: true
+      - run: bazel test ${{ matrix.crate.target }}
 
   # Push the broker image.
   #

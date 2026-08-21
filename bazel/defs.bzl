@@ -136,6 +136,7 @@ def crate_tests(
         mutants = True,
         mutants_jobs = 4,
         mutants_shards = 8,
+        mutants_timeout = "long",
         unit_tags = []):
     """Unit tests, one target per `tests/*.rs`, and a mutation sweep.
 
@@ -153,6 +154,7 @@ def crate_tests(
       mutants: whether to emit a `cargo_mutants_test` over the unit tests.
       mutants_jobs: mutants built and tested concurrently within one shard.
       mutants_shards: Bazel shards the sweep is split across.
+      mutants_timeout: Bazel timeout for one shard of the sweep.
       unit_tags: extra tags for the unit-test target.
     """
     unit = lib + "_test"
@@ -183,7 +185,12 @@ def crate_tests(
         # from the nightly job rather than on every `bazel test //...`.
         cargo_mutants_test(
             name = lib + "_mutants",
-            timeout = "eternal",
+            # Every mutant is a full rebuild of the crate plus a test run, so a
+            # sweep is long by nature -- but it must still be bounded. `eternal`
+            # is 3600s per shard, which for the small crates is not a timeout at
+            # all, it is an hour of a runner before anyone learns something is
+            # wrong. `long` is 900s; crates that legitimately need more say so.
+            timeout = mutants_timeout,
             jobs = mutants_jobs,
             shard_count = mutants_shards,
             tags = ["manual"],
