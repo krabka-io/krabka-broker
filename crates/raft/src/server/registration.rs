@@ -422,7 +422,262 @@ fn encode(response: &impl Encode, version: i16) -> Result<Bytes, RaftError> {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
+
     use super::*;
+
+    fn feature(name: &str, min: i16, max: i16) -> controller_registration_request::Feature {
+        controller_registration_request::Feature {
+            name: name.to_owned(),
+            min_supported_version: min,
+            max_supported_version: max,
+            ..Default::default()
+        }
+    }
+
+    fn request_with(
+        features: Vec<controller_registration_request::Feature>,
+    ) -> ControllerRegistrationRequest {
+        ControllerRegistrationRequest {
+            features,
+            ..Default::default()
+        }
+    }
+
+    /// The two registration responses carry the error code and the epoch or
+    /// message the caller passed, and encode to bytes.
+    ///
+    /// These are one-line wrappers, which is exactly why nothing tested them:
+    /// swapping a field or dropping the encode leaves a function that still
+    /// returns `Ok`.
+    #[test]
+    fn registration_responses_carry_what_they_were_given() {
+        use crabka_protocol::{
+            Decode as _,
+            owned::{broker_registration_response, controller_registration_response},
+        };
+
+        let bytes = broker_registration_response(
+            broker_registration_response::MAX_VERSION,
+            INVALID_REGISTRATION,
+            42,
+        )
+        .expect("encode broker response");
+        let mut cursor = &bytes[..];
+        let decoded = BrokerRegistrationResponse::decode(
+            &mut cursor,
+            broker_registration_response::MAX_VERSION,
+        )
+        .expect("decode broker response");
+        check!((decoded.error_code, decoded.broker_epoch) == (INVALID_REGISTRATION, 42));
+
+        let bytes = controller_registration_response(
+            controller_registration_response::MAX_VERSION,
+            NOT_CONTROLLER,
+            Some("not the controller".to_owned()),
+        )
+        .expect("encode controller response");
+        let mut cursor = &bytes[..];
+        let decoded = ControllerRegistrationResponse::decode(
+            &mut cursor,
+            controller_registration_response::MAX_VERSION,
+        )
+        .expect("decode controller response");
+        check!(decoded.error_code == NOT_CONTROLLER);
+        check!(decoded.error_message.as_deref() == Some("not the controller"));
+    }
+
+    /// The controller answers the lifecycle APIs it declares and nothing else.
+    #[test]
+    fn only_the_declared_apis_are_controller_apis() {
+        for &(key, _) in &SUPPORTED_APIS {
+            check!(is_controller_api(key), "declared api {key}");
+        }
+        // A key nothing declares: Produce is a broker API, never a controller one.
+        check!(!is_controller_api(0), "Produce is not a controller api");
+        check!(!is_controller_api(i16::MAX));
+    }
+
+    /// Both listener decoders run the same checks; each reports failure in the
+    /// shape its caller needs -- an error code for the broker path, a message
+    /// for the controller path.
+    #[test]
+    fn both_listener_decoders_reject_an_unusable_listener() {
+        let broker_bad = vec![broker_registration_request::Listener {
+            name: String::new(),
+            host: "host".to_owned(),
+            port: 9092,
+            security_protocol: 0,
+            ..Default::default()
+        }];
+        check!(decode_broker_listeners(&broker_bad) == Err(INVALID_REGISTRATION));
+
+        let broker_ok = vec![broker_registration_request::Listener {
+            name: "PLAINTEXT".to_owned(),
+            host: "host".to_owned(),
+            port: 9092,
+            security_protocol: 0,
+            ..Default::default()
+        }];
+        let decoded = decode_broker_listeners(&broker_ok).expect("a usable listener");
+        check!(decoded.len() == 1 && decoded[0].port == 9092);
+
+        let controller_bad = vec![controller_registration_request::Listener {
+            name: "CONTROLLER".to_owned(),
+            host: String::new(),
+            port: 9093,
+            security_protocol: 0,
+            ..Default::default()
+        }];
+        check!(decode_controller_listeners(&controller_bad).is_err());
+
+        let controller_ok = vec![controller_registration_request::Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "host".to_owned(),
+            port: 9093,
+            security_protocol: 0,
+            ..Default::default()
+        }];
+        let decoded = decode_controller_listeners(&controller_ok).expect("a usable listener");
+        check!(decoded.len() == 1 && decoded[0].port == 9093);
+    }
+
+    /// A controller's advertised feature ranges are taken as given only when
+    /// every one of them is named and non-inverted.
+    ///
+    /// A blank name collides with any other blank name in the map, and a range
+    /// whose minimum exceeds its maximum supports nothing -- accepting either
+    /// puts a value into the controller's view of the cluster that no version
+    /// negotiation can satisfy.
+    #[test]
+    fn controller_feature_ranges_must_be_named_and_not_inverted() {
+        // (what it is, features, accepted?)
+        let cases: Vec<(&str, Vec<controller_registration_request::Feature>, bool)> = vec![
+            ("no features at all", vec![], true),
+            (
+                "one ordinary range",
+                vec![feature("kraft.version", 0, 1)],
+                true,
+            ),
+            (
+                "a range that is a single point",
+                vec![feature("metadata.version", 7, 7)],
+                true,
+            ),
+            (
+                "several ordinary ranges",
+                vec![
+                    feature("kraft.version", 0, 1),
+                    feature("group.version", 0, 1),
+                ],
+                true,
+            ),
+            ("a nameless feature", vec![feature("", 0, 1)], false),
+            (
+                "an inverted range",
+                vec![feature("kraft.version", 2, 1)],
+                false,
+            ),
+            (
+                "one good range and one inverted",
+                vec![
+                    feature("kraft.version", 0, 1),
+                    feature("group.version", 5, 4),
+                ],
+                false,
+            ),
+        ];
+        for (what, features, accepted) in cases {
+            let request = request_with(features);
+            let got = decode_controller_features(&request);
+            check!(got.is_ok() == accepted, "{what}: {got:?}");
+        }
+    }
+
+    /// The decoded map carries each feature's range under its own name.
+    #[test]
+    fn decoded_controller_features_keep_their_ranges() {
+        let request = request_with(vec![
+            feature("kraft.version", 0, 1),
+            feature("metadata.version", 7, 25),
+        ]);
+        let decoded = decode_controller_features(&request).expect("valid ranges");
+        check!(decoded.len() == 2);
+        check!(decoded.get("kraft.version") == Some(&(0, 1)));
+        check!(decoded.get("metadata.version") == Some(&(7, 25)));
+    }
+
+    /// The wire's security-protocol numbering, and nothing outside it.
+    #[test]
+    fn listener_protocol_numbers_map_to_their_protocols() {
+        let cases = [
+            (0i16, Some(ListenerProtocol::Plaintext)),
+            (1, Some(ListenerProtocol::Ssl)),
+            (2, Some(ListenerProtocol::SaslPlaintext)),
+            (3, Some(ListenerProtocol::SaslSsl)),
+            (4, None),
+            (-1, None),
+            (i16::MAX, None),
+        ];
+        for (wire, want) in cases {
+            check!(protocol_from_wire(wire) == want, "protocol {wire}");
+        }
+    }
+
+    /// A listener set is rejected when any entry is unusable or repeats a
+    /// name, and an empty set is rejected outright.
+    #[test]
+    fn registration_listeners_must_be_usable_and_uniquely_named() {
+        type Row<'a> = (&'a str, Vec<(&'a str, &'a str, u16, i16)>, bool);
+        let cases: Vec<Row<'_>> = vec![
+            (
+                "one usable listener",
+                vec![("PLAINTEXT", "host", 9092, 0)],
+                true,
+            ),
+            (
+                "two, differently named",
+                vec![("PLAINTEXT", "host", 9092, 0), ("SSL", "host", 9093, 1)],
+                true,
+            ),
+            ("none at all", vec![], false),
+            ("a nameless listener", vec![("", "host", 9092, 0)], false),
+            (
+                "a hostless listener",
+                vec![("PLAINTEXT", "", 9092, 0)],
+                false,
+            ),
+            ("port zero", vec![("PLAINTEXT", "host", 0, 0)], false),
+            (
+                "a repeated name",
+                vec![
+                    ("PLAINTEXT", "host", 9092, 0),
+                    ("PLAINTEXT", "host", 9093, 0),
+                ],
+                false,
+            ),
+            (
+                "an unknown security protocol",
+                vec![("PLAINTEXT", "host", 9092, 9)],
+                false,
+            ),
+        ];
+        for (what, listeners, accepted) in cases {
+            let got = decode_listeners(listeners.iter().map(|&(n, h, p, proto)| (n, h, p, proto)));
+            check!(got.is_ok() == accepted, "{what}: {got:?}");
+        }
+    }
+
+    /// Each raft failure maps to the error code a Kafka client acts on: a
+    /// leadership problem tells it to look elsewhere, a rejected registration
+    /// tells it not to retry unchanged.
+    #[test]
+    fn raft_errors_map_to_the_client_visible_code() {
+        check!(raft_error_code(&RaftError::LeaderUnknown) == NOT_CONTROLLER);
+        check!(raft_error_code(&RaftError::ChangeRejected("no".into())) == INVALID_REGISTRATION,);
+        // Anything else is not something the client can act on specifically.
+        check!(raft_error_code(&RaftError::Shutdown) == UNKNOWN_SERVER_ERROR);
+    }
 
     #[test]
     fn recognizes_kafka_and_uuid_cluster_ids() {
