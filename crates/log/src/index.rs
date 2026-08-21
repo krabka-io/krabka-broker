@@ -151,6 +151,68 @@ mod tests {
 
     use super::*;
 
+    /// Truncation drops every entry at or past the bound and shortens the file
+    /// to match.
+    ///
+    /// The bound is exclusive, so an entry sitting exactly on it goes. And the
+    /// file has to end up exactly `kept * ENTRY_SIZE` bytes long: a stale tail
+    /// is read back as entries on the next open, which is how a torn index
+    /// resurrects offsets the log no longer has.
+    #[test]
+    fn offset_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("00000000000000000000.index");
+        let mut idx = OffsetIndex::open(&path).unwrap();
+        for i in 0..5u32 {
+            idx.append(i * 10, i * 100).unwrap();
+        }
+        check!(std::fs::metadata(&path).unwrap().len() == (5 * OFFSET_ENTRY_SIZE) as u64);
+
+        // Positions are 0, 100, 200, 300, 400; the bound is exclusive, so the
+        // entry at 200 goes with everything past it.
+        idx.truncate_by_position(200).unwrap();
+        check!(
+            std::fs::metadata(&path).unwrap().len() == (2 * OFFSET_ENTRY_SIZE) as u64,
+            "file should hold exactly the two surviving entries"
+        );
+        // Reopening reads the file back: the dropped entries must not return.
+        let reopened = OffsetIndex::open(&path).unwrap();
+        check!(reopened.lookup(9999) == 100, "the last surviving position");
+    }
+
+    /// The time index truncates on relative offset, with the same exclusive
+    /// bound and the same file-length obligation.
+    #[test]
+    fn time_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("00000000000000000000.timeindex");
+        let mut idx = TimeIndex::open(&path).unwrap();
+        for i in 0..5u32 {
+            idx.append(1_000 + i64::from(i), i * 10).unwrap();
+        }
+        check!(std::fs::metadata(&path).unwrap().len() == (5 * TIME_ENTRY_SIZE) as u64);
+
+        // Relative offsets are 0, 10, 20, 30, 40. Exclusive at 20: two survive.
+        idx.truncate_by_relative_offset(20).unwrap();
+        check!(
+            std::fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
+            "file should hold exactly the two surviving entries"
+        );
+
+        // Truncating to zero clears it; truncating past the end keeps everything.
+        let mut idx = TimeIndex::open(&path).unwrap();
+        idx.truncate_by_relative_offset(9_999).unwrap();
+        check!(
+            std::fs::metadata(&path).unwrap().len() == (2 * TIME_ENTRY_SIZE) as u64,
+            "a bound past the end drops nothing"
+        );
+        idx.truncate_by_relative_offset(0).unwrap();
+        check!(
+            std::fs::metadata(&path).unwrap().len() == 0,
+            "a bound of zero drops everything"
+        );
+    }
+
     #[test]
     fn append_and_lookup() {
         let dir = tempdir().unwrap();

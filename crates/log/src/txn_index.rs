@@ -140,6 +140,32 @@ mod tests {
 
     use super::*;
 
+    /// The range end is exclusive: an aborted transaction that begins exactly
+    /// where the fetch ends is not in it.
+    ///
+    /// A consumer uses this list to skip aborted records inside the batch range
+    /// it was handed. Including one that starts past the end makes it skip
+    /// records it was never sent.
+    #[test]
+    fn an_aborted_txn_starting_at_the_range_end_is_outside_it() {
+        let dir = TempDir::new().unwrap();
+        let mut index = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
+        index
+            .append(AbortedTxn {
+                start_offset: Offset(10),
+                last_offset: Offset(20),
+                producer_id: ProducerId(1),
+            })
+            .unwrap();
+
+        let found =
+            |start: i64, end: i64| index.aborted_in_range(Offset(start), Offset(end)).count();
+        assert2::check!(found(0, 10) == 0, "a fetch ending where the txn begins");
+        assert2::check!(found(0, 11) == 1, "a fetch reaching one past its start");
+        assert2::check!(found(20, 30) == 1, "a fetch starting on its last offset");
+        assert2::check!(found(21, 30) == 0, "a fetch starting past its last offset");
+    }
+
     #[test]
     fn empty_file_yields_empty_entries() {
         let dir = TempDir::new().unwrap();
