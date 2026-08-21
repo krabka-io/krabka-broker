@@ -1160,6 +1160,151 @@ mod tests {
         b
     }
 
+    /// A fetch reads nothing when it starts past the segment, and nothing when
+    /// it starts at or past the limit. Either condition alone is enough --
+    /// joined with `&&` a fetch would have to be both before it read nothing.
+    #[test]
+    fn a_fetch_past_the_segment_or_at_the_limit_reads_nothing() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap(); // offsets 0..=2
+
+        let past = seg.read_raw(Offset(3), Offset(99), NO_LIMIT).unwrap();
+        check!(past.is_empty(), "a fetch past the last offset");
+
+        let at_limit = seg.read_raw(Offset(0), Offset(0), NO_LIMIT).unwrap();
+        check!(at_limit.is_empty(), "a fetch at the limit");
+
+        let inside = seg.read_raw(Offset(0), Offset(3), NO_LIMIT).unwrap();
+        check!(
+            !inside.is_empty(),
+            "a fetch inside the segment and below the limit"
+        );
+    }
+
+    /// Batches before the fetch offset are stepped over by their own length.
+    /// Advancing by anything else lands mid-batch and the walk reads a header
+    /// out of the middle of a record.
+    #[test]
+    fn a_fetch_mid_segment_steps_over_the_batches_before_it() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        // A sparse index, so only the first batch gets an entry and the lookup
+        // lands at the segment head. The walk then has to step over the two
+        // batches before the one asked for -- with a dense index it would jump
+        // straight there and never step at all.
+        let sparse = mebibytes(1);
+        seg.append(&sample_batch(0, 2, 100), sparse).unwrap(); // 0..=1
+        seg.append(&sample_batch(2, 2, 200), sparse).unwrap(); // 2..=3
+        seg.append(&sample_batch(4, 2, 300), sparse).unwrap(); // 4..=5
+
+        let read = seg
+            .read_raw_with_buffer_cap(Offset(4), Offset(99), NO_LIMIT, mebibytes(1))
+            .unwrap();
+        check!(
+            read.start_offset == Offset(4),
+            "start {:?}",
+            read.start_offset
+        );
+        check!(read.last_offset == Offset(5), "last {:?}", read.last_offset);
+    }
+
+    /// A batch that will not fit the first read is fetched on its own, from
+    /// its own position in the file.
+    ///
+    /// That position is `start_pos + pos`, and with a dense index and a fetch
+    /// past the first batch `start_pos` is well away from the file head -- so
+    /// reading from anywhere else returns a different batch, or nothing.
+    #[test]
+    fn a_batch_too_large_for_the_first_read_is_fetched_from_its_own_position() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        for i in 0..4i64 {
+            seg.append(&sample_batch(i * 2, 2, 100 + i), DENSE_INDEX)
+                .unwrap();
+        }
+
+        // A one-byte budget makes the first read header-sized, so the batch
+        // cannot fit it and takes the read-one-batch path.
+        let read = seg.read_raw(Offset(4), Offset(99), bytes(1)).unwrap();
+        check!(
+            read.start_offset == Offset(4),
+            "start {:?}",
+            read.start_offset
+        );
+        check!(read.last_offset == Offset(5), "last {:?}", read.last_offset);
+        check!(!read.is_empty());
+    }
+
+    /// The byte budget stops the walk once the selected range reaches it, so a
+    /// small budget returns fewer batches than an unlimited one.
+    #[test]
+    fn the_byte_budget_bounds_how_much_a_fetch_returns() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        for i in 0..6i64 {
+            seg.append(&sample_batch(i * 2, 2, 100 + i), DENSE_INDEX)
+                .unwrap();
+        }
+
+        let everything = seg.read_raw(Offset(0), Offset(99), NO_LIMIT).unwrap();
+        let clipped = seg.read_raw(Offset(0), Offset(99), bytes(1)).unwrap();
+        check!(
+            !clipped.is_empty(),
+            "a budget of one byte still returns a batch"
+        );
+        check!(
+            clipped.last_offset < everything.last_offset,
+            "clipped to {:?}, unlimited reached {:?}",
+            clipped.last_offset,
+            everything.last_offset
+        );
+    }
+
+    /// Sealing is what `is_sealed` reports.
+    #[test]
+    fn is_sealed_follows_seal() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
+        check!(!seg.is_sealed(), "a fresh segment is open");
+        seg.seal();
+        check!(seg.is_sealed(), "a sealed segment reports it");
+    }
+
+    /// The scan reports the offset of the maximum timestamp as
+    /// `batch.base_offset + record.offset_delta`, and keeps the first record
+    /// holding that timestamp when several share it.
+    #[test]
+    fn the_windowed_scan_reports_the_first_offset_at_the_maximum() {
+        let dir = tempdir().unwrap();
+        // A non-zero base offset and a non-zero delta, so a sum is telling
+        // apart from a product and from either operand alone.
+        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
+        let mut batch = RecordBatch {
+            base_offset: 10,
+            base_timestamp: 500,
+            max_timestamp: 502,
+            last_offset_delta: 2,
+            ..RecordBatch::default()
+        };
+        // Records at offsets 10, 11, 12 with timestamps 500, 502, 502: the
+        // maximum is shared, and the first to hold it is offset 11.
+        for (delta, ts_delta) in [(0i32, 0i64), (1, 2), (2, 2)] {
+            batch.records.push(Record {
+                offset_delta: delta,
+                timestamp_delta: ts_delta,
+                key: Some(Bytes::from(format!("k{delta}"))),
+                value: Some(Bytes::from(format!("v{delta}"))),
+                ..Default::default()
+            });
+        }
+        seg.append(&batch, DENSE_INDEX).unwrap();
+
+        let found = seg.scan_max_timestamp_windowed(kibibytes(64));
+        check!(found == Some((Offset(11), 502)), "got {found:?}");
+    }
+
     #[test]
     fn offset_for_timestamp_finds_first_ge() {
         let dir = tempdir().unwrap();

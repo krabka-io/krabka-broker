@@ -707,15 +707,6 @@ impl Log {
         Ok(())
     }
 
-    /// Deprecated alias kept for existing test/feature-helpers callers.
-    #[deprecated(note = "use set_log_start_offset")]
-    #[cfg(any(test, feature = "test-helpers"))]
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn test_set_log_start_offset(&mut self, new_start: Offset) -> Result<(), LogError> {
-        self.set_log_start_offset(new_start)
-    }
-
     /// Reset the log to be empty at `new_base`.
     ///
     /// This method drops every segment and every on-disk file, then creates
@@ -2515,6 +2506,145 @@ mod tests {
         let dir = tempdir().unwrap();
         let log = Log::open(dir.path(), LogConfig::default()).unwrap();
         (dir, log)
+    }
+
+    /// A leader-epoch transition is recorded only when the epoch is known and
+    /// only when it advances past the one already recorded.
+    ///
+    /// Four append paths carry the same two-part guard, and each half is silent
+    /// on its own: joined with `||` an unknown epoch gets recorded, and relaxed
+    /// from `>` to `>=` the same epoch is recorded twice. Neither shows up in
+    /// the appended data -- only in the epoch checkpoint.
+    #[test]
+    fn an_epoch_transition_is_recorded_once_and_only_when_it_advances() {
+        // Offered in order. -1 is KIP-320's "unknown"; 5 repeats; 6 advances.
+        const OFFERED: [i32; 5] = [-1, 5, 5, 6, -1];
+        // Only the two advances belong in the checkpoint.
+        const RECORDED: [i32; 2] = [5, 6];
+
+        fn recorded(log: &Log) -> Vec<i32> {
+            log.epoch_checkpoint
+                .entries()
+                .iter()
+                .map(|e| e.epoch.0)
+                .collect()
+        }
+
+        // `append`: the log assigns the base offset.
+        {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for epoch in OFFERED {
+                let mut batch = sample_batch(1);
+                batch.partition_leader_epoch = epoch;
+                log.append(&mut batch).expect("append");
+            }
+            check!(recorded(&log) == RECORDED, "append: {:?}", recorded(&log));
+        }
+
+        // `append_at`: the caller supplies the offset.
+        {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for (i, epoch) in OFFERED.iter().enumerate() {
+                let mut batch = sample_batch(1);
+                batch.partition_leader_epoch = *epoch;
+                log.append_at(&mut batch, Offset(i as i64))
+                    .expect("append_at");
+            }
+            check!(
+                recorded(&log) == RECORDED,
+                "append_at: {:?}",
+                recorded(&log)
+            );
+        }
+
+        // `append_verbatim`: producer-supplied bytes, log-assigned offset.
+        {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for epoch in OFFERED {
+                let producer = test_batch_at(0);
+                let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(epoch));
+                log.append_verbatim(&vb).expect("append_verbatim");
+            }
+            check!(
+                recorded(&log) == RECORDED,
+                "append_verbatim: {:?}",
+                recorded(&log)
+            );
+        }
+
+        // `append_verbatim_at`: producer-supplied bytes and offset.
+        {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for (i, epoch) in OFFERED.iter().enumerate() {
+                let producer = test_batch_at(0);
+                let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(*epoch));
+                log.append_verbatim_at(&vb, Offset(i as i64))
+                    .expect("append_verbatim_at");
+            }
+            check!(
+                recorded(&log) == RECORDED,
+                "append_verbatim_at: {:?}",
+                recorded(&log)
+            );
+        }
+    }
+
+    /// Zero is a legal log start; only a negative one is rejected.
+    #[test]
+    fn the_log_start_may_be_set_to_zero_but_not_below() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        check!(
+            log.set_log_start_offset(Offset(0)).is_ok(),
+            "zero is a real offset"
+        );
+        check!(log.set_log_start_offset(Offset(7)).is_ok());
+        check!(
+            log.set_log_start_offset(Offset(-1)).is_err(),
+            "negative is not"
+        );
+    }
+
+    /// The log's size is every segment's size added up, the sealed ones as
+    /// well as the active one.
+    #[test]
+    fn log_size_sums_the_sealed_segments_and_the_active_one() {
+        let dir = tempdir().unwrap();
+        // A tiny segment cap, so appending rolls and leaves sealed segments
+        // behind the active one -- with only an active segment the fold has
+        // nothing to add and the accumulator is returned untouched.
+        let config = LogConfig {
+            segment_size: kibibytes(1),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).unwrap();
+        for _ in 0..40 {
+            let mut batch = sample_batch(4);
+            log.append(&mut batch).expect("append");
+        }
+        check!(
+            !log.segments.is_empty(),
+            "the appends should have rolled a segment"
+        );
+
+        let expected = log.segments.iter().map(Segment::size).fold(
+            log.active.as_ref().map_or(ByteSize::ZERO, Segment::size),
+            |a, b| a + b,
+        );
+        check!(
+            log.size() == expected,
+            "size {:?}, expected {:?}",
+            log.size(),
+            expected
+        );
+        check!(
+            log.size() > kibibytes(1),
+            "several segments should exceed one"
+        );
     }
 
     fn test_batch_at(_off: i64) -> RecordBatch {

@@ -53,6 +53,39 @@ exclude_re = [
     # is in there) and an operator one reads "replace + with * in capped", so
     # anything tighter matches one genre and silently misses the other.
     "throttle/src/lib\\.rs.*capped",
+    # ---- crates/log ----------------------------------------------------
+    #
+    # The epoch guard in each append path is `epoch.is_known() && latest is none
+    # or epoch > it`. Relaxing `>` to `>=` only admits an epoch already
+    # recorded, and `append_to` refuses one it has seen -- so the checkpoint is
+    # unchanged either way. The `&&` half is real and is tested.
+    "log/src/log\\.rs.*replace > with >= in Log::append(_verbatim)?(_at)?$",
+    # `read_raw`'s early return for "past the segment, or at the limit" is an
+    # optimisation: the walk reaches the same empty result on its own, one
+    # skipping every batch and the other breaking on `base >= limit_offset`.
+    "replace \\|\\| with && in Segment::read_raw_with_buffer_cap",
+    # `last_offset` starts at `fetch_offset - 1` and is overwritten by every
+    # batch the walk selects. When the walk selects none the result is the empty
+    # read, which does not carry it. The initial value is never returned.
+    "segment\\.rs:630.*in Segment::read_raw_with_buffer_cap",
+    # `max_timestamp > current` guards an assignment of that timestamp, so at
+    # equality both branches store the same value. (`<` is a different
+    # function and is tested.)
+    "replace > with >= in Segment::(append|recover_active_tail|truncate_to_relative)",
+    # `sync_data` has no in-process effect: it orders bytes against a crash,
+    # which a unit test cannot observe. Emptying the call changes nothing any
+    # assertion can reach.
+    "replace (OffsetIndex|TimeIndex)::flush with Ok\\(\\(\\)\\)",
+    "replace Segment::flush with Ok\\(\\(\\)\\)",
+    # The `#[cfg(windows)]` `read_at`: not compiled on the platforms this is
+    # built for, so nothing that runs changes.
+    "segment\\.rs:73.*replace read_at with",
+    # Guards on `io::ErrorKind` -- `Interrupted` in the read loop, `NotFound`
+    # when a sidecar is absent. Reaching them needs the kernel to return that
+    # errno, which a test cannot ask a real file for.
+    "replace == with != in read_full_at",
+    "leader_epoch_checkpoint\\.rs.*e\\.kind\\(\\)",
+    "txn_index\\.rs:85",
     # `base64_encode` packs three bytes into one u32 as
     # `(b0 << 16) | (b1 << 8) | b2`. The shifts put each byte in its own eight
     # bits, so no two operands share a set bit and `|` and `^` agree on every
