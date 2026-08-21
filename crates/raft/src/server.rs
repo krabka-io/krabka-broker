@@ -1506,6 +1506,188 @@ mod tests {
         check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
     }
 
+    /// A reconfiguration request is refused before it reaches the quorum when
+    /// it names the wrong cluster, a negative voter, or a zero directory id.
+    ///
+    /// Each is a separate arm returning INVALID_REQUEST with a reason, and a
+    /// request that slipped past them would be applied to the voter set --
+    /// a zero directory id in particular names no real incarnation.
+    #[tokio::test]
+    async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
+        use crabka_protocol::{
+            Encode as _,
+            owned::{
+                remove_raft_voter_request::{self, RemoveRaftVoterRequest},
+                remove_raft_voter_response::RemoveRaftVoterResponse,
+            },
+        };
+
+        const INVALID_REQUEST: i16 = 42;
+        let version = remove_raft_voter_request::MAX_VERSION;
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+        let cluster_id = engine.current_image().cluster_id().to_string();
+
+        let real_directory = crabka_protocol::primitives::uuid::Uuid([7u8; 16]);
+        // (what it is, cluster id sent, voter id, directory id)
+        let cases: Vec<(
+            &str,
+            Option<String>,
+            i32,
+            crabka_protocol::primitives::uuid::Uuid,
+        )> = vec![
+            (
+                "another cluster's id",
+                Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+                2,
+                real_directory,
+            ),
+            (
+                "a negative voter id",
+                Some(cluster_id.clone()),
+                -1,
+                real_directory,
+            ),
+            (
+                "a zero directory id",
+                Some(cluster_id.clone()),
+                2,
+                crabka_protocol::primitives::uuid::Uuid::ZERO,
+            ),
+        ];
+
+        for (what, request_cluster_id, voter_id, voter_directory_id) in cases {
+            let request = RemoveRaftVoterRequest {
+                cluster_id: request_cluster_id,
+                voter_id,
+                voter_directory_id,
+                ..Default::default()
+            };
+            let mut body = BytesMut::new();
+            request.encode(&mut body, version).expect("encode request");
+            let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
+                .await
+                .expect("a refusal is still a response");
+            let mut cursor = &bytes[..];
+            let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+            check!(decoded.error_code == INVALID_REQUEST, "{what}: error code");
+            check!(decoded.error_message.is_some(), "{what}: says why");
+        }
+
+        // Omitting the cluster id entirely is allowed: the field is optional,
+        // and only a mismatch is a refusal.
+        let request = RemoveRaftVoterRequest {
+            cluster_id: None,
+            voter_id: 2,
+            voter_directory_id: real_directory,
+            ..Default::default()
+        };
+        let mut body = BytesMut::new();
+        request.encode(&mut body, version).expect("encode request");
+        let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
+            .await
+            .expect("response");
+        let mut cursor = &bytes[..];
+        let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+        check!(
+            decoded.error_code != INVALID_REQUEST,
+            "a well-formed request reaches the quorum, got {}",
+            decoded.error_code
+        );
+    }
+
+    /// `DescribeQuorum` answers for `__cluster_metadata` partition 0 and
+    /// refuses everything else with a partition-level error.
+    ///
+    /// The refusal has to name the partition asked for and blank the leader,
+    /// epoch and high watermark, or a client reads a real quorum's numbers off
+    /// a topic that has none. And the real answer has to carry the leader,
+    /// epoch, watermark and voter list -- each read from the quorum
+    /// separately, so each can be wrong on its own.
+    #[tokio::test]
+    async fn describe_quorum_answers_only_for_the_metadata_partition() {
+        use crabka_protocol::{
+            Encode as _,
+            owned::{
+                describe_quorum_request::{self, DescribeQuorumRequest, PartitionData, TopicData},
+                describe_quorum_response::DescribeQuorumResponse,
+            },
+        };
+
+        fn body(version: i16, topic: &str, partition: i32) -> Bytes {
+            let request = DescribeQuorumRequest {
+                topics: vec![TopicData {
+                    topic_name: topic.to_owned(),
+                    partitions: vec![PartitionData {
+                        partition_index: partition,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut buf = BytesMut::new();
+            request.encode(&mut buf, version).expect("encode request");
+            buf.freeze()
+        }
+
+        let version = describe_quorum_request::MAX_VERSION;
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+
+        let answered =
+            describe_quorum_response(version, &body(version, "__cluster_metadata", 0), &engine)
+                .await
+                .expect("describe the metadata quorum");
+        let mut cursor = &answered[..];
+        let decoded = DescribeQuorumResponse::decode(&mut cursor, version).expect("decode");
+        let partition = &decoded.topics[0].partitions[0];
+        check!(
+            partition.error_code == 0,
+            "the metadata partition is answered"
+        );
+        check!(partition.partition_index == 0);
+        check!(partition.leader_id >= 0, "a leader was elected");
+        check!(partition.leader_epoch >= 0);
+        check!(partition.high_watermark >= 0);
+        check!(
+            !partition.current_voters.is_empty(),
+            "the answer carries the voter set"
+        );
+
+        // Anything else is refused, and the refusal keeps the partition it was
+        // asked about while blanking the quorum numbers.
+        for (what, topic, index) in [
+            ("another topic", "orders", 0),
+            (
+                "the right topic, another partition",
+                "__cluster_metadata",
+                7,
+            ),
+        ] {
+            let refused = describe_quorum_response(version, &body(version, topic, index), &engine)
+                .await
+                .expect("refuse politely");
+            let mut cursor = &refused[..];
+            let decoded = DescribeQuorumResponse::decode(&mut cursor, version).expect("decode");
+            let partition = &decoded.topics[0].partitions[0];
+            check!(partition.error_code == 17, "{what}: error code");
+            check!(
+                partition.partition_index == index,
+                "{what}: keeps the index"
+            );
+            check!(
+                (
+                    partition.leader_id,
+                    partition.leader_epoch,
+                    partition.high_watermark
+                ) == (-1, -1, -1),
+                "{what}: the quorum numbers are blank"
+            );
+            check!(partition.error_message.is_some(), "{what}: says why");
+        }
+    }
+
     #[test]
     fn private_startup_apis_bypass_the_admin_extension() {
         for api_key in [
