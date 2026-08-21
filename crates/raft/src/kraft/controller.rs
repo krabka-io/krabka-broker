@@ -3650,6 +3650,35 @@ mod tests {
     /// Deadline every test-side channel receive is bounded by.
     const TEST_RECV_TIMEOUT: Time = secs(1);
 
+    /// Kafka renders a UUID as URL-safe base64 with no padding. This encoder
+    /// is written out by hand rather than taken from the `base64` crate, so
+    /// the crate is what it should be checked against -- and its own decoder
+    /// is what it should round-trip through.
+    ///
+    /// The last two bytes fall in a partial six-bit group, which is the part a
+    /// shift or a mask gets wrong without changing the length.
+    #[test]
+    fn kafka_uuid_strings_are_url_safe_base64() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let cases = [
+            [0u8; 16],
+            [0xff; 16],
+            *uuid::Uuid::from_u128(1).as_bytes(),
+            *uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef).as_bytes(),
+            *uuid::Uuid::from_u128(u128::MAX - 1).as_bytes(),
+        ];
+        for bytes in cases {
+            let encoded = kafka_uuid_string(bytes);
+            check!(
+                encoded == URL_SAFE_NO_PAD.encode(bytes),
+                "encoding {bytes:?}"
+            );
+            check!(encoded.len() == 22, "a 16-byte id is 22 characters");
+            check!(kafka_uuid_bytes(&encoded) == Some(bytes), "round trip");
+        }
+    }
+
     /// Default election timeout for engines built by [`build`].
     const TEST_ELECTION_TIMEOUT: Time = secs(1);
 

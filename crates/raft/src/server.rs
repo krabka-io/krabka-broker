@@ -1368,6 +1368,144 @@ mod tests {
     /// How long a test waits for a leader to appear.
     const TEST_LEADER_DEADLINE: Time = secs(5);
 
+    /// A request is flexible from its API's own `FLEXIBLE_MIN` upward, and an
+    /// API nobody declares is not flexible at any version.
+    ///
+    /// Each arm names its own constant, so one arm reaching for another API's
+    /// minimum is invisible unless the versions either side of the boundary
+    /// are asked for. Getting it wrong means reading tagged fields off a wire
+    /// that has none, or skipping the ones that are there.
+    #[test]
+    fn a_request_is_flexible_from_its_own_minimum_upward() {
+        use crabka_protocol::owned::{
+            add_raft_voter_request, api_versions_request, describe_quorum_request, fetch_request,
+            vote_request,
+        };
+
+        // (api key, that API's flexible minimum)
+        let apis = [
+            (
+                api_versions_request::API_KEY,
+                api_versions_request::FLEXIBLE_MIN,
+            ),
+            (fetch_request::API_KEY, fetch_request::FLEXIBLE_MIN),
+            (vote_request::API_KEY, vote_request::FLEXIBLE_MIN),
+            (
+                describe_quorum_request::API_KEY,
+                describe_quorum_request::FLEXIBLE_MIN,
+            ),
+            (
+                add_raft_voter_request::API_KEY,
+                add_raft_voter_request::FLEXIBLE_MIN,
+            ),
+        ];
+        for (api_key, flexible_min) in apis {
+            check!(
+                request_is_flexible(api_key, flexible_min, None),
+                "api {api_key} at its own minimum {flexible_min}"
+            );
+            check!(
+                request_is_flexible(api_key, flexible_min + 1, None),
+                "api {api_key} above its minimum"
+            );
+            if let Some(below) = flexible_min.checked_sub(1) {
+                check!(
+                    !request_is_flexible(api_key, below, None),
+                    "api {api_key} below its minimum"
+                );
+            }
+        }
+
+        // An API this server does not route, with no admin extension to claim it.
+        check!(!request_is_flexible(i16::MAX, 0, None));
+    }
+
+    /// A wire listener set is usable only when every entry is named, hosted
+    /// and on a real port, no name repeats, and there is at least one.
+    #[test]
+    fn wire_listeners_must_be_usable_and_uniquely_named() {
+        type Row<'a> = (&'a str, Vec<(&'a str, &'a str, u16)>, bool);
+        let cases: Vec<Row<'_>> = vec![
+            (
+                "one usable listener",
+                vec![("CONTROLLER", "host", 9093)],
+                true,
+            ),
+            (
+                "two, differently named",
+                vec![("CONTROLLER", "host", 9093), ("PLAINTEXT", "host", 9092)],
+                true,
+            ),
+            ("none at all", vec![], false),
+            ("a nameless listener", vec![("", "host", 9093)], false),
+            ("a hostless listener", vec![("CONTROLLER", "", 9093)], false),
+            ("port zero", vec![("CONTROLLER", "host", 0)], false),
+            (
+                "a repeated name",
+                vec![("CONTROLLER", "host", 9093), ("CONTROLLER", "other", 9094)],
+                false,
+            ),
+            (
+                "one good listener followed by a bad one",
+                vec![("CONTROLLER", "host", 9093), ("", "host", 9094)],
+                false,
+            ),
+        ];
+        for (what, listeners, usable) in cases {
+            check!(valid_wire_listeners(listeners.clone()) == usable, "{what}");
+        }
+    }
+
+    /// Every KIP-853 admin API refuses an unauthorized caller in its own
+    /// response type, carrying Kafka's CLUSTER_AUTHORIZATION_FAILED.
+    ///
+    /// Each arm builds a different response, so encoding one API's refusal
+    /// into another's shape produces bytes the client cannot decode.
+    #[test]
+    fn each_kip853_admin_api_refuses_in_its_own_response_shape() {
+        use crabka_protocol::owned::{
+            add_raft_voter_response::{self, AddRaftVoterResponse},
+            remove_raft_voter_response::{self, RemoveRaftVoterResponse},
+            update_raft_voter_response::{self, UpdateRaftVoterResponse},
+        };
+
+        const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
+
+        let bytes = kip853_authorization_failure(
+            API_KEY_ADD_RAFT_VOTER,
+            add_raft_voter_response::MAX_VERSION,
+        )
+        .expect("encode add refusal");
+        let mut cursor = &bytes[..];
+        let decoded =
+            AddRaftVoterResponse::decode(&mut cursor, add_raft_voter_response::MAX_VERSION)
+                .expect("decode add refusal");
+        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
+        check!(decoded.error_message.is_some(), "the refusal says why");
+
+        let bytes = kip853_authorization_failure(
+            API_KEY_REMOVE_RAFT_VOTER,
+            remove_raft_voter_response::MAX_VERSION,
+        )
+        .expect("encode remove refusal");
+        let mut cursor = &bytes[..];
+        let decoded =
+            RemoveRaftVoterResponse::decode(&mut cursor, remove_raft_voter_response::MAX_VERSION)
+                .expect("decode remove refusal");
+        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
+
+        let bytes = kip853_authorization_failure(
+            API_KEY_UPDATE_RAFT_VOTER,
+            update_raft_voter_response::MAX_VERSION,
+        )
+        .expect("encode update refusal");
+        let mut cursor = &bytes[..];
+        let decoded =
+            UpdateRaftVoterResponse::decode(&mut cursor, update_raft_voter_response::MAX_VERSION)
+                .expect("decode update refusal");
+        check!(decoded.error_code == CLUSTER_AUTHORIZATION_FAILED);
+    }
+
     #[test]
     fn private_startup_apis_bypass_the_admin_extension() {
         for api_key in [
