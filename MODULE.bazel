@@ -84,7 +84,7 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
         # the image is reproducible without a second package manager in the
         # build.
         ("distroless_cc", "gcr.io/distroless/cc-debian12", "sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77"),
-        # jvm_acceptance's tiered-storage cases back the remote tier with MinIO.
+        # jvm_acceptance_tiered's cases back the remote tier with MinIO.
         ("minio", "mirror.gcr.io/minio/minio", "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"),
         ("minio_mc", "mirror.gcr.io/minio/mc", "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"),
     ]

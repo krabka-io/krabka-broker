@@ -31,7 +31,7 @@ broker-transactions = { max-threads = 1 }
 broker-tiered-storage-rlmm = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
+filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
 test-group = 'broker-jvm-acceptance'
 threads-required = 'num-test-threads'
 
@@ -51,7 +51,7 @@ test-group = 'broker-tiered-storage-rlmm'
 threads-required = 'num-test-threads'
 
 [[profile.ci.overrides]]
-filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
+filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
 test-group = 'broker-jvm-acceptance'
 threads-required = 'num-test-threads'
 

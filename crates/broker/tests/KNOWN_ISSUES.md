@@ -33,7 +33,8 @@ environment variable is not set, the port is `9092`.
 
 ## Both tests are `#[ignore = "requires Docker"]`
 
-Run them with `cargo test -p crabka-broker --test jvm_acceptance -- --ignored`.
+Run them with `cargo test -p crabka-broker --test jvm_acceptance_cli --
+--ignored`, substituting the `jvm_acceptance_*` suite you want.
 The CI job `broker-jvm-acceptance` is the only place that runs them by
 default. On a contributor's machine, `cargo test` skips them.
 

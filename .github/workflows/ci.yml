@@ -125,10 +125,10 @@ jobs:
           disk-cache: ${{ github.workflow }}-docker
           repository-cache: true
 
-      # The host side of these suites reaches the broker over loopback, but the
-      # advertised name has to resolve on the host too -- `jvm_acceptance` and
-      # `jvm_kip320_divergence` still bind fixed ports and use it. Containers
-      # resolve it separately, through `--add-host=host.docker.internal:host-gateway`.
+      # The host side of these suites reaches the broker over loopback, but a few
+      # host-side Rust clients bootstrap through the advertised name, so it has to
+      # resolve here too. Containers resolve it separately, through
+      # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
       - id: impacted

@@ -130,23 +130,34 @@ time.
 The tests reach the broker over loopback; only the containers use the advertised
 `host.docker.internal` name, which they resolve through
 `--add-host=host.docker.internal:host-gateway`. CI additionally maps that name to
-`127.0.0.1` in `/etc/hosts`, because `jvm_acceptance` and
-`jvm_kip320_divergence` still bind fixed ports and use it from the host side.
+`127.0.0.1` in `/etc/hosts`, because a few host-side Rust clients bootstrap
+through the advertised name rather than over loopback.
 
-Those two are the remaining work: `jvm_acceptance` threads its bootstrap address
-through 182 references and `jvm_kip320_divergence` names two containers, so
-neither converts as mechanically as the rest. Within one binary a suite's tests
-still share that process's ports and run one at a time; per-test ports would lift
-that too.
+`jvm_acceptance` was the long pole at roughly nine minutes: 48 tests in one
+binary, serialised by that process's single port allocation. It is now eight
+`jvm_acceptance_*` targets grouped by the cluster each one boots -- CLI
+round-trips, legacy 0.10 clients, durability, SASL, TLS, reassignment, quotas and
+tiered storage -- over one harness in `tests/jvm_acceptance/mod.rs`. Each target
+is its own process, so each gets its own ports for free and Bazel runs them
+concurrently. Within a single binary the tests still share that process's ports
+and run one at a time; per-test ports would lift that too.
 
-### Known-failing on some hosts
+### Docker Desktop hosts
 
-`jvm_acceptance`, `jvm_features` and `jvm_kip320_divergence` fail on a
-development machine here. They fail identically under `cargo nextest run
---run-ignored ignored-only`, so this is not a property of the Bazel targets --
-whatever it is, both build systems hit it, and it is not the port sharing above,
-which is fixed. Treat a local failure in these three as unconfirmed until it
-reproduces in CI.
+The mixed-cluster suites advertise the bridge gateway that `docker network
+inspect bridge` reports, so the host-run broker and the containers share one
+address. That holds on native Linux Docker, where the gateway *is* the host.
+Under Docker Desktop the containers sit inside a VM: `172.17.0.1` is the VM's
+bridge, a host-bound port is unreachable at it, and only `host.docker.internal`
+-- a different address again -- resolves. So `jvm_acceptance_*`, `jvm_features`
+and `jvm_kip320_divergence` fail on such a host, with the JVM CLI reporting
+`UnsupportedVersionException: The broker does not support CREATE_TOPICS`, which
+is what it says when it cannot reach a broker at all.
+
+To tell that apart from a real break: bind a host port, then from a container run
+`nc -z 172.17.0.1 <port>`. Unreachable means Docker Desktop semantics. CI runs
+native Linux Docker, so treat a local failure in these suites as environmental
+until it reproduces there.
 
 ## Delivery
 

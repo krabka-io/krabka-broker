@@ -26,13 +26,36 @@ crate_tests(
     cpu_heavy = ["sharegroup_backlog"],
     data = glob(["tests/fixtures/**"]) + [":crabka-broker"],
     docker = {
-        "jvm_acceptance": [
-            "cp_kafka_3_1_2",
+        "jvm_acceptance_cli": [
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
+        ],
+        "jvm_acceptance_durability": [
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
+        ],
+        "jvm_acceptance_legacy": [
+            "cp_kafka_3_1_2",
+            "cp_kafka_6_1_1",
+        ],
+        "jvm_acceptance_quotas": [
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
+        ],
+        "jvm_acceptance_reassign": ["cp_kafka_7_5_0"],
+        "jvm_acceptance_sasl": [
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
+        ],
+        "jvm_acceptance_tiered": [
+            "cp_kafka_6_1_1",
             "cp_kafka_7_8_8",
             "minio",
             "minio_mc",
+        ],
+        "jvm_acceptance_tls": [
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_5_0",
         ],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
