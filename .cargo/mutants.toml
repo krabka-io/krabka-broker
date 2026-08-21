@@ -84,11 +84,13 @@ exclude_re = [
     # `sync_data` has no in-process effect: it orders bytes against a crash,
     # which a unit test cannot observe. Emptying the call changes nothing any
     # assertion can reach.
-    "replace (OffsetIndex|TimeIndex)::flush with Ok\\(\\(\\)\\)",
-    "replace Segment::flush with Ok\\(\\(\\)\\)",
+    # Matched without the replacement: a whole-function mutant's name carries
+    # the return type between the function and the `with`, so
+    # "flush with Ok(())" is never adjacent and never matches.
+    "replace (OffsetIndex|TimeIndex|Segment)::flush ",
     # The `#[cfg(windows)]` `read_at`: not compiled on the platforms this is
     # built for, so nothing that runs changes.
-    "segment\\.rs:73.*replace read_at with",
+    "segment\\.rs:73.*replace read_at ",
     # Guards on `io::ErrorKind` -- `Interrupted` in the read loop, `NotFound`
     # when a sidecar is absent. Reaching them needs the kernel to return that
     # errno, which a test cannot ask a real file for.
