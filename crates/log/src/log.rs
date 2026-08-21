@@ -2593,6 +2593,83 @@ mod tests {
         }
     }
 
+    /// A raw fetch below the log start is refused, and one at or past the
+    /// limit reads nothing.
+    #[test]
+    fn a_raw_fetch_outside_the_readable_range_is_refused_or_empty() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for _ in 0..4 {
+            let mut batch = sample_batch(2);
+            log.append(&mut batch).expect("append");
+        }
+        log.set_log_start_offset(Offset(2)).expect("set log start");
+
+        let below = log.read_raw(Offset(1), Offset(99), mebibytes(1));
+        check!(
+            matches!(below, Err(LogError::OffsetTooLow { .. })),
+            "below the log start is refused, got {below:?}"
+        );
+        // Exactly at the log start is inside it.
+        check!(log.read_raw(Offset(2), Offset(99), mebibytes(1)).is_ok());
+
+        let at_limit = log
+            .read_raw(Offset(2), Offset(2), mebibytes(1))
+            .expect("a fetch at the limit is not an error");
+        check!(
+            at_limit.bytes.is_empty(),
+            "a fetch at the limit reads nothing"
+        );
+    }
+
+    /// A fetch spanning sealed segments and the active one returns every batch
+    /// once, in order, however many chunks it was assembled from.
+    ///
+    /// One chunk is returned as it stands and several are concatenated; a fetch
+    /// that crosses the seal takes the second path, and getting the join wrong
+    /// duplicates or drops a batch at the boundary.
+    #[test]
+    fn a_fetch_across_the_seal_joins_its_chunks_in_order() {
+        let dir = tempdir().unwrap();
+        // A small segment cap so the appends roll and the fetch has to cross.
+        let config = LogConfig {
+            segment_size: kibibytes(1),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).unwrap();
+        for _ in 0..40 {
+            let mut batch = sample_batch(2);
+            log.append(&mut batch).expect("append");
+        }
+        check!(!log.segments.is_empty(), "the appends should have rolled");
+
+        let end = log.log_end_offset();
+        let whole = log
+            .read_raw(Offset(0), end, gibibytes(1))
+            .expect("read the whole log");
+        check!(!whole.bytes.is_empty());
+        check!(
+            whole.start_offset == Offset(0),
+            "starts where asked, got {:?}",
+            whole.start_offset
+        );
+        check!(
+            whole.last_offset == Some(end - 1),
+            "reaches the end, got {:?}",
+            whole.last_offset
+        );
+
+        // A single sealed segment's worth: one chunk, returned unjoined.
+        let first_only = log
+            .read_raw(Offset(0), Offset(2), gibibytes(1))
+            .expect("read one batch");
+        check!(first_only.start_offset == Offset(0));
+        check!(
+            first_only.bytes.len() < whole.bytes.len(),
+            "one batch is less than the whole log"
+        );
+    }
+
     /// Zero is a legal log start; only a negative one is rejected.
     #[test]
     fn the_log_start_may_be_set_to_zero_but_not_below() {
