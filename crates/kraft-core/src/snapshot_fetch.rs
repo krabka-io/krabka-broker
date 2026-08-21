@@ -192,6 +192,42 @@ mod tests {
         );
     }
 
+    /// A declared total the receiver will not accept: negative, changed
+    /// mid-transfer, or contradicted by a chunk that runs past it.
+    ///
+    /// Each is its own guard and each is silent unless something asks for it.
+    /// A leader that could shrink `size` after the fact, or overrun it, would
+    /// push `buf` past the bound the cap is supposed to give.
+    #[test]
+    fn a_declared_size_that_cannot_be_trusted_restarts_the_transfer() {
+        // A negative total, rejected on its own rather than only alongside a
+        // wrong id or position.
+        let mut negative = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(negative.on_chunk((10, 1), -1, 0, b"") == SnapshotFetchStep::Restart);
+
+        // Zero is a real total: an empty snapshot completes immediately.
+        let mut empty = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(
+            empty.on_chunk((10, 1), 0, 0, b"") == SnapshotFetchStep::Complete(Bytes::new())
+        );
+
+        // The total may not change once declared.
+        let mut changed = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(
+            changed.on_chunk((10, 1), 6, 0, b"abc")
+                == SnapshotFetchStep::Continue { next_position: 3 }
+        );
+        assert2::assert!(changed.on_chunk((10, 1), 9, 3, b"def") == SnapshotFetchStep::Restart);
+
+        // A chunk may not carry more than the remaining bytes.
+        let mut overshoot = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(
+            overshoot.on_chunk((10, 1), 6, 0, b"abc")
+                == SnapshotFetchStep::Continue { next_position: 3 }
+        );
+        assert2::assert!(overshoot.on_chunk((10, 1), 6, 3, b"defgh") == SnapshotFetchStep::Restart);
+    }
+
     #[test]
     fn assembles_in_order_chunks_to_complete() {
         let mut s = SnapshotFetchState::new((10, 1), NodeId(2));

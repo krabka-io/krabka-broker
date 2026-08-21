@@ -90,6 +90,17 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    /// Every role reports its own name. These strings reach operators through
+    /// metrics and logs, so one standing in for another is a real confusion.
+    #[test]
+    fn each_role_reports_its_own_name() {
+        let names = [Role::default().name(), Role::Resigned.name()];
+        assert2::assert!(names == ["Unattached", "Resigned"]);
+        // Distinct, not merely non-empty: a single constant would satisfy the
+        // latter for every variant.
+        assert2::assert!(names[0] != names[1]);
+    }
+
     #[test]
     fn role_defaults_to_unattached() {
         let r = Role::default();

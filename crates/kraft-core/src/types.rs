@@ -95,6 +95,19 @@ mod tests {
 
     use super::*;
 
+    /// `floor(n/2) + 1` over the voter-set sizes a cluster actually runs at.
+    ///
+    /// A remainder agrees with a halving at three voters -- the size most
+    /// tests use -- so the sizes on either side of it are what separate them.
+    #[test]
+    fn majority_is_half_the_voters_plus_one() {
+        for (voters, want) in [(1usize, 1usize), (2, 2), (3, 2), (4, 3), (5, 3), (6, 4)] {
+            let ids: Vec<NodeId> = (1..=voters).map(|i| NodeId(i as u64)).collect();
+            let qs = QuorumState::bootstrap(uuid::Uuid::nil(), test_voter_set(&ids));
+            assert2::assert!(qs.majority() == want, "{voters} voters");
+        }
+    }
+
     #[test]
     fn quorum_state_starts_unattached_at_epoch_zero() {
         let voters = test_voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);

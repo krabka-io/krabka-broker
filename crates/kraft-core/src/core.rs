@@ -947,6 +947,172 @@ mod tests {
     /// The base election timeout for every test machine.
     const TEST_ELECTION_TIMEOUT: Time = secs(1);
 
+    /// Only a rejection from a *higher* epoch fences us.
+    ///
+    /// Each piece of `!granted && epoch > ours` matters: a grant must never
+    /// fence, a rejection at our own epoch must not either -- that is the
+    /// ordinary "you lost the vote" reply -- and only a rejection carrying a
+    /// newer epoch means the cluster has moved past us. Stepping down clears
+    /// the vote we are holding, so whether the vote survives is the tell.
+    #[test]
+    fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        // (what it is, granted, epoch offered, do we keep the vote we hold?)
+        let cases = [
+            ("a rejection at our own epoch", false, 3, true),
+            ("a grant from a higher epoch", true, 9, true),
+            ("a rejection from a higher epoch", false, 9, false),
+        ];
+        for (what, vote_granted, epoch, keeps_vote) in cases {
+            let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+            // Cast a binding vote at epoch 3, so a step-down has something to
+            // clear and "nothing happened" is distinguishable.
+            m.on_event(
+                Event::ReceiveVoteRequest {
+                    from: NodeId(2),
+                    voter_id: NodeId(1),
+                    candidate_epoch: 3,
+                    candidate: NodeId(2),
+                    candidate_log_end: LogEnd {
+                        last_epoch: 1,
+                        last_offset: 5,
+                    },
+                    pre_vote: false,
+                },
+                &log,
+                SimInstant(0),
+            );
+            check!(
+                m.quorum_state().voted_key.is_some(),
+                "{what}: setup should vote"
+            );
+
+            m.on_event(
+                Event::ReceiveVoteResponse {
+                    from: NodeId(2),
+                    epoch,
+                    vote_granted,
+                },
+                &log,
+                SimInstant(0),
+            );
+            let kept = m.quorum_state().voted_key.is_some();
+            check!(kept == keeps_vote, "{what}: vote kept = {kept}");
+        }
+    }
+
+    /// A replica that is not a voter denies every vote request, whoever the
+    /// candidate is.
+    ///
+    /// Being a voter and the candidate being one are separate requirements,
+    /// and an observer satisfies neither -- joining them so that both must
+    /// fail before denying would let an observer cast a vote.
+    #[test]
+    fn an_observer_denies_a_vote_request() {
+        // Not in its own voter set: an observer.
+        let mut m = machine(NodeId(9), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        let actions = m.on_event(
+            Event::ReceiveVoteRequest {
+                from: NodeId(2),
+                voter_id: NodeId(9),
+                candidate_epoch: 1,
+                candidate: NodeId(2),
+                candidate_log_end: LogEnd {
+                    last_epoch: 1,
+                    last_offset: 5,
+                },
+                pre_vote: false,
+            },
+            &log,
+            SimInstant(0),
+        );
+        check!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::ReplyVote { granted: false, .. }))
+        );
+        check!(
+            m.quorum_state().voted_key.is_none(),
+            "an observer must not record a vote"
+        );
+    }
+
+    /// A candidate at our own epoch is not fenced.
+    ///
+    /// Fencing is for a candidate *behind* us. Treating "equal" as behind
+    /// would deny every first-round vote, because a candidate that bumps to
+    /// epoch E asks replicas still at E.
+    #[test]
+    fn a_candidate_at_our_own_epoch_is_not_fenced() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 0,
+        };
+        // Both sides at epoch 0, the bootstrap epoch.
+        check!(m.quorum_state().leader_epoch == 0);
+        let actions = m.on_event(
+            Event::ReceiveVoteRequest {
+                from: NodeId(2),
+                voter_id: NodeId(1),
+                candidate_epoch: 0,
+                candidate: NodeId(2),
+                candidate_log_end: LogEnd {
+                    last_epoch: 0,
+                    last_offset: 5,
+                },
+                pre_vote: false,
+            },
+            &log,
+            SimInstant(0),
+        );
+        check!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::ReplyVote { granted: true, .. }))
+        );
+    }
+
+    /// A standard vote request from a higher epoch moves us to that epoch
+    /// before the grant is decided. Pre-vote never does.
+    #[test]
+    fn a_standard_vote_from_a_higher_epoch_advances_our_epoch() {
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        for (pre_vote, want_epoch) in [(false, 7), (true, 0)] {
+            let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+            m.on_event(
+                Event::ReceiveVoteRequest {
+                    from: NodeId(2),
+                    voter_id: NodeId(1),
+                    candidate_epoch: 7,
+                    candidate: NodeId(2),
+                    candidate_log_end: LogEnd {
+                        last_epoch: 1,
+                        last_offset: 5,
+                    },
+                    pre_vote,
+                },
+                &log,
+                SimInstant(0),
+            );
+            check!(
+                m.quorum_state().leader_epoch == want_epoch,
+                "pre_vote={pre_vote}: epoch {}",
+                m.quorum_state().leader_epoch
+            );
+        }
+    }
+
     #[test]
     fn grants_standard_vote_when_log_up_to_date_and_not_voted() {
         let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
