@@ -172,20 +172,22 @@ fn broker_heartbeat(
     } else if !is_leader(engine) {
         NOT_CONTROLLER
     } else {
-        validate_heartbeat(&request, engine, &mut response)
+        validate_heartbeat(&request, &engine.current_image(), &mut response)
     };
     encode(&response, version)
 }
 
+/// Takes the image rather than the engine it came from: the decision is a
+/// function of the registration on record, and a test should be able to hand it
+/// one without standing up a quorum to hold it.
 fn validate_heartbeat(
     request: &BrokerHeartbeatRequest,
-    engine: &KraftController,
+    image: &crabka_metadata::MetadataImage,
     response: &mut BrokerHeartbeatResponse,
 ) -> i16 {
     let Ok(node) = u64::try_from(request.broker_id).map(NodeId) else {
         return BROKER_ID_NOT_REGISTERED;
     };
-    let image = engine.current_image();
     let Some(registration) = image.broker(node) else {
         return BROKER_ID_NOT_REGISTERED;
     };
@@ -540,6 +542,169 @@ mod tests {
         }];
         let decoded = decode_controller_listeners(&controller_ok).expect("a usable listener");
         check!(decoded.len() == 1 && decoded[0].port == 9093);
+    }
+
+    /// A heartbeat is answered from the registration on record: an unknown
+    /// broker and a stale epoch are refused, and a known one is told whether
+    /// it is caught up, fenced, and asked to shut down.
+    ///
+    /// `is_fenced` is the one that matters most -- a broker that is behind
+    /// must be fenced whether or not it asked to be, because it is the
+    /// controller's job to keep a lagging replica out of the ISR.
+    #[test]
+    fn a_heartbeat_is_answered_from_the_registration_on_record() {
+        use crabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord};
+
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            BrokerRegistrationRecord {
+                node_id: NodeId(7),
+                broker_epoch: 100,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "broker-7".into(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        ));
+
+        let answer = |broker_id: i32,
+                      broker_epoch: i64,
+                      offset: i64,
+                      want_fence: bool,
+                      want_shut_down: bool| {
+            let request = BrokerHeartbeatRequest {
+                broker_id,
+                broker_epoch,
+                current_metadata_offset: offset,
+                want_fence,
+                want_shut_down,
+                ..Default::default()
+            };
+            let mut response = BrokerHeartbeatResponse::default();
+            let code = validate_heartbeat(&request, &image, &mut response);
+            (code, response)
+        };
+
+        // A broker nobody registered.
+        let (code, _) = answer(9, 100, 100, false, false);
+        check!(code == BROKER_ID_NOT_REGISTERED, "an unregistered broker");
+
+        // A negative id is not a node id at all.
+        let (code, _) = answer(-1, 100, 100, false, false);
+        check!(code == BROKER_ID_NOT_REGISTERED, "a negative broker id");
+
+        // The right broker at the wrong epoch.
+        let (code, _) = answer(7, 99, 100, false, false);
+        check!(code == STALE_BROKER_EPOCH, "a stale epoch");
+
+        // Caught up, asking for nothing: not fenced, not shutting down.
+        let (code, response) = answer(7, 100, 100, false, false);
+        check!(code == SUCCESS);
+        check!(
+            (
+                response.is_caught_up,
+                response.is_fenced,
+                response.should_shut_down
+            ) == (true, false, false),
+            "caught up and unfenced"
+        );
+
+        // Behind the registration: fenced even though it did not ask to be.
+        let (_, response) = answer(7, 100, 99, false, false);
+        check!(
+            (response.is_caught_up, response.is_fenced) == (false, true),
+            "a lagging broker is fenced regardless"
+        );
+
+        // Caught up but asking to be fenced, and to shut down.
+        let (_, response) = answer(7, 100, 100, true, true);
+        check!(
+            (
+                response.is_caught_up,
+                response.is_fenced,
+                response.should_shut_down
+            ) == (true, true, true),
+            "an explicit fence and shutdown are honoured"
+        );
+    }
+
+    /// A broker may register only if it supports every feature the cluster has
+    /// already finalized, at the finalized level.
+    ///
+    /// The level has to sit inside the broker's advertised range on both
+    /// sides, and a feature the broker does not mention at all is not support.
+    /// Admitting a broker that cannot speak a finalized feature puts a member
+    /// in the cluster that will mis-handle records already being written.
+    #[test]
+    fn a_broker_registers_only_when_it_supports_every_finalized_feature() {
+        use crabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+
+        fn image_finalizing(name: &str, level: i16) -> MetadataImage {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: name.to_owned(),
+                level,
+            }));
+            image
+        }
+
+        fn request_supporting(features: &[(&str, i16, i16)]) -> BrokerRegistrationRequest {
+            BrokerRegistrationRequest {
+                features: features
+                    .iter()
+                    .map(|&(name, min, max)| broker_registration_request::Feature {
+                        name: name.to_owned(),
+                        min_supported_version: min,
+                        max_supported_version: max,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }
+        }
+
+        let image = image_finalizing("metadata.version", 20);
+        // (what the broker advertises, may it register?)
+        let cases: &[(&str, &[(&str, i16, i16)], bool)] = &[
+            (
+                "a range around the finalized level",
+                &[("metadata.version", 7, 25)],
+                true,
+            ),
+            (
+                "a range starting at it",
+                &[("metadata.version", 20, 25)],
+                true,
+            ),
+            ("a range ending at it", &[("metadata.version", 7, 20)], true),
+            (
+                "a range entirely below it",
+                &[("metadata.version", 7, 19)],
+                false,
+            ),
+            (
+                "a range entirely above it",
+                &[("metadata.version", 21, 25)],
+                false,
+            ),
+            ("some other feature only", &[("group.version", 0, 1)], false),
+            ("nothing at all", &[], false),
+        ];
+        for (what, features, may_register) in cases {
+            let request = request_supporting(features);
+            check!(
+                features_support_finalized(&request, &image) == *may_register,
+                "{what}"
+            );
+        }
+
+        // With nothing finalized there is nothing to support, so any broker may
+        // register -- including one advertising no features.
+        let empty = MetadataImage::new(uuid::Uuid::nil());
+        check!(features_support_finalized(&request_supporting(&[]), &empty));
     }
 
     /// A controller's advertised feature ranges are taken as given only when
