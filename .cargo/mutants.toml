@@ -1,7 +1,19 @@
 # cargo-mutants configuration — https://mutants.rs
 #
-# Read both by a local `cargo mutants` run and by the `cargo_mutants_test`
-# targets, which shell out to a real cargo-mutants binary (see //tools/mutants).
+# Read by a local `cargo mutants` run. NOT read by the `cargo_mutants_test`
+# targets: `rules_rs_mutants` enumerates mutants by copying the crate's sources
+# into a synthetic single-crate workspace under a temp dir and running
+# `cargo mutants --list` there, and this file is not among the sources it
+# copies. So under Bazel every setting below is inert -- the exclusions do not
+# exclude, and `timeout_multiplier`/`minimum_test_timeout` are replaced by the
+# rule's own `timeout_multiplier` attribute and the runner's 20s floor.
+#
+# That matters most for the excludes: `crates/broker/src/bin/**` is swept under
+# Bazel despite this file, and mutants that cannot be killed by any test --
+# `throttle::capped` is `#[cfg(creusot)]`, so a normal build does not compile it
+# -- have no way to be marked. Making the sweep honour this file needs the
+# aspect to pass the config through to `mutants_list`, which is a patch to
+# rules_rs_mutants.
 
 test_tool = "nextest"
 profile = "mutants"
