@@ -31,10 +31,25 @@ use crate::{
 /// then returns the number of bytes read. Readers can therefore share the
 /// writer's `File` handle through `&self`, with no `dup(2)` or `lseek(2)` per
 /// call. The hot fetch path runs this function for every read.
-fn read_full_at(file: &File, mut offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+fn read_full_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    read_full_with(|at, into| read_at(file, at, into), offset, buf)
+}
+
+/// The loop itself, over any positional read.
+///
+/// Split out because the two things it exists to handle -- a read that returns
+/// fewer bytes than asked for, and one interrupted by a signal -- are not
+/// things a regular file can be persuaded to do on demand, so a test cannot
+/// reach them through [`read_full_at`]. Generic rather than `dyn`, so the hot
+/// path monomorphises to what it was.
+fn read_full_with(
+    read: impl Fn(u64, &mut [u8]) -> std::io::Result<usize>,
+    mut offset: u64,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
     let mut total = 0;
     while total < buf.len() {
-        match read_at(file, offset, &mut buf[total..]) {
+        match read(offset, &mut buf[total..]) {
             Ok(0) => break, // EOF
             Ok(n) => {
                 total += n;
@@ -1158,6 +1173,92 @@ mod tests {
             });
         }
         b
+    }
+
+    /// The read loop fills the buffer across short reads, retries an
+    /// interrupted read, and stops at end of file.
+    ///
+    /// A regular file returns everything asked for or stops at its end, so
+    /// none of this is reachable through a real one -- the loop is driven by a
+    /// reader that can be told what to do.
+    #[test]
+    fn the_read_loop_handles_short_reads_interruptions_and_eof() {
+        use std::{
+            cell::RefCell,
+            io::{Error, ErrorKind},
+        };
+
+        /// A reader replaying a script of results, recording the offset each
+        /// call was made at.
+        fn scripted(
+            script: Vec<std::io::Result<usize>>,
+        ) -> (
+            impl Fn(u64, &mut [u8]) -> std::io::Result<usize>,
+            std::rc::Rc<RefCell<Vec<u64>>>,
+        ) {
+            let offsets = std::rc::Rc::new(RefCell::new(Vec::new()));
+            let seen = std::rc::Rc::clone(&offsets);
+            let script = RefCell::new(script.into_iter());
+            let read = move |offset: u64, into: &mut [u8]| {
+                seen.borrow_mut().push(offset);
+                match script.borrow_mut().next() {
+                    Some(Ok(n)) => {
+                        into[..n].fill(b'x');
+                        Ok(n)
+                    }
+                    Some(Err(e)) => Err(e),
+                    None => Ok(0),
+                }
+            };
+            (read, offsets)
+        }
+
+        // Three short reads fill an eight-byte buffer, each resuming where the
+        // last stopped.
+        let (read, offsets) = scripted(vec![Ok(3), Ok(4), Ok(1)]);
+        let mut buf = [0u8; 8];
+        check!(read_full_with(read, 100, &mut buf).unwrap() == 8);
+        check!(
+            *offsets.borrow() == vec![100, 103, 107],
+            "each read resumes where the last ended, got {:?}",
+            offsets.borrow()
+        );
+
+        // An interrupted read is retried at the same offset, not skipped past.
+        let (read, offsets) =
+            scripted(vec![Ok(2), Err(Error::from(ErrorKind::Interrupted)), Ok(2)]);
+        let mut buf = [0u8; 4];
+        check!(read_full_with(read, 0, &mut buf).unwrap() == 4);
+        check!(
+            *offsets.borrow() == vec![0, 2, 2],
+            "the retry repeats the offset, got {:?}",
+            offsets.borrow()
+        );
+
+        // End of file stops the loop with whatever was read so far.
+        let (read, _) = scripted(vec![Ok(2), Ok(0), Ok(9)]);
+        let mut buf = [0u8; 8];
+        check!(
+            read_full_with(read, 0, &mut buf).unwrap() == 2,
+            "stops at EOF"
+        );
+
+        // Any other error is returned rather than retried.
+        let (read, _) = scripted(vec![Ok(1), Err(Error::from(ErrorKind::PermissionDenied))]);
+        let mut buf = [0u8; 4];
+        check!(
+            read_full_with(read, 0, &mut buf).is_err(),
+            "a real error propagates"
+        );
+
+        // A buffer that is already full asks for nothing at all.
+        let (read, offsets) = scripted(vec![Ok(1)]);
+        let mut empty: [u8; 0] = [];
+        check!(read_full_with(read, 0, &mut empty).unwrap() == 0);
+        check!(
+            offsets.borrow().is_empty(),
+            "no read is issued for no bytes"
+        );
     }
 
     /// Truncating to a relative offset keeps every batch that ends before it,
