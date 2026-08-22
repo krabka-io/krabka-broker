@@ -2670,6 +2670,86 @@ mod tests {
         );
     }
 
+    /// An end marker's coordinator epoch is bytes 2..6 of its value, and a
+    /// value too short to hold both fields is ignored rather than read past.
+    ///
+    /// Older krabka markers carried no value at all, so a short one has to be
+    /// absent-not-malformed -- the transaction still resolves, it just carries
+    /// no coordinator epoch.
+    #[test]
+    fn a_coordinator_epoch_needs_a_six_byte_value() {
+        check!(
+            parse_control_marker_coordinator_epoch(&[0, 0, 0, 0, 0, 7]) == Some(7),
+            "version then epoch"
+        );
+        check!(
+            parse_control_marker_coordinator_epoch(&[0, 1, 0, 0, 0, 7, 9]) == Some(7),
+            "a longer value reads the same"
+        );
+        for short in 0..6usize {
+            let value = vec![0u8; short];
+            check!(
+                parse_control_marker_coordinator_epoch(&value).is_none(),
+                "a {short}-byte value is too short"
+            );
+        }
+    }
+
+    /// Truncating to the log start is allowed; below it is not.
+    ///
+    /// The bound is what stops a truncation erasing the boundary the log
+    /// promises readers -- a fetch below `log_start` is already refused, so a
+    /// truncation past it would leave the two disagreeing.
+    #[test]
+    fn a_truncation_may_reach_the_log_start_but_not_pass_it() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for _ in 0..4 {
+            let mut batch = sample_batch(2);
+            log.append(&mut batch).expect("append");
+        }
+        log.set_log_start_offset(Offset(2)).expect("set log start");
+
+        check!(
+            log.truncate_to(Offset(2)).is_ok(),
+            "truncating to the log start itself"
+        );
+        let below = log.truncate_to(Offset(1));
+        check!(
+            matches!(below, Err(LogError::OffsetTooLow { .. })),
+            "below the log start is refused, got {below:?}"
+        );
+    }
+
+    /// A hard reset leaves the log empty at the new base, with the last stable
+    /// offset there too.
+    ///
+    /// `lso` is derived from the fresh segment rather than from the base it was
+    /// asked for, and it gates what a `read_committed` consumer may see -- one
+    /// short of the base would expose an offset the log does not have.
+    #[test]
+    fn a_reset_puts_the_stable_offset_at_the_new_base() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for _ in 0..3 {
+            let mut batch = sample_batch(2);
+            log.append(&mut batch).expect("append");
+        }
+        check!(log.log_end_offset() == Offset(6));
+
+        log.reset_to(Offset(50)).expect("reset");
+        check!(
+            log.log_start_offset() == Offset(50),
+            "starts at the new base"
+        );
+        check!(log.log_end_offset() == Offset(50), "and is empty there");
+        check!(
+            log.lso() == Offset(50),
+            "the stable offset is the base, got {:?}",
+            log.lso()
+        );
+    }
+
     /// A control marker's type comes from bytes 2..4 of its key, and a key too
     /// short to hold both fields yields nothing rather than reading past it.
     #[test]
