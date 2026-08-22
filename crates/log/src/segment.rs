@@ -1160,6 +1160,58 @@ mod tests {
         b
     }
 
+    /// Truncating to a relative offset keeps every batch that ends before it,
+    /// and leaves the segment describing exactly what it kept.
+    ///
+    /// Three things are rewritten from the walk and each is read back later:
+    /// the byte length, which decides where the next append lands; the last
+    /// offset, which decides what the next batch is numbered; and the maximum
+    /// timestamp, which time-based retention and `MAX_TIMESTAMP` both read.
+    /// Truncating everything away is the case that pins the last offset down --
+    /// it has to fall back to one before the base.
+    #[test]
+    fn truncating_a_segment_leaves_it_describing_what_it_kept() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(100)).unwrap();
+        // Three batches: offsets 100..=101, 102..=103, 104..=105, with
+        // timestamps 500, 600, 700.
+        for i in 0..3i64 {
+            seg.append(&sample_batch(100 + i * 2, 2, 500 + i * 100), DENSE_INDEX)
+                .unwrap();
+        }
+        let full_size = seg.size();
+        check!(seg.last_offset() == Offset(105));
+        check!(
+            seg.max_timestamp() == 701,
+            "batch 3 carries the newest record"
+        );
+
+        // Keep only the first batch: relative offset 2 is the start of the
+        // second, and the bound is exclusive of the batch containing it.
+        seg.truncate_to_relative(2).unwrap();
+        check!(
+            seg.last_offset() == Offset(101),
+            "last kept batch ends at 101"
+        );
+        check!(seg.max_timestamp() == 501, "the newest surviving record");
+        let kept = seg.size();
+        check!(
+            kept > ByteSize::ZERO && kept < full_size,
+            "shorter, not empty"
+        );
+
+        // Truncating everything away: nothing is kept, so the segment reports
+        // one before its base and no timestamp at all.
+        seg.truncate_to_relative(0).unwrap();
+        check!(seg.size() == ByteSize::ZERO, "no bytes survive");
+        check!(
+            seg.last_offset() == Offset(99),
+            "one before the base, got {:?}",
+            seg.last_offset()
+        );
+        check!(seg.max_timestamp() == i64::MIN, "no records, no timestamp");
+    }
+
     /// A fetch reads nothing when it starts past the segment, and nothing when
     /// it starts at or past the limit. Either condition alone is enough --
     /// joined with `&&` a fetch would have to be both before it read nothing.
