@@ -90,7 +90,13 @@ exclude_re = [
     "replace (OffsetIndex|TimeIndex|Segment)::flush ",
     # The `#[cfg(windows)]` `read_at`: not compiled on the platforms this is
     # built for, so nothing that runs changes.
-    "segment\\.rs:73.*replace read_at ",
+    #
+    # Pinned to a line because the unix and windows implementations share the
+    # name `read_at`, and the unix one IS compiled -- matching on the name alone
+    # would exclude mutants that a test can and should kill. The cost is that
+    # this needs updating whenever anything above it in segment.rs moves, which
+    # has already happened once: adding `read_full_with` shifted it from 73.
+    "segment\\.rs:87.*replace read_at ",
     # Guards on `io::ErrorKind` -- `Interrupted` in the read loop, `NotFound`
     # when a sidecar is absent. Reaching them needs the kernel to return that
     # errno, which a test cannot ask a real file for.
