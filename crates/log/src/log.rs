@@ -2670,6 +2670,70 @@ mod tests {
         );
     }
 
+    /// A control marker's type comes from bytes 2..4 of its key, and a key too
+    /// short to hold both fields yields nothing rather than reading past it.
+    #[test]
+    fn a_control_marker_type_needs_a_four_byte_key() {
+        // (version, type) big-endian; the type is what comes back.
+        check!(parse_control_marker_type(&[0, 0, 0, 0]) == Some(0), "ABORT");
+        check!(
+            parse_control_marker_type(&[0, 0, 0, 1]) == Some(1),
+            "COMMIT"
+        );
+        // Exactly four bytes is enough; anything longer is read the same way.
+        check!(
+            parse_control_marker_type(&[0, 1, 0, 1, 9, 9]) == Some(1),
+            "a longer key"
+        );
+        for short in [&[][..], &[0][..], &[0, 0][..], &[0, 0, 0][..]] {
+            check!(
+                parse_control_marker_type(short).is_none(),
+                "a {}-byte key is too short",
+                short.len()
+            );
+        }
+    }
+
+    /// An epoch covers `[start_offset, next.start_offset)`, so one ending
+    /// exactly where the requested range begins does not overlap it.
+    ///
+    /// The half-open end is what keeps a fetch from being told the epoch of a
+    /// record it did not ask for -- the divergence check a follower runs on
+    /// the answer would then compare against the wrong epoch.
+    #[test]
+    fn an_epoch_ending_where_the_range_begins_does_not_overlap_it() {
+        use crate::leader_epoch_checkpoint::EpochEntry;
+
+        let sorted = vec![
+            EpochEntry {
+                epoch: LeaderEpoch(1),
+                start_offset: Offset(0),
+            },
+            EpochEntry {
+                epoch: LeaderEpoch(2),
+                start_offset: Offset(10),
+            },
+        ];
+
+        // Epoch 1 covers [0, 10) and epoch 2 covers [10, MAX).
+        let from_ten = epochs_for_range(&sorted, Offset(10), Offset(20));
+        check!(
+            from_ten == vec![(LeaderEpoch(2), Offset(10))],
+            "a range starting at 10 is epoch 2 alone, got {from_ten:?}"
+        );
+
+        // One offset earlier and both epochs are in range.
+        let from_nine = epochs_for_range(&sorted, Offset(9), Offset(20));
+        check!(
+            from_nine == vec![(LeaderEpoch(1), Offset(9)), (LeaderEpoch(2), Offset(10))],
+            "got {from_nine:?}"
+        );
+
+        // A range wholly inside the first epoch sees only it.
+        let early = epochs_for_range(&sorted, Offset(0), Offset(5));
+        check!(early == vec![(LeaderEpoch(1), Offset(0))], "got {early:?}");
+    }
+
     /// Zero is a legal log start; only a negative one is rejected.
     #[test]
     fn the_log_start_may_be_set_to_zero_but_not_below() {
