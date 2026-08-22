@@ -2670,6 +2670,85 @@ mod tests {
         );
     }
 
+    /// Retention never evicts the last segment, however far past the budget
+    /// the log is.
+    ///
+    /// A log with no segments has nowhere to append and no offset to report;
+    /// the guard is what keeps an aggressive retention setting from leaving
+    /// one. The cap is on the count, so a budget of nothing still leaves one
+    /// behind.
+    #[test]
+    fn retention_never_evicts_the_last_segment() {
+        let dir = tempdir().unwrap();
+        // Roll often, and keep nothing: everything is evictable.
+        let config = LogConfig {
+            segment_size: kibibytes(1),
+            retention_size: Some(ByteSize::ZERO),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).unwrap();
+        for _ in 0..40 {
+            let mut batch = sample_batch(4);
+            log.append(&mut batch).expect("append");
+        }
+        check!(!log.segments.is_empty(), "the appends should have rolled");
+
+        log.tick(SystemTime::now()).expect("tick");
+        let remaining = log.segments.len() + usize::from(log.active.is_some());
+        check!(
+            remaining >= 1,
+            "a log must keep a segment to append to, got {remaining}"
+        );
+        // And it is still usable afterwards.
+        let mut batch = sample_batch(1);
+        check!(
+            log.append(&mut batch).is_ok(),
+            "the log still accepts appends"
+        );
+    }
+
+    /// The largest timestamp in the log wins, and the first segment holding it
+    /// keeps the answer when several do.
+    ///
+    /// KIP-734 asks for the offset of the maximum timestamp, so a tie has to
+    /// resolve to one offset -- and taking the later one hands back a record
+    /// that is not the first with that timestamp.
+    #[test]
+    fn the_max_timestamp_offset_comes_from_the_first_segment_holding_it() {
+        let dir = tempdir().unwrap();
+        let config = LogConfig {
+            segment_size: kibibytes(1),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).unwrap();
+        // Every batch carries the same timestamps, so several segments share
+        // the maximum and only the ordering separates them.
+        for _ in 0..40 {
+            let mut batch = sample_batch(4);
+            log.append(&mut batch).expect("append");
+        }
+        check!(!log.segments.is_empty(), "the appends should have rolled");
+
+        let (offset, ts) = log
+            .max_timestamp_offset_and_ts()
+            .expect("a log with records has a maximum");
+        // sample_batch stamps every record at the same timestamp, so the
+        // maximum is shared and the earliest offset carrying it is the answer.
+        let earliest = log
+            .segments
+            .iter()
+            .chain(log.active.as_ref())
+            .filter_map(|s| s.offset_of_max_timestamp())
+            .filter(|(_, seg_ts)| *seg_ts == ts)
+            .map(|(seg_offset, _)| seg_offset)
+            .min()
+            .expect("some segment holds the maximum");
+        check!(
+            offset == earliest,
+            "got {offset:?}, earliest is {earliest:?}"
+        );
+    }
+
     /// An end marker's coordinator epoch is bytes 2..6 of its value, and a
     /// value too short to hold both fields is ignored rather than read past.
     ///
