@@ -2,7 +2,8 @@
 //!
 //! The handler returns the cuts that one group retains, in ascending epoch
 //! order. `from_epoch` drops every older cut, and `max_results` caps how many
-//! come back. A `max_results` at or below zero caps nothing.
+//! come back. `-1` asks for every retained cut and is the request default, so
+//! `0` honestly asks for none.
 //!
 //! This is the RPC read path. The coordinator also publishes every cut to the
 //! `__barrier_state` topic, and an ordinary Kafka consumer reads it there, so a
@@ -86,11 +87,11 @@ pub(crate) async fn handle(
 /// The cuts of the response, in ascending epoch order.
 ///
 /// `from_epoch` drops every older cut and includes its own epoch.
-/// `max_results` caps the count when it is one or more, and caps nothing
-/// otherwise.
+/// `max_results` of `-1` asks for every cut, which is the request default. Any
+/// other value is the cap, so `0` returns nothing rather than everything.
 fn select(cuts: &[RetainedCut], from_epoch: i64, max_results: i32) -> Vec<BarrierCut> {
     let selected = cuts.iter().filter(|cut| cut.epoch >= from_epoch);
-    let limited: Vec<&RetainedCut> = if max_results > 0 {
+    let limited: Vec<&RetainedCut> = if max_results >= 0 {
         selected
             .take(usize::try_from(max_results).unwrap_or(usize::MAX))
             .collect()
@@ -183,12 +184,15 @@ mod tests {
     #[test]
     fn a_selection_applies_the_epoch_floor_and_the_cap() {
         let cases: &[(i64, i32, Vec<BarrierCut>)] = &[
-            (0, 0, vec![wire(4, 40), wire(5, 50), wire(6, 60)]),
+            // -1 is the request default, and asks for every retained cut.
             (0, -1, vec![wire(4, 40), wire(5, 50), wire(6, 60)]),
-            (5, 0, vec![wire(5, 50), wire(6, 60)]),
+            (5, -1, vec![wire(5, 50), wire(6, 60)]),
+            (7, -1, Vec::new()),
+            // 0 asks for none, rather than for everything.
+            (0, 0, Vec::new()),
+            (5, 0, Vec::new()),
             (5, 1, vec![wire(5, 50)]),
             (0, 2, vec![wire(4, 40), wire(5, 50)]),
-            (7, 0, Vec::new()),
             (0, 99, vec![wire(4, 40), wire(5, 50), wire(6, 60)]),
         ];
         for (from_epoch, max_results, expected) in cases {

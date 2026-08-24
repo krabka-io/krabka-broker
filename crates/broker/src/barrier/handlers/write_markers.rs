@@ -22,13 +22,14 @@
 //! The refusal is per partition. One request that names both a led and an
 //! unled partition marks the first and refuses the second.
 //!
-//! # The request carries no expected leader epoch
+//! # Fencing
 //!
-//! `WriteBarrierMarkersRequest` holds `group`, `epoch`, `triggered_at`, and the
-//! target partitions. It holds no epoch of the target partition, so the handler
-//! cannot compare the coordinator's view against its own. The fence above is
-//! what this broker can check on its own, and it is the check that keeps a
-//! stale epoch out of a marker header.
+//! Each requested partition carries the leader epoch the coordinator resolved
+//! when it froze the target set. This broker refuses a mismatch with
+//! `FENCED_LEADER_EPOCH`, because a marker written under one leadership and
+//! stamped with another's epoch puts a false epoch in the batch header. A
+//! request that carries -1 says the coordinator had no epoch, and this broker
+//! does not fence on it.
 
 use std::sync::atomic::Ordering;
 
@@ -93,7 +94,7 @@ pub(crate) async fn handle(
     let mut topics = Vec::with_capacity(req.topics.len());
     for topic in &req.topics {
         let mut partitions = Vec::with_capacity(topic.partitions.len());
-        for &index in &topic.partitions {
+        for requested in &topic.partitions {
             partitions.push(
                 mark(
                     &broker.partitions,
@@ -101,7 +102,8 @@ pub(crate) async fn handle(
                     broker.config.node_id,
                     &marker,
                     &topic.topic,
-                    PartitionIndex(index),
+                    PartitionIndex(requested.partition),
+                    requested.expected_leader_epoch,
                 )
                 .await,
             );
@@ -124,11 +126,19 @@ async fn mark(
     marker: &BarrierMarker,
     topic: &str,
     index: PartitionIndex,
+    expected_leader_epoch: i32,
 ) -> WrittenBarrierPartition {
     let Some(partition) = partitions.get(topic, index) else {
         return row(index, codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET);
     };
-    if let Some(code) = leadership_fault(&partition, image, node_id, topic, index) {
+    if let Some(code) = leadership_fault(
+        &partition,
+        image,
+        node_id,
+        topic,
+        index,
+        expected_leader_epoch,
+    ) {
         return row(index, code, NO_OFFSET);
     }
     match append_marker(&partition, marker).await {
@@ -146,17 +156,27 @@ async fn mark(
 }
 
 /// The code that refuses a partition, or `None` when this broker may mark it.
+/// `expected_leader_epoch` is the epoch the coordinator resolved when it froze
+/// the target set. A value below zero says it had none, and this broker does
+/// not fence on it.
 fn leadership_fault(
     partition: &Partition,
     image: &MetadataImage,
     node_id: NodeId,
     topic: &str,
     index: PartitionIndex,
+    expected_leader_epoch: i32,
 ) -> Option<i16> {
     if partition.current_leader.load(Ordering::Acquire) != node_id.get() {
         return Some(codes::NOT_LEADER_OR_FOLLOWER);
     }
     let local_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+    // The coordinator built this request against an older leadership than the
+    // one installed here, so the marker would carry an epoch that has already
+    // been superseded. Refusing sends the coordinator back for a fresh image.
+    if expected_leader_epoch >= 0 && expected_leader_epoch != local_epoch {
+        return Some(codes::FENCED_LEADER_EPOCH);
+    }
     let image_epoch = image
         .partition(topic, index.get())
         .map_or(local_epoch, |record| record.leader_epoch.get());
@@ -183,7 +203,7 @@ fn refused_topic(topic: &WritableBarrierTopic, error_code: i16) -> WrittenBarrie
         partitions: topic
             .partitions
             .iter()
-            .map(|index| row(PartitionIndex(*index), error_code, NO_OFFSET))
+            .map(|requested| row(PartitionIndex(requested.partition), error_code, NO_OFFSET))
             .collect(),
         ..WrittenBarrierTopic::default()
     }
@@ -199,6 +219,11 @@ fn response(topics: Vec<WrittenBarrierTopic>) -> WriteBarrierMarkersResponse {
 
 #[cfg(test)]
 mod tests {
+    use crabka_protocol::krabka::barrier::WritableBarrierPartition;
+
+    /// The epoch value that asks the receiving broker not to fence a partition.
+    const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
+
     use assert2::check;
     use crabka_log::Offset;
     use crabka_metadata::MetadataRecord;
@@ -244,6 +269,49 @@ mod tests {
         registry
     }
 
+    /// The coordinator froze its target set against one leadership and this
+    /// broker has since installed another. The marker would carry an epoch
+    /// that is already superseded, so the request is refused and the
+    /// coordinator comes back with a fresh image.
+    #[tokio::test]
+    async fn a_stale_expected_leader_epoch_is_fenced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry = registry_with_leader(dir.path(), LOCAL, 9).await;
+        let image = image(&topic_records("orders", 1, LOCAL));
+
+        let cases = [
+            (
+                "the epoch the coordinator saw is older",
+                8,
+                codes::FENCED_LEADER_EPOCH,
+            ),
+            (
+                "the epoch the coordinator saw is newer",
+                10,
+                codes::FENCED_LEADER_EPOCH,
+            ),
+            ("the epoch matches", 9, codes::NONE),
+            (
+                "the coordinator had no epoch",
+                NO_EXPECTED_LEADER_EPOCH,
+                codes::NONE,
+            ),
+        ];
+        for (case, expected_epoch, code) in cases {
+            let written = mark(
+                &registry,
+                &image,
+                LOCAL,
+                &marker(),
+                "orders",
+                PartitionIndex(0),
+                expected_epoch,
+            )
+            .await;
+            check!(written.error_code == code, "{case}");
+        }
+    }
+
     #[tokio::test]
     async fn a_partition_that_is_not_open_here_is_not_led_here() {
         let registry = PartitionRegistry::new();
@@ -255,6 +323,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
+            NO_EXPECTED_LEADER_EPOCH,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
@@ -272,6 +341,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
+            NO_EXPECTED_LEADER_EPOCH,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
@@ -291,6 +361,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
+            NO_EXPECTED_LEADER_EPOCH,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::FENCED_LEADER_EPOCH, NO_OFFSET));
@@ -308,6 +379,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
+            NO_EXPECTED_LEADER_EPOCH,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NONE, 0));
@@ -329,7 +401,16 @@ mod tests {
     fn a_denied_request_stamps_every_named_partition() {
         let topic = WritableBarrierTopic {
             topic: "orders".to_owned(),
-            partitions: vec![0, 2],
+            partitions: vec![
+                WritableBarrierPartition {
+                    partition: 0,
+                    ..WritableBarrierPartition::default()
+                },
+                WritableBarrierPartition {
+                    partition: 2,
+                    ..WritableBarrierPartition::default()
+                },
+            ],
             ..WritableBarrierTopic::default()
         };
         let expected = WrittenBarrierTopic {

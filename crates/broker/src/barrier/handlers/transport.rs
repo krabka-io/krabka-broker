@@ -34,9 +34,10 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use crabka_ids::{NodeId, PartitionIndex};
 use crabka_log::Offset;
-use crabka_metadata::BrokerRegistrationRecord;
+use crabka_metadata::{BrokerRegistrationRecord, MetadataImage};
 use crabka_protocol::krabka::barrier::{
-    WritableBarrierTopic, WriteBarrierMarkersRequest, WriteBarrierMarkersResponse,
+    WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
+    WriteBarrierMarkersResponse,
 };
 use crabka_security::ListenerProtocol;
 use tracing::warn;
@@ -124,7 +125,7 @@ impl RemoteMarkerWriter for InterBrokerMarkerWriter {
         // table, and the negotiation then settles on version 0, which is the
         // only version this message has.
         let response = connection
-            .send(build_request(marker, targets))
+            .send(build_request(marker, targets, &image))
             .await
             .map_err(|error| {
                 BrokerError::Replication(format!(
@@ -152,17 +153,32 @@ fn endpoint_of(broker_info: &BrokerRegistrationRecord, listener_name: &str) -> (
         )
 }
 
+/// The epoch value that asks the receiving broker not to fence a partition.
+const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
+
 /// The request that asks one leader to mark every target it leads.
+/// `image` supplies the leader epoch of each target. The receiving broker
+/// refuses a partition whose epoch has moved past it, so a request built
+/// against a stale view cannot write a false epoch into a marker header.
 fn build_request(
     marker: &BarrierMarker,
     targets: &[TargetPartition],
+    image: &MetadataImage,
 ) -> WriteBarrierMarkersRequest {
-    let mut by_topic: BTreeMap<&str, Vec<i32>> = BTreeMap::new();
+    let mut by_topic: BTreeMap<&str, Vec<WritableBarrierPartition>> = BTreeMap::new();
     for target in targets {
         by_topic
             .entry(target.topic.as_str())
             .or_default()
-            .push(target.partition.get());
+            .push(WritableBarrierPartition {
+                partition: target.partition.get(),
+                // -1 asks the receiver not to fence. The partition is absent
+                // from this image, so this broker has no epoch to offer.
+                expected_leader_epoch: image
+                    .partition(&target.topic, target.partition.get())
+                    .map_or(NO_EXPECTED_LEADER_EPOCH, |record| record.leader_epoch.get()),
+                ..WritableBarrierPartition::default()
+            });
     }
     WriteBarrierMarkersRequest {
         group: marker.group.clone(),
@@ -255,6 +271,14 @@ mod tests {
         }
     }
 
+    /// One requested partition, carrying the no-fence epoch.
+    fn part(partition: i32) -> WritableBarrierPartition {
+        WritableBarrierPartition {
+            partition,
+            ..WritableBarrierPartition::default()
+        }
+    }
+
     #[test]
     fn one_request_groups_every_target_under_its_topic() {
         let targets = vec![
@@ -270,18 +294,21 @@ mod tests {
             topics: vec![
                 WritableBarrierTopic {
                     topic: "orders".to_owned(),
-                    partitions: vec![2, 0, 1],
+                    partitions: vec![part(2), part(0), part(1)],
                     ..WritableBarrierTopic::default()
                 },
                 WritableBarrierTopic {
                     topic: "payments".to_owned(),
-                    partitions: vec![0],
+                    partitions: vec![part(0)],
                     ..WritableBarrierTopic::default()
                 },
             ],
             ..WriteBarrierMarkersRequest::default()
         };
-        check!(build_request(&marker(), &targets) == expected);
+        // No partition is in this image, so the request asks the receiver not
+        // to fence on any of them.
+        let image = MetadataImage::default();
+        check!(build_request(&marker(), &targets, &image) == expected);
     }
 
     #[test]
