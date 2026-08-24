@@ -54,6 +54,12 @@ pub struct S3Config {
     pub multipart_threshold: u64,
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
     pub multipart_chunk_size: usize,
+    /// Enable conditional puts (`If-None-Match`) so a `PutMode::Create` write
+    /// fails instead of silently overwriting. Defaults to `true`.
+    pub conditional_put: bool,
+    /// Send `x-amz-checksum-sha256` so the server verifies each object on
+    /// ingest. Defaults to `true`.
+    pub checksum_sha256: bool,
 }
 
 impl std::fmt::Debug for S3Config {
@@ -71,6 +77,8 @@ impl std::fmt::Debug for S3Config {
             .field("allow_http", &self.allow_http)
             .field("multipart_threshold", &self.multipart_threshold)
             .field("multipart_chunk_size", &self.multipart_chunk_size)
+            .field("conditional_put", &self.conditional_put)
+            .field("checksum_sha256", &self.checksum_sha256)
             .finish()
     }
 }
@@ -87,6 +95,8 @@ impl Default for S3Config {
             allow_http: false,
             multipart_threshold: DEFAULT_MULTIPART_THRESHOLD,
             multipart_chunk_size: DEFAULT_MULTIPART_CHUNK_SIZE,
+            conditional_put: true,
+            checksum_sha256: true,
         }
     }
 }
@@ -175,6 +185,20 @@ mod tests {
         let cfg = S3Config::default();
         assert!(cfg.multipart_threshold == DEFAULT_MULTIPART_THRESHOLD);
         assert!(cfg.multipart_chunk_size == DEFAULT_MULTIPART_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn s3_config_default_enables_integrity_knobs() {
+        let cfg = S3Config::default();
+        assert!(cfg.conditional_put);
+        assert!(cfg.checksum_sha256);
+    }
+
+    #[test]
+    fn s3_config_debug_shows_integrity_knobs() {
+        let dbg = format!("{:?}", S3Config::default());
+        assert!(dbg.contains("conditional_put: true"));
+        assert!(dbg.contains("checksum_sha256: true"));
     }
 
     #[test]

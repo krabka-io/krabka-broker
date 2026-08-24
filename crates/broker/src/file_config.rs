@@ -587,6 +587,11 @@ pub struct FileRemoteStorageConfig {
     /// Native Google Cloud Storage backend parameters. Omit to use
     /// `storage_dir` or `[remote_storage.s3]`.
     pub gcs: Option<FileRemoteStorageGcsConfig>,
+    /// WORM archive mode for whichever object-store backend is selected.
+    /// Presence of the table turns it on; omit it (the default) for
+    /// ordinary mutable tiered storage. Requires `[remote_storage.s3]` or
+    /// `[remote_storage.gcs]` — `storage_dir` cannot enforce write-once.
+    pub worm: Option<FileWormConfig>,
     /// Opt-in to the topic-backed `RemoteLogMetadataManager`.
     /// When absent, the broker uses the in-memory fixture.
     pub kafka_metadata: Option<FileKafkaRlmmConfig>,
@@ -673,6 +678,18 @@ pub struct FileRemoteStorageS3Config {
     /// applies. AWS requires parts ≥ 5 MiB except the last; `MinIO`
     /// tolerates smaller values.
     pub multipart_chunk_size: Option<usize>,
+    /// Optional override of conditional puts (`If-None-Match`), which make a
+    /// create-mode write fail on an existing key instead of overwriting it.
+    /// When `None`, the [`crabka_remote_storage::S3Config`] default of `true`
+    /// applies. Turn it off only for an S3-compatible store that mishandles
+    /// the header; WORM archive mode relies on it.
+    #[serde(default)]
+    pub conditional_put: Option<bool>,
+    /// Optional override of the `x-amz-checksum-sha256` header, which has the
+    /// server verify each object on ingest. When `None`, the
+    /// [`crabka_remote_storage::S3Config`] default of `true` applies.
+    #[serde(default)]
+    pub checksum_sha256: Option<bool>,
 }
 
 impl std::fmt::Debug for FileRemoteStorageS3Config {
@@ -691,6 +708,8 @@ impl std::fmt::Debug for FileRemoteStorageS3Config {
             .field("allow_http", &self.allow_http)
             .field("multipart_threshold", &self.multipart_threshold)
             .field("multipart_chunk_size", &self.multipart_chunk_size)
+            .field("conditional_put", &self.conditional_put)
+            .field("checksum_sha256", &self.checksum_sha256)
             .finish()
     }
 }
@@ -757,6 +776,40 @@ impl std::fmt::Debug for FileRemoteStorageGcsConfig {
             .field("multipart_chunk_size", &self.multipart_chunk_size)
             .finish()
     }
+}
+
+/// TOML shape of `[remote_storage.worm]`. Maps to
+/// [`crabka_remote_storage::WormConfig`]. Presence of the table enables WORM
+/// archive mode.
+///
+/// Unlike [`FileRemoteStorageS3Config`] this derives `Debug` plainly, and that
+/// is deliberate: it holds a *path* to a signing key and the key's public id,
+/// neither of which is credential material, and an operator debugging a chain
+/// needs to see which key signed it. Do not "fix" this into a redacting impl.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FileWormConfig {
+    /// Path to the `PKCS#8` Ed25519 key that signs each segment manifest.
+    ///
+    /// Default: unset. Manifests then carry no signature, and the archive
+    /// keeps only the per-object digests and the hash chain. Setting this
+    /// requires `signing_key_id` as well.
+    #[serde(default)]
+    pub signing_key_path: Option<String>,
+    /// Stable identifier recorded in every manifest signature, so a chain
+    /// stays verifiable across a key rotation.
+    ///
+    /// Default: unset. Setting this requires `signing_key_path` as well.
+    #[serde(default)]
+    pub signing_key_id: Option<String>,
+    /// Refuse every remote fetch from this archive.
+    ///
+    /// Default: `false`. When `true`, remote fetch is unavailable: a consumer
+    /// that asks for an offset whose local segment has already been evicted
+    /// gets an error, not a slow read. The archive is then a compliance sink,
+    /// not a storage tier.
+    #[serde(default)]
+    pub write_only: bool,
 }
 
 /// TOML shape of `[authorization]`. `type` (renamed to `authz_type` on
@@ -1407,6 +1460,10 @@ fn apply_remote_storage(
             dir: std::path::PathBuf::from(dir),
         });
     } else if let Some(s3) = &rs.s3 {
+        // The two integrity knobs default to on; read them from `S3Config`
+        // rather than restating the values here, so a change there cannot
+        // silently disagree with the TOML layer.
+        let s3_defaults = crabka_remote_storage::S3Config::default();
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::S3(
             crabka_remote_storage::S3Config {
                 bucket: s3.bucket.clone(),
@@ -1422,6 +1479,8 @@ fn apply_remote_storage(
                 multipart_chunk_size: s3
                     .multipart_chunk_size
                     .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
+                conditional_put: s3.conditional_put.unwrap_or(s3_defaults.conditional_put),
+                checksum_sha256: s3.checksum_sha256.unwrap_or(s3_defaults.checksum_sha256),
             },
         ));
     } else if let Some(gcs) = &rs.gcs {
@@ -1442,6 +1501,64 @@ fn apply_remote_storage(
                     .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
             },
         ));
+    }
+
+    // WORM archive mode layers over whichever object store was just
+    // selected. It is a sibling of the backend, not a fourth backend: the
+    // same S3 / GCS store is used, with write-once semantics on top.
+    if let Some(worm) = &rs.worm {
+        // Keyed off the resolved backend, not off `rs`, so a `storage_dir`
+        // inherited from the caller's `BrokerConfig` is caught too.
+        match &cfg.remote_storage_backend {
+            Some(
+                crate::config::RemoteStorageBackend::S3(_)
+                | crate::config::RemoteStorageBackend::Gcs(_),
+            ) => {}
+            Some(crate::config::RemoteStorageBackend::Local { .. }) => {
+                return Err(FileConfigError::InvalidConfig(
+                    "[remote_storage.worm] requires an object-store backend \
+                     (`[remote_storage.s3]` or `[remote_storage.gcs]`); \
+                     `storage_dir` (local) cannot enforce write-once"
+                        .into(),
+                ));
+            }
+            None => {
+                return Err(FileConfigError::InvalidConfig(
+                    "[remote_storage.worm] requires an object-store backend; \
+                     set `[remote_storage.s3]` or `[remote_storage.gcs]`"
+                        .into(),
+                ));
+            }
+        }
+        match (&worm.signing_key_path, &worm.signing_key_id) {
+            (Some(_), None) => {
+                return Err(FileConfigError::InvalidConfig(
+                    "[remote_storage.worm] cannot set `signing_key_path` \
+                     without `signing_key_id`: a key with no id cannot be \
+                     selected at verify time, so the signatures it writes are \
+                     unverifiable after a rotation"
+                        .into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(FileConfigError::InvalidConfig(
+                    "[remote_storage.worm] cannot set `signing_key_id` \
+                     without `signing_key_path`: an unsigned chain proves \
+                     continuity but not authorship, and the id alone signs \
+                     nothing"
+                        .into(),
+                ));
+            }
+            (Some(_), Some(_)) | (None, None) => {}
+        }
+        cfg.remote_storage_worm = Some(crabka_remote_storage::WormConfig {
+            signing_key_path: worm
+                .signing_key_path
+                .as_deref()
+                .map(std::path::PathBuf::from),
+            signing_key_id: worm.signing_key_id.clone(),
+            write_only: worm.write_only,
+        });
     }
 
     // KIP-405: topic-backed RLMM is the default whenever tiered storage
@@ -3213,6 +3330,8 @@ mod tests {
             allow_http: false,
             multipart_threshold: None,
             multipart_chunk_size: None,
+            conditional_put: None,
+            checksum_sha256: None,
         };
         let dbg = format!("{cfg:?}");
         // Secrets are redacted; non-secret fields are still printed.
@@ -4299,6 +4418,128 @@ bucket = "b"
             rendered.contains("cannot set"),
             "expected backend-conflict error, got: {rendered}"
         );
+    }
+
+    #[test]
+    fn worm_table_maps_to_broker_config() {
+        let toml = r#"
+[remote_storage.s3]
+bucket = "crabka-archive"
+region = "us-east-1"
+
+[remote_storage.worm]
+signing_key_path = "/etc/crabka/worm-signing.pk8"
+signing_key_id = "worm-2026-q3"
+write_only = true
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        check!(
+            cfg.remote_storage_worm
+                == Some(crabka_remote_storage::WormConfig {
+                    signing_key_path: Some(std::path::PathBuf::from(
+                        "/etc/crabka/worm-signing.pk8"
+                    )),
+                    signing_key_id: Some("worm-2026-q3".to_string()),
+                    write_only: true,
+                })
+        );
+    }
+
+    #[test]
+    fn worm_table_defaults_to_unsigned_readable_archive() {
+        let toml = r#"
+[remote_storage.gcs]
+bucket = "crabka-archive"
+
+[remote_storage.worm]
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        // An empty table still enables WORM; every knob takes its default.
+        check!(cfg.remote_storage_worm == Some(crabka_remote_storage::WormConfig::default()));
+    }
+
+    #[test]
+    fn worm_rejects_invalid_combinations() {
+        for (label, source, needle) in [
+            (
+                "local backend cannot enforce write-once",
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
+                 [remote_storage.worm]\n",
+                "storage_dir",
+            ),
+            (
+                "worm with a local backend and a key set is still rejected",
+                "[remote_storage]\nstorage_dir = \"/tmp/tier\"\n\
+                 [remote_storage.worm]\nsigning_key_path = \"/k.pk8\"\n\
+                 signing_key_id = \"k1\"\n",
+                "storage_dir",
+            ),
+            (
+                "no backend at all",
+                "[remote_storage.worm]\nwrite_only = true\n",
+                "[remote_storage.s3]",
+            ),
+            (
+                "key path without an id",
+                "[remote_storage.s3]\nbucket = \"b\"\nregion = \"us-east-1\"\n\
+                 [remote_storage.worm]\nsigning_key_path = \"/k.pk8\"\n",
+                "signing_key_id",
+            ),
+            (
+                "key id without a path",
+                "[remote_storage.s3]\nbucket = \"b\"\nregion = \"us-east-1\"\n\
+                 [remote_storage.worm]\nsigning_key_id = \"k1\"\n",
+                "signing_key_path",
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse worm syntax");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let error = file
+                .apply_to(&mut cfg)
+                .expect_err("invalid worm config must fail");
+            check!(
+                matches!(error, FileConfigError::InvalidConfig(_)),
+                "{label}: expected InvalidConfig, got {error:?}"
+            );
+            let rendered = error.to_string();
+            check!(
+                rendered.contains(needle),
+                "{label}: message must name {needle:?}, got: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn worm_absent_leaves_config_none() {
+        let toml = r#"
+[remote_storage.s3]
+bucket = "crabka-prod"
+region = "us-east-1"
+"#;
+        let file: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        check!(cfg.remote_storage_worm.is_none());
+    }
+
+    #[test]
+    fn worm_config_debug_shows_the_key_id_and_path() {
+        // Deliberately NOT redacted: neither field is credential material,
+        // and an operator auditing a chain must be able to tell which key
+        // signed it. A `***` here would remove the only answer to that.
+        let worm = FileWormConfig {
+            signing_key_path: Some("/etc/crabka/worm-signing.pk8".into()),
+            signing_key_id: Some("worm-2026-q3".into()),
+            write_only: true,
+        };
+        let rendered = format!("{worm:?}");
+        check!(rendered.contains("/etc/crabka/worm-signing.pk8"));
+        check!(rendered.contains("worm-2026-q3"));
+        check!(!rendered.contains("***"));
     }
 
     #[test]

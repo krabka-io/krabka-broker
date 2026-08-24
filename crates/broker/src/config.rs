@@ -770,6 +770,27 @@ pub struct BrokerConfig {
     /// when `remote_storage_backend` is `None`.
     pub remote_log_metadata: RlmmKind,
 
+    // A sibling of `remote_storage_backend`, deliberately not a
+    // `RemoteStorageBackend` variant. WORM is orthogonal to which object
+    // store is in use — it layers over S3 and GCS alike — and
+    // `RemoteStorageBackend` is also consumed by `build_diskless_read_handle`,
+    // which must not change shape. Do not "tidy" this into the enum.
+    /// WORM archive mode for the tiered-storage object store (`Some`), or
+    /// ordinary mutable tiered storage (`None`, the default).
+    ///
+    /// When set, every object the `RemoteStorageManager` writes is a
+    /// conditional create, each segment gets a hash-chained and optionally
+    /// Ed25519-signed integrity manifest, the backend refuses every delete,
+    /// and the `RemoteLogManager`'s remote-retention pass is disabled for its
+    /// partitions. Local retention is unaffected: the broker still evicts
+    /// local segments once they are archived.
+    ///
+    /// Requires an object-store backend. `storage_dir` cannot enforce
+    /// write-once.
+    ///
+    /// TOML: `[remote_storage.worm]`
+    pub remote_storage_worm: Option<crabka_remote_storage::WormConfig>,
+
     /// Whether the audit subsystem is active (`FedRAMP` MLA).
     pub audit_enabled: bool,
     /// Internal topic name for audit records.
@@ -1270,6 +1291,8 @@ impl BrokerConfig {
             remote_log_manager_interval: secs(2),
             // Tests use the in-memory RLMM fixture.
             remote_log_metadata: RlmmKind::InMemory,
+            // Ordinary mutable tiered storage in tests; WORM is opt-in.
+            remote_storage_worm: None,
             // Audit enabled by default (secure-by-default / `FedRAMP` MLA).
             audit_enabled: true,
             audit_topic: DEFAULT_AUDIT_TOPIC.to_string(),
@@ -1525,7 +1548,28 @@ impl BrokerConfig {
         if let RlmmKind::TopicBacked(config) = &self.remote_log_metadata {
             config.validate()?;
         }
+        self.validate_remote_storage_worm()?;
         self.validate_leader_rebalance()
+    }
+
+    /// Rejects WORM archive mode over anything but an object store.
+    ///
+    /// The TOML layer rejects the same pairing, but a `BrokerConfig` built in
+    /// code never passes through it.
+    fn validate_remote_storage_worm(&self) -> Result<(), BrokerError> {
+        if self.remote_storage_worm.is_some()
+            && !matches!(
+                self.remote_storage_backend,
+                Some(RemoteStorageBackend::S3(_) | RemoteStorageBackend::Gcs(_))
+            )
+        {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "remote storage WORM mode requires an S3 or GCS backend; a local storage \
+                 directory cannot enforce write-once"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     fn validate_outbound_sasl(&self, inter_broker: &ListenerSpec) -> Result<(), BrokerError> {
@@ -2284,6 +2328,9 @@ impl Default for BrokerConfig {
             // Production default: topic-backed RLMM. `bootstrap` and
             // `snapshot_dir` are empty; the broker derives them at startup.
             remote_log_metadata: RlmmKind::TopicBacked(KafkaRlmmConfig::default()),
+            // WORM archive mode off by default. Operators enable it via
+            // `[remote_storage.worm]` in `broker.toml`.
+            remote_storage_worm: None,
             // Audit enabled by default (secure-by-default / `FedRAMP` MLA).
             audit_enabled: true,
             audit_topic: DEFAULT_AUDIT_TOPIC.to_string(),
@@ -3531,6 +3578,50 @@ mod tests {
 
         c.validate()
             .expect("100% leader imbalance threshold is the maximum valid value");
+    }
+
+    #[test]
+    fn worm_without_an_object_store_backend_is_rejected_by_validate() {
+        // The TOML layer already rejects these, but a `BrokerConfig` built in
+        // code never passes through it.
+        let cases = [
+            (
+                "a local storage directory cannot enforce write-once",
+                Some(RemoteStorageBackend::Local {
+                    dir: PathBuf::from("/var/lib/crabka-remote"),
+                }),
+            ),
+            ("tiered storage is off entirely", None),
+        ];
+        for (name, backend) in cases {
+            let c = BrokerConfig {
+                remote_storage_backend: backend,
+                remote_storage_worm: Some(crabka_remote_storage::WormConfig::default()),
+                ..BrokerConfig::default()
+            };
+            check!(
+                matches!(c.validate(), Err(BrokerError::InvalidRuntimeConfig(_))),
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn worm_over_an_object_store_backend_is_accepted_by_validate() {
+        let c = BrokerConfig {
+            remote_storage_backend: Some(RemoteStorageBackend::S3(
+                crabka_remote_storage::S3Config {
+                    bucket: "archive".into(),
+                    region: "us-east-1".into(),
+                    ..crabka_remote_storage::S3Config::default()
+                },
+            )),
+            remote_storage_worm: Some(crabka_remote_storage::WormConfig::default()),
+            ..BrokerConfig::default()
+        };
+
+        c.validate()
+            .expect("WORM over an S3 backend is the supported pairing");
     }
 
     #[test]

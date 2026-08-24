@@ -44,6 +44,11 @@ async fn tiered_storage_round_trip_through_minio() {
         // MinIO permits parts < 5 MiB. Keep small so the test fixture
         // doesn't have to bloat segments to exercise multiple parts.
         multipart_chunk_size: 1024,
+        // These suites cover the ordinary mutable tier, so they pin the
+        // two integrity knobs off and keep exercising exactly the request
+        // shapes they always have. The WORM suite is what covers them on.
+        conditional_put: false,
+        checksum_sha256: false,
     };
     let (broker, _dir, _cfg) =
         start_host_broker_with_minio_tier(s3, crabka_broker::RlmmKind::InMemory).await;
@@ -107,6 +112,11 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
         allow_http: true,
         multipart_threshold: 4 * 1024,
         multipart_chunk_size: 1024,
+        // These suites cover the ordinary mutable tier, so they pin the
+        // two integrity knobs off and keep exercising exactly the request
+        // shapes they always have. The WORM suite is what covers them on.
+        conditional_put: false,
+        checksum_sha256: false,
     };
 
     // Boot with the durable topic-backed RLMM.
@@ -272,6 +282,11 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
         allow_http: true,
         multipart_threshold: 4 * 1024,
         multipart_chunk_size: 1024,
+        // These suites cover the ordinary mutable tier, so they pin the
+        // two integrity knobs off and keep exercising exactly the request
+        // shapes they always have. The WORM suite is what covers them on.
+        conditional_put: false,
+        checksum_sha256: false,
     };
 
     let (b1, b2, _d1, _d2) = start_two_brokers_with_minio_tier(s3).await;

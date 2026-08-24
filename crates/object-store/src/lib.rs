@@ -20,5 +20,5 @@ pub use config::{
     S3Config,
 };
 pub use error::ObjectStoreError;
-pub use ops::{ObjectOps, ObjectStoreClient};
+pub use ops::{ObjectOps, ObjectStoreClient, PutMode, PutOutcome, PutRequest};
 pub use read::read_capped;

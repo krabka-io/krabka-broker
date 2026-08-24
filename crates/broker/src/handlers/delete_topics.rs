@@ -244,11 +244,18 @@ pub(crate) async fn handle(
                 // immediately; failures inside the cascade log at WARN.
                 if let Some(reader) = broker.remote_reader.as_ref() {
                     let broker_id = broker.config.broker_id;
+                    // A write-once archive keeps every archived byte: the
+                    // cascade clears the broker's metadata but deletes
+                    // nothing. Deleting a topic must not erase a compliance
+                    // archive.
+                    let archive = crate::remote_log_manager::ArchiveMode::from_worm(
+                        broker.config.remote_storage_worm.as_ref(),
+                    );
                     for tp in tiered_to_cascade {
                         let rsm = reader.rsm.clone();
                         let rlmm = reader.rlmm.clone();
                         tokio::spawn(crate::remote_log_manager::cascade_remote_partition_delete(
-                            tp, broker_id, rsm, rlmm,
+                            tp, broker_id, archive, rsm, rlmm,
                         ));
                     }
                 }

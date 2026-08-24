@@ -29,6 +29,18 @@ pub enum ObjectStoreError {
         /// The cap in bytes.
         max_bytes: u64,
     },
+    /// A conditional create (`PutMode::Create`) found an object already at
+    /// the key.
+    #[error("object already exists: {0}")]
+    AlreadyExists(ObjectPath),
+    /// A conditional write's precondition did not hold.
+    #[error("precondition failed for `{key}`: {reason}")]
+    Precondition {
+        /// The object whose precondition was evaluated.
+        key: ObjectPath,
+        /// Why the backend rejected the write.
+        reason: String,
+    },
     /// Any other backend error. The error becomes a string, so the public
     /// surface stays stable.
     #[error("object store backend error: {0}")]
@@ -39,6 +51,13 @@ impl From<object_store::Error> for ObjectStoreError {
     fn from(err: object_store::Error) -> Self {
         match err {
             object_store::Error::NotFound { path, .. } => Self::NotFound(ObjectPath::from(path)),
+            object_store::Error::AlreadyExists { path, .. } => {
+                Self::AlreadyExists(ObjectPath::from(path))
+            }
+            object_store::Error::Precondition { path, source } => Self::Precondition {
+                key: ObjectPath::from(path),
+                reason: source.to_string(),
+            },
             other => Self::Backend(other.to_string()),
         }
     }
@@ -66,6 +85,31 @@ mod tests {
         let mapped = ObjectStoreError::from(err);
         assert!(
             matches!(&mapped, ObjectStoreError::NotFound(p) if p.to_string() == "tenant/block")
+        );
+    }
+
+    #[test]
+    fn already_exists_maps_to_structured_variant() {
+        let err = object_store::Error::AlreadyExists {
+            path: "worm/manifest.json".to_string(),
+            source: "exists".into(),
+        };
+        let mapped = ObjectStoreError::from(err);
+        assert!(
+            matches!(&mapped, ObjectStoreError::AlreadyExists(p) if p.to_string() == "worm/manifest.json")
+        );
+    }
+
+    #[test]
+    fn precondition_maps_to_structured_variant() {
+        let err = object_store::Error::Precondition {
+            path: "worm/manifest.json".to_string(),
+            source: "etag mismatch".into(),
+        };
+        let mapped = ObjectStoreError::from(err);
+        assert!(
+            matches!(&mapped, ObjectStoreError::Precondition { key, reason }
+                if key.to_string() == "worm/manifest.json" && reason == "etag mismatch")
         );
     }
 

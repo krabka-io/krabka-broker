@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 object_store = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
