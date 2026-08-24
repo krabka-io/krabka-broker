@@ -21,7 +21,7 @@ pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
 
 mod refresh;
-pub use refresh::{ImageWatcher, run};
+pub use refresh::run;
 
 #[derive(Clone, Copy)]
 struct QuotaConsumption<'a> {

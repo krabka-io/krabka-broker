@@ -5,7 +5,7 @@ pub use crabka_throttle::{ThrottleState, TokenBucket};
 mod refresh;
 use crabka_metadata::{MetadataImage, NodeId};
 pub(crate) use refresh::apply_image;
-pub use refresh::{ImageWatcher, run};
+pub use refresh::run;
 
 /// Topic-level `*.throttled.replicas` config value.
 #[derive(Debug, Clone, PartialEq, Eq)]

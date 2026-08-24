@@ -5,22 +5,15 @@
 //! trait abstraction keeps `crabka-raft` free of any dependency on
 //! `crabka-broker` and `crabka-security`.
 
+use crabka_client_core::ClientDuplex;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
-
-/// Type-erased duplex stream returned by [`RaftListenerHandshake::upgrade`].
-///
-/// The raft connection handler is generic over `AsyncRead + AsyncWrite +
-/// Unpin + Send + 'static`, so a `Box<dyn DuplexStream>` plugs in directly.
-pub trait DuplexStream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> DuplexStream for T {}
+use tokio::net::TcpStream;
 
 /// Authenticated controller-listener connection plus request-level grants.
 pub struct RaftConnection {
-    pub stream: Box<dyn DuplexStream>,
+    /// The raft connection handler is generic over `AsyncRead + AsyncWrite +
+    /// Unpin + Send + 'static`, so a `Box<dyn ClientDuplex>` plugs in directly.
+    pub stream: Box<dyn ClientDuplex>,
     /// Authenticated Kafka principal. `None` represents a PLAINTEXT or
     /// one-way TLS connection with the normal `ANONYMOUS` identity.
     pub principal: Option<crabka_security::Principal>,
@@ -46,7 +39,7 @@ pub enum RaftHandshakeError {
 /// Per-connection handshake hook.
 ///
 /// Implementors consume the raw `TcpStream` and return one of two things. On
-/// success they return an authenticated `Box<dyn DuplexStream>` that carries
+/// success they return an authenticated `Box<dyn ClientDuplex>` that carries
 /// the raft frames. On failure they return a `RaftHandshakeError`, and the
 /// listener then drops the connection at debug level.
 #[async_trait::async_trait]

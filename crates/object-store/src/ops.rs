@@ -135,7 +135,7 @@ impl ObjectOps for ObjectStoreClient {
     }
 
     async fn list(&self, prefix: Option<Path>) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
-        use futures::stream::TryStreamExt as _;
+        use futures_util::stream::TryStreamExt as _;
         Ok(self
             .inner
             .list(prefix.as_ref())
@@ -287,15 +287,15 @@ mod tests {
 
         fn delete_stream(
             &self,
-            locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
-        ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
+            locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
             self.inner.delete_stream(locations)
         }
 
         fn list(
             &self,
             prefix: Option<&Path>,
-        ) -> futures::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
             self.inner.list(prefix)
         }
 

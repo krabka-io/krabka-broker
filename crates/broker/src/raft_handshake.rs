@@ -17,6 +17,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use crabka_client_core::ClientDuplex;
 use crabka_protocol::{
     Decode, Encode,
     owned::{
@@ -27,9 +28,7 @@ use crabka_protocol::{
         sasl_handshake_request::{self, SaslHandshakeRequest},
     },
 };
-use crabka_raft::{
-    ControllerHandle, DuplexStream, RaftConnection, RaftHandshakeError, RaftListenerHandshake,
-};
+use crabka_raft::{ControllerHandle, RaftConnection, RaftHandshakeError, RaftListenerHandshake};
 use crabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -180,7 +179,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
             .map_err(|e| RaftHandshakeError::Tls(e.to_string()))?;
 
         // 1. TLS termination (if the listener protocol requires it).
-        let mut stream: Box<dyn DuplexStream> = if self.protocol.requires_tls() {
+        let mut stream: Box<dyn ClientDuplex> = if self.protocol.requires_tls() {
             let acceptor = self.tls_acceptor.clone().ok_or_else(|| {
                 RaftHandshakeError::Tls("tls_config required for TLS controller listener".into())
             })?;
@@ -235,7 +234,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
 /// returns `Err(...)` if the peer sent an unexpected frame or the auth
 /// failed.
 async fn run_inbound_sasl(
-    stream: &mut dyn DuplexStream,
+    stream: &mut dyn ClientDuplex,
     cfg: &BrokerRaftHandshake,
 ) -> Result<(crabka_security::Principal, bool), RaftHandshakeError> {
     let mut auth = pre_auth_state();
@@ -375,7 +374,7 @@ async fn run_inbound_sasl(
 /// - v2, flexible, which `SaslAuthenticate v2+` and `ApiVersions v3+` use:
 ///   the v1 layout plus a tagged-fields section.
 async fn read_kafka_request(
-    stream: &mut dyn DuplexStream,
+    stream: &mut dyn ClientDuplex,
     max_frame_bytes: usize,
 ) -> Result<(i16, i16, i32, Vec<u8>), RaftHandshakeError> {
     let mut size_buf = [0u8; 4];
@@ -409,7 +408,7 @@ async fn read_kafka_request(
 /// Encodes `resp`, prepends the `ResponseHeader` (v0 or v1 by the rules
 /// below), and writes the length-prefixed frame.
 async fn write_response<R: Encode>(
-    stream: &mut dyn DuplexStream,
+    stream: &mut dyn ClientDuplex,
     api_key: i16,
     api_version: i16,
     corr_id: i32,

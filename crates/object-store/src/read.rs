@@ -47,26 +47,26 @@ mod tests {
 
     use super::*;
 
-    fn store_with(key: &str, bytes: &'static [u8]) -> Arc<dyn object_store::ObjectStore> {
+    async fn store_with(key: &str, bytes: &'static [u8]) -> Arc<dyn object_store::ObjectStore> {
         let store: Arc<dyn object_store::ObjectStore> =
             Arc::new(object_store::memory::InMemory::new());
-        let s = store.clone();
-        let k = Path::from(key);
-        futures::executor::block_on(async move { s.put(&k, PutPayload::from(bytes)).await })
+        store
+            .put(&Path::from(key), PutPayload::from(bytes))
+            .await
             .unwrap();
         store
     }
 
     #[tokio::test]
     async fn under_cap_returns_bytes() {
-        let store = store_with("k", b"hello");
+        let store = store_with("k", b"hello").await;
         let got = read_capped(&store, &Path::from("k"), 1024).await.unwrap();
         assert!(&got[..] == b"hello");
     }
 
     #[tokio::test]
     async fn over_cap_returns_too_large() {
-        let store = store_with("k", b"hello world");
+        let store = store_with("k", b"hello world").await;
         let err = read_capped(&store, &Path::from("k"), 4).await.unwrap_err();
         assert!(matches!(
             err,

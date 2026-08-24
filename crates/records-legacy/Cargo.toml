@@ -28,23 +28,20 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
-[features]
-default = ["gzip", "snappy", "lz4", "zstd"]
-gzip   = ["crabka-compression/gzip"]
-snappy = ["crabka-compression/snappy"]
-lz4    = ["crabka-compression/lz4"]
-zstd   = ["crabka-compression/zstd"]
-
 [dependencies]
 assert2 = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
-crabka-compression = { version = "0.4.0", default-features = false }
+crabka-compression = { version = "0.4.0", default-features = false, features = [
+    "gzip",
+    "snappy",
+    "lz4",
+    "zstd",
+] }
 crabka-ids = { version = "0.4.0" }
 crabka-protocol = { version = "0.4.0", default-features = false }
 crabka-units = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-hex = { workspace = true }

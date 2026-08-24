@@ -112,9 +112,7 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
             let client_id = request.client_id.as_deref().unwrap_or("");
 
             let result = match entry.kind() {
-                DispatchKind::Context(handler)
-                | DispatchKind::DecodedContext(handler)
-                | DispatchKind::EncodedContext(handler) => {
+                DispatchKind::Context(handler) => {
                     let context = RequestContext::new(
                         &principal,
                         &request.peer,

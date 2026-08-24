@@ -11,7 +11,7 @@ use crate::{
     chain::{from_hex32, to_hex},
     event::AuditEventClass,
     ids::{EpochMs, Seq},
-    signing::{SigningKeyProvider, checkpoint_signing_bytes, verify_signature},
+    signing::{FileEd25519Signer, checkpoint_signing_bytes, verify_signature},
     sink::AuditRecord,
 };
 
@@ -38,7 +38,7 @@ impl Checkpoint {
         fields(key_id = %signer.key_id(), seq_high, time_ms)
     )]
     pub fn signed(
-        signer: &dyn SigningKeyProvider,
+        signer: &FileEd25519Signer,
         seq_high: Seq,
         chain_head: &[u8; 32],
         time_ms: EpochMs,

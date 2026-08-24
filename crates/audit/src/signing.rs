@@ -15,20 +15,6 @@ use crate::{
 /// Versioned domain-separation prefix for checkpoint signatures.
 pub const CHECKPOINT_DOMAIN: &[u8] = b"crabka-audit-ckpt-v1\0";
 
-/// Source of the broker's audit signing key.
-///
-/// A file-backed Ed25519 implementation ships in Slice 2. A KMS or HSM backend
-/// can implement this trait later without a change to the chain logic.
-pub trait SigningKeyProvider: Send + Sync + std::fmt::Debug {
-    /// Stable identifier for the key. Every checkpoint records it, so chains
-    /// span key-rotation epochs verifiably.
-    fn key_id(&self) -> &str;
-    /// Ed25519 signature over `msg`.
-    fn sign(&self, msg: &[u8]) -> Vec<u8>;
-    /// Raw 32-byte Ed25519 public key.
-    fn public_key(&self) -> Vec<u8>;
-}
-
 /// File-backed Ed25519 signer that reads a PKCS#8 v2 DER key.
 pub struct FileEd25519Signer {
     key_id: String,
@@ -74,16 +60,23 @@ impl FileEd25519Signer {
     }
 }
 
-impl SigningKeyProvider for FileEd25519Signer {
-    fn key_id(&self) -> &str {
+impl FileEd25519Signer {
+    /// Stable identifier for the key. Every checkpoint records it, so chains
+    /// span key-rotation epochs verifiably.
+    #[must_use]
+    pub fn key_id(&self) -> &str {
         &self.key_id
     }
 
-    fn sign(&self, msg: &[u8]) -> Vec<u8> {
+    /// Ed25519 signature over `msg`.
+    #[must_use]
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.key_pair.sign(msg).as_ref().to_vec()
     }
 
-    fn public_key(&self) -> Vec<u8> {
+    /// Raw 32-byte Ed25519 public key.
+    #[must_use]
+    pub fn public_key(&self) -> Vec<u8> {
         self.public_key.clone()
     }
 }

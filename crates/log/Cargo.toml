@@ -44,7 +44,6 @@ proptest = { workspace = true }
 # (`epoch_and_offset_for_entries`) in `leader_epoch_model.rs`.
 stateright = { workspace = true }
 tempfile = { workspace = true }
-hex = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -4,46 +4,25 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use crabka_metadata::{MetadataImage, NodeId, ThrottleKind};
 use crabka_units::{ByteRate, convert::ByteRateExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::debug;
 
 use super::ThrottleState;
-
-#[async_trait]
-pub trait ImageWatcher: Send + Sync {
-    fn current_image(&self) -> Arc<MetadataImage>;
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
-}
+use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
-    controller: Arc<dyn ImageWatcher>,
+    images: watch::Receiver<Arc<MetadataImage>>,
     node_id: NodeId,
     throttle: Arc<ThrottleState>,
     shutdown: CancellationToken,
 ) {
-    let mut watcher = controller.watch_image();
-    // Apply initial state.
-    apply_image(&controller.current_image(), node_id, &throttle);
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => {
-                info!("throttle refresh task shutting down");
-                return;
-            }
-            r = watcher.changed() => {
-                if r.is_err() {
-                    info!("throttle refresh task: image channel closed");
-                    return;
-                }
-            }
-        }
-        apply_image(&controller.current_image(), node_id, &throttle);
-    }
+    watch_image_loop(images, "throttle refresh", shutdown, |image| {
+        apply_image(image, node_id, &throttle);
+    })
+    .await;
 }
 
 /// The KIP-73 throttle rate the image holds for `kind`.
