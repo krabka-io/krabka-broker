@@ -146,7 +146,6 @@ pub(crate) const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka
 /// Spawn the broker on `broker0_listen()`. The advertised listener is
 /// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
-
 pub(crate) async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
