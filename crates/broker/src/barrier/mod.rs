@@ -9,6 +9,7 @@
 //! `docs/superpowers/specs/2026-08-24-barrier-markers-design.md` holds the
 //! design, the frozen wire formats, and the guarantee this primitive gives.
 
+pub(crate) mod marker;
 pub(crate) mod persistence;
 
 /// The internal topic that carries group definitions, injection-start records,
