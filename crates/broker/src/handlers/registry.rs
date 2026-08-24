@@ -61,8 +61,6 @@ pub(crate) enum DispatchKind {
     Context(ContextHandler),
     Produce(ProduceHandler),
     Telemetry(TelemetryHandler),
-    DecodedContext(ContextHandler),
-    EncodedContext(ContextHandler),
     Auth(AuthHandler),
     Fetch,
     SaslMetadata,
@@ -123,32 +121,6 @@ impl DispatchEntry {
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::Telemetry(handler),
-        }
-    }
-
-    pub(crate) fn decoded_context(
-        api_key: ApiKey,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
-        Self {
-            api_key,
-            flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
-            kind: DispatchKind::DecodedContext(handler),
-        }
-    }
-
-    pub(crate) fn encoded_context(
-        api_key: ApiKey,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
-        Self {
-            api_key,
-            flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
-            kind: DispatchKind::EncodedContext(handler),
         }
     }
 
@@ -352,7 +324,7 @@ macro_rules! decoded_context_dispatches {
         fn $register_fn(registry: &mut DispatchRegistry) {
             $(
                 assert!(
-                    registry.register(DispatchEntry::decoded_context(
+                    registry.register(DispatchEntry::context(
                         ApiKey::$api,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
@@ -389,7 +361,7 @@ macro_rules! decoded_sync_context_dispatches {
         fn $register_fn(registry: &mut DispatchRegistry) {
             $(
                 assert!(
-                    registry.register(DispatchEntry::decoded_context(
+                    registry.register(DispatchEntry::context(
                         ApiKey::$api,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
@@ -791,12 +763,12 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     register_sync_context_dispatches(&mut registry);
     register_decoded_context_dispatches(&mut registry);
     register_decoded_sync_context_dispatches(&mut registry);
-    registry.register(DispatchEntry::encoded_context(
+    registry.register(DispatchEntry::context(
         ApiKey::AlterUserScramCredentials,
         crabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
         alter_user_scram_credentials_adapter,
     ));
-    registry.register(DispatchEntry::encoded_context(
+    registry.register(DispatchEntry::context(
         ApiKey::UpdateFeatures,
         crabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
         update_features_adapter,
@@ -976,10 +948,7 @@ mod tests {
                 .get(key)
                 .unwrap_or_else(|| panic!("registered api_key {key}"));
             assert!(
-                matches!(
-                    entry.kind(),
-                    DispatchKind::DecodedContext(_) | DispatchKind::EncodedContext(_)
-                ),
+                matches!(entry.kind(), DispatchKind::Context(_)),
                 "api_key {key}"
             );
         }

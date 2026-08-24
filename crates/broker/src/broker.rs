@@ -1750,13 +1750,9 @@ fn start_runtime_watchers(
             shutdown.child_token(),
         ));
     }
-    let throttle_watcher: Arc<dyn crate::throttle::ImageWatcher> =
-        Arc::new(ThrottleControllerAdapter {
-            handle: Arc::clone(controller),
-        });
     crate::throttle::apply_image(&controller.current_image(), config.node_id, throttle_state);
     tokio::spawn(crate::throttle::run(
-        throttle_watcher,
+        controller.watch_image(),
         config.node_id,
         Arc::clone(throttle_state),
         shutdown.child_token(),
@@ -1765,11 +1761,8 @@ fn start_runtime_watchers(
         config.max_incremental_fetch_session_cache_slots,
     ));
     let quota_buckets = Arc::new(crate::quota::QuotaBuckets::new());
-    let quota_watcher: Arc<dyn crate::quota::ImageWatcher> = Arc::new(QuotaControllerAdapter {
-        handle: Arc::clone(controller),
-    });
     tokio::spawn(crate::quota::run(
-        quota_watcher,
+        controller.watch_image(),
         Arc::clone(&quota_buckets),
         shutdown.child_token(),
     ));
@@ -4130,42 +4123,6 @@ impl crate::reassignment::ReassignmentController for ReassignmentControllerAdapt
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
-    }
-}
-
-/// Wraps a real [`crabka_raft::ControllerHandle`] so it can satisfy the
-/// [`crate::throttle::ImageWatcher`] trait required by the throttle refresh
-/// background task. Every broker runs this, not only the controller leader,
-/// because each broker manages its own throttle buckets.
-struct ThrottleControllerAdapter {
-    handle: Arc<dyn crate::metadata_source::MetadataSource>,
-}
-
-impl crate::throttle::ImageWatcher for ThrottleControllerAdapter {
-    fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
-        self.handle.current_image()
-    }
-
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>> {
-        self.handle.watch_image()
-    }
-}
-
-/// Wraps a real [`crabka_raft::ControllerHandle`] so it can satisfy the
-/// [`crate::quota::ImageWatcher`] trait required by the quota refresh
-/// background task. Every broker runs this, not only the controller leader,
-/// because each broker enforces its own quotas with its own buckets.
-struct QuotaControllerAdapter {
-    handle: Arc<dyn crate::metadata_source::MetadataSource>,
-}
-
-impl crate::quota::ImageWatcher for QuotaControllerAdapter {
-    fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
-        self.handle.current_image()
-    }
-
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>> {
-        self.handle.watch_image()
     }
 }
 
@@ -6612,18 +6569,6 @@ protocol = "Plaintext"
         let reassignment_rx =
             crate::reassignment::ReassignmentController::watch_image(&reassignment);
         assert!(reassignment_rx.borrow().cluster_id() == cluster_id);
-
-        let throttle = ThrottleControllerAdapter {
-            handle: source.clone(),
-        };
-        assert!(crate::throttle::ImageWatcher::current_image(&throttle).cluster_id() == cluster_id);
-        let throttle_rx = crate::throttle::ImageWatcher::watch_image(&throttle);
-        assert!(throttle_rx.borrow().cluster_id() == cluster_id);
-
-        let quota = QuotaControllerAdapter {
-            handle: source.clone(),
-        };
-        assert!(crate::quota::ImageWatcher::current_image(&quota).cluster_id() == cluster_id);
 
         let cleanup = DelegationTokenCleanupControllerAdapter { handle: source };
         assert!(

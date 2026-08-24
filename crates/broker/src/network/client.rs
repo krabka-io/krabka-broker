@@ -8,12 +8,10 @@
 
 use std::sync::Arc;
 
+use crabka_client_core::ClientDuplex;
 use crabka_security::ListenerProtocol;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
 use crate::config::InterBrokerCredentials;
@@ -74,15 +72,6 @@ pub enum InterBrokerError {
     Codec(String),
 }
 
-/// Trait alias for boxed duplex streams. Both `TcpStream` and
-/// `tokio_rustls::client::TlsStream<TcpStream>` satisfy it.
-///
-/// Same shape as `crabka_client_core::ClientDuplex` so the stream
-/// returned by `InterBrokerClient::connect` can be handed directly to
-/// `Connection::from_stream`.
-pub trait DuplexStream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> DuplexStream for T {}
-
 /// Constructs outbound connections to other brokers, and runs TLS and SASL
 /// as the listener protocol demands. It is cheap to clone and share, because
 /// it holds only a `TlsConnector`, which is an `Arc` internally, and
@@ -139,9 +128,9 @@ impl InterBrokerClient {
         listener_protocol: ListenerProtocol,
         server_name: &str,
         options: &crabka_client_core::ConnectionOptions,
-    ) -> Result<Box<dyn DuplexStream>, InterBrokerError> {
+    ) -> Result<Box<dyn ClientDuplex>, InterBrokerError> {
         let tcp = TcpStream::connect((host, port)).await?;
-        let mut stream: Box<dyn DuplexStream> = if listener_protocol.requires_tls() {
+        let mut stream: Box<dyn ClientDuplex> = if listener_protocol.requires_tls() {
             let connector = self.tls_connector.clone().ok_or_else(|| {
                 InterBrokerError::Config("TLS listener without TlsConnector".into())
             })?;
@@ -189,42 +178,9 @@ impl InterBrokerClient {
         mut options: crabka_client_core::ConnectionOptions,
     ) -> Result<crabka_client_core::Connection, InterBrokerError> {
         self.apply_resource_policy(&mut options);
-        // Build the auth'd stream directly into a `Box<dyn ClientDuplex>`
-        // (rather than `Box<dyn DuplexStream>`) so it lines up with
-        // `Connection::from_stream` without an unsizing coercion that
-        // Rust can't do between two equivalent-but-distinct trait
-        // objects.
-        let tcp = TcpStream::connect((host, port)).await?;
-        let mut stream: Box<dyn crabka_client_core::ClientDuplex> =
-            if listener_protocol.requires_tls() {
-                let connector = self.tls_connector.clone().ok_or_else(|| {
-                    InterBrokerError::Config("TLS listener without TlsConnector".into())
-                })?;
-                let sni =
-                    tokio_rustls::rustls::pki_types::ServerName::try_from(server_name.to_string())
-                        .map_err(|e| InterBrokerError::Tls(format!("invalid server name: {e}")))?;
-                let tls = connector
-                    .connect(sni, tcp)
-                    .await
-                    .map_err(|e| InterBrokerError::Tls(e.to_string()))?;
-                Box::new(tls)
-            } else {
-                Box::new(tcp)
-            };
-        if listener_protocol.requires_sasl() {
-            let creds = self.creds.clone().ok_or_else(|| {
-                InterBrokerError::Config("SASL listener without inter_broker_credentials".into())
-            })?;
-            crabka_client_core::outbound_sasl(
-                &mut *stream,
-                &to_client_creds(&creds),
-                server_name,
-                &options.client_id,
-                options.frame_max,
-            )
-            .await
-            .map_err(|e| InterBrokerError::Sasl(e.to_string()))?;
-        }
+        let stream = self
+            .connect(host, port, listener_protocol, server_name, &options)
+            .await?;
         crabka_client_core::Connection::from_stream(stream, options)
             .await
             .map_err(|e| InterBrokerError::Config(format!("Connection::from_stream: {e}")))

@@ -32,7 +32,6 @@ crabka-raft = { version = "0.4.0", path = "../raft" }
 clap = { workspace = true, features = ["env"] }
 derive_more = { workspace = true }
 ring = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde-wincode = { workspace = true }
 wincode = { workspace = true }

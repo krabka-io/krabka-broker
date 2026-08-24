@@ -46,7 +46,6 @@ dashmap = "6"
 # stay one-liners. See docs/style_guides/code_style_guide.md#newtypes-for-domain-values.
 derive_more = { version = "2", features = ["display", "from", "into", "deref", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-futures = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 # KIP-664's ListTransactions filter accepts the full java.util.regex Pattern

@@ -31,6 +31,7 @@
 
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use crabka_ids::Offset;
 use crabka_metadata::{
     MetadataImage, MetadataRecord, VoterSet, VotersRecord, from_kraft_value, to_kraft_values,
@@ -3351,6 +3352,36 @@ fn control_state_at(
 
 // ---- quorum-state file --------------------------------------------------------
 
+/// One entry of schema v0's `currentVoters` array.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct QuorumStateVoter {
+    #[serde(rename = "voterId")]
+    voter_id: i32,
+}
+
+/// Kafka's on-disk `QuorumStateData`. Schema v0 carries the cluster id, the
+/// applied offset and the legacy voter ids; schema v1 carries the voted
+/// directory id instead. The `skip_serializing_if` markers keep each version's
+/// field set (and their Kafka field order) byte-exact.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct QuorumStateJson {
+    #[serde(rename = "clusterId", skip_serializing_if = "Option::is_none")]
+    cluster_id: Option<String>,
+    #[serde(rename = "leaderId")]
+    leader_id: i32,
+    #[serde(rename = "leaderEpoch")]
+    leader_epoch: i32,
+    #[serde(rename = "votedId")]
+    voted_id: i32,
+    #[serde(rename = "votedDirectoryId", skip_serializing_if = "Option::is_none")]
+    voted_directory_id: Option<String>,
+    #[serde(rename = "appliedOffset", skip_serializing_if = "Option::is_none")]
+    applied_offset: Option<i64>,
+    #[serde(rename = "currentVoters", skip_serializing_if = "Option::is_none")]
+    current_voters: Option<Vec<QuorumStateVoter>>,
+    data_version: i32,
+}
+
 /// Write Kafka's JSON `QuorumStateData` atomically. Level 0 uses schema v0
 /// (including the legacy voter ids); level 1 uses schema v1 with the voted
 /// directory id and no embedded voter set.
@@ -3366,32 +3397,46 @@ fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), R
         .voted_key
         .and_then(|key| i32::try_from(key.id.0).ok())
         .unwrap_or(-1);
-    let json = if state.kraft_version == 0 {
-        let current_voters = state
-            .voters
-            .ids()
-            .into_iter()
-            .map(|id| {
-                format!(
-                    "{{\"voterId\":{}}}",
-                    i32::try_from(id.0).unwrap_or(i32::MAX)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            "{{\"clusterId\":\"{}\",\"leaderId\":{leader_id},\"leaderEpoch\":{leader_epoch},\"votedId\":{voted_id},\"appliedOffset\":0,\"currentVoters\":[{current_voters}],\"data_version\":0}}",
-            state.cluster_id
-        )
+    let data = if state.kraft_version == 0 {
+        QuorumStateJson {
+            cluster_id: Some(state.cluster_id.to_string()),
+            leader_id,
+            leader_epoch,
+            voted_id,
+            voted_directory_id: None,
+            applied_offset: Some(0),
+            current_voters: Some(
+                state
+                    .voters
+                    .ids()
+                    .into_iter()
+                    .map(|id| QuorumStateVoter {
+                        voter_id: i32::try_from(id.0).unwrap_or(i32::MAX),
+                    })
+                    .collect(),
+            ),
+            data_version: 0,
+        }
     } else {
         let voted_directory_id = state
             .voted_key
             .map_or([0; 16], |key| *key.directory_id.as_bytes());
-        format!(
-            "{{\"leaderId\":{leader_id},\"leaderEpoch\":{leader_epoch},\"votedId\":{voted_id},\"votedDirectoryId\":\"{}\",\"data_version\":1}}",
-            kafka_uuid_string(voted_directory_id)
-        )
+        QuorumStateJson {
+            cluster_id: None,
+            leader_id,
+            leader_epoch,
+            voted_id,
+            voted_directory_id: Some(URL_SAFE_NO_PAD.encode(voted_directory_id)),
+            applied_offset: None,
+            current_voters: None,
+            data_version: 1,
+        }
     };
+    let json = serde_json::to_string(&data).map_err(|e| {
+        RaftError::Storage(crabka_log::LogError::Corrupt(format!(
+            "serialize quorum-state: {e}"
+        )))
+    })?;
     let path = dir.join(QUORUM_STATE_FILE);
     let tmp = path.with_extension("tmp");
     let mut file = std::fs::File::create(&tmp).map_err(crabka_log::LogError::Io)?;
@@ -3415,50 +3460,22 @@ fn load_quorum_state(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(RaftError::Storage(crabka_log::LogError::Io(e))),
     };
-    // Releases before Kafka-compatible QuorumStateData used a fixed 54-byte
-    // binary record. Migrate it in place so an upgrade keeps the durable term
-    // and vote instead of silently restarting from epoch zero.
-    if bytes.len() == 54 {
-        let mut cluster = [0_u8; 16];
-        cluster.copy_from_slice(&bytes[..16]);
-        let leader_epoch = u32::from_be_bytes(bytes[16..20].try_into().unwrap_or_default());
-        let voted = bytes[29] != 0;
-        let voted_id = u64::from_be_bytes(bytes[30..38].try_into().unwrap_or_default());
-        let mut voted_directory = [0_u8; 16];
-        voted_directory.copy_from_slice(&bytes[38..54]);
-        let state = QuorumState {
-            cluster_id: Uuid::from_bytes(cluster),
-            kraft_version: 0,
-            leader_epoch,
-            leader_id: None,
-            voted_key: voted.then(|| ReplicaKey {
-                id: NodeId(voted_id),
-                directory_id: Uuid::from_bytes(voted_directory),
-            }),
-            voters: voters.clone(),
-        };
-        save_quorum_state(dir, &state)?;
-        return Ok(Some(state));
-    }
-    let Ok(json) = std::str::from_utf8(&bytes) else {
+    let Ok(data) = serde_json::from_slice::<QuorumStateJson>(&bytes) else {
         return Ok(None);
     };
-    if !json.trim_start().starts_with('{') || json_i64(json, "leaderEpoch").is_none() {
-        return Ok(None);
-    }
-    let data_version = json_i64(json, "data_version").unwrap_or(0);
+    let data_version = data.data_version;
     if !(0..=1).contains(&data_version) {
         return Ok(None);
     }
-    let leader_epoch = json_i64(json, "leaderEpoch")
-        .and_then(|epoch| u32::try_from(epoch).ok())
-        .unwrap_or(0);
-    let voted_id = json_i64(json, "votedId").unwrap_or(-1);
+    let leader_epoch = u32::try_from(data.leader_epoch).unwrap_or(0);
+    let voted_id = data.voted_id;
     let voted_key = (voted_id >= 0).then(|| ReplicaKey {
         id: NodeId(u64::try_from(voted_id).unwrap_or(0)),
         directory_id: if data_version == 1 {
-            json_string(json, "votedDirectoryId")
-                .and_then(kafka_uuid_bytes)
+            data.voted_directory_id
+                .as_deref()
+                .and_then(|id| URL_SAFE_NO_PAD.decode(id).ok())
+                .and_then(|raw| <[u8; 16]>::try_from(raw).ok())
                 .map_or_else(Uuid::nil, Uuid::from_bytes)
         } else {
             Uuid::nil()
@@ -3480,69 +3497,6 @@ fn load_quorum_state(
         voters: voters.clone(),
         kraft_version: u16::try_from(data_version).unwrap_or(0),
     }))
-}
-
-fn json_i64(json: &str, field: &str) -> Option<i64> {
-    let marker = format!("\"{field}\":");
-    let tail = json.split_once(&marker)?.1.trim_start();
-    let end = tail
-        .find(|character: char| !character.is_ascii_digit() && character != '-')
-        .unwrap_or(tail.len());
-    tail[..end].parse().ok()
-}
-
-fn json_string<'a>(json: &'a str, field: &str) -> Option<&'a str> {
-    let marker = format!("\"{field}\":\"");
-    let tail = json.split_once(&marker)?.1;
-    Some(tail.split_once('"')?.0)
-}
-
-const KAFKA_UUID_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-fn kafka_uuid_string(bytes: [u8; 16]) -> String {
-    let mut result = String::with_capacity(22);
-    let mut accumulator = 0u32;
-    let mut bits = 0u8;
-    for byte in bytes {
-        accumulator = (accumulator << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 6 {
-            bits -= 6;
-            let index = usize::try_from((accumulator >> bits) & 0x3f).unwrap_or(0);
-            result.push(char::from(KAFKA_UUID_ALPHABET[index]));
-            accumulator &= (1u32 << bits).saturating_sub(1);
-        }
-    }
-    if bits > 0 {
-        let index = usize::try_from((accumulator << (6 - bits)) & 0x3f).unwrap_or(0);
-        result.push(char::from(KAFKA_UUID_ALPHABET[index]));
-    }
-    result
-}
-
-fn kafka_uuid_bytes(value: &str) -> Option<[u8; 16]> {
-    let mut output = [0u8; 16];
-    let mut output_index = 0usize;
-    let mut accumulator = 0u32;
-    let mut bits = 0u8;
-    for byte in value.bytes() {
-        let sextet = KAFKA_UUID_ALPHABET
-            .iter()
-            .position(|candidate| *candidate == byte)?;
-        accumulator = (accumulator << 6) | u32::try_from(sextet).ok()?;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            if output_index >= output.len() {
-                return None;
-            }
-            output[output_index] = u8::try_from((accumulator >> bits) & 0xff).ok()?;
-            output_index += 1;
-            accumulator &= (1u32 << bits).saturating_sub(1);
-        }
-    }
-    (output_index == output.len()).then_some(output)
 }
 
 /// Write a KIP-630 `.checkpoint` artifact (bytes only) directly with
@@ -3649,35 +3603,6 @@ mod tests {
 
     /// Deadline every test-side channel receive is bounded by.
     const TEST_RECV_TIMEOUT: Time = secs(1);
-
-    /// Kafka renders a UUID as URL-safe base64 with no padding. This encoder
-    /// is written out by hand rather than taken from the `base64` crate, so
-    /// the crate is what it should be checked against -- and its own decoder
-    /// is what it should round-trip through.
-    ///
-    /// The last two bytes fall in a partial six-bit group, which is the part a
-    /// shift or a mask gets wrong without changing the length.
-    #[test]
-    fn kafka_uuid_strings_are_url_safe_base64() {
-        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-
-        let cases = [
-            [0u8; 16],
-            [0xff; 16],
-            *uuid::Uuid::from_u128(1).as_bytes(),
-            *uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef).as_bytes(),
-            *uuid::Uuid::from_u128(u128::MAX - 1).as_bytes(),
-        ];
-        for bytes in cases {
-            let encoded = kafka_uuid_string(bytes);
-            check!(
-                encoded == URL_SAFE_NO_PAD.encode(bytes),
-                "encoding {bytes:?}"
-            );
-            check!(encoded.len() == 22, "a 16-byte id is 22 characters");
-            check!(kafka_uuid_bytes(&encoded) == Some(bytes), "round trip");
-        }
-    }
 
     /// Default election timeout for engines built by [`build`].
     const TEST_ELECTION_TIMEOUT: Time = secs(1);
@@ -5947,6 +5872,18 @@ mod tests {
         });
         save_quorum_state(dir.path(), &state).unwrap();
 
+        // The JVM tools read this file, so the schema-v0 field set and its
+        // Kafka field order are part of the contract, not an implementation
+        // detail of whatever serializer writes it.
+        let json = std::fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).unwrap();
+        check!(
+            json == format!(
+                "{{\"clusterId\":\"{cid}\",\"leaderId\":2,\"leaderEpoch\":5,\"votedId\":3,\
+                 \"appliedOffset\":0,\"currentVoters\":[{{\"voterId\":1}},{{\"voterId\":2}},\
+                 {{\"voterId\":3}}],\"data_version\":0}}"
+            )
+        );
+
         let loaded = load_quorum_state(
             dir.path(),
             cid,
@@ -5992,46 +5929,6 @@ mod tests {
             .unwrap();
         assert2::assert!(loaded.kraft_version == 1);
         assert2::assert!(loaded.voted_key == state.voted_key);
-    }
-
-    #[test]
-    fn legacy_binary_quorum_state_migrates_without_losing_epoch_or_vote() {
-        use bytes::BufMut as _;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cluster_id = uuid::Uuid::from_u128(0x1234);
-        let voted_directory = uuid::Uuid::from_u128(0x5678);
-        let mut bytes = Vec::with_capacity(54);
-        bytes.extend_from_slice(cluster_id.as_bytes());
-        bytes.put_u32(17);
-        bytes.put_u8(1);
-        bytes.put_u64(2);
-        bytes.put_u8(1);
-        bytes.put_u64(3);
-        bytes.extend_from_slice(voted_directory.as_bytes());
-        std::fs::write(dir.path().join(QUORUM_STATE_FILE), bytes).expect("write legacy state");
-
-        let loaded = load_quorum_state(
-            dir.path(),
-            uuid::Uuid::nil(),
-            &voter_set(&[NodeId(1), NodeId(2), NodeId(3)]),
-        )
-        .expect("load legacy state")
-        .expect("legacy state exists");
-
-        assert2::assert!(loaded.cluster_id == cluster_id);
-        assert2::assert!(loaded.leader_epoch == 17);
-        assert2::assert!(loaded.leader_id.is_none());
-        assert2::assert!(
-            loaded.voted_key
-                == Some(ReplicaKey {
-                    id: NodeId(3),
-                    directory_id: voted_directory,
-                })
-        );
-        let migrated = std::fs::read_to_string(dir.path().join(QUORUM_STATE_FILE))
-            .expect("read migrated JSON");
-        assert2::assert!(migrated.starts_with('{'));
     }
 
     #[test]

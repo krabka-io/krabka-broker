@@ -1,48 +1,29 @@
 //! Background task that subscribes to `MetadataImage` changes and pushes new
 //! quota rates to the `QuotaBuckets` cache.
 //!
-//! It mirrors the shape of `throttle::refresh`.
+//! The subscription itself is [`watch_image_loop`], shared with
+//! `throttle::refresh`; only the per-image work differs.
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use crabka_metadata::{EntityKey, MetadataImage};
 use crabka_units::convert::ByteRateExt as _;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::debug;
 
 use super::{buckets::QuotaBuckets, positive_f64_to_u64};
-
-#[async_trait]
-pub trait ImageWatcher: Send + Sync {
-    fn current_image(&self) -> Arc<MetadataImage>;
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
-}
+use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
-    controller: Arc<dyn ImageWatcher>,
+    images: watch::Receiver<Arc<MetadataImage>>,
     buckets: Arc<QuotaBuckets>,
     shutdown: CancellationToken,
 ) {
-    let mut watcher = controller.watch_image();
-    refresh_buckets(&controller.current_image(), &buckets);
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => {
-                info!("quota refresh task shutting down");
-                return;
-            }
-            r = watcher.changed() => {
-                if r.is_err() {
-                    info!("quota refresh: image channel closed");
-                    return;
-                }
-            }
-        }
-        refresh_buckets(&controller.current_image(), &buckets);
-    }
+    watch_image_loop(images, "quota refresh", shutdown, |image| {
+        refresh_buckets(image, &buckets);
+    })
+    .await;
 }
 
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
