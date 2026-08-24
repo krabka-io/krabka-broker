@@ -174,6 +174,22 @@ impl Predicates {
         partition: &PartitionRef,
         batch: &RecordBatchBorrowed<'_>,
     ) -> BatchDecision {
+        // A control batch carries a transaction commit or abort marker, not
+        // operator data -- no exclude predicate is about transaction
+        // bookkeeping, and an operator writing `--exclude-producer-id` for a
+        // producer's data batches has no way to know, or reason to expect,
+        // that the same id also names the marker that closes out that
+        // producer's transaction. Filtering or emptying a control batch would
+        // silently corrupt the restored partition's transaction state, which
+        // is a worse outcome than restoring one record the operator meant to
+        // exclude. The offset it claims is unaffected either way: the caller
+        // applies `--to-offset`/`--to-timestamp` tail truncation before ever
+        // calling this, so a control batch past that bound is still dropped
+        // by not being written at all, exactly like any other batch.
+        if batch.attributes().is_control_batch() {
+            return BatchDecision::Keep;
+        }
+
         if self.keeps_everything_in(partition) {
             return BatchDecision::Keep;
         }

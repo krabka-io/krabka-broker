@@ -101,8 +101,20 @@ const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
 const TXN_INDEX_ENTRY_LEN: usize = std::mem::size_of::<AbortedTxnIndexEntry>();
 
 /// Header length of a Kafka producer-state `.snapshot`: version (2 bytes),
-/// CRC32C (4 bytes), entry count (4 bytes).
+/// CRC32C (4 bytes), entry count (4 bytes). This is where the first entry
+/// starts, not where the CRC-covered region starts -- see
+/// [`SNAPSHOT_CRC_COVERAGE_START`].
 const SNAPSHOT_HEADER_LEN: usize = 10;
+
+/// Byte offset where the `.snapshot`'s CRC32C coverage begins: right after
+/// the CRC field itself (bytes `2..6`), so the covered region includes the
+/// entry count (bytes `6..10`) as well as every entry. This must match
+/// `crabka_log::producer_snapshot`'s writer exactly -- it computes the CRC
+/// over `&buffer[HEADER_LEN..]` with its own `HEADER_LEN = 6` -- or every
+/// genuinely archived snapshot fails verification with a false
+/// `ChecksumMismatch`, since [`SNAPSHOT_HEADER_LEN`] (10) is 4 bytes past
+/// where the real writer's coverage actually starts.
+const SNAPSHOT_CRC_COVERAGE_START: usize = 6;
 
 /// Byte length of one producer-state snapshot entry.
 const SNAPSHOT_ENTRY_LEN: usize = 46;
@@ -578,9 +590,9 @@ fn validate_txn_index(
 /// Check a Kafka producer-state `.snapshot`: `version` (bytes `0..2`) must be
 /// [`SNAPSHOT_VERSION`], the object length must equal
 /// `SNAPSHOT_HEADER_LEN + count * SNAPSHOT_ENTRY_LEN` for the `count` (bytes
-/// `6..10`) it declares, and the CRC32C (bytes `2..6`) over bytes `6..` must
-/// match. Entry fields are not decoded; only the framing and the checksum are
-/// verified.
+/// `6..10`) it declares, and the CRC32C (bytes `2..6`) over
+/// `bytes[SNAPSHOT_CRC_COVERAGE_START..]` must match. Entry fields are not
+/// decoded; only the framing and the checksum are verified.
 fn validate_producer_snapshot(key: &Path, bytes: &[u8]) -> Result<(), RestoreError> {
     if bytes.len() < SNAPSHOT_HEADER_LEN {
         return Err(RestoreError::TruncatedSegment {
@@ -622,7 +634,7 @@ fn validate_producer_snapshot(key: &Path, bytes: &[u8]) -> Result<(), RestoreErr
     }
 
     let stored_crc = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-    let computed_crc = crc32c(&bytes[SNAPSHOT_HEADER_LEN..]);
+    let computed_crc = crc32c(&bytes[SNAPSHOT_CRC_COVERAGE_START..]);
     if stored_crc != computed_crc {
         return Err(RestoreError::ChecksumMismatch {
             key: key.to_string(),
@@ -817,7 +829,7 @@ mod tests {
         for _ in 0..entry_count {
             buf.extend_from_slice(&[0u8; SNAPSHOT_ENTRY_LEN]);
         }
-        let crc = crc32c(&buf[SNAPSHOT_HEADER_LEN..]);
+        let crc = crc32c(&buf[SNAPSHOT_CRC_COVERAGE_START..]);
         buf[2..6].copy_from_slice(&crc.to_be_bytes());
         buf.freeze()
     }
