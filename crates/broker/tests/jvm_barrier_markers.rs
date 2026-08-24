@@ -41,7 +41,8 @@ use crabka_protocol::krabka::barrier::{
     AlterBarrierGroupsRequest, AlterableBarrierGroup, CUT_STATUS_COMPLETE, TriggerBarrierRequest,
 };
 use jvm_acceptance::{
-    KAFKA_IMAGE_TXN, docker_run_kafka_tool_with_image, rlmm_broker0_advertised, start_host_broker,
+    KAFKA_IMAGE_TXN, docker_run_kafka_tool_with_image, rlmm_broker0_advertised,
+    start_host_broker_with,
 };
 
 const TOPIC: &str = "barrier-invisibility";
@@ -84,6 +85,29 @@ async fn produce_round(producer: &Producer, round: i32) {
         }
     }
     producer.flush().await.expect("flush");
+}
+
+/// Block until the barrier coordinator answers.
+///
+/// `__barrier_state` is provisioned asynchronously at startup, so a define
+/// sent too early is refused with `COORDINATOR_NOT_AVAILABLE`. Waiting is what
+/// keeps this suite from depending on that timing.
+async fn wait_for_coordinator(client: &Client) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(1);
+    loop {
+        let answered = client
+            .send(crabka_protocol::krabka::barrier::DescribeBarrierGroupsRequest::default())
+            .await
+            .is_ok();
+        if answered {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the barrier coordinator never became available"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }
 
 /// Define the barrier group over the topic.
@@ -221,7 +245,14 @@ fn jvm_log_end_offset(partition: i32) -> i64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires docker"]
 async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
-    let (_broker, _dir) = start_host_broker().await;
+    // One state partition at replication factor one, because this is a single
+    // node: the 50-at-factor-3 default leaves the partition this group hashes
+    // to without a leader, and the coordinator then refuses every request.
+    let (_broker, _dir) = start_host_broker_with(|config| {
+        config.barrier_state_num_partitions = 1;
+        config.barrier_state_replication_factor = 1;
+    })
+    .await;
     // Despite the name, this accessor is broker 0 over loopback: the host-side
     // clients use it, and only the containers use the advertised name.
     let bootstrap = rlmm_broker0_advertised().to_string();
@@ -254,6 +285,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
         .await
         .expect("client build");
 
+    wait_for_coordinator(&client).await;
     create_barrier_group(&client).await;
 
     // Records, a cut, more records, a second cut. Every partition ends with
