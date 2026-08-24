@@ -1488,6 +1488,8 @@ dependencies = [
  "crabka-object-store",
  "crabka-protocol",
  "crabka-remote-storage",
+ "crabka-remote-storage-topic",
+ "crc32c",
  "object_store",
  "regex",
  "serde",

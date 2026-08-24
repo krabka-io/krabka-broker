@@ -38,8 +38,16 @@ crabka-object-store = { version = "0.4.0", path = "../object-store" }
 crabka-protocol = { version = "0.4.0", default-features = false }
 # The KIP-405 archive key codec and segment metadata model.
 crabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
+# `Snapshot::load` reads a broker's `remote-log-metadata/snapshot` for
+# `--rlmm-snapshot`, the authoritative-metadata cross-check against the
+# bucket scan.
+crabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+# The `.snapshot` sidecar's CRC32C header. `crabka-log` keeps its own decoder
+# `pub(crate)`, so the archive-side verifier reimplements the documented
+# format rather than reaching into the log crate's internals.
+crc32c = { workspace = true }
 object_store = { workspace = true }
 # RE2 semantics: `--exclude-key` and `--exclude-header` run over millions of
 # archived records, so an operator-supplied pattern must stay linear in the
