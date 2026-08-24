@@ -92,10 +92,11 @@ pub(crate) use sendfile_cfg;
 mod compact;
 mod config;
 mod error;
+mod filter;
 mod index;
 mod leader_epoch_checkpoint;
 mod log;
-mod name;
+pub mod name;
 mod producer_snapshot;
 mod recovery;
 mod retention;
@@ -107,6 +108,7 @@ mod txn_index;
 pub use config::{CleanupPolicy, LogConfig};
 pub use crabka_ids::{LeaderEpoch, Offset, ProducerId};
 pub use error::LogError;
+pub use filter::{FilteredBatch, filter_batch};
 pub use leader_epoch_checkpoint::{
     EpochEntry, LeaderEpochCheckpoint, epoch_and_offset_for_entries,
 };

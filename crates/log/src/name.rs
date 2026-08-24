@@ -1,11 +1,14 @@
-//! Segment filename parsing. Kafka names a segment by its 20-digit
-//! zero-padded base offset, with the `.log`, `.index`, and `.timeindex`
-//! extensions.
+//! Names inside a Kafka log directory: the per-partition directory, and the segment files in it.
+//!
+//! A partition's data lives in `<log_dir>/<topic>-<partition>/`. Kafka names each segment in that directory by its 20-digit zero-padded base offset, with the `.log`, `.index`, and `.timeindex` extensions.
+//!
+//! The module is public because a tool that opens a log directory needs the same paths the broker uses, and it must not have to link the broker to compute them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::LogError;
 
+/// Digit count of a segment filename stem. Kafka zero-pads the base offset to this width.
 pub const FILENAME_DIGITS: usize = 20;
 
 /// `0` → `"00000000000000000000"`. `1847` → `"00000000000000001847"`.
@@ -16,6 +19,10 @@ pub fn format_base_offset(base_offset: i64) -> String {
 
 /// Parse a `.log` filename and return its base offset.
 /// `"00000000000000001847.log"` → `Ok(1847)`.
+///
+/// # Errors
+///
+/// Returns [`LogError::BadSegmentName`] when the name has no `.log` extension, when the stem is not [`FILENAME_DIGITS`] characters long, or when the stem is not a decimal `i64`.
 pub fn parse_log_filename(name: &str) -> Result<i64, LogError> {
     let stem = name
         .strip_suffix(".log")
@@ -27,39 +34,81 @@ pub fn parse_log_filename(name: &str) -> Result<i64, LogError> {
         .map_err(|_| LogError::BadSegmentName(name.into()))
 }
 
-pub fn log_path(dir: &Path, base_offset: i64) -> std::path::PathBuf {
+/// Path to the `.log` file of the segment that starts at `base_offset`. It holds the record batches.
+#[must_use]
+pub fn log_path(dir: &Path, base_offset: i64) -> PathBuf {
     dir.join(format!("{}.log", format_base_offset(base_offset)))
 }
 
-pub fn index_path(dir: &Path, base_offset: i64) -> std::path::PathBuf {
+/// Path to the sparse offset index, `.index`, of the segment that starts at `base_offset`.
+#[must_use]
+pub fn index_path(dir: &Path, base_offset: i64) -> PathBuf {
     dir.join(format!("{}.index", format_base_offset(base_offset)))
 }
 
-pub fn timeindex_path(dir: &Path, base_offset: i64) -> std::path::PathBuf {
+/// Path to the sparse timestamp index, `.timeindex`, of the segment that starts at `base_offset`.
+#[must_use]
+pub fn timeindex_path(dir: &Path, base_offset: i64) -> PathBuf {
     dir.join(format!("{}.timeindex", format_base_offset(base_offset)))
 }
 
-pub fn txnindex_path(dir: &Path, base_offset: i64) -> std::path::PathBuf {
+/// Path to the aborted-transaction index, `.txnindex`, of the segment that starts at `base_offset`.
+#[must_use]
+pub fn txnindex_path(dir: &Path, base_offset: i64) -> PathBuf {
     dir.join(format!("{}.txnindex", format_base_offset(base_offset)))
 }
 
-pub fn producer_snapshot_path(dir: &Path, offset: i64) -> std::path::PathBuf {
+/// Path to the `.snapshot` file that holds the producer state as of `offset`.
+#[must_use]
+pub fn producer_snapshot_path(dir: &Path, offset: i64) -> PathBuf {
     dir.join(format!("{}.snapshot", format_base_offset(offset)))
 }
 
 /// Path to the per-segment `.stampindex` sidecar. It holds the additional
 /// internal stamp coordinate and is never a client-facing file.
-pub fn stampindex_path(dir: &Path, base_offset: i64) -> std::path::PathBuf {
+#[must_use]
+pub fn stampindex_path(dir: &Path, base_offset: i64) -> PathBuf {
     dir.join(format!("{}.stampindex", format_base_offset(base_offset)))
 }
 
 /// Path to the per-partition `.leader-epoch-checkpoint` file.
-pub fn leader_epoch_checkpoint_path(dir: &Path) -> std::path::PathBuf {
+#[must_use]
+pub fn leader_epoch_checkpoint_path(dir: &Path) -> PathBuf {
     dir.join("leader-epoch-checkpoint")
+}
+
+/// Suffix that the broker appends to a future-log partition directory while a KIP-113 intra-broker move runs.
+///
+/// The directory at `<target_log_dir>/<topic>-<partition><FUTURE_SUFFIX>` collects copied batches. When the future log catches up, the broker renames it in place to `<topic>-<partition>`. The suffix mirrors Apache Kafka's `LogManager.FutureDirSuffix`, so what cp-kafka tooling such as `kafka-log-dirs` expects matches the bytes on disk.
+pub const FUTURE_SUFFIX: &str = "-future";
+
+/// Builds the directory path for a (topic, partition).
+#[must_use]
+pub fn partition_dir(log_dir: &Path, topic: &str, partition: i32) -> PathBuf {
+    log_dir.join(format!("{topic}-{partition}"))
+}
+
+/// Parses `<topic>-<partition>` from a directory name. It returns `None` when the name does not match the pattern.
+#[must_use]
+pub fn parse_partition_dir(name: &str) -> Option<(String, i32)> {
+    let (topic, part) = name.rsplit_once('-')?;
+    if topic.is_empty() || topic.ends_with('-') {
+        // Empty topic or trailing `-` in the topic indicates a malformed
+        // name like "-0" or "foo--1" (which would otherwise parse the
+        // tail as a positive partition number).
+        return None;
+    }
+    let partition = part.parse::<i32>().ok()?;
+    if partition < 0 {
+        return None;
+    }
+    Some((topic.to_string(), partition))
 }
 
 #[cfg(test)]
 mod tests {
+
+    use assert2::assert;
 
     use super::*;
 
@@ -95,5 +144,37 @@ mod tests {
         ] {
             assert2::assert!(parse_log_filename(filename).is_err());
         }
+    }
+
+    #[test]
+    fn round_trip_partition_dir() {
+        let p = partition_dir(Path::new("/tmp"), "foo", 7);
+        let name = p
+            .file_name()
+            .expect("path has a file name")
+            .to_str()
+            .expect("file name is utf-8");
+        assert!(parse_partition_dir(name) == Some(("foo".to_string(), 7)));
+    }
+
+    #[test]
+    fn rejects_negative_partition() {
+        assert!(parse_partition_dir("foo--1") == None);
+    }
+
+    #[test]
+    fn rejects_empty_topic() {
+        assert!(parse_partition_dir("-0") == None);
+    }
+
+    #[test]
+    fn rejects_no_dash() {
+        assert!(parse_partition_dir("foo") == None);
+    }
+
+    #[test]
+    fn handles_topic_with_dashes() {
+        // Topic names can themselves contain hyphens; rsplit takes the last.
+        assert!(parse_partition_dir("my-cool-topic-3") == Some(("my-cool-topic".to_string(), 3)));
     }
 }

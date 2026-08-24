@@ -26,6 +26,7 @@ clap = { workspace = true, features = ["derive"] }
 crabka-audit = { workspace = true }
 crabka-ids = { version = "0.4.0" }
 crabka-object-store = { version = "0.4.0", path = "../object-store" }
+crabka-protocol = { version = "0.4.0", default-features = false }
 crabka-units = { workspace = true }
 derive_more = { workspace = true }
 # Streams the object listing, and the object bodies a deep verify re-hashes.
@@ -40,6 +41,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+zerocopy = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }

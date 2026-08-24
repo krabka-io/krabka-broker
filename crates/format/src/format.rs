@@ -10,6 +10,8 @@
 //! pre-load. Dynamic KIP-853 modes additionally write the authoritative
 //! offset-zero metadata checkpoint. The output is:
 //!
+//! - `<log_dir>/bootstrap.json` — a human-readable manifest with the
+//!   cluster id and a base64'd `serde_wincode` blob per metadata record.
 //! - `<log_dir>/bootstrap.records.bin` — the same records concatenated
 //!   as length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>`
 //!   payloads, so the broker can stream them without touching JSON.
@@ -30,7 +32,9 @@ use crabka_security::{
     SaslMechanism,
     scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ring::rand::{SecureRandom, SystemRandom};
+use serde::Serialize;
 use serde_wincode::SerdeCompat;
 use uuid::Uuid;
 use wincode::Serialize as _;
@@ -515,10 +519,22 @@ fn write_meta_properties(
         .map_err(|e| format!("write meta.properties.json: {e}"))
 }
 
-// `async` matches the entry point in `main.rs`; the body is sync today
-// (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
-// The body yields an `i32` (not a future), so `#[instrument]` is safe here
-// w.r.t. `clippy::async_yields_async`.
+/// Human-readable manifest written to `<log_dir>/bootstrap.json`.
+#[derive(Debug, Serialize)]
+struct BootstrapManifest {
+    /// Schema version of this bootstrap manifest. Bumped if the layout
+    /// changes; the broker's future consumer will reject unknown values.
+    schema: u32,
+    // `ClusterId` is `#[serde(transparent)]`, so this serializes as the bare
+    // UUID string exactly as the previous `Uuid` field did.
+    cluster_id: ClusterId,
+    record_count: usize,
+    /// Base64-encoded `SerdeCompat<MetadataRecord>` payloads, one per
+    /// seed record. Mirrors the contents of `bootstrap.records.bin` so
+    /// operators can inspect the file without a hex editor.
+    records_b64: Vec<String>,
+}
+
 /// Formats `args.log_dir`, returning the process exit code.
 ///
 /// Every failure a caller can cause -- an unwritable directory, a malformed
@@ -531,13 +547,53 @@ fn write_meta_properties(
 /// appearing in it. `is_dynamic_format` rejects that combination before this
 /// point, so reaching the panic means that validation and this branch have
 /// drifted apart.
+pub async fn run(args: FormatArgs) -> i32 {
+    run_with_records(args, Vec::new()).await
+}
+
+// `async` matches the entry point in `main.rs`; the body is sync today
+// (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
+// The body yields an `i32` (not a future), so `#[instrument]` is safe here
+// w.r.t. `clippy::async_yields_async`.
+/// Formats `args.log_dir` with `extra` seeded alongside the records the flags
+/// produce, returning the process exit code.
+///
+/// A cluster restored from tiered-storage archives has to come up with its
+/// topics already present, so the restore tool hands the topic and partition
+/// records it recovered to the formatter instead of repeating the bootstrap
+/// write itself. The extra records join the one seed stream, so they reach both
+/// the offset-zero checkpoint and the bootstrap files.
+///
+/// `extra` lands directly after the feature records and ahead of the
+/// `--add-scram` and `--add-acl` records. The finalized feature levels,
+/// `metadata.version` first, decide how every later record is read, so they
+/// lead the stream and a topic record can only come after them. The seeded
+/// topics ahead of the seeded ACL entries then matches the order a live cluster
+/// writes, where a topic exists before an entry names it as a resource. The
+/// KIP-853 control state -- the `KRaft` version and the initial voters -- is a
+/// separate stream that the checkpoint applies before any of these.
+///
+/// Ordering inside `extra` is the caller's. A `MetadataImage` derives a topic's
+/// partition count from the partition records that apply after it, so each
+/// `TopicRecord` must come before its own partitions.
+///
+/// # Panics
+///
+/// Panics if `--initial-controllers` was given without the node's own identity
+/// appearing in it. `is_dynamic_format` rejects that combination before this
+/// point, so reaching the panic means that validation and this branch have
+/// drifted apart.
 #[tracing::instrument(
     level = "info",
     name = "cli.format",
     skip_all,
-    fields(log_dir = %args.log_dir.display(), standalone = args.standalone)
+    fields(
+        log_dir = %args.log_dir.display(),
+        standalone = args.standalone,
+        extra_records = extra.len(),
+    )
 )]
-pub async fn run(args: FormatArgs) -> i32 {
+pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i32 {
     let dynamic_format = match is_dynamic_format(&args) {
         Ok(dynamic) => dynamic,
         Err(e) => {
@@ -647,6 +703,11 @@ pub async fn run(args: FormatArgs) -> i32 {
         &feature_overrides,
     ));
 
+    // Caller-seeded records (a restore's recovered topics) follow the feature
+    // levels that decide how they are read, and precede the credential and ACL
+    // records so a seeded ACL names a topic the image already holds.
+    records.extend(extra);
+
     // Build the seed records. Each `--add-scram` is hashed *here* (CLI
     // side) using `hash_scram_password_with_salt` from `crabka-security`
     // so the on-disk record carries the stretched keys, never the plain
@@ -693,7 +754,7 @@ pub async fn run(args: FormatArgs) -> i32 {
         return EXIT_BOOTSTRAP_FAIL;
     }
 
-    if let Err(e) = write_bootstrap_files(&args.log_dir, &records) {
+    if let Err(e) = write_bootstrap_files(&args.log_dir, cluster_id, &records) {
         eprintln!("crabka format: bootstrap failed: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
@@ -728,9 +789,8 @@ fn write_dynamic_checkpoint(
         .map_err(|e| format!("write offset-zero checkpoint: {e}"))
 }
 
-/// Serialize `records` to `<log_dir>/bootstrap.records.bin` as length-prefixed
-/// (u32 LE) `SerdeCompat<MetadataRecord>` payloads. Returns the first I/O or
-/// encoding error encountered.
+/// Serialize the manifest + records to disk under `log_dir`. Returns the
+/// first I/O or encoding error encountered.
 #[tracing::instrument(
     level = "debug",
     name = "cli.write_bootstrap_files",
@@ -740,19 +800,40 @@ fn write_dynamic_checkpoint(
 )]
 fn write_bootstrap_files(
     log_dir: &std::path::Path,
+    cluster_id: ClusterId,
     records: &[MetadataRecord],
 ) -> Result<(), String> {
-    let mut bin = Vec::new();
+    // 1. Per-record `SerdeCompat<MetadataRecord>` payloads.
+    let mut record_blobs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
     for rec in records {
-        let blob = <SerdeCompat<MetadataRecord>>::serialize(rec)
+        let bytes = <SerdeCompat<MetadataRecord>>::serialize(rec)
             .map_err(|e| format!("serialize record: {e}"))?;
+        record_blobs.push(bytes);
+    }
+
+    // 2. Binary stream: length-prefixed (u32 LE) blobs, concatenated.
+    let mut bin = Vec::new();
+    for blob in &record_blobs {
         let len: u32 = u32::try_from(blob.len())
             .map_err(|_| format!("record too large: {} bytes", blob.len()))?;
         bin.extend_from_slice(&len.to_le_bytes());
-        bin.extend_from_slice(&blob);
+        bin.extend_from_slice(blob);
     }
     std::fs::write(log_dir.join("bootstrap.records.bin"), &bin)
         .map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
+
+    // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
+    let records_b64: Vec<String> = record_blobs.iter().map(|b| STANDARD.encode(b)).collect();
+    let manifest = BootstrapManifest {
+        schema: 1,
+        cluster_id,
+        record_count: records.len(),
+        records_b64,
+    };
+    let json =
+        serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
+    std::fs::write(log_dir.join("bootstrap.json"), json)
+        .map_err(|e| format!("write bootstrap.json: {e}"))?;
 
     Ok(())
 }
@@ -1111,7 +1192,11 @@ mod tests {
         .await;
         check!(code == EXIT_OK);
 
-        for name in ["meta.properties.json", "bootstrap.records.bin"] {
+        for name in [
+            "meta.properties.json",
+            "bootstrap.records.bin",
+            "bootstrap.json",
+        ] {
             let path = log_dir.join(name);
             let len = std::fs::metadata(&path).map_or(0, |m| m.len());
             check!(len > 0, "{name} should exist and carry bytes, got {len}");

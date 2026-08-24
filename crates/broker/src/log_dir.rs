@@ -5,23 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+pub use crabka_log::name::{FUTURE_SUFFIX, parse_partition_dir, partition_dir};
+
 use crate::error::BrokerError;
-
-/// Suffix that the broker appends to a future-log partition directory while a
-/// KIP-113 intra-broker move runs.
-///
-/// The directory at `<target_log_dir>/<topic>-<partition><FUTURE_SUFFIX>`
-/// collects copied batches. When the future log catches up, the broker renames
-/// it in place to `<topic>-<partition>`. The suffix mirrors Apache Kafka's
-/// `LogManager.FutureDirSuffix`, so what cp-kafka tooling such as
-/// `kafka-log-dirs` expects matches the bytes on disk.
-pub const FUTURE_SUFFIX: &str = "-future";
-
-/// Builds the directory path for a (topic, partition).
-#[must_use]
-pub fn partition_dir(log_dir: &Path, topic: &str, partition: i32) -> PathBuf {
-    log_dir.join(format!("{topic}-{partition}"))
-}
 
 /// Builds the future-log directory path for a (topic, partition) in `log_dir`.
 ///
@@ -31,24 +17,6 @@ pub fn partition_dir(log_dir: &Path, topic: &str, partition: i32) -> PathBuf {
 #[must_use]
 pub fn future_partition_dir(log_dir: &Path, topic: &str, partition: i32) -> PathBuf {
     log_dir.join(format!("{topic}-{partition}{FUTURE_SUFFIX}"))
-}
-
-/// Parses `<topic>-<partition>` from a directory name. It returns `None` when
-/// the name does not match the pattern.
-#[must_use]
-pub fn parse_partition_dir(name: &str) -> Option<(String, i32)> {
-    let (topic, part) = name.rsplit_once('-')?;
-    if topic.is_empty() || topic.ends_with('-') {
-        // Empty topic or trailing `-` in the topic indicates a malformed
-        // name like "-0" or "foo--1" (which would otherwise parse the
-        // tail as a positive partition number).
-        return None;
-    }
-    let partition = part.parse::<i32>().ok()?;
-    if partition < 0 {
-        return None;
-    }
-    Some((topic.to_string(), partition))
 }
 
 /// Parses a `<topic>-<partition>-future` directory name back to
@@ -201,33 +169,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-
-    #[test]
-    fn round_trip_partition_dir() {
-        let p = partition_dir(Path::new("/tmp"), "foo", 7);
-        let name = p
-            .file_name()
-            .expect("path has a file name")
-            .to_str()
-            .expect("file name is utf-8");
-        assert!(parse_partition_dir(name) == Some(("foo".to_string(), 7)));
-    }
-
-    #[test]
-    fn rejects_negative_partition() {
-        assert!(parse_partition_dir("foo--1") == None);
-    }
-
-    #[test]
-    fn rejects_no_dash() {
-        assert!(parse_partition_dir("foo") == None);
-    }
-
-    #[test]
-    fn handles_topic_with_dashes() {
-        // Topic names can themselves contain hyphens; rsplit takes the last.
-        assert!(parse_partition_dir("my-cool-topic-3") == Some(("my-cool-topic".to_string(), 3)));
-    }
 
     #[test]
     fn scan_creates_dir_when_missing() {
