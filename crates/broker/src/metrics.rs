@@ -1259,70 +1259,6 @@ impl BrokerMetrics {
         };
         self.log_compactions_total.get_or_create(&lbl).inc();
     }
-
-    /// Account one barrier epoch the coordinator started for `group`. Call it
-    /// once the injection-start record is durable, before the first marker
-    /// append.
-    pub fn record_barrier_epoch_started(&self, group: &str) {
-        self.barrier_epochs_started_total
-            .get_or_create(&BarrierGroupLabel {
-                group: group.to_string(),
-            })
-            .inc();
-    }
-
-    /// Account one barrier epoch whose marker reached every partition of
-    /// `group`. Pairs with `record_barrier_epoch_published_partial`, and the
-    /// two together account for every started epoch that finished.
-    pub fn record_barrier_epoch_committed(&self, group: &str) {
-        self.barrier_epochs_committed_total
-            .get_or_create(&BarrierGroupLabel {
-                group: group.to_string(),
-            })
-            .inc();
-    }
-
-    /// Account one barrier epoch whose cut names at least one partition that
-    /// got no marker.
-    pub fn record_barrier_epoch_published_partial(&self, group: &str) {
-        self.barrier_epochs_published_partial_total
-            .get_or_create(&BarrierGroupLabel {
-                group: group.to_string(),
-            })
-            .inc();
-    }
-
-    /// Observe the wall-clock seconds one injection took for `group`, from the
-    /// injection-start record to the published cut. A partial cut counts too.
-    pub fn observe_barrier_injection_duration(&self, group: &str, seconds: f64) {
-        self.barrier_injection_duration_seconds
-            .get_or_create(&BarrierGroupLabel {
-                group: group.to_string(),
-            })
-            .observe(seconds);
-    }
-
-    /// Publish the epoch of the newest cut this coordinator wrote for `group`.
-    pub fn set_barrier_latest_epoch(&self, group: &str, epoch: i64) {
-        self.barrier_latest_epoch
-            .get_or_create(&BarrierGroupLabel {
-                group: group.to_string(),
-            })
-            .set(epoch);
-    }
-
-    /// Account `markers` barrier markers this broker appended to `topic`. Zero
-    /// is a no-op, so a topic that never took a marker keeps no series.
-    pub fn record_barrier_markers_written(&self, topic: &str, markers: u64) {
-        if markers == 0 {
-            return;
-        }
-        self.barrier_markers_written_total
-            .get_or_create(&TopicLabel {
-                topic: topic.to_string(),
-            })
-            .inc_by(markers);
-    }
 }
 
 impl Default for BrokerMetrics {
@@ -1383,12 +1319,27 @@ mod tests {
         m.record_replication_out("topic-a", 0, 8192);
         m.record_cleaner_run();
         m.record_compaction("topic-a", 0);
-        m.record_barrier_epoch_started("orders-cut");
-        m.record_barrier_epoch_committed("orders-cut");
-        m.record_barrier_epoch_published_partial("orders-cut");
-        m.observe_barrier_injection_duration("orders-cut", 0.02);
-        m.set_barrier_latest_epoch("orders-cut", 7);
-        m.record_barrier_markers_written("topic-a", 3);
+        let barrier_group = BarrierGroupLabel {
+            group: "orders-cut".into(),
+        };
+        m.barrier_epochs_started_total
+            .get_or_create(&barrier_group)
+            .inc();
+        m.barrier_epochs_committed_total
+            .get_or_create(&barrier_group)
+            .inc();
+        m.barrier_epochs_published_partial_total
+            .get_or_create(&barrier_group)
+            .inc();
+        m.barrier_injection_duration_seconds
+            .get_or_create(&barrier_group)
+            .observe(0.02);
+        m.barrier_latest_epoch.get_or_create(&barrier_group).set(7);
+        m.barrier_markers_written_total
+            .get_or_create(&TopicLabel {
+                topic: "topic-a".into(),
+            })
+            .inc_by(3);
         m.barrier_groups_coordinated.set(1);
         m.record_produce_message_conversion("topic-a");
         m.record_fetch_message_conversion("topic-a");
@@ -1539,52 +1490,6 @@ mod tests {
         for (api_key, want) in cases {
             assert!(api_key_label_name(api_key) == want, "api_key {api_key}");
         }
-    }
-
-    #[test]
-    fn barrier_counters_split_by_group_and_markers_split_by_topic() {
-        let m = BrokerMetrics::new();
-        let orders = BarrierGroupLabel {
-            group: "orders".to_string(),
-        };
-        let audit = BarrierGroupLabel {
-            group: "audit".to_string(),
-        };
-
-        m.record_barrier_epoch_started("orders");
-        m.record_barrier_epoch_started("orders");
-        m.record_barrier_epoch_started("audit");
-        m.record_barrier_epoch_committed("orders");
-        m.record_barrier_epoch_published_partial("audit");
-        m.set_barrier_latest_epoch("orders", 41);
-        m.set_barrier_latest_epoch("orders", 42);
-        // Zero is a no-op, so a topic that never took a marker keeps no series.
-        m.record_barrier_markers_written("t", 0);
-        m.record_barrier_markers_written("t", 2);
-        m.record_barrier_markers_written("t", 3);
-
-        let counts = (
-            m.barrier_epochs_started_total.get_or_create(&orders).get(),
-            m.barrier_epochs_started_total.get_or_create(&audit).get(),
-            m.barrier_epochs_committed_total
-                .get_or_create(&orders)
-                .get(),
-            m.barrier_epochs_committed_total.get_or_create(&audit).get(),
-            m.barrier_epochs_published_partial_total
-                .get_or_create(&orders)
-                .get(),
-            m.barrier_epochs_published_partial_total
-                .get_or_create(&audit)
-                .get(),
-            m.barrier_latest_epoch.get_or_create(&orders).get(),
-            m.barrier_markers_written_total
-                .get_or_create(&TopicLabel {
-                    topic: "t".to_string(),
-                })
-                .get(),
-        );
-
-        assert!(counts == (2, 1, 1, 0, 0, 1, 42, 5));
     }
 
     #[test]
