@@ -8,10 +8,18 @@
 //! `PartitionRecord` per partition that the inventory recovered, so the
 //! restored cluster boots with its topics already present. It then writes each
 //! verified segment into the target partition, applying [`Predicates`] as it
-//! walks the batches: a batch
-//! the bound keeps is written verbatim with its base offset and leader epoch
-//! restamped, and a batch the bound filters is re-encoded from the records
-//! that survive. Under `--dry-run` it does the same work and writes nothing.
+//! walks the batches: a batch the bound keeps is written verbatim through
+//! [`Log::append_verbatim_at`], with its base offset and leader epoch
+//! restamped and its producer CRC untouched; a batch the bound filters is
+//! rewritten through [`crabka_log::filter_batch`] and written through
+//! [`Log::append_at`]; and a batch every one of whose records the bound
+//! excludes is still written through [`Log::append_at`], as a bare header
+//! with zero records and the archived `base_offset` and `last_offset_delta`
+//! preserved. That third case is not optional: [`Log::append_at`] and
+//! [`Log::append_verbatim_at`] both require `offset == log_end_offset()`, so
+//! skipping a batch's write entirely leaves the target log's end offset
+//! behind the archive's and makes every later batch in the partition
+//! unappendable. Under `--dry-run` it does the same work and writes nothing.
 
 use crabka_ids::Offset;
 use crabka_remote_storage::TopicIdPartition;
@@ -36,8 +44,10 @@ pub struct SegmentOutcome {
     pub batches_kept: u64,
     /// Batches re-encoded because the bound dropped some of their records.
     pub batches_rewritten: u64,
-    /// Batches the bound dropped whole.
-    pub batches_dropped: u64,
+    /// Batches written as a bare header because the bound excluded every
+    /// record. The offset range stays claimed; see
+    /// [`crate::bound::BatchDecision::Empty`].
+    pub batches_emptied: u64,
     /// Records written.
     pub records_kept: u64,
     /// Records the bound dropped.
