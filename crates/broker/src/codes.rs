@@ -3,6 +3,9 @@
 //! Per-(topic, partition) response fields use these `i16` values. JVM clients
 //! react to specific codes, so a substitution changes client behavior. The
 //! values here mirror the canonical Apache Kafka table.
+//!
+//! One fenced block at the end of this file holds the krabka-private codes at
+//! 1000 and above. A broker returns those only on a krabka-private api key.
 
 pub const NONE: i16 = 0;
 pub const UNKNOWN_SERVER_ERROR: i16 = -1;
@@ -12,8 +15,6 @@ pub const OFFSET_OUT_OF_RANGE: i16 = 1;
 /// corresponds to `CORRUPT_MESSAGE` in the Apache Kafka error table.
 pub const CORRUPT_MESSAGE: i16 = 2;
 pub const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-pub const INVALID_FETCH_SIZE: i16 = 4;
-pub const LEADER_NOT_AVAILABLE: i16 = 5;
 pub const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 pub const REQUEST_TIMED_OUT: i16 = 7;
 /// `REPLICA_NOT_AVAILABLE` (11, KIP-113): this broker does not host the
@@ -79,7 +80,6 @@ pub const GROUP_MAX_SIZE_REACHED: i16 = 81;
 
 // Phase 6 additions — idempotent-producer codes.
 pub const OUT_OF_ORDER_SEQUENCE_NUMBER: i16 = 45;
-pub const DUPLICATE_SEQUENCE_NUMBER: i16 = 46;
 /// `INVALID_PRODUCER_EPOCH` (47): per the canonical Apache Kafka error table.
 /// Returned when the producer's epoch does not match the coordinator's current
 /// epoch, OR when no transaction state exists for the given
@@ -93,9 +93,7 @@ pub const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
 
 // Phase 9 additions — transactional protocol codes.
 pub const INVALID_TXN_STATE: i16 = 48;
-pub const INVALID_TXN_TIMEOUT: i16 = 50;
 pub const CONCURRENT_TRANSACTIONS: i16 = 51;
-pub const TRANSACTION_COORDINATOR_FENCED: i16 = 52;
 /// `TRANSACTION_ABORTABLE` (120, KIP-890) — the operation failed but the
 /// transaction can still be aborted by the client; e.g. `AddPartitionsToTxn`
 /// verify-only found a partition that is not part of the ongoing transaction.
@@ -122,9 +120,6 @@ pub const UNRELEASED_INSTANCE_ID: i16 = 111;
 /// `MISMATCHED_ENDPOINT_TYPE` (114, KIP-919): the request reached a broker
 /// endpoint while asking for controllers, or vice versa.
 pub const MISMATCHED_ENDPOINT_TYPE: i16 = 114;
-/// `UNSUPPORTED_ENDPOINT_TYPE` (115, KIP-919): the listener recognizes the
-/// requested endpoint type but does not implement that API on this surface.
-pub const UNSUPPORTED_ENDPOINT_TYPE: i16 = 115;
 /// `UNKNOWN_SUBSCRIPTION_ID` (117, KIP-848): the coordinator did not find the
 /// consumer's persisted subscription identifier.
 pub const UNKNOWN_SUBSCRIPTION_ID: i16 = 117;
@@ -199,11 +194,6 @@ pub const INVALID_UPDATE: i16 = 141;
 pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
 /// `GROUP_AUTHORIZATION_FAILED` (30): principal lacks permission on the group.
 pub const GROUP_AUTHORIZATION_FAILED: i16 = 30;
-/// `OPERATION_NOT_ATTEMPTED` (55): the broker returns this for a partition or
-/// resource whose authorization check an earlier error in the same request
-/// short-circuited. For example, an earlier resource already failed with an
-/// auth error.
-pub const OPERATION_NOT_ATTEMPTED: i16 = 55;
 
 // Bulletproof EOS / acks=all codes.
 /// Per-partition error that `acks=all` Produce returns when the request
@@ -261,7 +251,6 @@ pub const DELEGATION_TOKEN_NOT_FOUND: i16 = 62;
 pub const DELEGATION_TOKEN_OWNER_MISMATCH: i16 = 63;
 pub const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
 pub const DELEGATION_TOKEN_AUTHORIZATION_FAILED: i16 = 65;
-pub const DELEGATION_TOKEN_EXPIRED: i16 = 66;
 
 // KIP-630 FetchSnapshot (api_key 59) codes.
 /// `SNAPSHOT_NOT_FOUND` (98): the requested `__cluster_metadata` snapshot does
@@ -284,10 +273,6 @@ pub const UNKNOWN_TOPIC_ID: i16 = 100;
 /// `INCONSISTENT_TOPIC_ID` (103): a request supplied a topic UUID that does
 /// not match the UUID stored for the named topic (KIP-516).
 pub const INCONSISTENT_TOPIC_ID: i16 = 103;
-/// `FETCH_SESSION_TOPIC_ID_ERROR` (106, KIP-516): a fetch session referred to
-/// a topic UUID that no longer resolves. For example, the topic was recreated
-/// during the session.
-pub const FETCH_SESSION_TOPIC_ID_ERROR: i16 = 106;
 
 /// `UNSUPPORTED_COMPRESSION_TYPE` (76): a KIP-714 `PushTelemetry` carried a
 /// `compression_type` that the broker cannot decompress.
@@ -300,6 +285,30 @@ pub const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
 /// `TELEMETRY_TOO_LARGE` (118): KIP-714 `PushTelemetry` payload exceeded
 /// `telemetry.max.bytes`.
 pub const TELEMETRY_TOO_LARGE: i16 = 118;
+
+// ---------------------------------------------------------------------------
+// krabka-private error codes.
+//
+// Apache Kafka assigns error codes upward from 0, so krabka reserves 1000 and
+// above for errors that no Kafka error table names. A broker returns a code in
+// this range only on a krabka-private api key, which sits at or above
+// `crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR`. A JVM client cannot
+// negotiate such an api key, so it never receives one of these codes.
+// ---------------------------------------------------------------------------
+
+/// `BARRIER_INJECTION_IN_PROGRESS` (1000): an injection for this barrier group
+/// is already in flight. The caller should retry after a brief back-off.
+///
+/// The barrier coordinator runs one injection per group at a time, because an
+/// injection freezes the target set and consumes an epoch before it appends the
+/// first marker. A second `TriggerBarrier` for the same group gets this code
+/// instead of a second epoch.
+///
+/// Kafka has no generic operation-in-progress code. `CONCURRENT_TRANSACTIONS`
+/// (51) and `REBALANCE_IN_PROGRESS` (27) both drive JVM client state machines,
+/// so neither one carries this meaning. The broker returns this code only on a
+/// krabka-private api key, and it never reaches a JVM client.
+pub const BARRIER_INJECTION_IN_PROGRESS: i16 = 1000;
 
 /// Maps an internal [`crate::error::BrokerError`] to a wire-level code. Most
 /// internal errors map to `UNKNOWN_SERVER_ERROR`. Specific variants map to
@@ -461,13 +470,7 @@ mod tests {
                 INVALID_PRODUCER_ID_MAPPING,
                 49,
             ),
-            ("INVALID_TXN_TIMEOUT", INVALID_TXN_TIMEOUT, 50),
             ("CONCURRENT_TRANSACTIONS", CONCURRENT_TRANSACTIONS, 51),
-            (
-                "TRANSACTION_COORDINATOR_FENCED",
-                TRANSACTION_COORDINATOR_FENCED,
-                52,
-            ),
             (
                 "TRANSACTIONAL_ID_AUTHORIZATION_FAILED",
                 TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
@@ -488,7 +491,6 @@ mod tests {
             ("DUPLICATE_RESOURCE", DUPLICATE_RESOURCE, 92),
             ("UNACCEPTABLE_CREDENTIAL", UNACCEPTABLE_CREDENTIAL, 93),
             ("ELECTION_NOT_NEEDED", ELECTION_NOT_NEEDED, 84),
-            ("DELEGATION_TOKEN_EXPIRED", DELEGATION_TOKEN_EXPIRED, 66),
         ];
         for (name, code, want) in cases {
             assert!(code == want, "{name}");
@@ -500,11 +502,6 @@ mod tests {
         let cases = [
             ("UNKNOWN_TOPIC_ID", super::UNKNOWN_TOPIC_ID, 100),
             ("INCONSISTENT_TOPIC_ID", super::INCONSISTENT_TOPIC_ID, 103),
-            (
-                "FETCH_SESSION_TOPIC_ID_ERROR",
-                super::FETCH_SESSION_TOPIC_ID_ERROR,
-                106,
-            ),
         ];
         for (name, code, want) in cases {
             assert!(code == want, "{name}");
@@ -518,13 +515,30 @@ mod tests {
     }
 
     #[test]
+    fn krabka_private_error_codes_sit_above_every_kafka_code() {
+        let cases = [(
+            "BARRIER_INJECTION_IN_PROGRESS",
+            BARRIER_INJECTION_IN_PROGRESS,
+            1000,
+        )];
+
+        for (name, code, want) in cases {
+            assert!(code == want, "{name}");
+            // Above every code the Apache Kafka table assigns, and clear of
+            // the two codes whose meaning a JVM client would act on.
+            assert!(code > REBOOTSTRAP_REQUIRED, "{name}");
+            assert!(code != CONCURRENT_TRANSACTIONS, "{name}");
+            assert!(code != REBALANCE_IN_PROGRESS, "{name}");
+        }
+    }
+
+    #[test]
     fn kip848_and_kip919_error_codes_match_kafka() {
         let cases = [
             ("UNRELEASED_INSTANCE_ID", UNRELEASED_INSTANCE_ID, 111),
             ("UNSUPPORTED_ASSIGNOR", UNSUPPORTED_ASSIGNOR, 112),
             ("STALE_MEMBER_EPOCH", STALE_MEMBER_EPOCH, 113),
             ("MISMATCHED_ENDPOINT_TYPE", MISMATCHED_ENDPOINT_TYPE, 114),
-            ("UNSUPPORTED_ENDPOINT_TYPE", UNSUPPORTED_ENDPOINT_TYPE, 115),
             ("UNKNOWN_CONTROLLER_ID", UNKNOWN_CONTROLLER_ID, 116),
         ];
         for (name, code, want) in cases {

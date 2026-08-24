@@ -29,7 +29,7 @@ crabka-object-store = { version = "0.4.0", path = "../object-store" }
 crabka-units = { workspace = true }
 derive_more = { workspace = true }
 # Streams the object listing, and the object bodies a deep verify re-hashes.
-futures = { workspace = true }
+futures-util = { workspace = true }
 hex = { workspace = true }
 object_store = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

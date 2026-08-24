@@ -40,7 +40,7 @@ use std::{
 };
 
 use crabka_object_store::{ObjectStoreError, read_capped};
-use futures::TryStreamExt as _;
+use futures_util::TryStreamExt as _;
 use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
@@ -845,7 +845,7 @@ mod tests {
 
     use assert2::check;
     use bytes::Bytes;
-    use crabka_audit::signing::{FileEd25519Signer, SigningKeyProvider};
+    use crabka_audit::signing::FileEd25519Signer;
     use crabka_ids::LeaderEpoch;
     use crabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest};
     use object_store::{ObjectStoreExt as _, memory::InMemory};
@@ -875,7 +875,7 @@ mod tests {
     const SEGMENT_SPAN: i64 = 100;
 
     /// A throwaway Ed25519 signer, and the raw public key that verifies it.
-    fn signer(key_id: &str) -> (Arc<dyn SigningKeyProvider>, Vec<u8>) {
+    fn signer(key_id: &str) -> (Arc<FileEd25519Signer>, Vec<u8>) {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_string())
             .expect("ring mints a valid PKCS#8 Ed25519 key");
@@ -921,7 +921,7 @@ mod tests {
         dir: String,
         segments: Vec<Segment>,
         public_key: Vec<u8>,
-        signer: Arc<dyn SigningKeyProvider>,
+        signer: Arc<FileEd25519Signer>,
     }
 
     impl Archive {
@@ -1010,7 +1010,7 @@ mod tests {
         async fn reseal(
             &self,
             index: usize,
-            signer: Option<Arc<dyn SigningKeyProvider>>,
+            signer: Option<Arc<FileEd25519Signer>>,
             prev_head: Option<ChainHead>,
         ) {
             let segment = &self.segments[index];
@@ -1123,9 +1123,9 @@ mod tests {
             meta.version = Some(version);
             Ok(object_store::GetResult {
                 range: 0..meta.size,
-                payload: object_store::GetResultPayload::Stream(Box::pin(futures::stream::once(
-                    async move { Ok(bytes) },
-                ))),
+                payload: object_store::GetResultPayload::Stream(Box::pin(
+                    futures_util::stream::once(async move { Ok(bytes) }),
+                )),
                 meta,
                 attributes: object_store::Attributes::default(),
             })
@@ -1133,15 +1133,15 @@ mod tests {
 
         fn delete_stream(
             &self,
-            locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
-        ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
+            locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
             self.inner.delete_stream(locations)
         }
 
         fn list(
             &self,
             prefix: Option<&Path>,
-        ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
         {
             self.inner.list(prefix)
         }

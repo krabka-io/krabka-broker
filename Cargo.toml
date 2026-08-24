@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "crates/broker/test-helpers"]
+members = ["crates/*"]
 # The cargo-mutants pin that Bazel builds //tools/mutants from is not a member.
 exclude = ["tools/mutants"]
 
@@ -46,7 +46,6 @@ dashmap = "6"
 # stay one-liners. See docs/style_guides/code_style_guide.md#newtypes-for-domain-values.
 derive_more = { version = "2", features = ["display", "from", "into", "deref", "as_ref", "constructor", "from_str", "add", "add_assign", "mul", "sum"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-futures = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 # KIP-664's ListTransactions filter accepts the full java.util.regex Pattern
@@ -166,15 +165,15 @@ crabka-units = "0.4.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
-crabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "55cfeba1148963e195fde3a959871c582d390a89" }
-crabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "55cfeba1148963e195fde3a959871c582d390a89" }
-crabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "55cfeba1148963e195fde3a959871c582d390a89" }
-crabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "55cfeba1148963e195fde3a959871c582d390a89" }
-crabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
-crabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "fe164a8d816f6e7b0447bfe44085874aa9f5f3b5" }
+crabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "dbea46923441c19b7858d7e3278ca5b77af2e00b" }
+crabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "dbea46923441c19b7858d7e3278ca5b77af2e00b" }
+crabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "dbea46923441c19b7858d7e3278ca5b77af2e00b" }
+crabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "dbea46923441c19b7858d7e3278ca5b77af2e00b" }
+crabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }
+crabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "7a5aab7499455c068e8ff2f269b05b21fd599046" }

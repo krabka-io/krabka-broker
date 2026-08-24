@@ -327,6 +327,22 @@ pub struct BrokerConfig {
     pub transaction_min_timeout: Time,
     /// Maximum accepted transaction timeout.
     pub transaction_max_timeout: Time,
+    /// Partition count for the `__barrier_state` internal topic.
+    pub barrier_state_num_partitions: i32,
+    /// Desired replication factor for the `__barrier_state` internal topic.
+    pub barrier_state_replication_factor: i16,
+    /// Shortest periodic injection interval a barrier group may ask for.
+    pub barrier_min_injection_interval: Time,
+    /// Deadline for one barrier injection to reach every target partition.
+    pub barrier_injection_timeout: Time,
+    /// Maximum bytes requested by each `__barrier_state` recovery read.
+    pub barrier_recovery_read_max: ByteSize,
+    /// Number of cuts a barrier group keeps before it tombstones the oldest.
+    pub barrier_retained_cuts: i32,
+    /// Maximum number of barrier groups the cluster accepts.
+    pub barrier_max_groups: usize,
+    /// Maximum number of topics in one barrier group.
+    pub barrier_max_topics_per_group: usize,
 
     /// Broker id reported in `Metadata` responses. Default: 1.
     pub broker_id: i32,
@@ -1149,6 +1165,14 @@ impl BrokerConfig {
             transaction_state_replication_factor: 3,
             transaction_min_timeout: secs(1),
             transaction_max_timeout: minutes(15),
+            barrier_state_num_partitions: 50,
+            barrier_state_replication_factor: 3,
+            barrier_min_injection_interval: secs(1),
+            barrier_injection_timeout: secs(30),
+            barrier_recovery_read_max: mebibytes(1),
+            barrier_retained_cuts: 100,
+            barrier_max_groups: 100,
+            barrier_max_topics_per_group: 100,
             broker_id: 1,
             roles: vec![NodeRole::Controller, NodeRole::Broker],
             listen_addr,
@@ -1910,6 +1934,11 @@ impl BrokerConfig {
                 "share_session_cache_max_when_unlimited",
                 self.share_session_cache_max_when_unlimited,
             ),
+            ("barrier_max_groups", self.barrier_max_groups),
+            (
+                "barrier_max_topics_per_group",
+                self.barrier_max_topics_per_group,
+            ),
             ("max_produce_group", self.max_produce_group),
             (
                 "partition_writer_queue_depth",
@@ -1939,6 +1968,7 @@ impl BrokerConfig {
                 self.diskless_wal_flush_max_size,
             ),
             ("share_recovery_read_max", self.share_recovery_read_max),
+            ("barrier_recovery_read_max", self.barrier_recovery_read_max),
             ("socket_request_max", self.socket_request_max),
             ("sendfile_min", self.sendfile_min),
             ("socket_send_buffer", self.socket_send_buffer),
@@ -1992,6 +2022,11 @@ impl BrokerConfig {
                 "transaction_state_num_partitions",
                 self.transaction_state_num_partitions,
             ),
+            (
+                "barrier_state_num_partitions",
+                self.barrier_state_num_partitions,
+            ),
+            ("barrier_retained_cuts", self.barrier_retained_cuts),
         ] {
             if value <= 0 {
                 return Err(BrokerError::InvalidRuntimeConfig(format!(
@@ -2002,6 +2037,11 @@ impl BrokerConfig {
         for (name, value) in [
             ("transaction_min_timeout", self.transaction_min_timeout),
             ("transaction_max_timeout", self.transaction_max_timeout),
+            (
+                "barrier_min_injection_interval",
+                self.barrier_min_injection_interval,
+            ),
+            ("barrier_injection_timeout", self.barrier_injection_timeout),
         ] {
             require_positive_time(name, value)?;
         }
@@ -2021,6 +2061,10 @@ impl BrokerConfig {
             (
                 "streams_internal_topic_replication_factor",
                 self.streams_group.internal_topic_replication_factor,
+            ),
+            (
+                "barrier_state_replication_factor",
+                self.barrier_state_replication_factor,
             ),
         ] {
             if value <= 0 {
@@ -2167,6 +2211,14 @@ impl Default for BrokerConfig {
             transaction_state_replication_factor: 3,
             transaction_min_timeout: secs(1),
             transaction_max_timeout: minutes(15),
+            barrier_state_num_partitions: 50,
+            barrier_state_replication_factor: 3,
+            barrier_min_injection_interval: secs(1),
+            barrier_injection_timeout: secs(30),
+            barrier_recovery_read_max: mebibytes(1),
+            barrier_retained_cuts: 100,
+            barrier_max_groups: 100,
+            barrier_max_topics_per_group: 100,
             broker_id: 1,
             roles: vec![NodeRole::Controller, NodeRole::Broker],
             listen_addr: addr,
@@ -2500,6 +2552,23 @@ mod tests {
     }
 
     #[test]
+    fn barrier_defaults_match_the_documented_policy() {
+        let config = BrokerConfig::default();
+        let actual = (
+            config.barrier_state_num_partitions,
+            config.barrier_state_replication_factor,
+            config.barrier_min_injection_interval,
+            config.barrier_injection_timeout,
+            config.barrier_recovery_read_max,
+            config.barrier_retained_cuts,
+            config.barrier_max_groups,
+            config.barrier_max_topics_per_group,
+        );
+
+        assert!(actual == (50, 3, secs(1), secs(30), mebibytes(1), 100, 100, 100));
+    }
+
+    #[test]
     fn additional_operational_policy_defaults_match_existing_behavior() {
         let actual = additional_policy_snapshot(BrokerConfig::default());
         assert!(
@@ -2821,6 +2890,30 @@ mod tests {
             }),
             ("transaction_max_timeout must be positive", |c| {
                 c.transaction_max_timeout = <Time as TimeExt>::ZERO;
+            }),
+            ("barrier_state_num_partitions must be positive", |c| {
+                c.barrier_state_num_partitions = 0;
+            }),
+            ("barrier_state_replication_factor must be positive", |c| {
+                c.barrier_state_replication_factor = 0;
+            }),
+            ("barrier_retained_cuts must be positive", |c| {
+                c.barrier_retained_cuts = 0;
+            }),
+            ("barrier_max_groups must be positive", |c| {
+                c.barrier_max_groups = 0;
+            }),
+            ("barrier_max_topics_per_group must be positive", |c| {
+                c.barrier_max_topics_per_group = 0;
+            }),
+            ("barrier_recovery_read_max must be positive", |c| {
+                c.barrier_recovery_read_max = <ByteSize as ByteSizeExt>::ZERO;
+            }),
+            ("barrier_min_injection_interval must be positive", |c| {
+                c.barrier_min_injection_interval = <Time as TimeExt>::ZERO;
+            }),
+            ("barrier_injection_timeout must be positive", |c| {
+                c.barrier_injection_timeout = <Time as TimeExt>::ZERO;
             }),
         ];
 

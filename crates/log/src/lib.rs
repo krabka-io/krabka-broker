@@ -113,7 +113,9 @@ pub use leader_epoch_checkpoint::{
 sendfile_cfg! {
     pub use log::RawReadDesc;
 }
-pub use log::{CompactionContext, Log, RawRead, ReadOutput, SegmentExport, VerbatimBatch};
+pub use log::{
+    BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead, ReadOutput, SegmentExport, VerbatimBatch,
+};
 pub use producer_snapshot::ProducerSnapshotEntry;
 sendfile_cfg! {
     pub use segment::RawSegmentDesc;

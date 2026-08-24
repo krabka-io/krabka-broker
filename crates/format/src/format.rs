@@ -10,8 +10,6 @@
 //! pre-load. Dynamic KIP-853 modes additionally write the authoritative
 //! offset-zero metadata checkpoint. The output is:
 //!
-//! - `<log_dir>/bootstrap.json` — a human-readable manifest with the
-//!   cluster id and a base64'd `serde_wincode` blob per metadata record.
 //! - `<log_dir>/bootstrap.records.bin` — the same records concatenated
 //!   as length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>`
 //!   payloads, so the broker can stream them without touching JSON.
@@ -33,7 +31,6 @@ use crabka_security::{
     scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
 };
 use ring::rand::{SecureRandom, SystemRandom};
-use serde::Serialize;
 use serde_wincode::SerdeCompat;
 use uuid::Uuid;
 use wincode::Serialize as _;
@@ -518,22 +515,6 @@ fn write_meta_properties(
         .map_err(|e| format!("write meta.properties.json: {e}"))
 }
 
-/// Human-readable manifest written to `<log_dir>/bootstrap.json`.
-#[derive(Debug, Serialize)]
-struct BootstrapManifest {
-    /// Schema version of this bootstrap manifest. Bumped if the layout
-    /// changes; the broker's future consumer will reject unknown values.
-    schema: u32,
-    // `ClusterId` is `#[serde(transparent)]`, so this serializes as the bare
-    // UUID string exactly as the previous `Uuid` field did.
-    cluster_id: ClusterId,
-    record_count: usize,
-    /// Base64-encoded `SerdeCompat<MetadataRecord>` payloads, one per
-    /// seed record. Mirrors the contents of `bootstrap.records.bin` so
-    /// operators can inspect the file without a hex editor.
-    records_b64: Vec<String>,
-}
-
 // `async` matches the entry point in `main.rs`; the body is sync today
 // (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
 // The body yields an `i32` (not a future), so `#[instrument]` is safe here
@@ -712,7 +693,7 @@ pub async fn run(args: FormatArgs) -> i32 {
         return EXIT_BOOTSTRAP_FAIL;
     }
 
-    if let Err(e) = write_bootstrap_files(&args.log_dir, cluster_id, &records) {
+    if let Err(e) = write_bootstrap_files(&args.log_dir, &records) {
         eprintln!("crabka format: bootstrap failed: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
@@ -747,8 +728,9 @@ fn write_dynamic_checkpoint(
         .map_err(|e| format!("write offset-zero checkpoint: {e}"))
 }
 
-/// Serialize the manifest + records to disk under `log_dir`. Returns the
-/// first I/O or encoding error encountered.
+/// Serialize `records` to `<log_dir>/bootstrap.records.bin` as length-prefixed
+/// (u32 LE) `SerdeCompat<MetadataRecord>` payloads. Returns the first I/O or
+/// encoding error encountered.
 #[tracing::instrument(
     level = "debug",
     name = "cli.write_bootstrap_files",
@@ -758,79 +740,21 @@ fn write_dynamic_checkpoint(
 )]
 fn write_bootstrap_files(
     log_dir: &std::path::Path,
-    cluster_id: ClusterId,
     records: &[MetadataRecord],
 ) -> Result<(), String> {
-    // 1. Per-record `SerdeCompat<MetadataRecord>` payloads.
-    let mut record_blobs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
-    for rec in records {
-        let bytes = <SerdeCompat<MetadataRecord>>::serialize(rec)
-            .map_err(|e| format!("serialize record: {e}"))?;
-        record_blobs.push(bytes);
-    }
-
-    // 2. Binary stream: length-prefixed (u32 LE) blobs, concatenated.
     let mut bin = Vec::new();
-    for blob in &record_blobs {
+    for rec in records {
+        let blob = <SerdeCompat<MetadataRecord>>::serialize(rec)
+            .map_err(|e| format!("serialize record: {e}"))?;
         let len: u32 = u32::try_from(blob.len())
             .map_err(|_| format!("record too large: {} bytes", blob.len()))?;
         bin.extend_from_slice(&len.to_le_bytes());
-        bin.extend_from_slice(blob);
+        bin.extend_from_slice(&blob);
     }
     std::fs::write(log_dir.join("bootstrap.records.bin"), &bin)
         .map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
 
-    // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
-    let records_b64: Vec<String> = record_blobs.iter().map(|b| base64_encode(b)).collect();
-    let manifest = BootstrapManifest {
-        schema: 1,
-        cluster_id,
-        record_count: records.len(),
-        records_b64,
-    };
-    let json =
-        serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
-    std::fs::write(log_dir.join("bootstrap.json"), json)
-        .map_err(|e| format!("write bootstrap.json: {e}"))?;
-
     Ok(())
-}
-
-/// Tiny self-contained base64 encoder (standard alphabet, padded). We
-/// don't pull in the `base64` crate just for the manifest mirror — the
-/// records are only base64'd for human readability; the authoritative
-/// copy lives in `bootstrap.records.bin`.
-fn base64_encode(input: &[u8]) -> String {
-    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let mut iter = input.chunks_exact(3);
-    for chunk in iter.by_ref() {
-        let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
-        out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
-        out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
-        out.push(ALPHA[((n >> 6) & 0x3f) as usize] as char);
-        out.push(ALPHA[(n & 0x3f) as usize] as char);
-    }
-    let rem = iter.remainder();
-    match rem.len() {
-        0 => {}
-        1 => {
-            let n = u32::from(rem[0]) << 16;
-            out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
-            out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let n = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
-            out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
-            out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
-            out.push(ALPHA[((n >> 6) & 0x3f) as usize] as char);
-            out.push('=');
-        }
-        _ => unreachable!("chunks_exact(3) remainder is 0..3"),
-    }
-    out
 }
 
 #[cfg(test)]
@@ -974,7 +898,7 @@ mod tests {
     fn checkpoint_len(log_dir: &std::path::Path) -> u64 {
         let path = crabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
             .join(ZERO_CHECKPOINT_NAME);
-        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+        std::fs::metadata(path).map_or(0, |m| m.len())
     }
 
     /// Any one of the three quorum flags selects a dynamic format, and their
@@ -1187,13 +1111,9 @@ mod tests {
         .await;
         check!(code == EXIT_OK);
 
-        for name in [
-            "meta.properties.json",
-            "bootstrap.records.bin",
-            "bootstrap.json",
-        ] {
+        for name in ["meta.properties.json", "bootstrap.records.bin"] {
             let path = log_dir.join(name);
-            let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let len = std::fs::metadata(&path).map_or(0, |m| m.len());
             check!(len > 0, "{name} should exist and carry bytes, got {len}");
         }
 
@@ -1201,7 +1121,7 @@ mod tests {
         // checkpoint, not in the bootstrap record stream.
         let checkpoint = crabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
             .join(ZERO_CHECKPOINT_NAME);
-        let len = std::fs::metadata(&checkpoint).map(|m| m.len()).unwrap_or(0);
+        let len = std::fs::metadata(&checkpoint).map_or(0, |m| m.len());
         check!(len > 0, "offset-zero checkpoint should carry the voter set");
     }
 
@@ -1549,22 +1469,6 @@ mod tests {
             "3@hostonly:00000000-0000-0000-0000-000000000003",        // missing host:port
         ] {
             assert2::assert!(parse_initial_controller(bad).is_err());
-        }
-    }
-
-    #[test]
-    fn base64_encode_known_vectors() {
-        // RFC 4648 §10
-        for (input, want) in [
-            (b"".as_slice(), ""),
-            (b"f".as_slice(), "Zg=="),
-            (b"fo".as_slice(), "Zm8="),
-            (b"foo".as_slice(), "Zm9v"),
-            (b"foob".as_slice(), "Zm9vYg=="),
-            (b"fooba".as_slice(), "Zm9vYmE="),
-            (b"foobar".as_slice(), "Zm9vYmFy"),
-        ] {
-            assert2::assert!(base64_encode(input) == want);
         }
     }
 }

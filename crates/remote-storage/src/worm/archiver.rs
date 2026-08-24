@@ -7,7 +7,7 @@
 use std::{fmt, sync::Arc};
 
 use bytes::Bytes;
-use crabka_audit::signing::{FileEd25519Signer, SigningKeyProvider};
+use crabka_audit::signing::FileEd25519Signer;
 
 use crate::{
     metadata::RemoteLogSegmentMetadata,
@@ -29,7 +29,7 @@ use crate::{
 /// receipt. Keeping the IO in the backend and the cryptography here makes the
 /// manifest logic testable without an object store.
 pub struct WormArchiver {
-    signer: Option<Arc<dyn SigningKeyProvider>>,
+    signer: Option<Arc<FileEd25519Signer>>,
 }
 
 /// One sealed manifest: the value, the bytes to write, and the receipt.
@@ -62,7 +62,7 @@ impl WormArchiver {
     /// An archiver that signs with `signer`, or leaves manifests unsigned when
     /// `signer` is `None`.
     #[must_use]
-    pub fn new(signer: Option<Arc<dyn SigningKeyProvider>>) -> Self {
+    pub fn new(signer: Option<Arc<FileEd25519Signer>>) -> Self {
         Self { signer }
     }
 
@@ -78,7 +78,7 @@ impl WormArchiver {
             (Some(path), Some(key_id)) => {
                 let signer = FileEd25519Signer::from_pkcs8_file(path, key_id.clone())
                     .map_err(|e| WormError::SigningKey(e.to_string()))?;
-                Some(Arc::new(signer) as Arc<dyn SigningKeyProvider>)
+                Some(Arc::new(signer))
             }
             // A half-configured key is a misconfiguration and not a request
             // for an unsigned archive. Unsigned is what an empty config asks
@@ -221,7 +221,7 @@ mod tests {
         }]
     }
 
-    fn signer() -> Arc<dyn SigningKeyProvider> {
+    fn signer() -> Arc<FileEd25519Signer> {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let signer =
             FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_string()).unwrap();

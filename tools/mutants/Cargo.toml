@@ -12,3 +12,8 @@ path = "stub.rs"
 
 [dependencies]
 cargo-mutants = "27.1.0"
+
+# Standalone: this pin is not part of any workspace. The root manifest
+# excludes it, but that only applies when this checkout is the outermost
+# one -- in a nested git worktree cargo resolves past it to the parent.
+[workspace]

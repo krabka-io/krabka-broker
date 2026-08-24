@@ -14,7 +14,7 @@ use std::{
 
 use assert2::check;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crabka_audit::signing::{FileEd25519Signer, SigningKeyProvider};
+use crabka_audit::signing::FileEd25519Signer;
 use crabka_ids::LeaderEpoch;
 use crabka_remote_storage::{
     ChainHead, ChainStamp, EpochId, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry,
@@ -89,7 +89,7 @@ impl Fixture {
         let public_key = keys.path().join("worm.pub");
         std::fs::write(&public_key, signer.public_key()).unwrap();
         let archiver = if sign {
-            WormArchiver::new(Some(Arc::new(signer) as Arc<dyn SigningKeyProvider>))
+            WormArchiver::new(Some(Arc::new(signer)))
         } else {
             WormArchiver::new(None)
         };
@@ -161,7 +161,7 @@ impl Fixture {
             })
             .to_custom_metadata(),
         );
-        let sealed = WormArchiver::new(Some(Arc::new(signer) as Arc<dyn SigningKeyProvider>))
+        let sealed = WormArchiver::new(Some(Arc::new(signer)))
             .seal(&stamped, self.entries[index].clone())
             .unwrap();
         std::fs::write(self.root().join(&self.manifest_keys[index]), &sealed.bytes).unwrap();

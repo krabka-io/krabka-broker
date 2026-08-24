@@ -41,15 +41,11 @@ let decoded = decode_message_set(&mut &buf[..], buf.len()).unwrap();
 assert_eq!(decoded[0].offset, 42);
 ```
 
-## Features
+## Compression
 
-This crate supports these compression features through `crabka-compression`:
-- `gzip`
-- `snappy`
-- `lz4`
-- `zstd`
-
-All compression features are on by default.
+Every legacy compression codec is always available: the crate depends on
+`crabka-compression` with `gzip`, `snappy`, `lz4` and `zstd` enabled, and
+exposes no cargo features of its own.
 
 ## MSRV
 

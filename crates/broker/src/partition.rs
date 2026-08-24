@@ -72,6 +72,14 @@ pub enum ProduceData {
     /// Decode and re-encode the owned batch on append (the original path).
     /// The writer mutates `base_offset` before append.
     Owned(RecordBatch),
+    /// An internally built control batch, such as a transaction ABORT marker
+    /// or a barrier marker.
+    ///
+    /// The writer appends it without the compression rewrite that
+    /// [`Self::Owned`] gets. Kafka never compresses a control batch that
+    /// arrived uncompressed, and a control batch holds one small record, so
+    /// the rewrite would both diverge from Kafka and buy nothing.
+    OwnedControl(RecordBatch),
     /// An internally built COMMIT marker plus the cross-domain coordinator's
     /// commit stamp. The stamp is written only to `.stampindex`; it never
     /// enters the Kafka batch bytes.
@@ -89,6 +97,8 @@ impl ProduceData {
                 .expect("verbatim batch offset count is non-negative"),
             Self::Owned(batch) => u32::try_from(batch.last_offset_delta + 1)
                 .expect("owned batch offset count is non-negative"),
+            Self::OwnedControl(batch) => u32::try_from(batch.last_offset_delta + 1)
+                .expect("control batch offset count is non-negative"),
             Self::OwnedCommitMarker { batch, .. } => u32::try_from(batch.last_offset_delta + 1)
                 .expect("commit marker offset count is non-negative"),
         }
@@ -533,6 +543,37 @@ impl Partition {
                     batch,
                     commit_stamp,
                 },
+                ack: ack_tx,
+            }))
+            .await
+            .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| BrokerError::Txn("ack dropped".into()))?
+    }
+
+    /// Append an internally built control batch, such as a transaction ABORT
+    /// marker or a barrier marker.
+    ///
+    /// The partition writer keeps it ordered with all produce and replication
+    /// appends, and appends it without the compression rewrite that
+    /// [`Self::produce_batch`] applies.
+    ///
+    /// The caller stamps `partition_leader_epoch` before it calls this
+    /// function. The writer does not stamp it, and a batch that keeps the
+    /// default of zero carries a false leader epoch in its header.
+    ///
+    /// # Errors
+    /// Returns [`BrokerError::Txn`] if the writer task is dead or the ack
+    /// channel closes before the writer replies, or the log rejects the batch.
+    pub(crate) async fn produce_control_batch(
+        &self,
+        batch: RecordBatch,
+    ) -> Result<Offset, BrokerError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::Produce(ProduceJob {
+                data: ProduceData::OwnedControl(batch),
                 ack: ack_tx,
             }))
             .await

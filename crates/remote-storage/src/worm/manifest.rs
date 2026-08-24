@@ -510,9 +510,7 @@ mod tests {
     use assert2::check;
     use crabka_audit::{
         ids::{EpochMs, Seq},
-        signing::{
-            CHECKPOINT_DOMAIN, FileEd25519Signer, SigningKeyProvider, checkpoint_signing_bytes,
-        },
+        signing::{CHECKPOINT_DOMAIN, FileEd25519Signer, checkpoint_signing_bytes},
     };
     use crabka_ids::LeaderEpoch;
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};

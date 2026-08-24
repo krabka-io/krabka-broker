@@ -15,7 +15,7 @@ mod support;
 use std::process::Command;
 
 use assert2::{assert, check};
-use crabka_audit::signing::{FileEd25519Signer, SigningKeyProvider as _};
+use crabka_audit::signing::FileEd25519Signer;
 use crabka_log::LogConfig;
 use jvm_acceptance::*;
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};

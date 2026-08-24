@@ -977,9 +977,7 @@ async fn dispatch_registered_bytes(
         client_software_version,
     } = context;
     match entry.kind() {
-        crate::handlers::DispatchKind::Context(handler)
-        | crate::handlers::DispatchKind::DecodedContext(handler)
-        | crate::handlers::DispatchKind::EncodedContext(handler) => {
+        crate::handlers::DispatchKind::Context(handler) => {
             let ctx = crate::handlers::RequestContext::new(
                 principal_or_anonymous(auth),
                 peer,

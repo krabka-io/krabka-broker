@@ -185,13 +185,19 @@ pub(crate) async fn append_marker_and_materialize(
         (None, HashMap::new())
     };
 
-    let marker = build_marker_batch(
+    let mut marker = build_marker_batch(
         producer_id,
         producer_epoch,
         partition.log_end_offset(),
         marker_type,
         coordinator_epoch,
     );
+    // The owned produce path stamps this field from the metadata image. A
+    // marker does not travel that path, so it stamps its own, and a marker
+    // that kept the default of zero would carry a false leader epoch.
+    marker.partition_leader_epoch = partition
+        .current_leader_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
     if let Some(stamp) = commit_stamp {
         if marker_type != MarkerType::Commit {
             return Err(BrokerError::Txn(
@@ -200,7 +206,10 @@ pub(crate) async fn append_marker_and_materialize(
         }
         partition.produce_commit_marker(marker, stamp).await?;
     } else {
-        partition.produce_batch(marker).await?;
+        // A control batch takes the control append path, which applies no
+        // compression rewrite. Kafka never compresses a control batch that
+        // arrived uncompressed.
+        partition.produce_control_batch(marker).await?;
     }
 
     if let (Some(coordinator), offsets) = committed_offsets {
