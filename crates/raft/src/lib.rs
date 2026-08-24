@@ -81,7 +81,7 @@ pub use controller::{
     Controller, ControllerHandle, QuorumState, SnapshotRange, SnapshotSlice, metadata_log_nonempty,
 };
 pub use error::RaftError;
-pub use handshake::{DuplexStream, RaftConnection, RaftHandshakeError, RaftListenerHandshake};
+pub use handshake::{RaftConnection, RaftHandshakeError, RaftListenerHandshake};
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};

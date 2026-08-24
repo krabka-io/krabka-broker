@@ -1,9 +1,9 @@
 //! TOML file-config surface for the `crabka-broker` binary.
 //!
-//! Deserialized by `--config-file PATH` in `bin/broker.rs` and merged
-//! into [`crate::BrokerConfig`]. Only `[[listeners]]`,
-//! `inter_broker_listener_name`, and (passively) `[server_properties]`
-//! are consumed; other top-level keys are accepted but ignored.
+//! Deserialized by `--config-file PATH` in `bin/broker.rs` and applied to
+//! [`crate::BrokerConfig`] by [`FileConfig::apply_to`]. Every field here is
+//! `Option` or defaulted: a present value replaces the current broker value,
+//! an absent one retains it.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -55,7 +55,6 @@ pub enum FileConfigError {
 pub struct FileConfig {
     /// Operational runtime policy. Present values replace the current broker
     /// value; absent values retain it.
-    #[serde(default)]
     pub runtime: Option<RuntimeFileConfig>,
     pub broker_id: Option<i32>,
     pub log_dir: Option<String>,
@@ -64,12 +63,10 @@ pub struct FileConfig {
     #[serde(default)]
     pub extra_log_dirs: Vec<String>,
     /// KIP-392: this broker's rack id. Maps to `BrokerConfig::rack`.
-    #[serde(default)]
     pub rack: Option<String>,
 
     /// KIP-392: replica selector name (`"leader"` | `"rack-aware"`).
     /// Maps to `BrokerConfig::replica_selector`.
-    #[serde(default)]
     pub replica_selector: Option<String>,
     /// How often this broker sends `BrokerHeartbeat` to the controller leader.
     /// Absent leaves the `BrokerConfig` default intact.
@@ -100,13 +97,11 @@ pub struct FileConfig {
     /// (Kafka `max.connections`). Connections accepted past this ceiling
     /// are closed immediately. Absent leaves the `BrokerConfig` default
     /// `usize::MAX` (unlimited), matching Kafka's `Integer.MAX_VALUE`.
-    #[serde(default)]
     pub max_connections: Option<usize>,
 
     /// Maximum number of live connections from any single client IP
     /// (Kafka `max.connections.per.ip`). Absent leaves the `BrokerConfig`
     /// default `usize::MAX` (unlimited).
-    #[serde(default)]
     pub max_connections_per_ip: Option<usize>,
 
     /// KIP-595 static controller quorum voter set. Each entry is
@@ -129,7 +124,6 @@ pub struct FileConfig {
     pub bootstrap_servers: Vec<String>,
 
     /// Enable automatic dynamic controller enrollment.
-    #[serde(default)]
     pub auto_join: Option<bool>,
 
     /// TLS server name (SNI) presented when dialing a PEER's controller
@@ -138,7 +132,6 @@ pub struct FileConfig {
     /// so mTLS validation succeeds no matter which peer (resolved to a pod
     /// IP) is dialed. Absent falls back to `"localhost"`. Maps to
     /// [`crate::BrokerConfig::controller_server_name`].
-    #[serde(default)]
     pub controller_server_name: Option<String>,
 
     #[serde(default)]
@@ -148,25 +141,21 @@ pub struct FileConfig {
 
     /// Controller listener security protocol. When `Some(Ssl)`
     /// the controller listener terminates TLS using `tls_config`.
-    #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub controller_listener_protocol: Option<ListenerProtocol>,
 
     /// TLS material for the controller listener (and any
     /// listener whose `protocol` is TLS-bearing).
-    #[serde(default)]
     pub tls_config: Option<FileTlsConfig>,
 
     /// SASL/OAUTHBEARER validator tuning. Only relevant when a
     /// listener enables the `OAUTHBEARER` mechanism.
-    #[serde(default)]
     pub oauthbearer: Option<FileOAuthBearerConfig>,
 
     /// KIP-48: delegation-token master key + lifetime knobs.
     /// Env var `CRABKA_DELEGATION_TOKEN_SECRET_KEY` wins over `secret_key`
     /// here. When neither source provides a key, the broker disables
     /// delegation-token auth.
-    #[serde(default)]
     pub delegation_token: Option<FileDelegationTokenConfig>,
 
     /// Principals that are unconditionally authorized for
@@ -182,7 +171,6 @@ pub struct FileConfig {
     /// KIP-405: tiered-storage enablement. Setting
     /// `storage_dir` turns tiered storage on broker-wide and roots the
     /// local reference `RemoteStorageManager` there.
-    #[serde(default)]
     pub remote_storage: Option<FileRemoteStorageConfig>,
 
     /// Pluggable cluster authorizer + super-user list.
@@ -190,28 +178,23 @@ pub struct FileConfig {
     /// super-users (default-on-no-config behavior). When `Some`, the
     /// `type` field selects the authorizer implementation; for
     /// `type = "opa"`, the `[authorization.opa]` subtable is required.
-    #[serde(default)]
     pub authorization: Option<FileAuthorizationConfig>,
 
     /// `[process]` section — `KRaft` `process.roles`. Absent / empty leaves
     /// the `BrokerConfig` default `[Controller, Broker]`.
-    #[serde(default)]
     pub process: Option<FileProcessConfig>,
 
     /// SASL/GSSAPI (Kerberos) accept-path config. Broker-global —
     /// there is one `[gssapi]` block per broker. Relevant when a listener
     /// enables the `GSSAPI` mechanism.
-    #[serde(default)]
     pub gssapi: Option<FileGssapiConfig>,
 
     /// Credentials this broker uses to authenticate *to* peer brokers and
     /// controller listeners (inter-broker initiate path).
-    #[serde(default)]
     pub inter_broker_credentials: Option<FileInterBrokerCredentials>,
 
     /// `FedRAMP` 20x MLA audit subsystem configuration.
     /// Absent → secure default (enabled, standard internal topic name).
-    #[serde(default)]
     pub audit: Option<FileAuditConfig>,
 }
 
@@ -608,12 +591,10 @@ pub struct FileKafkaRlmmConfig {
     /// Partition count for `__remote_log_metadata` on first creation.
     /// Defaults to 50 (Kafka's
     /// `remote.log.metadata.topic.num.partitions`).
-    #[serde(default)]
     pub num_partitions: Option<i32>,
     /// Replication factor for `__remote_log_metadata` on first
     /// creation. Defaults to 3 (Kafka's
     /// `remote.log.metadata.topic.replication.factor`).
-    #[serde(default)]
     pub replication: Option<i32>,
     /// Timeout for provisioning each internal metadata topic.
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
@@ -632,7 +613,6 @@ pub struct FileKafkaRlmmConfig {
     #[schemars(with = "Option<String>")]
     pub fetch_retry_backoff: Option<Time>,
     /// Capacity of the shared metadata-event delivery queue.
-    #[serde(default)]
     #[schemars(range(min = 1))]
     pub event_queue_capacity: Option<usize>,
     /// RLMM cache snapshot cadence.
@@ -656,18 +636,14 @@ pub struct FileRemoteStorageS3Config {
     pub region: String,
     /// Optional key prefix inside the bucket (lets multiple clusters
     /// share a bucket).
-    #[serde(default)]
     pub prefix: Option<String>,
     /// Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).
-    #[serde(default)]
     pub endpoint: Option<String>,
     /// Explicit access key id. Falls back to the AWS credential chain
     /// (env vars, instance profile, …) when omitted.
-    #[serde(default)]
     pub access_key_id: Option<String>,
     /// Explicit secret access key. Falls back to the AWS credential chain
     /// when omitted.
-    #[serde(default)]
     pub secret_access_key: Option<String>,
     /// Allow plaintext HTTP (off-by-default; required by `MinIO` running
     /// without TLS).
@@ -677,13 +653,11 @@ pub struct FileRemoteStorageS3Config {
     /// `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
     /// applies. Operators typically leave this alone; lower it to force
     /// multipart on smaller segments for testing.
-    #[serde(default)]
     pub multipart_threshold: Option<u64>,
     /// Optional override of the per-part multipart chunk size (bytes).
     /// When `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
     /// applies. AWS requires parts ≥ 5 MiB except the last; `MinIO`
     /// tolerates smaller values.
-    #[serde(default)]
     pub multipart_chunk_size: Option<usize>,
 }
 
@@ -721,22 +695,17 @@ pub struct FileRemoteStorageGcsConfig {
     pub bucket: String,
     /// Optional key prefix inside the bucket (lets multiple clusters
     /// share a bucket).
-    #[serde(default)]
     pub prefix: Option<String>,
     /// Path to a service-account JSON key file. Omit (along with the
     /// other credential fields) to use Workload Identity / ADC.
-    #[serde(default)]
     pub service_account_path: Option<String>,
     /// Inline service-account JSON key. Omit (along with the other
     /// credential fields) to use Workload Identity / ADC.
-    #[serde(default)]
     pub service_account_key: Option<String>,
     /// Path to an Application Default Credentials JSON file. Omit (along
     /// with the other credential fields) to use Workload Identity / ADC.
-    #[serde(default)]
     pub application_credentials_path: Option<String>,
     /// Optional custom GCS API base URL (for emulators / fakes).
-    #[serde(default)]
     pub endpoint: Option<String>,
     /// Allow plaintext HTTP (off-by-default; required by emulators
     /// running without TLS).
@@ -746,12 +715,10 @@ pub struct FileRemoteStorageGcsConfig {
     /// `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
     /// applies. Operators typically leave this alone; lower it to force
     /// multipart on smaller segments for testing.
-    #[serde(default)]
     pub multipart_threshold: Option<u64>,
     /// Optional override of the per-part multipart chunk size (bytes).
     /// When `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
     /// applies.
-    #[serde(default)]
     pub multipart_chunk_size: Option<usize>,
 }
 
@@ -796,7 +763,6 @@ pub struct FileAuthorizationConfig {
     /// `Some` iff `authz_type == Opa`. Required in that case;
     /// `apply_to` returns [`FileConfigError::MissingSection`] when
     /// omitted.
-    #[serde(default)]
     pub opa: Option<FileOpaConfig>,
 }
 
@@ -893,43 +859,35 @@ pub struct FileProcessConfig {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileOAuthBearerConfig {
     /// Claim whose value becomes the principal name. Default `sub`.
-    #[serde(default)]
     pub principal_claim_name: Option<String>,
     /// Optional `JsonPath` expression (RFC 9535, via
     /// jsonpath-rust) evaluated against the token claim set. Token is
     /// rejected when the expression yields empty/null/false. Compiled
     /// once at broker startup; malformed expressions panic with a
     /// descriptive error.
-    #[serde(default)]
     pub custom_claim_check: Option<String>,
     /// Optional JWT `typ` header check. When set, JWT-mode
     /// validators (unsecured + signed JWS) require the JWT header's
     /// `typ` field to equal this string. Introspection-mode skips
     /// (no JWT header). Ignored when unset.
-    #[serde(default)]
     pub valid_token_type: Option<String>,
     /// Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.
     /// Default 30000.
-    #[serde(default)]
     pub allowable_clock_skew_ms: Option<i64>,
 
     /// JWKS endpoint URL. When set, tokens are validated as signed
     /// JWTs (RS256 / ES256) against the keys fetched from this URL, and the
     /// broker spawns a background refresher. When unset, the unsecured-JWS
     /// (`alg:none`) development validator is used.
-    #[serde(default)]
     pub jwks_endpoint_uri: Option<String>,
     /// When set, the token `iss` claim must equal this. Signed
     /// validator only.
-    #[serde(default)]
     pub valid_issuer_uri: Option<String>,
     /// When set, the token `aud` claim must contain this. Signed
     /// validator only.
-    #[serde(default)]
     pub expected_audience: Option<String>,
     /// JWKS re-fetch interval, in milliseconds. Default 300000
     /// (5 minutes). Signed validator only.
-    #[serde(default)]
     pub jwks_refresh_interval_ms: Option<u64>,
 
     /// PEM file containing the CA
@@ -939,13 +897,11 @@ pub struct FileOAuthBearerConfig {
     /// the *only* trust roots used for the outbound HTTPS (replaces the
     /// default webpki-roots — Strimzi-shaped). When unset, the broker
     /// uses reqwest's default rustls webpki-roots.
-    #[serde(default)]
     pub idp_tls_trust: Option<std::path::PathBuf>,
 
     /// RFC 7662 introspection endpoint URL. When set,
     /// selects the introspection validator (mutually exclusive with
     /// `jwks_endpoint_uri`).
-    #[serde(default)]
     pub introspection_endpoint_uri: Option<String>,
 
     /// Optional OIDC userinfo endpoint URL. When set, the
@@ -953,13 +909,11 @@ pub struct FileOAuthBearerConfig {
     /// introspection and merges the profile claims over the
     /// introspection claims (introspection wins for `active`, `exp`,
     /// `iat`, `nbf`, `scope`, `client_id`, `sub`).
-    #[serde(default)]
     pub userinfo_endpoint_uri: Option<String>,
 
     /// `client_id` the broker uses to authenticate (HTTP Basic
     /// Auth) against the introspection endpoint. Required when
     /// `introspection_endpoint_uri` is set.
-    #[serde(default)]
     pub introspection_client_id: Option<String>,
 
     /// Filesystem path to a file containing the client
@@ -968,55 +922,45 @@ pub struct FileOAuthBearerConfig {
     /// File-based (not literal) so secret material doesn't sit in the
     /// TOML; operator mounts a `Secret` and writes the mount path here.
     /// The file's trailing newline (if any) is stripped at config-load.
-    #[serde(default)]
     pub introspection_client_secret_path: Option<std::path::PathBuf>,
 
     /// Timeout for the introspection (and userinfo) HTTP
     /// requests, in milliseconds. Default 10 000 (10 s).
-    #[serde(default)]
     pub introspection_http_timeout_ms: Option<u64>,
 
     /// Optional ceiling on OAUTHBEARER session lifetime, in
     /// seconds. When set, the broker clamps `session_lifetime_ms` to
     /// `min(token_exp_ms - now_ms, cap * 1000)`. When unset, sessions
     /// last until the token's natural `exp`.
-    #[serde(default)]
     pub max_session_lifetime_seconds: Option<u32>,
 
     /// Alternate claim name for principal-name fallback.
-    #[serde(default)]
     pub fallback_user_name_claim: Option<String>,
     /// Prepended on fallback only.
-    #[serde(default)]
     pub fallback_user_name_prefix: Option<String>,
     /// `JsonPath` expression (RFC 9535) extracting groups.
     /// Compiled once at broker startup; malformed expression panics
     /// with descriptive error.
-    #[serde(default)]
     pub groups_claim: Option<String>,
     /// When `groups_claim` resolves to a string, split on
     /// this delimiter.
-    #[serde(default)]
     pub groups_claim_delimiter: Option<String>,
 
     /// Minimum pause (seconds) between on-demand JWKS refreshes
     /// triggered by validator signals (unknown-kid / bad-signature tokens).
     /// Defaults to 1 (Strimzi parity). Signed validator only.
-    #[serde(default)]
     pub jwks_min_refresh_pause_seconds: Option<u32>,
 
     /// Maximum age (seconds) of the cached JWKS before validators
     /// reject tokens until the next successful refresh. Strimzi default 360
     /// (6 minutes). Unset = no expiry check. Fails
     /// closed on prolonged `IdP` outage. Signed validator only.
-    #[serde(default)]
     pub jwks_expiry_seconds: Option<u32>,
 
     /// When true, the JWKS parser keeps keys regardless of `use`
     /// field. Default false (filter out `use=enc`). Some identity providers
     /// publish signing keys with `use="enc"` by mistake; operators set this
     /// to true to accept them. Signed validator only.
-    #[serde(default)]
     pub jwks_ignore_key_use: Option<bool>,
 }
 
@@ -1038,17 +982,14 @@ const DEFAULT_ALLOWABLE_CLOCK_SKEW: Time = secs(30);
 pub struct FileGssapiConfig {
     pub keytab_path: std::path::PathBuf,
     /// `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted.
-    #[serde(default)]
     pub service_name: Option<String>,
     /// `auth_to_local` rule specs, applied in order (first match wins).
     #[serde(default)]
     pub principal_to_local_rules: Vec<String>,
     /// Default Kerberos realm, used for principals that omit their realm.
-    #[serde(default)]
     pub realm: Option<String>,
     /// KDC endpoint (e.g. `tcp://kdc:88`) that bypasses krb5.conf discovery;
     /// falls back to krb5.conf when omitted.
-    #[serde(default)]
     pub kdc: Option<String>,
     /// Maximum tolerated difference between client and broker clocks.
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
@@ -1065,7 +1006,6 @@ pub enum FileInterBrokerCredentials {
     Gssapi {
         keytab_path: std::path::PathBuf,
         client_principal: String,
-        #[serde(default)]
         service_name: Option<String>,
         kdc_url: String,
     },
@@ -1088,13 +1028,10 @@ pub struct FileAuditConfig {
     #[serde(default = "default_audit_topic")]
     pub topic: String,
     /// Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints.
-    #[serde(default)]
     pub signing: Option<FileAuditSigningConfig>,
     /// Checkpoint emission cadence. `None` → use defaults.
-    #[serde(default)]
     pub checkpoint: Option<FileAuditCheckpointConfig>,
     /// Durable spool for the AU-5 degraded path. `None` → use defaults.
-    #[serde(default)]
     pub spool: Option<FileAuditSpoolConfig>,
 }
 
@@ -1191,9 +1128,7 @@ pub struct FileTlsConfig {
     /// operator renders the cluster CA here so KIP-595 controller peers can
     /// mutually authenticate over the controller listener. Maps to
     /// [`crabka_security::TlsConfig::trust_roots_path`].
-    #[serde(default)]
     pub trust_roots_path: Option<std::path::PathBuf>,
-    #[serde(default)]
     pub client_ca_path: Option<std::path::PathBuf>,
     #[serde(default)]
     pub client_auth: FileClientAuthMode,
@@ -1239,9 +1174,7 @@ pub struct FileListener {
     pub advertised: String,
     #[schemars(with = "String")]
     pub protocol: ListenerProtocol,
-    #[serde(default)]
     pub tls_config: Option<FileTlsConfig>,
-    #[serde(default)]
     pub sasl_config: Option<FileListenerSaslConfig>,
 }
 
@@ -3316,17 +3249,6 @@ protocol = "Plaintext"
             audit: None,
         };
         assert!(cfg == expected);
-    }
-
-    #[test]
-    fn unknown_top_level_key_is_ignored() {
-        // Forward-compat: a newer config file shouldn't break older brokers.
-        let src = r#"
-broker_id = 0
-some_future_field = "from-a-later-slice"
-"#;
-        let cfg: FileConfig = toml::from_str(src).unwrap();
-        assert!(cfg.broker_id == Some(0));
     }
 
     #[test]

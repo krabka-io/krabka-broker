@@ -103,11 +103,6 @@ exclude_re = [
     "replace == with != in read_full_at",
     "leader_epoch_checkpoint\\.rs.*e\\.kind\\(\\)",
     "txn_index\\.rs:85",
-    # `base64_encode` packs three bytes into one u32 as
-    # `(b0 << 16) | (b1 << 8) | b2`. The shifts put each byte in its own eight
-    # bits, so no two operands share a set bit and `|` and `^` agree on every
-    # input. Equivalent mutants, not a gap: the encoder is covered.
-    "replace \\| with \\^ in base64_encode",
     # `crates/verified` carries its Creusot specification beside the executable
     # code. These are `#[cfg(creusot)] #[logic]` functions and the `lemma_*`
     # proof obligations: a normal build does not compile them, so mutating one
