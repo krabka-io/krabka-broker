@@ -924,17 +924,14 @@ async fn start_coordinators(
         ),
     ));
     let barrier_coordinator = Arc::new(barrier_coordinator);
-    // The topic has to exist before recovery can replay it. A broker that is
-    // not the quorum leader loses the race and finds the topic already there.
-    if let Err(error) = crate::barrier::bootstrap::ensure_topic(
-        controller,
-        barrier_coordinator.state_topic_num_partitions(),
-        barrier_coordinator.state_topic_replication_factor(),
-    )
-    .await
-    {
-        tracing::warn!(%error, "barrier state topic bootstrap error");
-    }
+    // __barrier_state is created when the first group is defined, not here.
+    // Creating it at every startup put 50 partitions into the metadata log on
+    // every broker, whether or not anything used barriers, and a cluster that
+    // cannot satisfy the replication factor then leaves all of them
+    // leaderless for the election sweep to walk on every pass.
+    //
+    // Recovery below needs no bootstrap: it replays the partitions this broker
+    // leads, and a topic that does not exist has none.
     if let Err(error) = barrier_coordinator
         .recover(&controller.current_image())
         .await

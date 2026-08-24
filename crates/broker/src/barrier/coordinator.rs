@@ -29,6 +29,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
+    time::Instant,
 };
 
 use bytes::Bytes;
@@ -64,6 +65,14 @@ use crate::{
     partition_registry::PartitionRegistry,
     time_util::now_ms,
 };
+
+/// How long `create_group` waits for the state topic's partition to take a
+/// leader before it gives up. Creation and leader assignment are two separate
+/// metadata rounds, and the caller cannot act until the second one lands.
+const STATE_TOPIC_READY_TIMEOUT: Time = crabka_units::secs(10);
+
+/// How often that wait re-reads the metadata image.
+const STATE_TOPIC_READY_POLL: Time = crabka_units::millis(20);
 
 /// What one published cut says about its group.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,12 +257,57 @@ impl BarrierCoordinator {
     /// group, [`BarrierError::GroupExists`] when the name is live,
     /// [`BarrierError::InvalidDefinition`] when the definition is not usable,
     /// and [`BarrierError::Persist`] when the append fails.
+    /// Create `__barrier_state` if no broker has yet, and wait until the
+    /// partition `group` hashes to has a leader.
+    ///
+    /// The call is idempotent and returns at once when the topic is already
+    /// there. The wait is what makes lazy creation safe: leadership is
+    /// assigned after the topic record lands, and `is_coordinator_for` reads
+    /// the leader set, so a caller that raced the assignment would be told it
+    /// is not the coordinator for a group it just asked to create.
+    async fn ensure_state_topic(&self, group: &str) -> Result<(), BarrierError> {
+        crate::barrier::bootstrap::ensure_topic(
+            &self.controller,
+            self.state_topic_num_partitions(),
+            self.state_topic_replication_factor(),
+        )
+        .await?;
+
+        let partition = self.state_partition_for(group);
+        let deadline = Instant::now() + STATE_TOPIC_READY_TIMEOUT.to_std();
+        loop {
+            let image = self.controller.current_image();
+            let led = image
+                .partition(STATE_TOPIC, partition.get())
+                .is_some_and(|p| p.leader == self.node_id);
+            // Metadata leadership lands one round before the log is open here,
+            // and the coordinator writes through the partition, so both have
+            // to be true before the caller can be told it is the coordinator.
+            let open = self.partitions.get(STATE_TOPIC, partition).is_some();
+            if led && open {
+                self.refresh_leader_partitions(&image).await;
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(BarrierError::NotCoordinator {
+                    group: group.to_owned(),
+                });
+            }
+            tokio::time::sleep(STATE_TOPIC_READY_POLL.to_std()).await;
+        }
+    }
+
     pub(crate) async fn create_group(
         &self,
         group: &str,
         spec: GroupSpec,
     ) -> Result<GroupValue, BarrierError> {
         validate_spec(&spec)?;
+        // The first group is what brings __barrier_state into being. The topic
+        // has to exist before require_coordinator can decide anything, because
+        // that decision is the leadership of the partition the group hashes
+        // to. A broker that loses the race finds the topic already there.
+        self.ensure_state_topic(group).await?;
         self.require_coordinator(group).await?;
         let handle = self.entry_handle(group);
         let mut entry = handle.lock().await;
