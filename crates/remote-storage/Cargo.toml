@@ -20,19 +20,39 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 bytes = { workspace = true }
+# `crabka-worm-verify`, the standalone archive auditor, is a `[[bin]]` of this
+# crate: the verifier and the manifest types it checks belong together.
+clap = { workspace = true, features = ["derive"] }
+crabka-audit = { workspace = true }
 crabka-ids = { version = "0.4.0" }
 crabka-object-store = { version = "0.4.0", path = "../object-store" }
 crabka-units = { workspace = true }
+derive_more = { workspace = true }
+# Streams the object listing, and the object bodies a deep verify re-hashes.
+futures = { workspace = true }
+hex = { workspace = true }
 object_store = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
 crabka-log = { version = "0.4.0", path = "../log" }
 crabka-protocol = { version = "0.4.0", default-features = false }
-sha2 = { workspace = true }
+proptest = { workspace = true }
+# Generates a throwaway Ed25519 key pair for the WORM manifest signing tests.
+# `crabka-audit` exposes no key generator, only `FileEd25519Signer`, which
+# needs a PKCS#8 key that already exists.
+ring = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[[bin]]
+name = "crabka-worm-verify"
+path = "src/bin/worm-verify.rs"

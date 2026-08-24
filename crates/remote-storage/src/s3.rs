@@ -30,9 +30,11 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use crabka_object_store::{
     DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, ObjectOps, ObjectStoreClient,
-    ObjectStoreConfig, ObjectStoreError, S3Config, build_object_store,
+    ObjectStoreConfig, ObjectStoreError, PutMode, PutOutcome, PutRequest, S3Config,
+    build_object_store,
 };
 use crabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use object_store::{GetRange, ObjectStore, path::Path as ObjectPath};
@@ -42,6 +44,7 @@ use crate::{
     error::RemoteStorageError,
     metadata::{CustomMetadata, RemoteLogSegmentMetadata},
     storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
+    worm::{MANIFEST_SUFFIX, ObjectEntry, Sha256Digest, WormArchiver, WormConfig, WormError},
 };
 
 /// A [`RemoteStorageManager`] backed by any S3-compatible object store.
@@ -59,6 +62,53 @@ pub struct S3RemoteStorage {
     multipart_threshold: ByteSize,
     /// Per-part size used by the multipart path.
     multipart_chunk_size: ByteSize,
+    /// `Some` when this backend is a write-once archive.
+    worm: Option<WormMode>,
+}
+
+/// Resolved WORM state: the archiver (which owns the loaded key) plus the
+/// credential posture.
+struct WormMode {
+    archiver: WormArchiver,
+    write_only: bool,
+}
+
+/// Where one copied object's body comes from.
+///
+/// The two arms differ in more than the source: a file goes through the
+/// multipart threshold, an in-memory payload is always a single PUT. Naming
+/// them lets the copy walk one ordered list instead of six near-identical
+/// call sites, which is what makes collecting a digest per object cheap.
+enum ObjectBody<'a> {
+    /// A file on disk.
+    Path(&'a std::path::Path),
+    /// An in-memory payload.
+    Memory(Bytes),
+}
+
+/// Turns one completed upload into the manifest entry that records it.
+///
+/// # Errors
+///
+/// [`WormError::MissingDigest`] when the put reported no `SHA-256`. An entry
+/// with no digest makes no integrity claim, so the copy fails rather than
+/// write a manifest that only looks like a proof.
+fn object_entry(
+    suffix: &str,
+    key: &ObjectPath,
+    outcome: PutOutcome,
+) -> Result<ObjectEntry, WormError> {
+    let sha256 = outcome.sha256.ok_or_else(|| WormError::MissingDigest {
+        key: key.to_string(),
+    })?;
+    Ok(ObjectEntry {
+        suffix: suffix.to_string(),
+        key: key.to_string(),
+        size_bytes: outcome.size_bytes,
+        sha256: Sha256Digest(sha256),
+        e_tag: outcome.e_tag,
+        version_id: outcome.version_id,
+    })
 }
 
 /// Lifts a raw byte count from [`crabka_object_store`]'s config layer into
@@ -74,6 +124,13 @@ impl std::fmt::Debug for S3RemoteStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("S3RemoteStorage")
             .field("prefix", &self.prefix)
+            // Mode only. The archiver holds live private-key material, so it
+            // never reaches a formatter.
+            .field("worm", &self.worm.is_some())
+            .field(
+                "write_only",
+                &self.worm.as_ref().is_some_and(|worm| worm.write_only),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -92,7 +149,26 @@ impl S3RemoteStorage {
             prefix,
             multipart_threshold: ByteSize::from_bytes(DEFAULT_MULTIPART_THRESHOLD),
             multipart_chunk_size: size_from_usize(DEFAULT_MULTIPART_CHUNK_SIZE),
+            worm: None,
         }
+    }
+
+    /// Puts this backend into WORM archive mode.
+    ///
+    /// Every copy then seals a signed, chained `.manifest` beside the segment,
+    /// every delete is refused, and a `write_only` archive refuses remote
+    /// fetches as well.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteStorageError::Worm`] when `cfg`'s signing key cannot be
+    /// loaded.
+    pub fn with_worm(mut self, cfg: &WormConfig) -> Result<Self, RemoteStorageError> {
+        self.worm = Some(WormMode {
+            archiver: WormArchiver::from_config(cfg)?,
+            write_only: cfg.write_only,
+        });
+        Ok(self)
     }
 
     /// Overrides the multipart threshold and chunk size. Returns `self` for
@@ -179,6 +255,18 @@ impl S3RemoteStorage {
         self.legacy_segment_key(metadata, name)
     }
 
+    /// Refuses a remote read when the archive is configured write-only.
+    ///
+    /// Callers must invoke this before they derive a key or reach the store,
+    /// so that no request the archive is going to reject ever leaves the
+    /// process.
+    fn refuse_read_when_write_only(&self) -> Result<(), RemoteStorageError> {
+        if self.worm.as_ref().is_some_and(|worm| worm.write_only) {
+            return Err(RemoteStorageError::Worm(WormError::ReadRefused));
+        }
+        Ok(())
+    }
+
     /// Runs an async [`ObjectOps`] call to completion on the current Tokio
     /// runtime. Sync trait callers reach this through `spawn_blocking`, where
     /// `Handle::current()` is always available. The `block_on` bridge lives
@@ -216,48 +304,111 @@ impl RemoteStorageManager for S3RemoteStorage {
         // `ObjectOps` is a primitive-typed substrate: hand it raw counts.
         let threshold = self.multipart_threshold.bytes_u64();
         let chunk_size = self.multipart_chunk_size.bytes_usize();
-        Self::block_os(self.ops.put_from_path(
-            &self.log_key(metadata),
-            &data.log_segment,
-            threshold,
-            chunk_size,
-        ))?;
-        Self::block_os(self.ops.put_from_path(
-            &self.index_key(metadata, IndexType::Offset),
-            &data.offset_index,
-            threshold,
-            chunk_size,
-        ))?;
-        Self::block_os(self.ops.put_from_path(
-            &self.index_key(metadata, IndexType::Timestamp),
-            &data.time_index,
-            threshold,
-            chunk_size,
-        ))?;
+        let worm = self.worm.as_ref();
+        // One request shape for every data object of this copy. A WORM copy
+        // writes each key once and hashes the body on the way past.
+        //
+        // `PutMode::Create` binds only below `multipart_threshold`:
+        // object_store 0.13's `PutMultipartOptions` carries no mode and
+        // `MultipartUpload::complete` takes no precondition, so a large `.log`
+        // body degrades to an unconditional multipart put and depends on the
+        // bucket's Object Lock policy for its write-once guarantee. The
+        // manifest is always small, so its create is always conditional.
+        let put = if worm.is_some() {
+            PutRequest {
+                mode: PutMode::Create,
+                digest: true,
+            }
+        } else {
+            PutRequest::default()
+        };
+
+        let mut uploads = vec![
+            (
+                ".log",
+                self.log_key(metadata),
+                ObjectBody::Path(&data.log_segment),
+            ),
+            (
+                IndexType::Offset.suffix(),
+                self.index_key(metadata, IndexType::Offset),
+                ObjectBody::Path(&data.offset_index),
+            ),
+            (
+                IndexType::Timestamp.suffix(),
+                self.index_key(metadata, IndexType::Timestamp),
+                ObjectBody::Path(&data.time_index),
+            ),
+        ];
         if let Some(snap) = &data.producer_snapshot_index {
-            Self::block_os(self.ops.put_from_path(
-                &self.index_key(metadata, IndexType::ProducerSnapshot),
-                snap,
-                threshold,
-                chunk_size,
-            ))?;
+            uploads.push((
+                IndexType::ProducerSnapshot.suffix(),
+                self.index_key(metadata, IndexType::ProducerSnapshot),
+                ObjectBody::Path(snap),
+            ));
         }
-        Self::block_os(self.ops.put(
-            &self.index_key(metadata, IndexType::LeaderEpoch),
-            data.leader_epoch_index.clone(),
-        ))?;
+        uploads.push((
+            IndexType::LeaderEpoch.suffix(),
+            self.index_key(metadata, IndexType::LeaderEpoch),
+            ObjectBody::Memory(data.leader_epoch_index.clone()),
+        ));
         if let Some(txn) = &data.transaction_index {
-            Self::block_os(self.ops.put_from_path(
-                &self.index_key(metadata, IndexType::Transaction),
-                txn,
-                threshold,
-                chunk_size,
-            ))?;
+            uploads.push((
+                IndexType::Transaction.suffix(),
+                self.index_key(metadata, IndexType::Transaction),
+                ObjectBody::Path(txn),
+            ));
         }
-        // The opaque CustomMetadata channel is unused — every object's
-        // key is derivable from the segment metadata, so we don't need to
-        // echo a separate identifier back.
-        Ok(None)
+
+        // Only the WORM path reads this list. An empty `Vec` allocates
+        // nothing, so the default path pays nothing to declare it.
+        let mut objects = Vec::new();
+        for (suffix, key, body) in uploads {
+            let outcome = match body {
+                ObjectBody::Path(path) => Self::block_os(self.ops.put_from_path(
+                    &key,
+                    path,
+                    threshold,
+                    chunk_size,
+                    put.clone(),
+                ))?,
+                ObjectBody::Memory(bytes) => {
+                    Self::block_os(self.ops.put(&key, bytes, put.clone()))?
+                }
+            };
+            if worm.is_some() {
+                objects.push(object_entry(suffix, &key, outcome)?);
+            }
+        }
+
+        let Some(worm) = worm else {
+            // Outside WORM mode the opaque CustomMetadata channel is unused —
+            // every object's key is derivable from the segment metadata, so we
+            // don't need to echo a separate identifier back.
+            return Ok(None);
+        };
+
+        let sealed = worm.archiver.seal(metadata, objects)?;
+        // The manifest goes last, deliberately: it is the commit point of the
+        // copy. A crash part-way through then leaves data objects that no
+        // manifest names, and a verifier reports them as orphans. Writing it
+        // first would instead leave a manifest naming objects that do not
+        // exist, which reads as a broken chain — far worse to meet in an
+        // audit than a few unreferenced blobs.
+        let manifest_put = Self::block_os(self.ops.put(
+            &self.segment_key(metadata, MANIFEST_SUFFIX),
+            sealed.bytes,
+            PutRequest {
+                mode: PutMode::Create,
+                digest: false,
+            },
+        ))?;
+        Ok(Some(
+            sealed
+                .receipt
+                .with_manifest_version(manifest_put.version_id)
+                .to_custom_metadata(),
+        ))
     }
 
     #[instrument(
@@ -278,6 +429,7 @@ impl RemoteStorageManager for S3RemoteStorage {
         start_position: u32,
         end_position: Option<u32>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
+        self.refuse_read_when_write_only()?;
         let key = self.log_key(metadata);
         if let Some(end) = end_position
             && end < start_position
@@ -325,6 +477,7 @@ impl RemoteStorageManager for S3RemoteStorage {
         metadata: &RemoteLogSegmentMetadata,
         index_type: IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
+        self.refuse_read_when_write_only()?;
         let key = self.index_key(metadata, index_type);
         let result = match Self::block_os(self.ops.get(&key)) {
             Err(ObjectStoreError::NotFound(_)) => {
@@ -354,6 +507,15 @@ impl RemoteStorageManager for S3RemoteStorage {
         &self,
         metadata: &RemoteLogSegmentMetadata,
     ) -> Result<(), RemoteStorageError> {
+        if self.worm.is_some() {
+            // The backstop that makes the write-once guarantee hold against
+            // any caller. No delete is issued at all, not even for an object
+            // that is absent: a store that is never asked cannot be talked
+            // into obliging.
+            return Err(RemoteStorageError::Worm(WormError::DeleteRefused {
+                key: self.log_key(metadata).to_string(),
+            }));
+        }
         for key in [
             self.log_key(metadata),
             self.index_key(metadata, IndexType::Offset),
@@ -383,16 +545,22 @@ mod tests {
     use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
     use assert2::{assert, check};
-    use bytes::Bytes;
     use crabka_ids::LeaderEpoch;
     use crabka_units::prelude::{kibibytes, mebibytes};
     use object_store::memory::InMemory;
+    use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::*;
-    use crate::metadata::{
-        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
+    use crate::{
+        metadata::{
+            RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
+        },
+        worm::{
+            ChainHead, ChainStamp, EpochId, MANIFEST_FORMAT_VERSION, ManifestSeq, SegmentIdentity,
+            SegmentManifest, WormChainRecord, manifest_head, verify_manifest_signature,
+        },
     };
 
     fn rsm(prefix: Option<&str>) -> S3RemoteStorage {
@@ -583,11 +751,13 @@ mod tests {
             S3RemoteStorage::block_os(store.ops.put(
                 &store.legacy_log_key(&md),
                 Bytes::from_static(b"legacy-log"),
+                PutRequest::default(),
             ))
             .unwrap();
             S3RemoteStorage::block_os(store.ops.put(
                 &store.legacy_index_key(&md, IndexType::ProducerSnapshot),
                 Bytes::from_static(b"legacy-snapshot"),
+                PutRequest::default(),
             ))
             .unwrap();
 
@@ -776,5 +946,414 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    // ---- WORM archive mode -------------------------------------------------
+
+    const WORM_KEY_ID: &str = "s3-worm-key";
+
+    /// The chain epoch every stamped fixture in this module belongs to.
+    fn worm_epoch() -> EpochId {
+        EpochId(Uuid::from_u128(0x5eed))
+    }
+
+    /// A [`WormConfig`] naming a throwaway PKCS#8 Ed25519 key written into
+    /// `dir`. `ring` mints it because `crabka-audit` exposes no key generator.
+    fn worm_config(dir: &std::path::Path, write_only: bool) -> WormConfig {
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let path = dir.join("worm.pk8");
+        std::fs::write(&path, pkcs8.as_ref()).unwrap();
+        WormConfig {
+            signing_key_path: Some(path),
+            signing_key_id: Some(WORM_KEY_ID.to_string()),
+            write_only,
+        }
+    }
+
+    /// An archive backed by `store`, signing with a key under `keys`.
+    fn worm_rsm(store: Arc<dyn ObjectStore>, keys: &TempDir, write_only: bool) -> S3RemoteStorage {
+        S3RemoteStorage::with_store(store, None)
+            .with_worm(&worm_config(keys.path(), write_only))
+            .unwrap()
+    }
+
+    /// [`sample_metadata`] plus the chain stamp the broker leaves on a segment
+    /// before it asks for the copy.
+    fn stamped_metadata(id: u128, seq: u64, prev_head: ChainHead) -> RemoteLogSegmentMetadata {
+        sample_metadata(id).with_custom_metadata(
+            WormChainRecord::request(ChainStamp {
+                epoch_id: worm_epoch(),
+                seq: ManifestSeq(seq),
+                prev_head,
+            })
+            .to_custom_metadata(),
+        )
+    }
+
+    /// Reads back and decodes the manifest a copy wrote for `md`.
+    fn read_manifest(store: &S3RemoteStorage, md: &RemoteLogSegmentMetadata) -> SegmentManifest {
+        let raw = S3RemoteStorage::block_os(store.ops.get(&store.segment_key(md, MANIFEST_SUFFIX)))
+            .unwrap();
+        serde_json::from_slice(&raw).unwrap()
+    }
+
+    /// The manifest entry a copy must record for an object holding `body`.
+    fn expected_entry(suffix: &str, key: &ObjectPath, body: &[u8], e_tag: &str) -> ObjectEntry {
+        ObjectEntry {
+            suffix: suffix.to_string(),
+            key: key.to_string(),
+            size_bytes: u64::try_from(body.len()).unwrap(),
+            sha256: Sha256Digest::of(body),
+            e_tag: Some(e_tag.to_string()),
+            version_id: None,
+        }
+    }
+
+    /// Every key the backing store currently holds, sorted.
+    fn all_keys(store: &S3RemoteStorage) -> Vec<String> {
+        let mut keys: Vec<String> = S3RemoteStorage::block_os(store.ops.list(None))
+            .unwrap()
+            .into_iter()
+            .map(|meta| meta.location.to_string())
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_copy_writes_a_manifest_next_to_the_segment() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let md = stamped_metadata(50, 0, ChainHead::GENESIS);
+        tokio::task::spawn_blocking(move || {
+            store
+                .copy_log_segment_data(&md, &sample_data(src.path(), true))
+                .unwrap();
+
+            // The manifest is the log's key with the suffix swapped, so a
+            // verifier that can list a partition prefix finds it beside the
+            // data it describes.
+            let manifest_key = store.segment_key(&md, MANIFEST_SUFFIX);
+            check!(
+                manifest_key.as_ref().trim_end_matches(MANIFEST_SUFFIX)
+                    == store.log_key(&md).as_ref().trim_end_matches(".log")
+            );
+
+            let manifest = read_manifest(&store, &md);
+            check!(manifest.body.segment == SegmentIdentity::from_metadata(&md));
+            check!(manifest.body.format_version == MANIFEST_FORMAT_VERSION);
+            assert!(let Some(signature) = manifest.signature.as_ref());
+            check!(signature.key_id == WORM_KEY_ID);
+            check!(verify_manifest_signature(
+                &manifest,
+                &signature.public_key.0
+            ));
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_manifest_lists_every_object_with_its_digest() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let md = stamped_metadata(51, 0, ChainHead::GENESIS);
+        tokio::task::spawn_blocking(move || {
+            store
+                .copy_log_segment_data(&md, &sample_data(src.path(), true))
+                .unwrap();
+
+            // `InMemory` hands out etags from a per-store counter, so a fresh
+            // store numbers this copy's six objects 0..=5 in upload order.
+            // The digests are computed here from the fixture bodies, never
+            // from what the store reported.
+            let expected = vec![
+                expected_entry(".log", &store.log_key(&md), b"0123456789", "0"),
+                expected_entry(
+                    ".index",
+                    &store.index_key(&md, IndexType::Offset),
+                    b"OFFSET-IDX",
+                    "1",
+                ),
+                expected_entry(
+                    ".timeindex",
+                    &store.index_key(&md, IndexType::Timestamp),
+                    b"TIME-IDX",
+                    "2",
+                ),
+                expected_entry(
+                    ".snapshot",
+                    &store.index_key(&md, IndexType::ProducerSnapshot),
+                    b"SNAP",
+                    "3",
+                ),
+                expected_entry(
+                    ".leader_epoch_checkpoint",
+                    &store.index_key(&md, IndexType::LeaderEpoch),
+                    b"EPOCH-BYTES",
+                    "4",
+                ),
+                expected_entry(
+                    ".txnindex",
+                    &store.index_key(&md, IndexType::Transaction),
+                    b"TXN-IDX",
+                    "5",
+                ),
+            ];
+            check!(read_manifest(&store, &md).body.objects == expected);
+        })
+        .await
+        .unwrap();
+    }
+
+    /// A segment with no transaction index and no producer snapshot lists
+    /// exactly the four objects the copy wrote, and no placeholders.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_manifest_omits_objects_the_copy_did_not_write() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let md = stamped_metadata(52, 0, ChainHead::GENESIS);
+        let data = LogSegmentData {
+            log_segment: write_file(src.path(), "00.log", b"0123456789"),
+            offset_index: write_file(src.path(), "00.index", b"OFFSET-IDX"),
+            time_index: write_file(src.path(), "00.timeindex", b"TIME-IDX"),
+            transaction_index: None,
+            producer_snapshot_index: None,
+            leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
+        };
+        tokio::task::spawn_blocking(move || {
+            store.copy_log_segment_data(&md, &data).unwrap();
+            let suffixes: Vec<String> = read_manifest(&store, &md)
+                .body
+                .objects
+                .into_iter()
+                .map(|object| object.suffix)
+                .collect();
+            check!(suffixes == [".log", ".index", ".timeindex", ".leader_epoch_checkpoint"]);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_copy_returns_a_receipt_with_the_new_head() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let prev_head = ChainHead([1u8; 32]);
+        let md = stamped_metadata(53, 3, prev_head);
+        tokio::task::spawn_blocking(move || {
+            assert!(let
+                Ok(Some(custom)) =
+                    store.copy_log_segment_data(&md, &sample_data(src.path(), false))
+            );
+            assert!(let Ok(receipt) = WormChainRecord::from_custom_metadata(&custom));
+
+            check!(
+                receipt
+                    == WormChainRecord {
+                        epoch_id: worm_epoch(),
+                        seq: ManifestSeq(3),
+                        prev_head,
+                        head: Some(manifest_head(&read_manifest(&store, &md).body)),
+                        // `InMemory` is unversioned, so the PUT reports none.
+                        manifest_version_id: None,
+                    }
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_copy_refuses_to_overwrite_an_existing_manifest() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let md = stamped_metadata(54, 0, ChainHead::GENESIS);
+        tokio::task::spawn_blocking(move || {
+            let data = sample_data(src.path(), true);
+            store.copy_log_segment_data(&md, &data).unwrap();
+            let first = read_manifest(&store, &md);
+
+            // A replayed copy stops at the very first object: `PutMode::Create`
+            // refuses the `.log` key before the manifest is ever reached.
+            assert!(let Err(err) = store.copy_log_segment_data(&md, &data));
+            check!(matches!(&err, RemoteStorageError::ObjectExists { key }
+                    if *key == store.log_key(&md).to_string()));
+
+            // With the data objects gone but the manifest still in place, the
+            // conditional create on the manifest key itself is what refuses.
+            for suffix in [
+                ".log",
+                ".index",
+                ".timeindex",
+                ".snapshot",
+                ".leader_epoch_checkpoint",
+                ".txnindex",
+            ] {
+                S3RemoteStorage::block_os(store.ops.delete(&store.segment_key(&md, suffix)))
+                    .unwrap();
+            }
+            assert!(let Err(err) = store.copy_log_segment_data(&md, &data));
+            check!(matches!(&err, RemoteStorageError::ObjectExists { key }
+                    if *key == store.segment_key(&md, MANIFEST_SUFFIX).to_string()));
+            // The manifest that is there is still the original one.
+            check!(read_manifest(&store, &md) == first);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_delete_is_refused() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        let md = stamped_metadata(55, 0, ChainHead::GENESIS);
+        tokio::task::spawn_blocking(move || {
+            store
+                .copy_log_segment_data(&md, &sample_data(src.path(), true))
+                .unwrap();
+            let before = all_keys(&store);
+
+            assert!(let Err(err) = store.delete_log_segment_data(&md));
+            check!(
+                matches!(&err, RemoteStorageError::Worm(WormError::DeleteRefused { key })
+                    if *key == store.log_key(&md).to_string())
+            );
+
+            // Not one object left the archive, including the legacy-layout
+            // keys the non-WORM path would also have swept.
+            check!(all_keys(&store) == before);
+            check!(before.len() == 7, "six objects plus the manifest");
+        })
+        .await
+        .unwrap();
+    }
+
+    /// The write-only guard must fire before a key is derived or a request is
+    /// built.
+    ///
+    /// The proof is the missing Tokio runtime. `block_os` reaches the store
+    /// only through `Handle::try_current`, so on a plain thread any call that
+    /// got as far as the store would come back as
+    /// [`RemoteStorageError::Backend`]. A `ReadRefused` from that thread can
+    /// therefore only mean the guard returned first. The twin archive over the
+    /// same backing store proves the object is there to be read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_only_worm_refuses_fetch_without_touching_the_store() {
+        let backing: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let src = TempDir::new().unwrap();
+        let readable_keys = TempDir::new().unwrap();
+        let sealed_keys = TempDir::new().unwrap();
+        let readable = worm_rsm(Arc::clone(&backing), &readable_keys, false);
+        let write_only = worm_rsm(backing, &sealed_keys, true);
+        let md = stamped_metadata(56, 0, ChainHead::GENESIS);
+
+        let readable_md = md.clone();
+        tokio::task::spawn_blocking(move || {
+            readable
+                .copy_log_segment_data(&readable_md, &sample_data(src.path(), false))
+                .unwrap();
+            check!(readable.fetch_log_segment(&readable_md, 0, None).unwrap() == b"0123456789");
+            check!(
+                readable
+                    .fetch_index(&readable_md, IndexType::Offset)
+                    .unwrap()
+                    == b"OFFSET-IDX"
+            );
+        })
+        .await
+        .unwrap();
+
+        let (segment, index) = std::thread::spawn(move || {
+            (
+                write_only.fetch_log_segment(&md, 0, None),
+                write_only.fetch_index(&md, IndexType::Offset),
+            )
+        })
+        .join()
+        .unwrap();
+
+        check!(matches!(
+            segment,
+            Err(RemoteStorageError::Worm(WormError::ReadRefused))
+        ));
+        check!(matches!(
+            index,
+            Err(RemoteStorageError::Worm(WormError::ReadRefused))
+        ));
+    }
+
+    /// Regression guard on the default path: no manifest, no receipt, and
+    /// still an overwriting put rather than a conditional create.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn non_worm_copy_writes_no_manifest_and_returns_none() {
+        let store = rsm(None);
+        let src = TempDir::new().unwrap();
+        let md = sample_metadata(57);
+        tokio::task::spawn_blocking(move || {
+            let data = sample_data(src.path(), true);
+            check!(store.copy_log_segment_data(&md, &data).unwrap().is_none());
+            check!(matches!(
+                S3RemoteStorage::block_os(store.ops.get(&store.segment_key(&md, MANIFEST_SUFFIX))),
+                Err(ObjectStoreError::NotFound(_))
+            ));
+            // A second copy overwrites rather than being refused.
+            check!(store.copy_log_segment_data(&md, &data).unwrap().is_none());
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worm_copy_without_a_chain_stamp_is_refused() {
+        let src = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+        // No `with_custom_metadata`: the broker did not stamp this segment.
+        let md = sample_metadata(58);
+        tokio::task::spawn_blocking(move || {
+            assert!(let
+                Err(err) = store.copy_log_segment_data(&md, &sample_data(src.path(), false))
+            );
+            check!(matches!(
+                err,
+                RemoteStorageError::Worm(WormError::MissingChainStamp)
+            ));
+            // Nothing was committed: the manifest is the commit point, and the
+            // copy failed before it.
+            check!(matches!(
+                S3RemoteStorage::block_os(store.ops.get(&store.segment_key(&md, MANIFEST_SUFFIX))),
+                Err(ObjectStoreError::NotFound(_))
+            ));
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn worm_debug_reports_mode_without_leaking_the_key() {
+        let keys = TempDir::new().unwrap();
+        let cfg = worm_config(keys.path(), true);
+        let key_path = cfg.signing_key_path.clone().unwrap();
+        let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), None)
+            .with_worm(&cfg)
+            .unwrap();
+
+        let rendered = format!("{store:?}");
+        check!(rendered.contains("worm: true"));
+        check!(rendered.contains("write_only: true"));
+        // Neither the key nor the path to it reaches a log line.
+        check!(!rendered.contains(&key_path.display().to_string()));
+        check!(!rendered.contains(&hex::encode(std::fs::read(&key_path).unwrap())));
+
+        let plain = format!("{:?}", rsm(None));
+        check!(plain.contains("worm: false"));
+        check!(plain.contains("write_only: false"));
     }
 }

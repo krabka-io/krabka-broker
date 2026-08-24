@@ -44,6 +44,12 @@ fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     if let (Some(k), Some(s)) = (&cfg.access_key_id, &cfg.secret_access_key) {
         builder = builder.with_access_key_id(k).with_secret_access_key(s);
     }
+    if cfg.conditional_put {
+        builder = builder.with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
+    }
+    if cfg.checksum_sha256 {
+        builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
+    }
     let store = builder
         .build()
         .map_err(|e| ObjectStoreError::InvalidConfig(format!("S3 builder: {e}")))?;
@@ -115,6 +121,33 @@ mod tests {
             region: "us-east-1".into(),
             endpoint: Some("http://minio:9000".into()),
             allow_http: true,
+            ..Default::default()
+        });
+        assert!(build_object_store(&cfg).is_ok());
+    }
+
+    /// The integrity knobs are opt-out. Turning both off must still yield a
+    /// usable builder: the flags select request headers, not a different
+    /// backend.
+    #[test]
+    fn s3_builds_with_integrity_knobs_off() {
+        let cfg = ObjectStoreConfig::S3(S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+            conditional_put: false,
+            checksum_sha256: false,
+            ..Default::default()
+        });
+        assert!(build_object_store(&cfg).is_ok());
+    }
+
+    /// The default config turns both knobs on, so the common path must build
+    /// with conditional put and SHA-256 checksums wired in.
+    #[test]
+    fn s3_builds_with_integrity_knobs_on() {
+        let cfg = ObjectStoreConfig::S3(S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
             ..Default::default()
         });
         assert!(build_object_store(&cfg).is_ok());

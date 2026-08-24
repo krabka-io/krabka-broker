@@ -1,7 +1,10 @@
 //! Error type shared by both tiered-storage SPIs.
 
-use crate::metadata::{
-    RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState, TopicIdPartition,
+use crate::{
+    metadata::{
+        RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState, TopicIdPartition,
+    },
+    worm::WormError,
 };
 
 /// Errors raised by [`RemoteStorageManager`](crate::RemoteStorageManager)
@@ -56,6 +59,32 @@ pub enum RemoteStorageError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// A conditional create found an object already at the key.
+    ///
+    /// A write-once archive turns on `PutMode::Create` for every object it
+    /// writes, so this is how it learns that a key is already taken rather
+    /// than silently replacing what is there.
+    #[error("object already exists: {key}")]
+    ObjectExists {
+        /// Object-store key that already holds an object.
+        key: String,
+    },
+
+    /// A conditional write's precondition did not hold, for example an `ETag`
+    /// that no longer matches.
+    #[error("precondition failed for `{key}`: {reason}")]
+    PreconditionFailed {
+        /// Object-store key whose precondition was evaluated.
+        key: String,
+        /// Why the backend rejected the write.
+        reason: String,
+    },
+
+    /// The write-once (WORM) archive layer refused or could not complete the
+    /// operation.
+    #[error("write-once archive: {0}")]
+    Worm(#[from] WormError),
+
     /// A backend, for example an object store, raised an error. The error
     /// does not map cleanly to one of the structured variants above.
     #[error("remote storage backend error: {0}")]
@@ -91,6 +120,11 @@ impl From<crabka_object_store::ObjectStoreError> for RemoteStorageError {
             } => Self::Backend(format!(
                 "object `{key}` is {size} bytes, exceeds cap of {max_bytes} bytes"
             )),
+            E::AlreadyExists(p) => Self::ObjectExists { key: p.to_string() },
+            E::Precondition { key, reason } => Self::PreconditionFailed {
+                key: key.to_string(),
+                reason,
+            },
             E::Backend(m) => Self::Backend(m),
         }
     }
@@ -98,10 +132,55 @@ impl From<crabka_object_store::ObjectStoreError> for RemoteStorageError {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use object_store::path::Path;
 
     use super::*;
+
+    /// The write-once archive branches on these two, so each must arrive as
+    /// its own structured variant and not as an opaque `Backend` string.
+    #[test]
+    fn conditional_write_errors_convert_to_structured_variants() {
+        let already = RemoteStorageError::from(
+            crabka_object_store::ObjectStoreError::AlreadyExists(Path::from("worm/manifest")),
+        );
+        check!(
+            matches!(&already, RemoteStorageError::ObjectExists { key } if key == "worm/manifest")
+        );
+        check!(already.to_string() == "object already exists: worm/manifest");
+
+        let precondition =
+            RemoteStorageError::from(crabka_object_store::ObjectStoreError::Precondition {
+                key: Path::from("worm/manifest"),
+                reason: "etag mismatch".to_owned(),
+            });
+        check!(matches!(
+            &precondition,
+            RemoteStorageError::PreconditionFailed { key, reason }
+                if key == "worm/manifest" && reason == "etag mismatch"
+        ));
+        check!(
+            precondition.to_string() == "precondition failed for `worm/manifest`: etag mismatch"
+        );
+    }
+
+    /// `?` on a [`WormError`] must land in one variant that still renders the
+    /// underlying refusal, so a log line names the key that was protected.
+    #[test]
+    fn worm_errors_convert_and_keep_their_message() {
+        let err = RemoteStorageError::from(WormError::DeleteRefused {
+            key: "archive/orders-0/0.log".to_owned(),
+        });
+
+        check!(matches!(
+            err,
+            RemoteStorageError::Worm(WormError::DeleteRefused { .. })
+        ));
+        check!(
+            err.to_string()
+                == "write-once archive: delete refused: `archive/orders-0/0.log` is in a write-once archive"
+        );
+    }
 
     #[test]
     fn object_store_too_large_converts_to_backend_message() {

@@ -72,6 +72,15 @@ crate_tests(
         "jvm_static_quorum_spike": ["apache_kafka_4_0_0"],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
+        # Same image set as `jvm_acceptance_tiered`: the suite reuses that
+        # harness's producer, consumer and topic-create helpers, and adds an
+        # Object-Lock bucket that `mc` creates and then fails to empty.
+        "worm_object_lock": [
+            "cp_kafka_6_1_1",
+            "cp_kafka_7_8_8",
+            "minio",
+            "minio_mc",
+        ],
     },
     # `cli_smoke` boots the real binary and finds it through the variable Cargo
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,

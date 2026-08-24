@@ -2136,6 +2136,50 @@ pub(crate) fn minio_make_bucket(bucket: &str) {
     );
 }
 
+/// Create a bucket with S3 Object Lock on and a compliance-mode default
+/// retention, for the WORM archive suite.
+///
+/// `mc mb --with-lock` also turns on bucket versioning, which Object Lock
+/// needs: a lock protects one object *version*, and an unversioned bucket has
+/// none. `mc retention set --default COMPLIANCE 1d` is the part that makes
+/// `MinIO` refuse a delete. Without it the bucket only *can* hold locked
+/// objects, and no object is locked.
+///
+/// `1d` is the shortest retention the suite can use and still prove the point.
+/// The bucket lives inside a container the test removes on drop, so nothing
+/// outlives the run.
+pub(crate) fn minio_make_locked_bucket(bucket: &str) {
+    // Same `alias set` retry as `minio_make_bucket`, so a slow MinIO startup
+    // doesn't fail the test on the first probe.
+    let minio_port = minio_port();
+    let script = format!(
+        "for i in 1 2 3 4 5 6 7 8 9 10; do \
+           mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null 2>&1 && break; \
+           sleep 1; \
+         done && mc mb --with-lock local/{bucket} \
+         && mc retention set --default COMPLIANCE 1d local/{bucket}"
+    );
+    let out = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--add-host=host.docker.internal:host-gateway",
+            "--entrypoint",
+            "/bin/sh",
+            MINIO_CLIENT_IMAGE,
+            "-c",
+            &script,
+        ])
+        .output()
+        .expect("spawn mc mb --with-lock");
+    assert!(
+        out.status.success(),
+        "mc mb --with-lock failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 /// `mc ls --recursive local/<bucket>` for assertion-side bucket inspection.
 pub(crate) fn minio_list_objects(bucket: &str) -> String {
     let minio_port = minio_port();

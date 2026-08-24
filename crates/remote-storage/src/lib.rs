@@ -7,6 +7,12 @@
 //! of Apache Kafka's `storage-api` module
 //! (`org.apache.kafka.server.log.remote.storage`).
 //!
+//! It also holds the write-once (WORM) archive layer, which turns an
+//! object-store tier into a compliance archive: every object is a conditional
+//! create, every segment copy seals a signed and hash-chained manifest, and
+//! the backend refuses every delete. See
+//! [Write-once archive mode](#write-once-worm-archive-mode).
+//!
 //! ## What this crate provides
 //!
 //! - [`RemoteStorageManager`] copies, fetches, and deletes segment data and
@@ -21,6 +27,12 @@
 //! - [`LocalTieredStorage`] is a filesystem [`RemoteStorageManager`].
 //! - [`InmemoryRemoteLogMetadataManager`] is a process-memory
 //!   [`RemoteLogMetadataManager`].
+//! - [`S3RemoteStorage`] is an object-store [`RemoteStorageManager`] for S3 and
+//!   for Google Cloud Storage.
+//! - The write-once (WORM) archive layer: [`WormConfig`] turns the mode on
+//!   through [`S3RemoteStorage::with_worm`], [`WormArchiver`] seals each
+//!   [`SegmentManifest`] onto the partition chain, and [`verify_archive`]
+//!   audits a finished archive into an [`ArchiveVerifyReport`].
 //!
 //! ## Boundary with the broker
 //!
@@ -32,8 +44,35 @@
 //! The SPIs are intentionally **synchronous**. They mirror Kafka's
 //! blocking `RemoteStorageManager` / `RemoteLogMetadataManager`, which the
 //! broker drives from a thread pool. The broker wraps the calls in
-//! `spawn_blocking`. Because the SPIs stay synchronous, this crate does not
-//! need the async runtime.
+//! `spawn_blocking`. Because the SPIs stay synchronous, the segment-copy and
+//! segment-fetch paths here need no async runtime of their own. The archive
+//! verifier is the exception: [`verify_archive`] is an `async fn` over the
+//! object store, and the `crabka-worm-verify` binary starts a Tokio runtime to
+//! drive it.
+//!
+//! ## Write-once (WORM) archive mode
+//!
+//! [`S3RemoteStorage::with_worm`] puts an object-store backend into archive
+//! mode. Each copy writes its objects with `PutMode::Create`, records a
+//! `SHA-256` digest per object in a [`SegmentManifest`], chains that manifest
+//! onto the partition's previous head, and signs the head with an Ed25519 key.
+//! The backend then refuses every delete, and a [`WormConfig::write_only`]
+//! archive refuses every remote fetch as well.
+//!
+//! The bucket enforces the retention, not this crate. An operator configures S3
+//! Object Lock in compliance mode with a default retention period.
+//! `object_store` 0.13 models no `x-amz-object-lock-*` header, so the archive
+//! layer cannot set one. What the layer adds is a writer that never deletes and
+//! never overwrites, plus a chain that shows what the archive held.
+//!
+//! [`verify_archive`] reads a finished archive back with nothing but the
+//! objects. It recomputes every chain head, checks every signature against a
+//! [`TrustedManifestKeys`] set, and confirms that every object a manifest names
+//! is present with the recorded size. Tail truncation is the one attack the
+//! archive cannot reveal on its own, so a caller that holds an independently
+//! recorded tip passes it as [`VerifyRequest::expect_head`]. The
+//! `crabka-worm-verify` binary is the same check with a command line and graded
+//! exit codes.
 //!
 //! ## Filesystem-backed remote tier
 //!
@@ -96,6 +135,7 @@ mod metadata;
 mod metadata_manager;
 mod s3;
 mod storage_manager;
+mod worm;
 
 pub use crabka_object_store::{
     DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, GcsConfig, ObjectStoreConfig,
@@ -113,3 +153,12 @@ pub use metadata::{
 pub use metadata_manager::RemoteLogMetadataManager;
 pub use s3::S3RemoteStorage;
 pub use storage_manager::{IndexType, LogSegmentData, RemoteStorageManager};
+pub use worm::{
+    ArchiveVerifyReport, ChainHead, ChainStamp, EpochId, EpochSpan, HexBytes, MANIFEST_BODY_DOMAIN,
+    MANIFEST_DOMAIN, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, MAX_MANIFEST_BYTES, ManifestBody,
+    ManifestSeq, ManifestSignature, ObjectEntry, OffsetGap, PartitionVerifyReport, SealedManifest,
+    SegmentIdentity, SegmentManifest, Sha256Digest, TrustedManifestKeys, VerifyBreak, VerifyDepth,
+    VerifyRequest, WormArchiver, WormChainRecord, WormConfig, WormError, canonical_manifest_bytes,
+    manifest_head, manifest_signing_bytes, next_chain_stamp, verify_archive,
+    verify_manifest_signature,
+};

@@ -10,12 +10,41 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+/// Precondition for a write, re-exported so callers need not depend on
+/// `object_store` directly.
+pub use object_store::PutMode;
 use object_store::{
-    GetOptions, GetRange, ObjectMeta, ObjectStoreExt as _, PutPayload, WriteMultipart, path::Path,
+    GetOptions, GetRange, ObjectMeta, ObjectStoreExt as _, PutOptions, PutPayload, WriteMultipart,
+    path::Path,
 };
+use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
 
 use crate::error::ObjectStoreError;
+
+/// How one put should behave.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PutRequest {
+    /// Precondition for the write. Defaults to `PutMode::Overwrite`.
+    pub mode: PutMode,
+    /// Whether to compute a SHA-256 digest of the payload during upload.
+    /// Defaults to `false`; only the WORM archive path needs it, and hashing
+    /// every tiered byte is not free.
+    pub digest: bool,
+}
+
+/// What a put produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutOutcome {
+    /// Bytes written.
+    pub size_bytes: u64,
+    /// Whole-object SHA-256, present only when `PutRequest::digest` was set.
+    pub sha256: Option<[u8; 32]>,
+    /// Backend entity tag, when the backend returned one.
+    pub e_tag: Option<String>,
+    /// Version id on a versioned bucket, when the backend returned one.
+    pub version_id: Option<String>,
+}
 
 /// Async object-store operations. The trait is `Send + Sync`, so tasks can
 /// share it.
@@ -27,8 +56,13 @@ use crate::error::ObjectStoreError;
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait ObjectOps: Send + Sync {
-    /// Single-PUT an in-memory payload.
-    async fn put(&self, key: &Path, bytes: Bytes) -> Result<(), ObjectStoreError>;
+    /// Single-PUT an in-memory payload under the preconditions in `req`.
+    async fn put(
+        &self,
+        key: &Path,
+        bytes: Bytes,
+        req: PutRequest,
+    ) -> Result<PutOutcome, ObjectStoreError>;
 
     /// Upload a local file. The method uses single-PUT below `threshold`
     /// bytes, and streaming multipart in `chunk_size` parts at or above
@@ -39,7 +73,8 @@ pub trait ObjectOps: Send + Sync {
         src: &std::path::Path,
         threshold: u64,
         chunk_size: usize,
-    ) -> Result<(), ObjectStoreError>;
+        req: PutRequest,
+    ) -> Result<PutOutcome, ObjectStoreError>;
 
     /// Fetch a whole object.
     async fn get(&self, key: &Path) -> Result<Bytes, ObjectStoreError>;
@@ -77,9 +112,35 @@ impl ObjectStoreClient {
 
 #[async_trait::async_trait]
 impl ObjectOps for ObjectStoreClient {
-    async fn put(&self, key: &Path, bytes: Bytes) -> Result<(), ObjectStoreError> {
-        self.inner.put(key, PutPayload::from_bytes(bytes)).await?;
-        Ok(())
+    async fn put(
+        &self,
+        key: &Path,
+        bytes: Bytes,
+        req: PutRequest,
+    ) -> Result<PutOutcome, ObjectStoreError> {
+        let size_bytes = bytes.len() as u64;
+        let sha256 = req.digest.then(|| {
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            hasher.finalize().into()
+        });
+        let result = self
+            .inner
+            .put_opts(
+                key,
+                PutPayload::from_bytes(bytes),
+                PutOptions {
+                    mode: req.mode,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(PutOutcome {
+            size_bytes,
+            sha256,
+            e_tag: result.e_tag,
+            version_id: result.version,
+        })
     }
 
     async fn put_from_path(
@@ -88,7 +149,8 @@ impl ObjectOps for ObjectStoreClient {
         src: &std::path::Path,
         threshold: u64,
         chunk_size: usize,
-    ) -> Result<(), ObjectStoreError> {
+        req: PutRequest,
+    ) -> Result<PutOutcome, ObjectStoreError> {
         if chunk_size == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -100,22 +162,59 @@ impl ObjectOps for ObjectStoreClient {
         let len = tokio::fs::metadata(src).await?.len();
         if len < threshold {
             let bytes = tokio::fs::read(src).await?;
-            self.inner.put(key, PutPayload::from(bytes)).await?;
-            return Ok(());
+            let size_bytes = bytes.len() as u64;
+            let sha256 = req.digest.then(|| {
+                let mut hasher = Sha256::new();
+                hasher.update(&bytes);
+                hasher.finalize().into()
+            });
+            let result = self
+                .inner
+                .put_opts(
+                    key,
+                    PutPayload::from(bytes),
+                    PutOptions {
+                        mode: req.mode,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            return Ok(PutOutcome {
+                size_bytes,
+                sha256,
+                e_tag: result.e_tag,
+                version_id: result.version,
+            });
         }
+        // `req.mode` cannot reach the multipart path: object_store 0.13's
+        // `PutMultipartOptions` carries only tags, attributes, and extensions
+        // — it has no `mode` field, and `MultipartUpload::complete` takes no
+        // precondition. A non-`Overwrite` mode on a file at or above
+        // `threshold` therefore degrades to a plain multipart put.
         let upload = self.inner.put_multipart(key).await?;
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
         let mut file = tokio::fs::File::open(src).await?;
         let mut buf = vec![0u8; chunk_size];
+        let mut hasher = req.digest.then(Sha256::new);
+        let mut size_bytes = 0u64;
         loop {
             let n = file.read(&mut buf).await?;
             if n == 0 {
                 break;
             }
+            if let Some(hasher) = hasher.as_mut() {
+                hasher.update(&buf[..n]);
+            }
+            size_bytes += n as u64;
             writer.write(&buf[..n]);
         }
-        writer.finish().await?;
-        Ok(())
+        let result = writer.finish().await?;
+        Ok(PutOutcome {
+            size_bytes,
+            sha256: hasher.map(|hasher| hasher.finalize().into()),
+            e_tag: result.e_tag,
+            version_id: result.version,
+        })
     }
 
     async fn get(&self, key: &Path) -> Result<Bytes, ObjectStoreError> {
@@ -153,8 +252,9 @@ impl ObjectOps for ObjectStoreClient {
 mod tests {
     use std::{io::Write, sync::Arc};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use object_store::{GetRange, path::Path};
+    use sha2::{Digest as _, Sha256};
 
     use super::*;
 
@@ -162,13 +262,25 @@ mod tests {
         ObjectStoreClient::new(Arc::new(object_store::memory::InMemory::new()))
     }
 
+    /// SHA-256 of `bytes`, computed independently of the upload path under
+    /// test.
+    fn sha256_of(bytes: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher.finalize().into()
+    }
+
     #[tokio::test]
     async fn put_get_round_trips() {
         let c = client();
         let key = Path::from("a/b");
-        c.put(&key, bytes::Bytes::from_static(b"hello"))
-            .await
-            .unwrap();
+        c.put(
+            &key,
+            bytes::Bytes::from_static(b"hello"),
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
         let got = c.get(&key).await.unwrap();
         assert!(&got[..] == b"hello");
     }
@@ -177,9 +289,13 @@ mod tests {
     async fn get_range_returns_slice() {
         let c = client();
         let key = Path::from("a/b");
-        c.put(&key, bytes::Bytes::from_static(b"hello world"))
-            .await
-            .unwrap();
+        c.put(
+            &key,
+            bytes::Bytes::from_static(b"hello world"),
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
         let got = c.get_range(&key, GetRange::Bounded(0..5)).await.unwrap();
         assert!(&got[..] == b"hello");
     }
@@ -195,9 +311,13 @@ mod tests {
     async fn head_and_list_and_delete() {
         let c = client();
         let key = Path::from("p/x");
-        c.put(&key, bytes::Bytes::from_static(b"1234"))
-            .await
-            .unwrap();
+        c.put(
+            &key,
+            bytes::Bytes::from_static(b"1234"),
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
         assert!(c.head(&key).await.unwrap().size == 4);
         let listed = c.list(Some(Path::from("p"))).await.unwrap();
         assert!(listed.iter().any(|m| m.location == key));
@@ -208,13 +328,94 @@ mod tests {
         ));
     }
 
+    /// The default request asks for no digest, and the outcome reports the
+    /// payload size plus whatever identifiers the backend returned. `InMemory`
+    /// hands out sequential etags from `0`, so the whole outcome is
+    /// predictable.
+    #[tokio::test]
+    async fn put_outcome_reports_size_and_backend_identifiers() {
+        let c = client();
+
+        let got = c
+            .put(
+                &Path::from("a/b"),
+                bytes::Bytes::from_static(b"hello"),
+                PutRequest::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            got == PutOutcome {
+                size_bytes: 5,
+                sha256: None,
+                e_tag: Some("0".to_owned()),
+                version_id: None,
+            }
+        );
+    }
+
+    /// `PutRequest::digest` turns on whole-object hashing, and the digest must
+    /// be of the bytes actually stored.
+    #[tokio::test]
+    async fn put_with_digest_returns_payload_sha256() {
+        let c = client();
+        let payload = bytes::Bytes::from_static(b"hello");
+
+        let got = c
+            .put(
+                &Path::from("a/b"),
+                payload.clone(),
+                PutRequest {
+                    digest: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            got == PutOutcome {
+                size_bytes: 5,
+                sha256: Some(sha256_of(&payload)),
+                e_tag: Some("0".to_owned()),
+                version_id: None,
+            }
+        );
+    }
+
+    /// `PutMode::Create` is a precondition, not a hint: the second write to a
+    /// key must fail rather than clobber the first.
+    #[tokio::test]
+    async fn put_create_mode_rejects_an_existing_key() {
+        let c = client();
+        let key = Path::from("worm/manifest");
+        let req = PutRequest {
+            mode: PutMode::Create,
+            digest: false,
+        };
+        c.put(&key, bytes::Bytes::from_static(b"first"), req.clone())
+            .await
+            .unwrap();
+
+        let err = c
+            .put(&key, bytes::Bytes::from_static(b"second"), req)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ObjectStoreError::AlreadyExists(p) if p == key));
+        assert!(&c.get(&key).await.unwrap()[..] == b"first");
+    }
+
     #[tokio::test]
     async fn put_from_path_single_put_below_threshold() {
         let c = client();
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(b"tiny").unwrap();
         let key = Path::from("seg/small");
-        c.put_from_path(&key, f.path(), 8, 4).await.unwrap();
+        c.put_from_path(&key, f.path(), 8, 4, PutRequest::default())
+            .await
+            .unwrap();
         assert!(&c.get(&key).await.unwrap()[..] == b"tiny");
     }
 
@@ -225,8 +426,75 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&payload).unwrap();
         let key = Path::from("seg/big");
-        c.put_from_path(&key, f.path(), 8, 4).await.unwrap();
+        c.put_from_path(&key, f.path(), 8, 4, PutRequest::default())
+            .await
+            .unwrap();
         assert!(c.get(&key).await.unwrap()[..] == payload[..]);
+    }
+
+    /// Both upload paths must produce the same digest over the same file, and
+    /// the multipart path must fold every chunk in — a partial fold would give
+    /// a different hash. The cases differ only in file length, which selects
+    /// the path: below `threshold` is single-PUT, at or above it is multipart
+    /// across several `chunk_size` reads.
+    #[tokio::test]
+    async fn put_from_path_digests_the_whole_file_on_both_paths() {
+        for (case, len) in [("single put", 7usize), ("multipart", 21usize)] {
+            let c = client();
+            let payload: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(&payload).unwrap();
+
+            let got = c
+                .put_from_path(
+                    &Path::from("seg/x"),
+                    f.path(),
+                    8,
+                    4,
+                    PutRequest {
+                        digest: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+
+            check!(
+                got == PutOutcome {
+                    size_bytes: len as u64,
+                    sha256: Some(sha256_of(&payload)),
+                    e_tag: Some("0".to_owned()),
+                    version_id: None,
+                },
+                "{case}"
+            );
+        }
+    }
+
+    /// Without `digest`, neither path pays for hashing, so the outcome carries
+    /// `None` while still reporting the byte count.
+    #[tokio::test]
+    async fn put_from_path_omits_digest_when_not_requested() {
+        for (case, len) in [("single put", 7usize), ("multipart", 21usize)] {
+            let c = client();
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(&vec![3u8; len]).unwrap();
+
+            let got = c
+                .put_from_path(&Path::from("seg/x"), f.path(), 8, 4, PutRequest::default())
+                .await
+                .unwrap();
+
+            check!(
+                got == PutOutcome {
+                    size_bytes: len as u64,
+                    sha256: None,
+                    e_tag: Some("0".to_owned()),
+                    version_id: None,
+                },
+                "{case}"
+            );
+        }
     }
 
     /// A delegating spy that counts which upload path `put_from_path` takes.
@@ -324,9 +592,15 @@ mod tests {
         let c = ObjectStoreClient::new(store.clone());
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&[1u8; 7]).unwrap(); // len 7, threshold 8
-        c.put_from_path(&Path::from("b/under"), f.path(), 8, 4)
-            .await
-            .unwrap();
+        c.put_from_path(
+            &Path::from("b/under"),
+            f.path(),
+            8,
+            4,
+            PutRequest::default(),
+        )
+        .await
+        .unwrap();
         assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 1);
         assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == 0);
     }
@@ -340,7 +614,7 @@ mod tests {
         let c = ObjectStoreClient::new(store.clone());
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&[2u8; 8]).unwrap(); // len 8 == threshold 8
-        c.put_from_path(&Path::from("b/at"), f.path(), 8, 4)
+        c.put_from_path(&Path::from("b/at"), f.path(), 8, 4, PutRequest::default())
             .await
             .unwrap();
         assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 0);
@@ -354,7 +628,10 @@ mod tests {
         f.write_all(b"tiny").unwrap();
         let key = Path::from("seg/bad");
 
-        let err = c.put_from_path(&key, f.path(), 8, 0).await.unwrap_err();
+        let err = c
+            .put_from_path(&key, f.path(), 8, 0, PutRequest::default())
+            .await
+            .unwrap_err();
 
         assert!(matches!(
             err,
@@ -362,12 +639,69 @@ mod tests {
         ));
     }
 
+    /// The single-PUT path honours `PutMode::Create`; the multipart path
+    /// cannot, because `object_store` 0.13's `PutMultipartOptions` has no mode.
+    /// A `Create` write of a file at or above the threshold therefore
+    /// overwrites, and this test pins that documented limitation.
+    #[tokio::test]
+    async fn put_from_path_create_mode_only_binds_below_the_threshold() {
+        for (case, len, expect_conflict) in
+            [("single put", 7usize, true), ("multipart", 8usize, false)]
+        {
+            let c = client();
+            let key = Path::from("seg/once");
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(&vec![9u8; len]).unwrap();
+            let req = PutRequest {
+                mode: PutMode::Create,
+                digest: false,
+            };
+            c.put_from_path(&key, f.path(), 8, 4, req.clone())
+                .await
+                .unwrap();
+
+            let second = c.put_from_path(&key, f.path(), 8, 4, req).await;
+
+            check!(
+                matches!(second, Err(ObjectStoreError::AlreadyExists(_))) == expect_conflict,
+                "{case}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn mock_seam_compiles_and_returns() {
         let mut mock = MockObjectOps::new();
         mock.expect_get()
             .returning(|_| Ok(bytes::Bytes::from_static(b"x")));
+        mock.expect_put().returning(|_, bytes, _| {
+            Ok(PutOutcome {
+                size_bytes: bytes.len() as u64,
+                sha256: None,
+                e_tag: None,
+                version_id: None,
+            })
+        });
+
         let got = mock.get(&Path::from("k")).await.unwrap();
+        let outcome = mock
+            .put(
+                &Path::from("k"),
+                bytes::Bytes::from_static(b"xy"),
+                PutRequest::default(),
+            )
+            .await
+            .unwrap();
+
         assert!(&got[..] == b"x");
+        assert!(
+            outcome
+                == PutOutcome {
+                    size_bytes: 2,
+                    sha256: None,
+                    e_tag: None,
+                    version_id: None,
+                }
+        );
     }
 }

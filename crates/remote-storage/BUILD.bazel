@@ -1,4 +1,4 @@
-load("//bazel:defs.bzl", "crate_library", "crate_tests")
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,7 +7,17 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "remote-storage")
 
+# `crabka-worm-verify verify` — audits a WORM archive with read-only credentials.
+crate_binary(
+    name = "crabka-worm-verify",
+    crate_root = "src/bin/worm-verify.rs",
+    lib = ":remote-storage",
+)
+
 crate_tests(
+    # `worm_verify_cli` runs the binary against an archive it writes.
+    data = [":crabka-worm-verify"],
     docker = {"jvm_tiered_storage": ["apache_kafka_4_0_0"]},
+    env = {"CARGO_BIN_EXE_crabka-worm-verify": "$(rootpath :crabka-worm-verify)"},
     lib = "remote-storage",
 )

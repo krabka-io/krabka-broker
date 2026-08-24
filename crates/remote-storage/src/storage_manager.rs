@@ -154,7 +154,8 @@ pub trait RemoteStorageManager: Send + Sync {
     /// Deletes a segment's data and all of its indexes from the remote tier.
     ///
     /// Implementations must be idempotent: a delete of an absent segment
-    /// succeeds.
+    /// succeeds — or return an error, when the backend is an immutable
+    /// archive.
     ///
     /// # Errors
     ///
