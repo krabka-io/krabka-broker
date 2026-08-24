@@ -86,8 +86,10 @@ pub(crate) fn storage_failure_error(
 /// input order. It also returns the log-end offset after the append, for the
 /// group's HW recompute. Verbatim jobs go straight to `append_verbatim`. The
 /// function recompresses owned jobs to the topic's configured codec, which it
-/// reads once under the same lock. Sequential appends stamp sequential base
-/// offsets, so the function keeps the order across the group.
+/// reads once under the same lock. Control jobs skip that rewrite, because
+/// Kafka never compresses a control batch that arrived uncompressed.
+/// Sequential appends stamp sequential base offsets, so the function keeps the
+/// order across the group.
 fn append_produce_batch(
     log: &Mutex<Log>,
     datas: Vec<ProduceData>,
@@ -110,6 +112,9 @@ fn append_produce_batch(
                     .append(&mut batch)
                     .map_err(crate::error::BrokerError::from)
             }
+            ProduceData::OwnedControl(mut batch) => guard
+                .append(&mut batch)
+                .map_err(crate::error::BrokerError::from),
             ProduceData::OwnedCommitMarker {
                 mut batch,
                 commit_stamp,
@@ -151,6 +156,10 @@ fn append_produce_batch_at(
                     .map(|()| next)
                     .map_err(crate::error::BrokerError::from)
             }
+            ProduceData::OwnedControl(mut batch) => guard
+                .append_at(&mut batch, next)
+                .map(|()| next)
+                .map_err(crate::error::BrokerError::from),
             ProduceData::OwnedCommitMarker {
                 mut batch,
                 commit_stamp,
@@ -1353,6 +1362,75 @@ mod tests {
         assert!(read.batches.len() == 1);
         check!(read.batches[0].attributes.compression() == CompressionType::Lz4);
         check!(read.batches[0].records.len() == 2);
+    }
+
+    /// A control batch that arrives uncompressed stays uncompressed, whatever
+    /// the topic's `compression.type` says. Kafka never compresses one, and a
+    /// control batch holds one small record, so the rewrite would both diverge
+    /// from Kafka and buy nothing.
+    #[test]
+    fn append_control_batch_keeps_its_own_compression() {
+        let dir = tempdir().expect("tempdir");
+        let log = Mutex::new(
+            Log::open(
+                dir.path(),
+                LogConfig {
+                    compression_type: Some(CompressionType::Lz4),
+                    ..LogConfig::default()
+                },
+            )
+            .expect("open log"),
+        );
+
+        let mut marker = sample_batch(1);
+        marker.attributes = marker.attributes.with_control(true);
+        assert!(marker.attributes.compression() == CompressionType::None);
+
+        let (results, _) = append_produce_batch(&log, vec![ProduceData::OwnedControl(marker)]);
+        let assigned = results.into_iter().next().unwrap().expect("append ok");
+        assert!(assigned == 0);
+
+        let read = log
+            .lock()
+            .unwrap()
+            .read(Offset(0), crabka_units::mebibytes(10))
+            .unwrap();
+        assert!(read.batches.len() == 1);
+        check!(read.batches[0].attributes.compression() == CompressionType::None);
+        check!(read.batches[0].attributes.is_control_batch());
+    }
+
+    /// The follower path makes the same promise as the leader path. A
+    /// replicated control batch must land byte-for-byte as the leader wrote
+    /// it, or the two logs diverge.
+    #[test]
+    fn append_control_batch_at_offset_keeps_its_own_compression() {
+        let dir = tempdir().expect("tempdir");
+        let log = Mutex::new(
+            Log::open(
+                dir.path(),
+                LogConfig {
+                    compression_type: Some(CompressionType::Lz4),
+                    ..LogConfig::default()
+                },
+            )
+            .expect("open log"),
+        );
+
+        let mut marker = sample_batch(1);
+        marker.attributes = marker.attributes.with_control(true);
+
+        let (results, _) =
+            append_produce_batch_at(&log, Offset(0), vec![ProduceData::OwnedControl(marker)]);
+        assert!(results.into_iter().next().unwrap().expect("append ok") == 0);
+
+        let read = log
+            .lock()
+            .unwrap()
+            .read(Offset(0), crabka_units::mebibytes(10))
+            .unwrap();
+        check!(read.batches[0].attributes.compression() == CompressionType::None);
+        check!(read.batches[0].attributes.is_control_batch());
     }
 
     #[tokio::test]
