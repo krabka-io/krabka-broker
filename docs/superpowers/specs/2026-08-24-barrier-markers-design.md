@@ -74,7 +74,8 @@ This section is the contract. Read it before you build on the primitive.
 - Every partition in the group gets the same epoch.
 - The cut is durable. It survives restart, failover, and replication.
 - Compaction keeps the markers.
-- A replay from cut N always reads the same set of records.
+- A replay from cut N always reads the same set of records, for as long as the
+  records themselves are retained.
 
 ### Not guaranteed
 
@@ -87,6 +88,17 @@ falls after the cut. The cut inverts the producer's own order.
 True Chandy-Lamport consistency needs the markers to travel along the channels
 that connect the processes. A broker that injects into every partition cannot
 supply that property to a producer it does not control.
+
+A marker is also not immune to retention. Compaction keeps a marker forever,
+but retention does not. `Log::tick` applies time and size retention whatever
+the cleanup policy says, so a compacted topic with a finite `retention.ms`
+drops markers with the segments that hold them. An operator should keep a
+group's cut retention at or below the shortest retention of its member topics.
+Beyond that horizon the cut record still names offsets, but the records at
+those offsets are gone.
+
+A cut also says nothing about consumer offsets. It records where the data was,
+not where any consumer group had read to.
 
 ### What this supports
 
@@ -172,9 +184,19 @@ election can be in flight past the deadline.
 The coordinator writes the cut with a partial status and names the partitions
 that got no marker. It consumes the epoch either way, and it never reuses one.
 
-The alternative was to hide a failed injection. That was rejected. A consumer
-that already saw epoch N's marker on some partitions would wait for markers
-that never arrive. A published partial cut lets every reader skip that epoch.
+The alternative was to hide a failed injection and let the epoch leave a bare
+gap in the sequence. That was rejected, but not because a reader could be
+stranded: no client can see a marker, so no client learns of epoch N except
+through its cut record.
+
+It was rejected because a failed injection leaves real markers in the
+partitions that did answer, and those appends cannot be withdrawn. A hidden
+failure turns them into orphans that no record explains. The partial cut names
+them, so every marker in every log belongs to a cut a reader can find. An
+operator also gets to see that the injection ran and how far it reached.
+
+A reader must still treat the cut record, and never a marker, as proof that a
+cut exists.
 
 ### The target set is frozen before the first append
 
@@ -188,6 +210,41 @@ coordinator that crashes mid-injection finds a fixed, recoverable target set.
 
 The shape copies the `PrepareCommit` and `PrepareAbort` records that
 `TxnCoordinator` writes before it dispatches transaction markers.
+
+### An injected control batch takes a separate append path
+
+`Partition::produce_batch` was the obvious injection seam, and it is the wrong
+one. The partition writer rewrites the compression of an owned batch to the
+topic's `compression.type`, and Kafka never compresses a control batch that
+arrived uncompressed. `produce_batch` also leaves `partition_leader_epoch` at
+its default of zero, where the produce handler stamps the real epoch on a
+client batch.
+
+So an injected control batch goes through its own path. That path applies no
+compression rewrite, and it stamps the partition's current leader epoch. The
+transaction markers move to the same path, because both problems were already
+theirs: krabka compresses transaction markers today on any topic whose
+`compression.type` is not `producer`, and it writes a leader epoch of zero into
+every marker header. The default compression hides the first one.
+
+### Old cuts age out through tombstones, not through a log trim
+
+The cut records share `__barrier_state` with the group definitions, and the
+topic is compacted. A cut key holds the epoch, so cut records would otherwise
+accumulate without limit.
+
+The coordinator keeps the last `retained_cuts` cuts of a group. When it
+publishes epoch N it writes a tombstone for epoch `N - retained_cuts`.
+Compaction drops the tombstoned record, and then drops the tombstone itself
+once the delete horizon passes. Group definitions live under a different key
+and no tombstone touches them.
+
+A log trim was the first choice, because
+`crates/broker/src/share_coordinator/pruning.rs` trims the share-state log
+below a redundant offset. It does not transfer. Share state folds, so the
+newest snapshot for a key subsumes every older record and the prefix below the
+oldest live snapshot is redundant. Cuts do not fold, and the group definitions
+sit in the same prefix. A trim would delete them.
 
 ## Wire Formats
 
@@ -282,10 +339,10 @@ epoch. A reader that needs the cut offsets reads them from the manifest.
 **The log.** `crates/log` learns the barrier control type and states that the
 type changes no producer state and no transaction state.
 
-**The partition writer.** Injection calls `Partition::produce_batch`, which
-returns the assigned base offset. That offset is the manifest entry. The
-partition writer keeps the marker ordered against every produce and replication
-append.
+**The partition writer.** Injection appends the marker through the control-batch
+path described above, which returns the assigned base offset. That offset is the
+cut entry. The partition writer keeps the marker ordered against every produce
+and replication append, because it is the single writer for the partition.
 
 **The KRaft controller.** The coordinator reads the metadata image to find the
 group's topics, their partition counts, and each partition's leader. It creates
