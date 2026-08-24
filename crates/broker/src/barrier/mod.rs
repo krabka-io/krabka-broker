@@ -33,9 +33,30 @@
 //! are asserted in `krabka-streams-rs`, `krabka-streams-java` and
 //! `krabka-streams-go`, which read the format that only this crate writes.
 //!
+//! # Key Modules
+//!
+//! - [`marker`] builds and parses the control record that lands in a data
+//!   partition.
+//! - [`persistence`] is the byte-exact codec of the `__barrier_state` records.
+//! - [`coordinator`] owns the groups, the epochs, and the injection protocol.
+//! - [`injection`] writes the markers of one epoch and collects their offsets.
+//! - [`state`] holds the in-memory group entry and the pure decisions over it.
+//! - [`scheduler`] drives the per-group interval.
 
+pub(crate) mod bootstrap;
+pub(crate) mod config;
+pub(crate) mod coordinator;
+pub(crate) mod error;
+pub(crate) mod injection;
 pub(crate) mod marker;
+pub(crate) mod metrics;
+pub(crate) mod partitioner;
 pub(crate) mod persistence;
+pub(crate) mod scheduler;
+pub(crate) mod state;
+
+#[cfg(test)]
+mod test_support;
 
 /// The internal topic that carries group definitions, injection-start records,
 /// and cuts.

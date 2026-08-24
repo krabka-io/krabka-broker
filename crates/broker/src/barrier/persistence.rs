@@ -449,7 +449,7 @@ fn decode_vec<T>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::convert::TimeExt as _;
+    use crabka_units::convert::TimeExt;
 
     use super::*;
 
@@ -557,7 +557,7 @@ mod tests {
     fn an_interval_keeps_its_millisecond_value() {
         let value = sample_group();
         let decoded = decode_group(&encode_group(&value)).expect("decodes");
-        assert!(decoded.interval.map(|t| t.millis_i64()) == Some(60_000));
+        assert!(decoded.interval.map(TimeExt::millis_i64) == Some(60_000));
     }
 
     #[test]

@@ -31,6 +31,15 @@ const REQUEST_DURATION_BUCKETS: [f64; 12] = [
     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 10.0,
 ];
 
+/// Latency buckets (seconds) for `barrier_injection_duration_seconds`. One
+/// injection appends a marker to every partition of a barrier group, and a
+/// partition that another broker leads costs an inter-broker round trip. The
+/// span runs from 5ms for a small single-broker group to 30s, which is the
+/// default `barrier_injection_timeout`.
+const BARRIER_INJECTION_DURATION_BUCKETS: [f64; 12] = [
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+];
+
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`
 /// to register and we want lazy registration from multiple init paths.
@@ -73,16 +82,27 @@ pub struct ClientSoftwareLabel {
     pub software_version: String,
 }
 
-/// Per-Kafka-API request fingerprint, paired with the
+/// Per-API request fingerprint, paired with the
 /// `api_requests` counter family. `api_key` is the
 /// `ApiKey::IntoStaticStr`-derived variant name (e.g. `"Produce"`,
 /// `"DescribeQuorum"`) so operators see human-readable api-name
-/// labels. Cardinality is bounded by `ApiKey::ALL.len()` (~80
-/// entries); requests for unknown api keys land under the
-/// `"Unknown"` sentinel label.
+/// labels. A krabka-private api key carries its own RPC name instead
+/// (e.g. `"TriggerBarrier"`), because the generated enum does not
+/// know that range. Cardinality is bounded by `ApiKey::ALL.len()`
+/// (~80 entries) plus one label per krabka-private RPC; requests for
+/// unknown api keys land under the `"Unknown"` sentinel label.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ApiKeyLabel {
     pub api_key: String,
+}
+
+/// Per-barrier-group label set, paired with the `barrier_*` families.
+/// `group` is the barrier group name. Cardinality is bounded by
+/// `BrokerConfig::barrier_max_groups`, because the coordinator rejects a new
+/// group past that cap.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct BarrierGroupLabel {
+    pub group: String,
 }
 
 /// Controller directory identity attached to the current vote.
@@ -359,6 +379,36 @@ pub struct BrokerMetrics {
     /// this counter to advance knows the sealed segment has been through a
     /// compaction pass without guessing a duration.
     pub log_compactions_total: Family<PartitionLabel, Counter>,
+    /// Per-group count of barrier epochs the coordinator started. It
+    /// increments when the coordinator writes the injection-start record that
+    /// freezes the target set, before it appends the first marker.
+    pub barrier_epochs_started_total: Family<BarrierGroupLabel, Counter>,
+    /// Per-group count of barrier epochs that reached every partition of the
+    /// group. The coordinator published a complete cut for each one.
+    pub barrier_epochs_committed_total: Family<BarrierGroupLabel, Counter>,
+    /// Per-group count of barrier epochs whose cut names at least one
+    /// partition that got no marker. The coordinator publishes the partial cut
+    /// and consumes the epoch, so
+    /// `rate(barrier_epochs_published_partial_total[5m]) > 0` is the alert an
+    /// operator sets on a group that does not reach all of its partitions.
+    pub barrier_epochs_published_partial_total: Family<BarrierGroupLabel, Counter>,
+    /// Per-group wall-clock seconds from the injection-start record to the
+    /// published cut. Operators graph
+    /// `histogram_quantile(0.99, rate(..._bucket[5m]))` against
+    /// `barrier_injection_timeout` to see how much headroom a group has.
+    pub barrier_injection_duration_seconds: Family<BarrierGroupLabel, Histogram>,
+    /// Per-group epoch of the newest cut this coordinator published (gauge).
+    /// A flat value beside a live `barrier_min_injection_interval` says that
+    /// injection stopped.
+    pub barrier_latest_epoch: Family<BarrierGroupLabel, Gauge>,
+    /// Per-topic count of barrier markers this broker appended, across every
+    /// group and every partition it leads. Markers survive compaction, so this
+    /// counter also tracks the control batches that accumulate in a compacted
+    /// topic.
+    pub barrier_markers_written_total: Family<TopicLabel, Counter>,
+    /// Number of barrier groups this broker coordinates (gauge). It is zero on
+    /// a broker that leads no `__barrier_state` partition.
+    pub barrier_groups_coordinated: Gauge,
 }
 
 impl BrokerMetrics {
@@ -420,6 +470,15 @@ impl BrokerMetrics {
             client_metrics_otlp_failed_total: Counter::default(),
             log_cleaner_runs_total: Counter::default(),
             log_compactions_total: Family::default(),
+            barrier_epochs_started_total: Family::default(),
+            barrier_epochs_committed_total: Family::default(),
+            barrier_epochs_published_partial_total: Family::default(),
+            barrier_injection_duration_seconds: Family::new_with_constructor(|| {
+                Histogram::new(BARRIER_INJECTION_DURATION_BUCKETS)
+            }),
+            barrier_latest_epoch: Family::default(),
+            barrier_markers_written_total: Family::default(),
+            barrier_groups_coordinated: Gauge::default(),
         }
     }
 
@@ -867,6 +926,64 @@ impl BrokerMetrics {
         );
     }
 
+    fn register_group_6(&self, registry: &mut Registry) {
+        registry.register(
+            "barrier_epochs_started",
+            "Per-barrier-group cumulative count of epochs the coordinator \
+             started. Bumped when it writes the injection-start record that \
+             freezes the target set, before the first marker append.",
+            self.barrier_epochs_started_total.clone(),
+        );
+
+        registry.register(
+            "barrier_epochs_committed",
+            "Per-barrier-group cumulative count of epochs whose marker \
+             reached every partition of the group. The coordinator published \
+             a complete cut for each one.",
+            self.barrier_epochs_committed_total.clone(),
+        );
+
+        registry.register(
+            "barrier_epochs_published_partial",
+            "Per-barrier-group cumulative count of epochs whose cut names at \
+             least one partition that got no marker. The coordinator consumes \
+             the epoch either way. Alert on rate(...) > 0 to catch a group \
+             that no longer reaches all of its partitions.",
+            self.barrier_epochs_published_partial_total.clone(),
+        );
+
+        registry.register(
+            "barrier_injection_duration_seconds",
+            "Per-barrier-group wall-clock seconds from the injection-start \
+             record to the published cut. Graph histogram_quantile(0.99, \
+             rate(..._bucket[5m])) against barrier_injection_timeout to see \
+             how much headroom a group has.",
+            self.barrier_injection_duration_seconds.clone(),
+        );
+
+        registry.register(
+            "barrier_latest_epoch",
+            "Per-barrier-group epoch of the newest cut this coordinator \
+             published (gauge). A flat value beside a live \
+             barrier_min_injection_interval says that injection stopped.",
+            self.barrier_latest_epoch.clone(),
+        );
+
+        registry.register(
+            "barrier_markers_written",
+            "Per-topic cumulative count of barrier markers this broker \
+             appended, across every group and every partition it leads.",
+            self.barrier_markers_written_total.clone(),
+        );
+
+        registry.register(
+            "barrier_groups_coordinated",
+            "Number of barrier groups this broker coordinates (gauge). Zero \
+             on a broker that leads no __barrier_state partition.",
+            self.barrier_groups_coordinated.clone(),
+        );
+    }
+
     /// Build and register every broker metric.
     #[must_use]
     /// # Panics
@@ -884,6 +1001,7 @@ impl BrokerMetrics {
             metrics.register_group_3(&mut registry);
             metrics.register_group_4(&mut registry);
             metrics.register_group_5(&mut registry);
+            metrics.register_group_6(&mut registry);
         }
         metrics
     }
@@ -918,9 +1036,9 @@ impl BrokerMetrics {
         }
     }
 
-    /// Account one dispatched request for `api_key`. The
-    /// label is the human-readable variant name from
-    /// `ApiKey::IntoStaticStr`; unknown keys fold under `"Unknown"`.
+    /// Account one dispatched request for `api_key`. The label is the
+    /// human-readable name from `api_key_label_name`; unknown keys fold under
+    /// `"Unknown"`.
     pub fn record_api_request(&self, api_key: crate::handlers::ApiKeyCode) {
         let lbl = ApiKeyLabel {
             api_key: api_key_label_name(api_key).to_string(),
@@ -943,15 +1061,11 @@ impl BrokerMetrics {
     /// request on the `request_duration_seconds{api}` histogram. `api_key`
     /// is resolved to the same human-readable label as
     /// `record_api_request` (unknown keys fold under `"Unknown"`), so the
-    /// two families share a label set. Called from the dispatch path once
+    /// two families share one label set. Called from the dispatch path once
     /// per frame with the elapsed seconds of the full handler round-trip.
     pub fn observe_request_duration(&self, api_key: i16, seconds: f64) {
-        let name: &'static str = match crabka_protocol::api_key::ApiKey::from_i16(api_key) {
-            Some(k) => k.into(),
-            None => "Unknown",
-        };
         let lbl = ApiKeyLabel {
-            api_key: name.to_string(),
+            api_key: api_key_label_name(api_key).to_string(),
         };
         self.request_duration_seconds
             .get_or_create(&lbl)
@@ -963,12 +1077,8 @@ impl BrokerMetrics {
     /// `record_api_request`; disjoint from the
     /// `unsupported_api_requests` family.
     pub fn record_request_error(&self, api_key: i16) {
-        let name: &'static str = match crabka_protocol::api_key::ApiKey::from_i16(api_key) {
-            Some(k) => k.into(),
-            None => "Unknown",
-        };
         let lbl = ApiKeyLabel {
-            api_key: name.to_string(),
+            api_key: api_key_label_name(api_key).to_string(),
         };
         self.request_errors.get_or_create(&lbl).inc();
     }
@@ -1149,6 +1259,70 @@ impl BrokerMetrics {
         };
         self.log_compactions_total.get_or_create(&lbl).inc();
     }
+
+    /// Account one barrier epoch the coordinator started for `group`. Call it
+    /// once the injection-start record is durable, before the first marker
+    /// append.
+    pub fn record_barrier_epoch_started(&self, group: &str) {
+        self.barrier_epochs_started_total
+            .get_or_create(&BarrierGroupLabel {
+                group: group.to_string(),
+            })
+            .inc();
+    }
+
+    /// Account one barrier epoch whose marker reached every partition of
+    /// `group`. Pairs with `record_barrier_epoch_published_partial`, and the
+    /// two together account for every started epoch that finished.
+    pub fn record_barrier_epoch_committed(&self, group: &str) {
+        self.barrier_epochs_committed_total
+            .get_or_create(&BarrierGroupLabel {
+                group: group.to_string(),
+            })
+            .inc();
+    }
+
+    /// Account one barrier epoch whose cut names at least one partition that
+    /// got no marker.
+    pub fn record_barrier_epoch_published_partial(&self, group: &str) {
+        self.barrier_epochs_published_partial_total
+            .get_or_create(&BarrierGroupLabel {
+                group: group.to_string(),
+            })
+            .inc();
+    }
+
+    /// Observe the wall-clock seconds one injection took for `group`, from the
+    /// injection-start record to the published cut. A partial cut counts too.
+    pub fn observe_barrier_injection_duration(&self, group: &str, seconds: f64) {
+        self.barrier_injection_duration_seconds
+            .get_or_create(&BarrierGroupLabel {
+                group: group.to_string(),
+            })
+            .observe(seconds);
+    }
+
+    /// Publish the epoch of the newest cut this coordinator wrote for `group`.
+    pub fn set_barrier_latest_epoch(&self, group: &str, epoch: i64) {
+        self.barrier_latest_epoch
+            .get_or_create(&BarrierGroupLabel {
+                group: group.to_string(),
+            })
+            .set(epoch);
+    }
+
+    /// Account `markers` barrier markers this broker appended to `topic`. Zero
+    /// is a no-op, so a topic that never took a marker keeps no series.
+    pub fn record_barrier_markers_written(&self, topic: &str, markers: u64) {
+        if markers == 0 {
+            return;
+        }
+        self.barrier_markers_written_total
+            .get_or_create(&TopicLabel {
+                topic: topic.to_string(),
+            })
+            .inc_by(markers);
+    }
 }
 
 impl Default for BrokerMetrics {
@@ -1157,12 +1331,36 @@ impl Default for BrokerMetrics {
     }
 }
 
-/// Resolve a wire `api_key` to the `ApiKey` variant name used as the
-/// metric label, folding unrecognised keys under [`UNKNOWN_LABEL`].
+/// Resolve a wire `api_key` to the name used as the metric label.
+///
+/// A Kafka api key resolves to its `ApiKey` variant name. A krabka-private api
+/// key resolves through [`krabka_private_api_key_label_name`], because
+/// `ApiKey::from_i16` does not know that range. Anything else folds under
+/// [`UNKNOWN_LABEL`].
 fn api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'static str {
+    if api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR {
+        return krabka_private_api_key_label_name(api_key);
+    }
     match crabka_protocol::api_key::ApiKey::from_i16(api_key) {
         Some(k) => k.into(),
         None => UNKNOWN_LABEL,
+    }
+}
+
+/// Resolve a krabka-private wire `api_key` to its RPC name.
+///
+/// Without this arm every krabka-private request shares one
+/// `api_requests{api_key="Unknown"}` series with genuine garbage traffic, and
+/// an operator cannot tell the two apart. Cardinality stays bounded: the range
+/// holds one label per krabka-private RPC, plus [`UNKNOWN_LABEL`].
+fn krabka_private_api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'static str {
+    match api_key {
+        crate::handlers::ALTER_BARRIER_GROUPS_API_KEY => "AlterBarrierGroups",
+        crate::handlers::DESCRIBE_BARRIER_GROUPS_API_KEY => "DescribeBarrierGroups",
+        crate::handlers::TRIGGER_BARRIER_API_KEY => "TriggerBarrier",
+        crate::handlers::LIST_BARRIER_CUTS_API_KEY => "ListBarrierCuts",
+        crate::handlers::WRITE_BARRIER_MARKERS_API_KEY => "WriteBarrierMarkers",
+        _ => UNKNOWN_LABEL,
     }
 }
 
@@ -1185,6 +1383,13 @@ mod tests {
         m.record_replication_out("topic-a", 0, 8192);
         m.record_cleaner_run();
         m.record_compaction("topic-a", 0);
+        m.record_barrier_epoch_started("orders-cut");
+        m.record_barrier_epoch_committed("orders-cut");
+        m.record_barrier_epoch_published_partial("orders-cut");
+        m.observe_barrier_injection_duration("orders-cut", 0.02);
+        m.set_barrier_latest_epoch("orders-cut", 7);
+        m.record_barrier_markers_written("topic-a", 3);
+        m.barrier_groups_coordinated.set(1);
         m.record_produce_message_conversion("topic-a");
         m.record_fetch_message_conversion("topic-a");
         m.record_failed_produce("topic-a");
@@ -1279,6 +1484,15 @@ mod tests {
             "crabka_broker_topic_failed_fetch_requests_total",
             "crabka_broker_successful_authentication_total",
             "crabka_broker_failed_authentication_total",
+            "crabka_broker_barrier_epochs_started_total",
+            "crabka_broker_barrier_epochs_committed_total",
+            "crabka_broker_barrier_epochs_published_partial_total",
+            "crabka_broker_barrier_injection_duration_seconds_bucket",
+            "crabka_broker_barrier_injection_duration_seconds_sum",
+            "crabka_broker_barrier_injection_duration_seconds_count",
+            "crabka_broker_barrier_latest_epoch",
+            "crabka_broker_barrier_markers_written_total",
+            "crabka_broker_barrier_groups_coordinated",
         ] {
             assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
         }
@@ -1291,6 +1505,86 @@ mod tests {
         ] {
             assert!(buf.contains(needle), "expected {what} in:\n{buf}");
         }
+    }
+
+    #[test]
+    fn api_key_label_name_names_every_krabka_private_api() {
+        let cases = [
+            (
+                crate::handlers::ALTER_BARRIER_GROUPS_API_KEY,
+                "AlterBarrierGroups",
+            ),
+            (
+                crate::handlers::DESCRIBE_BARRIER_GROUPS_API_KEY,
+                "DescribeBarrierGroups",
+            ),
+            (crate::handlers::TRIGGER_BARRIER_API_KEY, "TriggerBarrier"),
+            (
+                crate::handlers::LIST_BARRIER_CUTS_API_KEY,
+                "ListBarrierCuts",
+            ),
+            (
+                crate::handlers::WRITE_BARRIER_MARKERS_API_KEY,
+                "WriteBarrierMarkers",
+            ),
+            // A Kafka api key still resolves through the generated enum.
+            (0, "Produce"),
+            // Garbage inside the krabka-private range, and outside it, both
+            // fold under the sentinel.
+            (crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR, UNKNOWN_LABEL),
+            (9999, UNKNOWN_LABEL),
+            (999, UNKNOWN_LABEL),
+        ];
+
+        for (api_key, want) in cases {
+            assert!(api_key_label_name(api_key) == want, "api_key {api_key}");
+        }
+    }
+
+    #[test]
+    fn barrier_counters_split_by_group_and_markers_split_by_topic() {
+        let m = BrokerMetrics::new();
+        let orders = BarrierGroupLabel {
+            group: "orders".to_string(),
+        };
+        let audit = BarrierGroupLabel {
+            group: "audit".to_string(),
+        };
+
+        m.record_barrier_epoch_started("orders");
+        m.record_barrier_epoch_started("orders");
+        m.record_barrier_epoch_started("audit");
+        m.record_barrier_epoch_committed("orders");
+        m.record_barrier_epoch_published_partial("audit");
+        m.set_barrier_latest_epoch("orders", 41);
+        m.set_barrier_latest_epoch("orders", 42);
+        // Zero is a no-op, so a topic that never took a marker keeps no series.
+        m.record_barrier_markers_written("t", 0);
+        m.record_barrier_markers_written("t", 2);
+        m.record_barrier_markers_written("t", 3);
+
+        let counts = (
+            m.barrier_epochs_started_total.get_or_create(&orders).get(),
+            m.barrier_epochs_started_total.get_or_create(&audit).get(),
+            m.barrier_epochs_committed_total
+                .get_or_create(&orders)
+                .get(),
+            m.barrier_epochs_committed_total.get_or_create(&audit).get(),
+            m.barrier_epochs_published_partial_total
+                .get_or_create(&orders)
+                .get(),
+            m.barrier_epochs_published_partial_total
+                .get_or_create(&audit)
+                .get(),
+            m.barrier_latest_epoch.get_or_create(&orders).get(),
+            m.barrier_markers_written_total
+                .get_or_create(&TopicLabel {
+                    topic: "t".to_string(),
+                })
+                .get(),
+        );
+
+        assert!(counts == (2, 1, 1, 0, 0, 1, 42, 5));
     }
 
     #[test]

@@ -127,6 +127,7 @@ pub struct Broker {
     pub(crate) producer_state: Arc<crate::producer_state::ProducerState>,
     pub(crate) txn_coordinator: Arc<crate::txn::coordinator::TxnCoordinator>,
     pub(crate) share_coordinator: Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
+    pub(crate) barrier_coordinator: Arc<crate::barrier::coordinator::BarrierCoordinator>,
     pub(crate) share_partition_leaders:
         Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
     pub(crate) supervisor_shutdown: tokio_util::sync::CancellationToken,
@@ -817,6 +818,7 @@ async fn recover_storage_and_groups(
 
 struct CoordinatorStartup {
     txn_coordinator: Arc<crate::txn::coordinator::TxnCoordinator>,
+    barrier_coordinator: Arc<crate::barrier::coordinator::BarrierCoordinator>,
     share_coordinator: Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
     share_partition_leaders: Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
     share_persister: Arc<crate::share_coordinator::persister_client::SharePersister>,
@@ -829,6 +831,7 @@ async fn start_coordinators(
     group_coordinator: &Arc<crate::coordinator::GroupCoordinator>,
     producer_ids: &Arc<crate::producer_id_manager::ProducerIdManager>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    metrics: &crate::metrics::BrokerMetrics,
 ) -> CoordinatorStartup {
     let listener_protocol = config
         .effective_listeners()
@@ -891,8 +894,42 @@ async fn start_coordinators(
         ),
     );
     share_partition_leaders.spawn_lock_sweeper();
+    let barrier_coordinator = Arc::new(crate::barrier::coordinator::BarrierCoordinator::new(
+        config.node_id,
+        Arc::clone(partitions),
+        Arc::clone(controller),
+        crate::barrier::config::BarrierConfig {
+            state_topic_num_partitions: config.barrier_state_num_partitions,
+            state_topic_replication_factor: config.barrier_state_replication_factor,
+            recovery_read_max: config.barrier_recovery_read_max,
+            injection_timeout: config.barrier_injection_timeout,
+            default_retained_cuts: config.barrier_retained_cuts,
+            ..crate::barrier::config::BarrierConfig::default()
+        },
+        Arc::new(crate::barrier::metrics::BrokerBarrierMetrics::new(
+            metrics.clone(),
+        )),
+    ));
+    // The topic has to exist before recovery can replay it. A broker that is
+    // not the quorum leader loses the race and finds the topic already there.
+    if let Err(error) = crate::barrier::bootstrap::ensure_topic(
+        controller,
+        barrier_coordinator.state_topic_num_partitions(),
+        barrier_coordinator.state_topic_replication_factor(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "barrier state topic bootstrap error");
+    }
+    if let Err(error) = barrier_coordinator
+        .recover(&controller.current_image())
+        .await
+    {
+        tracing::warn!(%error, "barrier coordinator recovery error");
+    }
     CoordinatorStartup {
         txn_coordinator,
+        barrier_coordinator,
         share_coordinator,
         share_partition_leaders,
         share_persister,
@@ -2006,6 +2043,7 @@ type BrokerCoordinatorSet = (
     Arc<crate::txn::coordinator::TxnCoordinator>,
     Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
     Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
+    Arc<crate::barrier::coordinator::BarrierCoordinator>,
 );
 
 struct BrokerStorageStartup {
@@ -2054,6 +2092,7 @@ async fn finish_broker_startup(
         txn_coordinator: coordinators.3,
         share_coordinator: coordinators.4,
         share_partition_leaders: coordinators.5,
+        barrier_coordinator: coordinators.6,
         supervisor_shutdown: runtime.supervisor_shutdown,
         supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
         disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
@@ -2230,8 +2269,11 @@ async fn start_broker_runtime(
         &Arc<crate::txn::coordinator::TxnCoordinator>,
         &Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
     ),
-    diskless_runtime: &DisklessRuntime,
+    // The two things the runtime needs pre-built: the diskless WAL runtime,
+    // and the metric registry the coordinators already report into.
+    runtime_deps: (&DisklessRuntime, crate::metrics::BrokerMetrics),
 ) -> Result<BrokerRuntimeStartup, BrokerError> {
+    let (diskless_runtime, metrics) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
     let throttle_state = Arc::new(crate::throttle::ThrottleState::new());
     let inter_listener_protocol = config
@@ -2241,7 +2283,6 @@ async fn start_broker_runtime(
         .map_or(crabka_security::ListenerProtocol::Plaintext, |listener| {
             listener.protocol
         });
-    let metrics = crate::metrics::BrokerMetrics::new();
     let (audit_led_partition, audit_log, audit_writer_handle) = start_audit_pipeline(
         config,
         &**controller,
@@ -4359,8 +4400,13 @@ impl Broker {
             producer_ids,
         } = recover_storage_and_groups(&config, &controller, &diskless_runtime).await?;
 
+        // The barrier coordinator reports through the process registry, and it
+        // is built here rather than inside the runtime because the coordinators
+        // start first. BrokerMetrics clones cheaply.
+        let metrics = crate::metrics::BrokerMetrics::new();
         let CoordinatorStartup {
             txn_coordinator,
+            barrier_coordinator,
             share_coordinator,
             share_partition_leaders,
             share_persister,
@@ -4371,6 +4417,7 @@ impl Broker {
             &group_coordinator,
             &producer_ids,
             &inter_broker_client,
+            &metrics,
         )
         .await;
 
@@ -4386,7 +4433,7 @@ impl Broker {
             tls_dynamic.as_ref(),
             (&partitions, &producer_state, &log_dir_status, &log_dir_ids),
             (&txn_coordinator, &share_coordinator),
-            &diskless_runtime,
+            (&diskless_runtime, metrics),
         )
         .await?;
 
@@ -4397,6 +4444,12 @@ impl Broker {
             Arc::clone(&group_coordinator),
             runtime.supervisor_shutdown.child_token(),
         );
+
+        tokio::spawn(crate::barrier::scheduler::run(
+            Arc::clone(&barrier_coordinator),
+            Arc::clone(&controller),
+            runtime.supervisor_shutdown.child_token(),
+        ));
 
         crate::share_partition::backlog_poller::BacklogPoller {
             node_id: config.node_id,
@@ -4424,6 +4477,7 @@ impl Broker {
                 txn_coordinator,
                 share_coordinator,
                 share_partition_leaders,
+                barrier_coordinator,
             ),
             (tls_dynamic, ktls_enabled, inter_broker_client),
             runtime,

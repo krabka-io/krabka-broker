@@ -3,6 +3,9 @@
 //! Per-(topic, partition) response fields use these `i16` values. JVM clients
 //! react to specific codes, so a substitution changes client behavior. The
 //! values here mirror the canonical Apache Kafka table.
+//!
+//! One fenced block at the end of this file holds the krabka-private codes at
+//! 1000 and above. A broker returns those only on a krabka-private api key.
 
 pub const NONE: i16 = 0;
 pub const UNKNOWN_SERVER_ERROR: i16 = -1;
@@ -301,6 +304,30 @@ pub const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
 /// `telemetry.max.bytes`.
 pub const TELEMETRY_TOO_LARGE: i16 = 118;
 
+// ---------------------------------------------------------------------------
+// krabka-private error codes.
+//
+// Apache Kafka assigns error codes upward from 0, so krabka reserves 1000 and
+// above for errors that no Kafka error table names. A broker returns a code in
+// this range only on a krabka-private api key, which sits at or above
+// `crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR`. A JVM client cannot
+// negotiate such an api key, so it never receives one of these codes.
+// ---------------------------------------------------------------------------
+
+/// `BARRIER_INJECTION_IN_PROGRESS` (1000): an injection for this barrier group
+/// is already in flight. The caller should retry after a brief back-off.
+///
+/// The barrier coordinator runs one injection per group at a time, because an
+/// injection freezes the target set and consumes an epoch before it appends the
+/// first marker. A second `TriggerBarrier` for the same group gets this code
+/// instead of a second epoch.
+///
+/// Kafka has no generic operation-in-progress code. `CONCURRENT_TRANSACTIONS`
+/// (51) and `REBALANCE_IN_PROGRESS` (27) both drive JVM client state machines,
+/// so neither one carries this meaning. The broker returns this code only on a
+/// krabka-private api key, and it never reaches a JVM client.
+pub const BARRIER_INJECTION_IN_PROGRESS: i16 = 1000;
+
 /// Maps an internal [`crate::error::BrokerError`] to a wire-level code. Most
 /// internal errors map to `UNKNOWN_SERVER_ERROR`. Specific variants map to
 /// more meaningful codes.
@@ -515,6 +542,24 @@ mod tests {
     fn ineligible_replica_code_does_not_collide_with_duplicate_resource() {
         assert!(DUPLICATE_RESOURCE == 92);
         assert!(INELIGIBLE_REPLICA == 107);
+    }
+
+    #[test]
+    fn krabka_private_error_codes_sit_above_every_kafka_code() {
+        let cases = [(
+            "BARRIER_INJECTION_IN_PROGRESS",
+            BARRIER_INJECTION_IN_PROGRESS,
+            1000,
+        )];
+
+        for (name, code, want) in cases {
+            assert!(code == want, "{name}");
+            // Above every code the Apache Kafka table assigns, and clear of
+            // the two codes whose meaning a JVM client would act on.
+            assert!(code > REBOOTSTRAP_REQUIRED, "{name}");
+            assert!(code != CONCURRENT_TRANSACTIONS, "{name}");
+            assert!(code != REBALANCE_IN_PROGRESS, "{name}");
+        }
     }
 
     #[test]

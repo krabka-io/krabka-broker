@@ -70,7 +70,7 @@ pub(crate) enum DispatchKind {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DispatchEntry {
-    api_key: ApiKey,
+    api_key: ApiKeyCode,
     flexible_min: ApiVersion,
     quota_policy: RequestQuotaPolicy,
     kind: DispatchKind,
@@ -82,7 +82,11 @@ pub(crate) struct DispatchRegistry {
 }
 
 impl DispatchEntry {
-    pub(crate) fn plain(api_key: ApiKey, flexible_min: ApiVersion, handler: PlainHandler) -> Self {
+    pub(crate) fn plain(
+        api_key: ApiKeyCode,
+        flexible_min: ApiVersion,
+        handler: PlainHandler,
+    ) -> Self {
         Self {
             api_key,
             flexible_min,
@@ -92,7 +96,7 @@ impl DispatchEntry {
     }
 
     pub(crate) fn context(
-        api_key: ApiKey,
+        api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: ContextHandler,
     ) -> Self {
@@ -106,7 +110,7 @@ impl DispatchEntry {
 
     pub(crate) fn produce(flexible_min: ApiVersion, handler: ProduceHandler) -> Self {
         Self {
-            api_key: ApiKey::Produce,
+            api_key: ApiKey::Produce as i16,
             flexible_min,
             quota_policy: RequestQuotaPolicy::SelfAccounted,
             kind: DispatchKind::Produce(handler),
@@ -114,7 +118,7 @@ impl DispatchEntry {
     }
 
     pub(crate) fn telemetry(
-        api_key: ApiKey,
+        api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: TelemetryHandler,
     ) -> Self {
@@ -127,7 +131,7 @@ impl DispatchEntry {
     }
 
     pub(crate) fn decoded_context(
-        api_key: ApiKey,
+        api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: ContextHandler,
     ) -> Self {
@@ -140,7 +144,7 @@ impl DispatchEntry {
     }
 
     pub(crate) fn encoded_context(
-        api_key: ApiKey,
+        api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: ContextHandler,
     ) -> Self {
@@ -152,7 +156,11 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn auth(api_key: ApiKey, flexible_min: ApiVersion, handler: AuthHandler) -> Self {
+    pub(crate) fn auth(
+        api_key: ApiKeyCode,
+        flexible_min: ApiVersion,
+        handler: AuthHandler,
+    ) -> Self {
         Self {
             api_key,
             flexible_min,
@@ -163,14 +171,14 @@ impl DispatchEntry {
 
     pub(crate) fn fetch(flexible_min: ApiVersion) -> Self {
         Self {
-            api_key: ApiKey::Fetch,
+            api_key: ApiKey::Fetch as i16,
             flexible_min,
             quota_policy: RequestQuotaPolicy::SelfAccounted,
             kind: DispatchKind::Fetch,
         }
     }
 
-    pub(crate) fn sasl_metadata(api_key: ApiKey, flexible_min: ApiVersion) -> Self {
+    pub(crate) fn sasl_metadata(api_key: ApiKeyCode, flexible_min: ApiVersion) -> Self {
         Self {
             api_key,
             flexible_min,
@@ -203,7 +211,7 @@ impl DispatchRegistry {
     }
 
     pub(crate) fn register(&mut self, entry: DispatchEntry) -> bool {
-        self.table.insert(entry.api_key as i16, entry).is_none()
+        self.table.insert(entry.api_key, entry).is_none()
     }
 
     pub(crate) fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {
@@ -235,7 +243,7 @@ macro_rules! plain_dispatches {
             $(
                 assert!(
                     registry.register(DispatchEntry::plain(
-                        ApiKey::$api,
+                        ApiKey::$api as i16,
                         crabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $handler,
                     )),
@@ -283,7 +291,7 @@ macro_rules! context_dispatches {
             $(
                 assert!(
                     registry.register(DispatchEntry::context(
-                        ApiKey::$api,
+                        ApiKey::$api as i16,
                         crabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $adapter,
                     )),
@@ -291,6 +299,39 @@ macro_rules! context_dispatches {
                     ApiKey::$api
                 );
             )+
+        }
+    };
+}
+
+/// Registers krabka-private context dispatches by raw wire `api_key`.
+///
+/// A krabka-private api key sits at or above
+/// [`KRABKA_PRIVATE_API_KEY_FLOOR`][crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR],
+/// and `ApiKey::from_i16` returns `None` for every key in that range. So each
+/// entry names the wire code and its `flexible_min` directly, where a Kafka
+/// entry reads both from the generated schema constants. The registry entry is
+/// then the only place the framing layer can learn that the body is flexible.
+///
+/// Every krabka-private api gets [`DispatchKind::Context`], so the handler
+/// receives the [`RequestContext`] and can authorize on the principal.
+macro_rules! krabka_private_context_dispatches {
+    ($register_fn:ident; $(($adapter:ident, $api_key:path, $flexible_min:expr, $handler:path)),* $(,)?) => {
+        $(context_adapter!($adapter, $handler);)*
+
+        fn $register_fn(registry: &mut DispatchRegistry) {
+            let entries: &[(ApiKeyCode, ApiVersion, ContextHandler)] = &[
+                $(($api_key, $flexible_min, $adapter as ContextHandler),)*
+            ];
+            for &(api_key, flexible_min, handler) in entries {
+                assert!(
+                    api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
+                    "api_key {api_key} is below the krabka-private floor"
+                );
+                assert!(
+                    registry.register(DispatchEntry::context(api_key, flexible_min, handler)),
+                    "duplicate dispatch registration for api_key {api_key}"
+                );
+            }
         }
     };
 }
@@ -315,7 +356,7 @@ macro_rules! sync_context_dispatches {
             $(
                 assert!(
                     registry.register(DispatchEntry::context(
-                        ApiKey::$api,
+                        ApiKey::$api as i16,
                         crabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $adapter,
                     )),
@@ -353,7 +394,7 @@ macro_rules! decoded_context_dispatches {
             $(
                 assert!(
                     registry.register(DispatchEntry::decoded_context(
-                        ApiKey::$api,
+                        ApiKey::$api as i16,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
                     )),
@@ -390,7 +431,7 @@ macro_rules! decoded_sync_context_dispatches {
             $(
                 assert!(
                     registry.register(DispatchEntry::decoded_context(
-                        ApiKey::$api,
+                        ApiKey::$api as i16,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
                     )),
@@ -758,6 +799,11 @@ sync_context_dispatches!(register_sync_context_dispatches;
     (describe_configs_adapter, DescribeConfigs, describe_configs_request, crate::handlers::describe_configs::handle),
 );
 
+// The barrier control plane registers its five RPCs here, at api keys 1010 to
+// 1014. They stay out of `api_catalog::supported_apis`; see
+// `KRABKA_PRIVATE_API_KEY_FLOOR` for why.
+krabka_private_context_dispatches!(register_krabka_private_context_dispatches;);
+
 telemetry_adapter!(
     get_telemetry_subscriptions_adapter,
     crate::handlers::get_telemetry_subscriptions::handle
@@ -780,59 +826,60 @@ pub(crate) fn build_registry() -> DispatchRegistry {
         crabka_protocol::owned::fetch_request::FLEXIBLE_MIN,
     ));
     registry.register(DispatchEntry::sasl_metadata(
-        ApiKey::SaslHandshake,
+        ApiKey::SaslHandshake as i16,
         i16::MAX,
     ));
     registry.register(DispatchEntry::sasl_metadata(
-        ApiKey::SaslAuthenticate,
+        ApiKey::SaslAuthenticate as i16,
         crabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
     ));
     register_context_dispatches(&mut registry);
     register_sync_context_dispatches(&mut registry);
+    register_krabka_private_context_dispatches(&mut registry);
     register_decoded_context_dispatches(&mut registry);
     register_decoded_sync_context_dispatches(&mut registry);
     registry.register(DispatchEntry::encoded_context(
-        ApiKey::AlterUserScramCredentials,
+        ApiKey::AlterUserScramCredentials as i16,
         crabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
         alter_user_scram_credentials_adapter,
     ));
     registry.register(DispatchEntry::encoded_context(
-        ApiKey::UpdateFeatures,
+        ApiKey::UpdateFeatures as i16,
         crabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
         update_features_adapter,
     ));
     registry.register(DispatchEntry::auth(
-        ApiKey::AlterReplicaLogDirs,
+        ApiKey::AlterReplicaLogDirs as i16,
         crabka_protocol::owned::alter_replica_log_dirs_request::FLEXIBLE_MIN,
         alter_replica_log_dirs_adapter,
     ));
     registry.register(DispatchEntry::auth(
-        ApiKey::CreateDelegationToken,
+        ApiKey::CreateDelegationToken as i16,
         crabka_protocol::owned::create_delegation_token_request::FLEXIBLE_MIN,
         create_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
-        ApiKey::RenewDelegationToken,
+        ApiKey::RenewDelegationToken as i16,
         crabka_protocol::owned::renew_delegation_token_request::FLEXIBLE_MIN,
         renew_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
-        ApiKey::ExpireDelegationToken,
+        ApiKey::ExpireDelegationToken as i16,
         crabka_protocol::owned::expire_delegation_token_request::FLEXIBLE_MIN,
         expire_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
-        ApiKey::DescribeDelegationToken,
+        ApiKey::DescribeDelegationToken as i16,
         crabka_protocol::owned::describe_delegation_token_request::FLEXIBLE_MIN,
         describe_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::telemetry(
-        ApiKey::GetTelemetrySubscriptions,
+        ApiKey::GetTelemetrySubscriptions as i16,
         crabka_protocol::owned::get_telemetry_subscriptions_request::FLEXIBLE_MIN,
         get_telemetry_subscriptions_adapter,
     ));
     registry.register(DispatchEntry::telemetry(
-        ApiKey::PushTelemetry,
+        ApiKey::PushTelemetry as i16,
         crabka_protocol::owned::push_telemetry_request::FLEXIBLE_MIN,
         push_telemetry_adapter,
     ));
@@ -1007,16 +1054,94 @@ mod tests {
         assert!(registry.get(9999).is_none());
     }
 
+    fn krabka_private_test_adapter<'a>(
+        _broker: &'a Broker,
+        _version: ApiVersion,
+        _correlation_id: CorrelationId,
+        _body: &'a [u8],
+        _ctx: &'a RequestContext<'a>,
+    ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
+        Box::pin(std::future::ready(Ok(Bytes::new())))
+    }
+
     #[test]
-    fn registry_and_api_catalog_cover_same_api_keys() {
+    fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
         let registry = build_registry();
         let registered: BTreeSet<ApiKeyCode> = registry.registered_api_keys().collect();
         let advertised: BTreeSet<ApiKeyCode> = crate::api_catalog::supported_apis()
             .into_iter()
             .map(|api| api.api_key)
             .collect();
+        let empty = BTreeSet::new();
 
-        assert!(registered == advertised);
+        // Every advertised api key has a handler. A client that negotiates a
+        // version and then gets UNSUPPORTED_VERSION is the failure this bars.
+        let advertised_without_handler: BTreeSet<ApiKeyCode> =
+            advertised.difference(&registered).copied().collect();
+        assert!(advertised_without_handler == empty);
+
+        // Every registered Kafka api key is advertised.
+        let kafka_registered: BTreeSet<ApiKeyCode> = registered
+            .iter()
+            .copied()
+            .filter(|key| *key < handlers::KRABKA_PRIVATE_API_KEY_FLOOR)
+            .collect();
+        let kafka_registered_without_advertisement: BTreeSet<ApiKeyCode> =
+            kafka_registered.difference(&advertised).copied().collect();
+        assert!(kafka_registered_without_advertisement == empty);
+
+        // A krabka-private api key is registered but never advertised. An
+        // advertised row would print as UNKNOWN(1010) in
+        // kafka-broker-api-versions.sh output, and a real Kafka broker prints
+        // no such row.
+        let advertised_krabka_private: BTreeSet<ApiKeyCode> = advertised
+            .iter()
+            .copied()
+            .filter(|key| *key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR)
+            .collect();
+        assert!(advertised_krabka_private == empty);
+    }
+
+    #[test]
+    fn krabka_private_api_key_registers_and_frames_as_flexible() {
+        // The generated enum does not know a krabka-private key, so the
+        // registry entry is the only source of the flexibility that
+        // `network::dispatch` reads through `body_flexible`.
+        assert!(ApiKey::from_i16(handlers::TRIGGER_BARRIER_API_KEY).is_none());
+
+        let mut registry = DispatchRegistry::new();
+        assert!(registry.register(DispatchEntry::context(
+            handlers::TRIGGER_BARRIER_API_KEY,
+            0,
+            krabka_private_test_adapter,
+        )));
+
+        let entry = registry
+            .get(handlers::TRIGGER_BARRIER_API_KEY)
+            .expect("registered krabka-private entry");
+        assert!(matches!(entry.kind(), DispatchKind::Context(_)));
+        assert!(entry.quota_policy() == RequestQuotaPolicy::InlineExempt);
+        assert!(registry.body_flexible(handlers::TRIGGER_BARRIER_API_KEY, 0));
+    }
+
+    #[test]
+    fn every_barrier_api_key_sits_in_the_krabka_private_range() {
+        let barrier_keys = [
+            handlers::ALTER_BARRIER_GROUPS_API_KEY,
+            handlers::DESCRIBE_BARRIER_GROUPS_API_KEY,
+            handlers::TRIGGER_BARRIER_API_KEY,
+            handlers::LIST_BARRIER_CUTS_API_KEY,
+            handlers::WRITE_BARRIER_MARKERS_API_KEY,
+        ];
+
+        assert!(barrier_keys == [1010, 1011, 1012, 1013, 1014]);
+        for key in barrier_keys {
+            assert!(
+                key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
+                "api_key {key}"
+            );
+            assert!(ApiKey::from_i16(key).is_none(), "api_key {key}");
+        }
     }
 
     #[test]
