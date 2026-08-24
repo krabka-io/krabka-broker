@@ -659,6 +659,66 @@ mod tests {
         }
     }
 
+    /// The cut format is frozen across this crate, `krabka-streams-rs`,
+    /// `krabka-streams-java` and `krabka-streams-go`. These bytes are encoded
+    /// straight from the specification in the barrier design document,
+    /// independently of all four implementations, so an encoder or a decoder
+    /// that drifts fails here. The same vector is asserted in the other three.
+    ///
+    /// Key: version 0, kind 2, group `orders-cut`, epoch 7.
+    /// Value: version 0, triggered 1724500000000, completed 1724500000042,
+    /// status complete, topic `orders` with partition 0 at offset 1024 and
+    /// partition 1 at offset 2048, and no missing partitions.
+    const GOLDEN_CUT_KEY: &[u8] = &[
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x0a, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73,
+        0x2d, 0x63, 0x75, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
+    ];
+
+    const GOLDEN_CUT_VALUE: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x91, 0x84, 0x35, 0xbd, 0x00, 0x00, 0x00,
+        0x01, 0x91, 0x84, 0x35, 0xbd, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x06, 0x6f, 0x72, 0x64, 0x65, 0x72, 0x73, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00,
+        0x00, 0x00, 0x00,
+    ];
+
+    fn golden_cut() -> CutValue {
+        CutValue {
+            triggered_at: 1_724_500_000_000,
+            completed_at: 1_724_500_000_042,
+            status: CutStatus::Complete,
+            topics: vec![TopicOffsets {
+                topic: "orders".to_owned(),
+                partitions: vec![
+                    PartitionOffset {
+                        partition: PartitionIndex(0),
+                        offset: Offset(1024),
+                    },
+                    PartitionOffset {
+                        partition: PartitionIndex(1),
+                        offset: Offset(2048),
+                    },
+                ],
+            }],
+            missing: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_golden_cut_key_decodes_and_re_encodes_byte_for_byte() {
+        let expected = RecordKey::cut("orders-cut", 7);
+        assert!(decode_key(GOLDEN_CUT_KEY).ok() == Some(expected.clone()));
+        assert!(encode_key(&expected) == GOLDEN_CUT_KEY);
+    }
+
+    #[test]
+    fn the_golden_cut_value_decodes_and_re_encodes_byte_for_byte() {
+        let expected = golden_cut();
+        assert!(decode_cut(GOLDEN_CUT_VALUE).ok() == Some(expected.clone()));
+        assert!(encode_cut(&expected) == GOLDEN_CUT_VALUE);
+    }
+
     #[test]
     fn a_kind_survives_its_wire_code() {
         for kind in [

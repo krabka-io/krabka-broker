@@ -314,6 +314,28 @@ cut value:
 The `missing` array repeats what the frozen target set implies. It is present
 so that a reader can classify a partial cut from one record.
 
+### One golden vector, asserted in all four implementations
+
+A cut record encoded straight from the rules above, with no implementation in
+the loop:
+
+```text
+key   00000002000a6f72646572732d6375740000000000000007
+value 0000000001918435bd00000001918435bd2a000000000100066f7264657273
+      0000000200000000000000000000040000000001000000000000080000000000
+```
+
+The key holds version 0, kind 2, group `orders-cut`, and epoch 7. The value
+holds version 0, `triggered_at` 1724500000000, `completed_at` 1724500000042,
+status complete, topic `orders` with partition 0 at offset 1024 and partition 1
+at offset 2048, and no missing partitions.
+
+`krabka-broker`, `krabka-streams-rs`, `krabka-streams-java` and
+`krabka-streams-go` each assert these exact bytes. A decoder that drifts fails
+in its own test suite, not in a customer's cut. The broker also re-encodes them
+and compares byte for byte, because it is the only one of the four that writes
+the format.
+
 ### Snapshot container
 
 The three streams libraries share one container for the state that a task
