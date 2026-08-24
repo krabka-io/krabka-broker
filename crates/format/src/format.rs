@@ -567,9 +567,9 @@ pub async fn run(args: FormatArgs) -> i32 {
 /// `extra` lands directly after the feature records and ahead of the
 /// `--add-scram` and `--add-acl` records. The finalized feature levels,
 /// `metadata.version` first, decide how every later record is read, so they
-/// lead the stream and a topic record can only come after them. The seeded
-/// topics ahead of the seeded ACL entries then matches the order a live cluster
-/// writes, where a topic exists before an entry names it as a resource. The
+/// lead the stream and a topic record can only come after them. Seeded topics
+/// ahead of seeded ACL entries then match the order a live cluster writes them
+/// in, where a topic exists before an entry names it as a resource. The
 /// KIP-853 control state -- the `KRaft` version and the initial voters -- is a
 /// separate stream that the checkpoint applies before any of these.
 ///

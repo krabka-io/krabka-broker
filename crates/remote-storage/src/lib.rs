@@ -149,8 +149,8 @@ pub use crabka_object_store::{
 pub use dump::{PartitionDump, RlmmCacheDump};
 pub use error::RemoteStorageError;
 pub use index::{
-    AbortedTxnIndexEntry, BytePosition, LogOffset, OffsetIndexEntry, RelativeOffset, TimeIndexEntry,
-    TimestampMs, corrupt_log, end_position_for, first_batch_at_or_after,
+    AbortedTxnIndexEntry, BytePosition, LogOffset, OffsetIndexEntry, RelativeOffset,
+    TimeIndexEntry, TimestampMs, corrupt_log, end_position_for, first_batch_at_or_after,
     first_record_at_or_after_timestamp, parse_offset_index, parse_time_index, parse_txn_index,
     position_for_relative_offset, relative_offset_floor_for_timestamp, txn_overlaps,
 };
