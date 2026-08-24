@@ -273,10 +273,14 @@ impl MarkerFanout<'_> {
 /// The batch carries the partition's current leader epoch, because the writer
 /// does not stamp it and a default of zero is a false epoch in the header.
 ///
+/// The `WriteBarrierMarkers` handler appends through this function too, so a
+/// marker that a remote coordinator asks for takes the same batch shape as one
+/// this broker's own coordinator places.
+///
 /// # Errors
 /// Returns a [`BrokerError`] when the partition writer is gone, or when the
 /// log rejects the batch.
-async fn append_marker(
+pub(crate) async fn append_marker(
     partition: &Partition,
     marker: &BarrierMarker,
 ) -> Result<Offset, BrokerError> {

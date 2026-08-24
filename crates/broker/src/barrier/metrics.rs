@@ -127,9 +127,13 @@ impl BarrierMetrics for BrokerBarrierMetrics {
 }
 
 /// A [`BarrierMetrics`] that counts nothing.
+///
+/// It exists so a unit test needs no live metric registry.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct NoBarrierMetrics;
 
+#[cfg(test)]
 impl BarrierMetrics for NoBarrierMetrics {
     fn injection_started(&self, _group: &str, _epoch: i64) {}
 

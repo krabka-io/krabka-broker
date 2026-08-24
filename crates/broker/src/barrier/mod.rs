@@ -35,6 +35,8 @@
 //!
 //! # Key Modules
 //!
+//! - [`handlers`] is the wire surface: the five barrier RPCs and the
+//!   inter-broker transport behind one of them.
 //! - [`marker`] builds and parses the control record that lands in a data
 //!   partition.
 //! - [`persistence`] is the byte-exact codec of the `__barrier_state` records.
@@ -47,6 +49,7 @@ pub(crate) mod bootstrap;
 pub(crate) mod config;
 pub(crate) mod coordinator;
 pub(crate) mod error;
+pub(crate) mod handlers;
 pub(crate) mod injection;
 pub(crate) mod marker;
 pub(crate) mod metrics;

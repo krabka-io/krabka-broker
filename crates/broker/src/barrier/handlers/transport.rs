@@ -1,0 +1,351 @@
+//! The sending side of `WriteBarrierMarkers`, api key 1014.
+//!
+//! [`InterBrokerMarkerWriter`] is the leg of a marker fan-out that leaves this
+//! broker. The coordinator groups the pending targets of an epoch by their
+//! current leader, and it hands each remote group to this writer. The writer
+//! sends one request to that leader and returns the offset of every marker the
+//! leader placed.
+//!
+//! [`write_markers`][crate::barrier::handlers::write_markers] is the receiving
+//! side.
+//!
+//! # The dialer
+//!
+//! The writer dials through the shared
+//! [`InterBrokerClient`][crate::network::client::InterBrokerClient], so the
+//! connection terminates TLS and runs the SASL client handshake whenever the
+//! inter-broker listener needs them. A one-shot client per call would carry no
+//! TLS connector and no inter-broker credentials, and the fan-out would then
+//! work only against a PLAINTEXT inter-broker listener.
+//!
+//! The endpoint comes from the leader's registration record. The writer takes
+//! the endpoint whose name matches the inter-broker listener, and it falls back
+//! to the top-level host and port of the record. `EndTxn` resolves the marker
+//! endpoint the same way.
+//!
+//! # Failure
+//!
+//! A failed connection, a failed request, and a per-partition error code all
+//! leave the target out of the returned placements. The fan-out keeps that
+//! target pending and retries it until the injection deadline runs out.
+
+use std::{collections::BTreeMap, sync::Arc};
+
+use async_trait::async_trait;
+use crabka_ids::{NodeId, PartitionIndex};
+use crabka_log::Offset;
+use crabka_metadata::BrokerRegistrationRecord;
+use crabka_protocol::krabka::barrier::{
+    WritableBarrierTopic, WriteBarrierMarkersRequest, WriteBarrierMarkersResponse,
+};
+use crabka_security::ListenerProtocol;
+use tracing::warn;
+
+use crate::{
+    barrier::{
+        injection::{MarkerPlacement, RemoteMarkerWriter},
+        marker::BarrierMarker,
+        state::TargetPartition,
+    },
+    codes,
+    error::BrokerError,
+    metadata_source::MetadataSource,
+    network::client::InterBrokerClient,
+};
+
+/// A [`RemoteMarkerWriter`] over the inter-broker listener.
+pub(crate) struct InterBrokerMarkerWriter {
+    node_id: NodeId,
+    controller: Arc<dyn MetadataSource>,
+    client: Arc<InterBrokerClient>,
+    listener_protocol: ListenerProtocol,
+    listener_name: String,
+    server_name: String,
+}
+
+impl InterBrokerMarkerWriter {
+    pub(crate) fn new(
+        node_id: NodeId,
+        controller: Arc<dyn MetadataSource>,
+        client: Arc<InterBrokerClient>,
+        listener_protocol: ListenerProtocol,
+        listener_name: String,
+        server_name: String,
+    ) -> Self {
+        Self {
+            node_id,
+            controller,
+            client,
+            listener_protocol,
+            listener_name,
+            server_name,
+        }
+    }
+}
+
+#[async_trait]
+impl RemoteMarkerWriter for InterBrokerMarkerWriter {
+    async fn write_markers(
+        &self,
+        leader: NodeId,
+        marker: &BarrierMarker,
+        targets: &[TargetPartition],
+    ) -> Result<Vec<MarkerPlacement>, BrokerError> {
+        let image = self.controller.current_image();
+        let Some(broker_info) = image.broker(leader) else {
+            return Err(BrokerError::Replication(format!(
+                "WriteBarrierMarkers: leader node {leader} is not in the metadata image"
+            )));
+        };
+        let (host, port) = endpoint_of(broker_info, &self.listener_name);
+
+        let options = crabka_client_core::ConnectionOptions {
+            client_id: format!("crabka-broker-barrier-{}", self.node_id),
+            ..crabka_client_core::ConnectionOptions::default()
+        };
+        let connection = self
+            .client
+            .connect_as_connection(
+                &host,
+                port,
+                self.listener_protocol,
+                &self.server_name,
+                options,
+            )
+            .await
+            .map_err(|error| {
+                BrokerError::Replication(format!(
+                    "WriteBarrierMarkers: connect to {host}:{port}: {error}"
+                ))
+            })?;
+
+        // `Connection::send` negotiates the version from the table that the
+        // peer advertised at connect. A krabka-private api key is in no such
+        // table, and the negotiation then settles on version 0, which is the
+        // only version this message has.
+        let response = connection
+            .send(build_request(marker, targets))
+            .await
+            .map_err(|error| {
+                BrokerError::Replication(format!(
+                    "WriteBarrierMarkers: request to {host}:{port}: {error}"
+                ))
+            });
+        connection.close();
+
+        Ok(placements(&response?))
+    }
+}
+
+/// The inter-broker host and port of a leader.
+///
+/// The named listener wins. A registration record that projects no such
+/// endpoint falls back to its top-level host and port.
+fn endpoint_of(broker_info: &BrokerRegistrationRecord, listener_name: &str) -> (String, u16) {
+    broker_info
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == listener_name)
+        .map_or_else(
+            || (broker_info.host.clone(), broker_info.port),
+            |endpoint| (endpoint.host.clone(), endpoint.port),
+        )
+}
+
+/// The request that asks one leader to mark every target it leads.
+fn build_request(
+    marker: &BarrierMarker,
+    targets: &[TargetPartition],
+) -> WriteBarrierMarkersRequest {
+    let mut by_topic: BTreeMap<&str, Vec<i32>> = BTreeMap::new();
+    for target in targets {
+        by_topic
+            .entry(target.topic.as_str())
+            .or_default()
+            .push(target.partition.get());
+    }
+    WriteBarrierMarkersRequest {
+        group: marker.group.clone(),
+        epoch: marker.epoch,
+        triggered_at: marker.triggered_at,
+        topics: by_topic
+            .into_iter()
+            .map(|(topic, partitions)| WritableBarrierTopic {
+                topic: topic.to_owned(),
+                partitions,
+                ..WritableBarrierTopic::default()
+            })
+            .collect(),
+        ..WriteBarrierMarkersRequest::default()
+    }
+}
+
+/// The markers that the leader placed.
+///
+/// A partition row with a non-zero error code carries no offset, so it stays
+/// out of the result and the fan-out retries it.
+fn placements(response: &WriteBarrierMarkersResponse) -> Vec<MarkerPlacement> {
+    let mut out = Vec::new();
+    for topic in &response.topics {
+        for partition in &topic.partitions {
+            if partition.error_code == codes::NONE {
+                out.push(MarkerPlacement {
+                    target: TargetPartition {
+                        topic: topic.topic.clone(),
+                        partition: PartitionIndex(partition.partition),
+                    },
+                    offset: Offset(partition.offset),
+                });
+            } else {
+                warn!(
+                    topic = topic.topic,
+                    partition = partition.partition,
+                    error_code = partition.error_code,
+                    "the leader refused a barrier marker"
+                );
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use crabka_metadata::BrokerEndpoint;
+    use crabka_protocol::krabka::barrier::{WrittenBarrierPartition, WrittenBarrierTopic};
+
+    use super::*;
+
+    fn marker() -> BarrierMarker {
+        BarrierMarker {
+            group: "orders-cut".to_owned(),
+            epoch: 4,
+            triggered_at: 1_724_500_000_000,
+        }
+    }
+
+    fn at(topic: &str, partition: i32) -> TargetPartition {
+        TargetPartition {
+            topic: topic.to_owned(),
+            partition: PartitionIndex(partition),
+        }
+    }
+
+    fn registration(endpoints: Vec<BrokerEndpoint>) -> BrokerRegistrationRecord {
+        BrokerRegistrationRecord {
+            node_id: NodeId(2),
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::nil(),
+            host: "legacy.example".to_owned(),
+            port: 9092,
+            rack: None,
+            endpoints,
+            log_dirs: Vec::new(),
+            features: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn endpoint(name: &str, host: &str, port: u16) -> BrokerEndpoint {
+        BrokerEndpoint {
+            name: name.to_owned(),
+            host: host.to_owned(),
+            port,
+            protocol: ListenerProtocol::Plaintext,
+        }
+    }
+
+    #[test]
+    fn one_request_groups_every_target_under_its_topic() {
+        let targets = vec![
+            at("orders", 2),
+            at("payments", 0),
+            at("orders", 0),
+            at("orders", 1),
+        ];
+        let expected = WriteBarrierMarkersRequest {
+            group: "orders-cut".to_owned(),
+            epoch: 4,
+            triggered_at: 1_724_500_000_000,
+            topics: vec![
+                WritableBarrierTopic {
+                    topic: "orders".to_owned(),
+                    partitions: vec![2, 0, 1],
+                    ..WritableBarrierTopic::default()
+                },
+                WritableBarrierTopic {
+                    topic: "payments".to_owned(),
+                    partitions: vec![0],
+                    ..WritableBarrierTopic::default()
+                },
+            ],
+            ..WriteBarrierMarkersRequest::default()
+        };
+        check!(build_request(&marker(), &targets) == expected);
+    }
+
+    #[test]
+    fn a_response_returns_the_offset_of_every_marker_the_leader_placed() {
+        let response = WriteBarrierMarkersResponse {
+            topics: vec![WrittenBarrierTopic {
+                topic: "orders".to_owned(),
+                partitions: vec![
+                    WrittenBarrierPartition {
+                        partition: 0,
+                        error_code: codes::NONE,
+                        offset: 77,
+                        ..WrittenBarrierPartition::default()
+                    },
+                    WrittenBarrierPartition {
+                        partition: 1,
+                        error_code: codes::NOT_LEADER_OR_FOLLOWER,
+                        offset: -1,
+                        ..WrittenBarrierPartition::default()
+                    },
+                    WrittenBarrierPartition {
+                        partition: 2,
+                        error_code: codes::FENCED_LEADER_EPOCH,
+                        offset: -1,
+                        ..WrittenBarrierPartition::default()
+                    },
+                ],
+                ..WrittenBarrierTopic::default()
+            }],
+            ..WriteBarrierMarkersResponse::default()
+        };
+        let expected = vec![MarkerPlacement {
+            target: at("orders", 0),
+            offset: Offset(77),
+        }];
+        check!(placements(&response) == expected);
+    }
+
+    #[test]
+    fn an_empty_response_places_no_marker() {
+        check!(placements(&WriteBarrierMarkersResponse::default()) == Vec::new());
+    }
+
+    #[test]
+    fn the_endpoint_of_a_leader_prefers_the_inter_broker_listener() {
+        let record = registration(vec![
+            endpoint("PLAINTEXT", "public.example", 9092),
+            endpoint("INTERNAL", "internal.example", 9093),
+        ]);
+        check!(endpoint_of(&record, "INTERNAL") == ("internal.example".to_owned(), 9093));
+    }
+
+    #[test]
+    fn a_leader_with_no_such_listener_falls_back_to_the_top_level_address() {
+        let cases: &[(Vec<BrokerEndpoint>, &str)] = &[
+            (Vec::new(), "INTERNAL"),
+            (vec![endpoint("PLAINTEXT", "public.example", 9092)], "SSL"),
+        ];
+        for (endpoints, listener) in cases {
+            let record = registration(endpoints.clone());
+            check!(
+                endpoint_of(&record, listener) == ("legacy.example".to_owned(), 9092),
+                "{listener}"
+            );
+        }
+    }
+}

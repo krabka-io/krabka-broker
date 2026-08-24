@@ -29,11 +29,20 @@
 
 use bytes::Bytes;
 use crabka_log::{BARRIER_CONTROL_TYPE, Offset};
+// Only the round-trip tests read a marker back, so the decode side and the
+// helpers it needs stay out of the release build.
+#[cfg(test)]
 use crabka_protocol::{
     ProtocolError,
     primitives::{
-        fixed::{get_i16, get_i64, put_i16, put_i64},
-        string_bytes::{get_string_owned, put_string},
+        fixed::{get_i16, get_i64},
+        string_bytes::get_string_owned,
+    },
+};
+use crabka_protocol::{
+    primitives::{
+        fixed::{put_i16, put_i64},
+        string_bytes::put_string,
     },
     records::{Attributes, Record, RecordBatch},
 };
@@ -110,6 +119,7 @@ pub(crate) fn build_barrier_batch(
 /// when the key is not a barrier control-record key, when either the key
 /// version or the value version is unsupported, or when the value is
 /// truncated, holds a non-UTF-8 group name, or has trailing bytes.
+#[cfg(test)]
 pub(crate) fn parse_barrier_marker(record: &Record) -> Result<BarrierMarker, ProtocolError> {
     let key = record
         .key

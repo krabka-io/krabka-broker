@@ -894,7 +894,7 @@ async fn start_coordinators(
         ),
     );
     share_partition_leaders.spawn_lock_sweeper();
-    let barrier_coordinator = Arc::new(crate::barrier::coordinator::BarrierCoordinator::new(
+    let mut barrier_coordinator = crate::barrier::coordinator::BarrierCoordinator::new(
         config.node_id,
         Arc::clone(partitions),
         Arc::clone(controller),
@@ -909,7 +909,21 @@ async fn start_coordinators(
         Arc::new(crate::barrier::metrics::BrokerBarrierMetrics::new(
             metrics.clone(),
         )),
+    );
+    // The transport has to be bound before the coordinator goes into its `Arc`.
+    // Without it the coordinator marks only the partitions it leads, and every
+    // remote partition lands in the `missing` list of the cut.
+    barrier_coordinator.configure_marker_transport(Arc::new(
+        crate::barrier::handlers::transport::InterBrokerMarkerWriter::new(
+            config.node_id,
+            Arc::clone(controller),
+            Arc::clone(inter_broker_client),
+            listener_protocol,
+            config.inter_broker_listener_name.clone(),
+            config.inter_broker_server_name.clone(),
+        ),
     ));
+    let barrier_coordinator = Arc::new(barrier_coordinator);
     // The topic has to exist before recovery can replay it. A broker that is
     // not the quorum leader loses the race and finds the topic already there.
     if let Err(error) = crate::barrier::bootstrap::ensure_topic(

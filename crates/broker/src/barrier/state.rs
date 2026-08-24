@@ -92,6 +92,10 @@ impl Default for GroupEntry {
 
 impl GroupEntry {
     /// The entry of a group the caller just defined.
+    ///
+    /// The coordinator folds an entry out of the state topic instead, so only
+    /// the tests here build one straight from a spec.
+    #[cfg(test)]
     pub(crate) fn from_spec(spec: GroupSpec, last_epoch: i64) -> Self {
         Self {
             definition: GroupValue {
