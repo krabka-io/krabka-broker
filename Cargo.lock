@@ -1475,6 +1475,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabka-restore"
+version = "0.4.0"
+dependencies = [
+ "assert2",
+ "bytes",
+ "clap",
+ "crabka-format",
+ "crabka-ids",
+ "crabka-log",
+ "crabka-metadata",
+ "crabka-object-store",
+ "crabka-protocol",
+ "crabka-remote-storage",
+ "object_store",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "crabka-security"
 version = "0.4.0"
 source = "git+https://github.com/krabka-io/krabka-protocol?rev=7a5aab7499455c068e8ff2f269b05b21fd599046#7a5aab7499455c068e8ff2f269b05b21fd599046"

@@ -1,0 +1,59 @@
+[package]
+name = "crabka-restore"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Offline point-in-time restore: rebuilds a bootable krabka log directory from a KIP-405 tiered-storage archive"
+
+[lints]
+workspace = true
+
+[lib]
+name = "crabka_restore"
+path = "src/lib.rs"
+
+# `krabka-restore`, not `crabka-restore`. The `krabka` operator CLI resolves an
+# unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves
+# `git foo` to `git-foo`. This exact spelling is what makes `krabka restore`
+# work, so it deliberately breaks the `crabka-` convention the rest of the
+# workspace follows.
+[[bin]]
+name = "krabka-restore"
+path = "src/main.rs"
+
+[dependencies]
+# The target cluster is formatted through the same code path `krabka format`
+# uses, with the recovered topic and partition records seeded into the
+# bootstrap stream.
+crabka-format = { version = "0.4.0", path = "../format" }
+crabka-ids = { version = "0.4.0" }
+crabka-log = { version = "0.4.0", path = "../log" }
+crabka-metadata = { version = "0.4.0" }
+# The archive handle is built straight onto the object-store layer. The broker
+# owns the same mapping, but a recovery tool must not carry the broker.
+crabka-object-store = { version = "0.4.0", path = "../object-store" }
+crabka-protocol = { version = "0.4.0", default-features = false }
+# The KIP-405 archive key codec and segment metadata model.
+crabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+object_store = { workspace = true }
+# RE2 semantics: `--exclude-key` and `--exclude-header` run over millions of
+# archived records, so an operator-supplied pattern must stay linear in the
+# input. `java_regex` is for the KIP-664 `ListTransactions` wire surface and
+# offers no such bound.
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+tempfile = { workspace = true }

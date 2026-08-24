@@ -344,16 +344,12 @@ impl RemoteReader {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-
     // These exercise the full RSM/RLMM plumbing through `RemoteReader` against
     // `LocalTieredStorage` and `InmemoryRemoteLogMetadataManager`, using the
     // copy path's `copy_eligible` to populate the tier from a real `Log`.
-
     use std::{collections::BTreeMap, fmt::Write as _};
 
+    use assert2::assert;
     use crabka_log::{Log, LogConfig};
     use crabka_protocol::records::Record;
     use crabka_remote_storage::{
@@ -362,6 +358,8 @@ mod tests {
     };
     use crabka_units::convert::ByteSizeExt as _;
     use uuid::Uuid;
+
+    use super::*;
 
     fn tp() -> TopicIdPartition {
         TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)

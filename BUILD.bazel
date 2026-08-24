@@ -30,6 +30,13 @@ alias(
     actual = "//crates/format:crabka-format",
 )
 
+# Offline point-in-time restore from a KIP-405 archive. Named `krabka-restore`
+# so the `krabka` operator CLI resolves `krabka restore` to it on `PATH`.
+alias(
+    name = "restore_bin",
+    actual = "//crates/restore:krabka-restore",
+)
+
 alias(
     name = "raft",
     actual = "//crates/raft",
