@@ -23,6 +23,7 @@ use std::{
     path::PathBuf,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::Args;
 use crabka_metadata::{
     AclEntry, KRaftVersionRange, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, Voter,
@@ -32,7 +33,6 @@ use crabka_security::{
     SaslMechanism,
     scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::Serialize;
 use serde_wincode::SerdeCompat;
