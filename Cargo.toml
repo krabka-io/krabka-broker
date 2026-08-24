@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "crates/broker/test-helpers"]
+members = ["crates/*"]
 # The cargo-mutants pin that Bazel builds //tools/mutants from is not a member.
 exclude = ["tools/mutants"]
 
