@@ -157,6 +157,7 @@ pub(crate) mod audit_recovery;
 pub mod audit_sink;
 pub mod authorizer;
 pub(crate) mod auto_join;
+pub(crate) mod barrier;
 pub mod bootstrap;
 mod broker;
 pub(crate) mod cleaner;
