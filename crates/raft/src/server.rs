@@ -123,7 +123,7 @@ pub(crate) async fn run(
                                 }
                             } else {
                                 crate::RaftConnection {
-                                    stream: Box::new(stream) as Box<dyn crate::DuplexStream>,
+                                    stream: Box::new(stream) as Box<dyn crabka_client_core::ClientDuplex>,
                                     principal: None,
                                     authenticated_via_token: false,
                                     cluster_alter_authorized: true,

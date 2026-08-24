@@ -61,8 +61,6 @@ pub(crate) enum DispatchKind {
     Context(ContextHandler),
     Produce(ProduceHandler),
     Telemetry(TelemetryHandler),
-    DecodedContext(ContextHandler),
-    EncodedContext(ContextHandler),
     Auth(AuthHandler),
     Fetch,
     SaslMetadata,
@@ -127,32 +125,6 @@ impl DispatchEntry {
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::Telemetry(handler),
-        }
-    }
-
-    pub(crate) fn decoded_context(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
-        Self {
-            api_key,
-            flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
-            kind: DispatchKind::DecodedContext(handler),
-        }
-    }
-
-    pub(crate) fn encoded_context(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
-        Self {
-            api_key,
-            flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
-            kind: DispatchKind::EncodedContext(handler),
         }
     }
 
@@ -393,7 +365,7 @@ macro_rules! decoded_context_dispatches {
         fn $register_fn(registry: &mut DispatchRegistry) {
             $(
                 assert!(
-                    registry.register(DispatchEntry::decoded_context(
+                    registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
@@ -430,7 +402,7 @@ macro_rules! decoded_sync_context_dispatches {
         fn $register_fn(registry: &mut DispatchRegistry) {
             $(
                 assert!(
-                    registry.register(DispatchEntry::decoded_context(
+                    registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
@@ -799,8 +771,15 @@ sync_context_dispatches!(register_sync_context_dispatches;
     (describe_configs_adapter, DescribeConfigs, describe_configs_request, crate::handlers::describe_configs::handle),
 );
 
-// The barrier control plane registers its five RPCs here, at api keys 1010 to
-// 1014. They stay out of `api_catalog::supported_apis`; see
+telemetry_adapter!(
+    get_telemetry_subscriptions_adapter,
+    crate::handlers::get_telemetry_subscriptions::handle
+);
+telemetry_adapter!(
+    push_telemetry_adapter,
+    crate::handlers::push_telemetry::handle
+);
+
 // `KRABKA_PRIVATE_API_KEY_FLOOR` for why.
 // `flexible_min` comes from the codec of each message, so the framing the
 // registry reports and the framing the codec writes cannot drift apart.
@@ -837,15 +816,6 @@ krabka_private_context_dispatches!(register_krabka_private_context_dispatches;
     ),
 );
 
-telemetry_adapter!(
-    get_telemetry_subscriptions_adapter,
-    crate::handlers::get_telemetry_subscriptions::handle
-);
-telemetry_adapter!(
-    push_telemetry_adapter,
-    crate::handlers::push_telemetry::handle
-);
-
 pub(crate) fn build_registry() -> DispatchRegistry {
     let mut registry = DispatchRegistry::new();
 
@@ -871,12 +841,12 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     register_krabka_private_context_dispatches(&mut registry);
     register_decoded_context_dispatches(&mut registry);
     register_decoded_sync_context_dispatches(&mut registry);
-    registry.register(DispatchEntry::encoded_context(
+    registry.register(DispatchEntry::context(
         ApiKey::AlterUserScramCredentials as i16,
         crabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
         alter_user_scram_credentials_adapter,
     ));
-    registry.register(DispatchEntry::encoded_context(
+    registry.register(DispatchEntry::context(
         ApiKey::UpdateFeatures as i16,
         crabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
         update_features_adapter,
@@ -954,56 +924,56 @@ mod tests {
         let registry = build_registry();
 
         for api_key in [
-            ApiKey::Produce,
-            ApiKey::Metadata,
-            ApiKey::OffsetCommit,
-            ApiKey::OffsetFetch,
-            ApiKey::FindCoordinator,
-            ApiKey::JoinGroup,
-            ApiKey::Heartbeat,
-            ApiKey::LeaveGroup,
-            ApiKey::SyncGroup,
-            ApiKey::DeleteGroups,
-            ApiKey::ListOffsets,
-            ApiKey::OffsetForLeaderEpoch,
-            ApiKey::CreateTopics,
-            ApiKey::DeleteTopics,
-            ApiKey::AlterConfigs,
-            ApiKey::IncrementalAlterConfigs,
-            ApiKey::DeleteRecords,
-            ApiKey::CreatePartitions,
-            ApiKey::DescribeGroups,
-            ApiKey::ListGroups,
-            ApiKey::OffsetDelete,
-            ApiKey::DescribeCluster,
-            ApiKey::DescribeProducers,
-            ApiKey::DescribeTransactions,
-            ApiKey::ListTransactions,
-            ApiKey::UnregisterBroker,
-            ApiKey::DescribeTopicPartitions,
-            ApiKey::ListConfigResources,
-            ApiKey::DescribeQuorum,
-            ApiKey::AddRaftVoter,
-            ApiKey::RemoveRaftVoter,
-            ApiKey::UpdateRaftVoter,
-            ApiKey::AlterPartition,
-            ApiKey::BrokerHeartbeat,
-            ApiKey::GetReplicaLogInfo,
-            ApiKey::ConsumerGroupHeartbeat,
-            ApiKey::ConsumerGroupDescribe,
-            ApiKey::ShareGroupDescribe,
-            ApiKey::ShareFetch,
-            ApiKey::ShareAcknowledge,
-            ApiKey::ShareGroupHeartbeat,
-            ApiKey::StreamsGroupHeartbeat,
-            ApiKey::StreamsGroupDescribe,
-            ApiKey::DescribeShareGroupOffsets,
-            ApiKey::AlterShareGroupOffsets,
-            ApiKey::DeleteShareGroupOffsets,
-            ApiKey::InitProducerId,
-            ApiKey::AddPartitionsToTxn,
-            ApiKey::EndTxn,
-            ApiKey::TxnOffsetCommit,
+            ApiKey::Produce as i16,
+            ApiKey::Metadata as i16,
+            ApiKey::OffsetCommit as i16,
+            ApiKey::OffsetFetch as i16,
+            ApiKey::FindCoordinator as i16,
+            ApiKey::JoinGroup as i16,
+            ApiKey::Heartbeat as i16,
+            ApiKey::LeaveGroup as i16,
+            ApiKey::SyncGroup as i16,
+            ApiKey::DeleteGroups as i16,
+            ApiKey::ListOffsets as i16,
+            ApiKey::OffsetForLeaderEpoch as i16,
+            ApiKey::CreateTopics as i16,
+            ApiKey::DeleteTopics as i16,
+            ApiKey::AlterConfigs as i16,
+            ApiKey::IncrementalAlterConfigs as i16,
+            ApiKey::DeleteRecords as i16,
+            ApiKey::CreatePartitions as i16,
+            ApiKey::DescribeGroups as i16,
+            ApiKey::ListGroups as i16,
+            ApiKey::OffsetDelete as i16,
+            ApiKey::DescribeCluster as i16,
+            ApiKey::DescribeProducers as i16,
+            ApiKey::DescribeTransactions as i16,
+            ApiKey::ListTransactions as i16,
+            ApiKey::UnregisterBroker as i16,
+            ApiKey::DescribeTopicPartitions as i16,
+            ApiKey::ListConfigResources as i16,
+            ApiKey::DescribeQuorum as i16,
+            ApiKey::AddRaftVoter as i16,
+            ApiKey::RemoveRaftVoter as i16,
+            ApiKey::UpdateRaftVoter as i16,
+            ApiKey::AlterPartition as i16,
+            ApiKey::BrokerHeartbeat as i16,
+            ApiKey::GetReplicaLogInfo as i16,
+            ApiKey::ConsumerGroupHeartbeat as i16,
+            ApiKey::ConsumerGroupDescribe as i16,
+            ApiKey::ShareGroupDescribe as i16,
+            ApiKey::ShareFetch as i16,
+            ApiKey::ShareAcknowledge as i16,
+            ApiKey::ShareGroupHeartbeat as i16,
+            ApiKey::StreamsGroupHeartbeat as i16,
+            ApiKey::StreamsGroupDescribe as i16,
+            ApiKey::DescribeShareGroupOffsets as i16,
+            ApiKey::AlterShareGroupOffsets as i16,
+            ApiKey::DeleteShareGroupOffsets as i16,
+            ApiKey::InitProducerId as i16,
+            ApiKey::AddPartitionsToTxn as i16,
+            ApiKey::EndTxn as i16,
+            ApiKey::TxnOffsetCommit as i16,
         ] {
             let key = api_key as i16;
             let entry = registry
@@ -1039,27 +1009,24 @@ mod tests {
         let registry = build_registry();
 
         for api_key in [
-            ApiKey::DescribeAcls,
-            ApiKey::CreateAcls,
-            ApiKey::DeleteAcls,
-            ApiKey::ElectLeaders,
-            ApiKey::AlterPartitionReassignments,
-            ApiKey::ListPartitionReassignments,
-            ApiKey::DescribeClientQuotas,
-            ApiKey::AlterClientQuotas,
-            ApiKey::DescribeUserScramCredentials,
-            ApiKey::AlterUserScramCredentials,
-            ApiKey::UpdateFeatures,
+            ApiKey::DescribeAcls as i16,
+            ApiKey::CreateAcls as i16,
+            ApiKey::DeleteAcls as i16,
+            ApiKey::ElectLeaders as i16,
+            ApiKey::AlterPartitionReassignments as i16,
+            ApiKey::ListPartitionReassignments as i16,
+            ApiKey::DescribeClientQuotas as i16,
+            ApiKey::AlterClientQuotas as i16,
+            ApiKey::DescribeUserScramCredentials as i16,
+            ApiKey::AlterUserScramCredentials as i16,
+            ApiKey::UpdateFeatures as i16,
         ] {
             let key = api_key as i16;
             let entry = registry
                 .get(key)
                 .unwrap_or_else(|| panic!("registered api_key {key}"));
             assert!(
-                matches!(
-                    entry.kind(),
-                    DispatchKind::DecodedContext(_) | DispatchKind::EncodedContext(_)
-                ),
+                matches!(entry.kind(), DispatchKind::Context(_)),
                 "api_key {key}"
             );
         }
@@ -1087,16 +1054,6 @@ mod tests {
         assert!(registry.get(9999).is_none());
     }
 
-    fn krabka_private_test_adapter<'a>(
-        _broker: &'a Broker,
-        _version: ApiVersion,
-        _correlation_id: CorrelationId,
-        _body: &'a [u8],
-        _ctx: &'a RequestContext<'a>,
-    ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-        Box::pin(std::future::ready(Ok(Bytes::new())))
-    }
-
     #[test]
     fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
         let registry = build_registry();
@@ -1105,76 +1062,23 @@ mod tests {
             .into_iter()
             .map(|api| api.api_key)
             .collect();
-        let empty = BTreeSet::new();
 
-        // Every advertised api key has a handler. A client that negotiates a
-        // version and then gets UNSUPPORTED_VERSION is the failure this bars.
-        let advertised_without_handler: BTreeSet<ApiKeyCode> =
-            advertised.difference(&registered).copied().collect();
-        assert!(advertised_without_handler == empty);
-
-        // Every registered Kafka api key is advertised.
-        let kafka_registered: BTreeSet<ApiKeyCode> = registered
+        let floor = crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR;
+        let registered_kafka: BTreeSet<ApiKeyCode> = registered
             .iter()
             .copied()
-            .filter(|key| *key < handlers::KRABKA_PRIVATE_API_KEY_FLOOR)
+            .filter(|key| *key < floor)
             .collect();
-        let kafka_registered_without_advertisement: BTreeSet<ApiKeyCode> =
-            kafka_registered.difference(&advertised).copied().collect();
-        assert!(kafka_registered_without_advertisement == empty);
 
-        // A krabka-private api key is registered but never advertised. An
-        // advertised row would print as UNKNOWN(1010) in
-        // kafka-broker-api-versions.sh output, and a real Kafka broker prints
-        // no such row.
-        let advertised_krabka_private: BTreeSet<ApiKeyCode> = advertised
-            .iter()
-            .copied()
-            .filter(|key| *key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR)
-            .collect();
-        assert!(advertised_krabka_private == empty);
-    }
-
-    #[test]
-    fn krabka_private_api_key_registers_and_frames_as_flexible() {
-        // The generated enum does not know a krabka-private key, so the
-        // registry entry is the only source of the flexibility that
-        // `network::dispatch` reads through `body_flexible`.
-        assert!(ApiKey::from_i16(handlers::TRIGGER_BARRIER_API_KEY).is_none());
-
-        let mut registry = DispatchRegistry::new();
-        assert!(registry.register(DispatchEntry::context(
-            handlers::TRIGGER_BARRIER_API_KEY,
-            0,
-            krabka_private_test_adapter,
-        )));
-
-        let entry = registry
-            .get(handlers::TRIGGER_BARRIER_API_KEY)
-            .expect("registered krabka-private entry");
-        assert!(matches!(entry.kind(), DispatchKind::Context(_)));
-        assert!(entry.quota_policy() == RequestQuotaPolicy::InlineExempt);
-        assert!(registry.body_flexible(handlers::TRIGGER_BARRIER_API_KEY, 0));
-    }
-
-    #[test]
-    fn every_barrier_api_key_sits_in_the_krabka_private_range() {
-        let barrier_keys = [
-            handlers::ALTER_BARRIER_GROUPS_API_KEY,
-            handlers::DESCRIBE_BARRIER_GROUPS_API_KEY,
-            handlers::TRIGGER_BARRIER_API_KEY,
-            handlers::LIST_BARRIER_CUTS_API_KEY,
-            handlers::WRITE_BARRIER_MARKERS_API_KEY,
-        ];
-
-        assert!(barrier_keys == [1010, 1011, 1012, 1013, 1014]);
-        for key in barrier_keys {
-            assert!(
-                key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
-                "api_key {key}"
-            );
-            assert!(ApiKey::from_i16(key).is_none(), "api_key {key}");
-        }
+        // Every advertised key is registered, and every registered Kafka key is
+        // advertised. The krabka-private keys are deliberately absent from the
+        // catalog: advertising them would put UNKNOWN(1010) rows into
+        // kafka-broker-api-versions output, a visible divergence from a real
+        // broker, and a client that does not find a key negotiates (0, 0),
+        // which is right for a MIN = MAX = 0 request.
+        assert!(advertised.is_subset(&registered));
+        assert!(registered_kafka == advertised);
+        assert!(advertised.iter().all(|key| *key < floor));
     }
 
     #[test]

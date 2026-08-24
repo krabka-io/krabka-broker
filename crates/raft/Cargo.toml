@@ -43,6 +43,7 @@ base64 = { workspace = true }
 dashmap = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "fs"] }
 tokio-util = { workspace = true, features = ["rt"] }

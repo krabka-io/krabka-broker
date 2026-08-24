@@ -39,5 +39,7 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 assert2 = { workspace = true }
 crabka-client-admin = { version = "0.4.0" }
-crabka-broker-test-helpers = { version = "0.4.0", path = "../broker/test-helpers" }
+# BrokerConfig::for_tests lives behind the broker's own test-helpers feature
+# now that the facade crate is gone.
+crabka-broker = { version = "0.4.0", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }
