@@ -19,7 +19,7 @@ use crate::{
     event::AuditEvent,
     ids::{EpochMs, Seq},
     ocsf::ProductInfo,
-    signing::SigningKeyProvider,
+    signing::FileEd25519Signer,
     sink::{AuditRecord, AuditSink},
     spool::Spool,
     stats::AuditStats,
@@ -91,7 +91,7 @@ impl AuditLog {
 pub struct AuditWriterParams {
     pub sink: Arc<dyn AuditSink>,
     pub product: ProductInfo,
-    pub signer: Option<Arc<dyn SigningKeyProvider>>,
+    pub signer: Option<Arc<FileEd25519Signer>>,
     /// Emit a checkpoint after the writer chains this many records since the
     /// last checkpoint. This field is a count, not an extent. `0` disables the
     /// count trigger.
@@ -120,7 +120,7 @@ pub struct AuditWriter {
     sink: Arc<dyn AuditSink>,
     product: ProductInfo,
     chain: ChainState,
-    signer: Option<Arc<dyn SigningKeyProvider>>,
+    signer: Option<Arc<FileEd25519Signer>>,
     checkpoint_every_n: u64,
     checkpoint_every: Time,
     since_checkpoint: u64,

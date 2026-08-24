@@ -899,7 +899,7 @@ async fn start_coordinators(
     }
 }
 
-fn audit_signer(config: &BrokerConfig) -> Option<Arc<dyn crabka_audit::SigningKeyProvider>> {
+fn audit_signer(config: &BrokerConfig) -> Option<Arc<crabka_audit::FileEd25519Signer>> {
     let (Some(path), Some(key_id)) = (&config.audit_signing_key_path, &config.audit_signing_key_id)
     else {
         tracing::info!("no audit signing key configured; checkpoints disabled");
