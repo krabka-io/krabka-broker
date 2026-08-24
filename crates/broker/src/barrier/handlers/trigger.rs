@@ -12,11 +12,16 @@
 //!
 //! # The `timeout_ms` field
 //!
-//! The coordinator applies the broker-wide `barrier.injection.timeout` to
-//! every injection, and `timeout_ms` does not shorten it. The handler cannot
-//! bound the wait on its own: it would have to drop the injection future, and
-//! that leaves the epoch's injection-start record with no cut record after it.
-//! Recovery then finalises that epoch on the next coordinator.
+//! `timeout_ms` shortens how long the fan-out retries the partitions that
+//! carry no marker yet. A value at or below zero asks for the broker-wide
+//! `barrier.injection.timeout`, and a value above it is clamped to it, so a
+//! caller cannot hold the group's lock for longer than the operator allows.
+//!
+//! The bound moves the fan-out deadline. It never drops the injection future:
+//! abandoning one leaves the epoch's injection-start record with no cut record
+//! after it, which is the state a crashed coordinator leaves behind, and a
+//! caller's impatience must not manufacture one. A request that runs out of
+//! time gets a partial cut, which names the partitions that took no marker.
 //!
 //! Authorization: `Alter` on `Cluster("kafka-cluster")`. On a deny the response
 //! carries `CLUSTER_AUTHORIZATION_FAILED` (31).
@@ -26,6 +31,7 @@ use crabka_protocol::{
     Decode,
     krabka::barrier::{CUT_STATUS_PARTIAL, TriggerBarrierRequest, TriggerBarrierResponse},
 };
+use crabka_units::{Time, millis};
 
 use crate::{
     barrier::{
@@ -63,7 +69,7 @@ pub(crate) async fn handle(
 
     let resp = match broker
         .barrier_coordinator
-        .trigger_injection(&req.group)
+        .trigger_injection(&req.group, requested_timeout(req.timeout_ms))
         .await
     {
         Ok(outcome) => cut_response(&outcome),
@@ -112,8 +118,36 @@ fn refused(error_code: i16, error_message: Option<String>) -> TriggerBarrierResp
     }
 }
 
+/// The fan-out bound a `TriggerBarrier` request asks for.
+///
+/// A value at or below zero asks for the broker-wide default, which the
+/// coordinator supplies for `None`. Kafka spells "no opinion" as a
+/// non-positive timeout across its own admin requests, so this follows it.
+fn requested_timeout(timeout_ms: i32) -> Option<Time> {
+    u32::try_from(timeout_ms)
+        .ok()
+        .filter(|ms| *ms > 0)
+        .map(millis)
+}
+
 #[cfg(test)]
 mod tests {
+    /// A non-positive bound asks for the broker default, which the coordinator
+    /// supplies for `None`. Anything positive is the caller's own bound.
+    #[test]
+    fn a_requested_timeout_reads_non_positive_as_no_opinion() {
+        let cases = [
+            ("zero", 0, None),
+            ("negative", -1, None),
+            ("i32 floor", i32::MIN, None),
+            ("one millisecond", 1, Some(crabka_units::millis(1))),
+            ("thirty seconds", 30_000, Some(crabka_units::millis(30_000))),
+        ];
+        for (case, requested, expected) in cases {
+            assert!(requested_timeout(requested) == expected, "{case}");
+        }
+    }
+
     use assert2::check;
     use crabka_ids::PartitionIndex;
     use crabka_log::Offset;

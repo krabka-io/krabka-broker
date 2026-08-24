@@ -145,14 +145,18 @@ impl MarkerFanout<'_> {
     ///
     /// The function reads a fresh metadata image per attempt, so a leader that
     /// moves between two attempts still gets the marker. It returns when every
-    /// target carries a marker, or when the injection deadline passes. The
-    /// caller publishes a partial cut for whatever is absent from the result.
+    /// target carries a marker, or when `timeout` passes. The caller publishes
+    /// a partial cut for whatever is absent from the result.
+    ///
+    /// The caller supplies `timeout` rather than the fan-out reading it from
+    /// the config, because a `TriggerBarrier` request carries its own bound.
     pub(crate) async fn run(
         &self,
         marker: &BarrierMarker,
         targets: Vec<TargetPartition>,
+        timeout: Time,
     ) -> BTreeMap<TargetPartition, Offset> {
-        let deadline = Instant::now() + self.config.injection_timeout.to_std();
+        let deadline = Instant::now() + timeout.to_std();
         let mut pending = targets;
         let mut placed: BTreeMap<TargetPartition, Offset> = BTreeMap::new();
         let mut attempt: u32 = 0;
@@ -419,7 +423,11 @@ mod tests {
         };
 
         let placed = fanout
-            .run(&marker(), vec![at("orders", 0), at("orders", 1)])
+            .run(
+                &marker(),
+                vec![at("orders", 0), at("orders", 1)],
+                config.injection_timeout,
+            )
             .await;
         assert!(placed.len() == 2);
         assert!(placed[&at("orders", 0)] == Offset(0));
@@ -458,7 +466,11 @@ mod tests {
         };
 
         let placed = fanout
-            .run(&marker(), vec![at("orders", 0), at("orders", 1)])
+            .run(
+                &marker(),
+                vec![at("orders", 0), at("orders", 1)],
+                config.injection_timeout,
+            )
             .await;
         assert!(placed.keys().cloned().collect::<Vec<_>>() == vec![at("orders", 0)]);
     }
@@ -494,7 +506,9 @@ mod tests {
             metrics: &metrics,
             config: &config,
         };
-        let placed = fanout.run(&marker(), vec![at("orders", 0)]).await;
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
         assert!(placed == BTreeMap::from([(at("orders", 0), Offset(77))]));
     }
 
@@ -538,7 +552,9 @@ mod tests {
             metrics: &metrics,
             config: &config,
         };
-        let placed = fanout.run(&marker(), vec![at("orders", 0)]).await;
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
         assert!(placed == BTreeMap::from([(at("orders", 0), Offset(12))]));
     }
 
@@ -565,7 +581,9 @@ mod tests {
             metrics: &metrics,
             config: &config,
         };
-        let placed = fanout.run(&marker(), vec![at("orders", 0)]).await;
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
         assert!(placed.is_empty());
     }
 }

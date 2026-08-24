@@ -99,6 +99,15 @@ pub(crate) struct GroupDescription {
 /// Returns [`BarrierError::InvalidDefinition`] when the topic list is empty,
 /// when it holds an empty name or a duplicate name, when `retained_cuts` is
 /// below one, or when the interval is not positive.
+/// The fan-out deadline a request gets.
+///
+/// `ceiling` is the operator's configured bound. A request that names none
+/// takes it, and one that asks for longer is held to it, so a caller cannot
+/// hold a group's lock past what the operator allows.
+fn clamp_timeout(requested: Option<Time>, ceiling: Time) -> Time {
+    requested.map_or(ceiling, |asked| asked.min(ceiling))
+}
+
 pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
     if spec.topics.is_empty() {
         return Err(BarrierError::InvalidDefinition(
@@ -427,9 +436,19 @@ impl BarrierCoordinator {
     /// busy, [`BarrierError::CoordinatorEpochChanged`] when this broker lost
     /// the state partition during the fan-out, and [`BarrierError::Persist`]
     /// when an append fails.
+    /// `timeout` bounds how long the fan-out retries the partitions that carry
+    /// no marker yet. `None` uses the configured default, and a value above it
+    /// is clamped to it, so a caller cannot hold the group's lock for longer
+    /// than the operator allows.
+    ///
+    /// The bound shortens the fan-out deadline rather than dropping the
+    /// injection. Abandoning it would leave the epoch's injection-start record
+    /// with no cut record, which is the state a crashed coordinator leaves
+    /// behind, so a caller's impatience must not manufacture one.
     pub(crate) async fn trigger_injection(
         &self,
         group: &str,
+        timeout: Option<Time>,
     ) -> Result<InjectionOutcome, BarrierError> {
         self.require_coordinator(group).await?;
         let handle = self.live_entry(group)?;
@@ -443,7 +462,13 @@ impl BarrierCoordinator {
                 group: group.to_owned(),
             });
         }
-        self.inject(group, &mut entry).await
+        self.inject(group, &mut entry, self.effective_timeout(timeout))
+            .await
+    }
+
+    /// The fan-out deadline for one injection.
+    fn effective_timeout(&self, requested: Option<Time>) -> Time {
+        clamp_timeout(requested, self.config.injection_timeout)
     }
 
     /// Inject into every group whose interval elapsed at `now_ms`.
@@ -462,7 +487,7 @@ impl BarrierCoordinator {
 
         let mut injected = Vec::new();
         for group in candidates {
-            match self.trigger_injection(&group).await {
+            match self.trigger_injection(&group, None).await {
                 Ok(outcome) => {
                     info!(group, epoch = outcome.epoch, "scheduled barrier injection");
                     injected.push(group);
@@ -567,6 +592,7 @@ impl BarrierCoordinator {
         &self,
         group: &str,
         entry: &mut GroupEntry,
+        timeout: Time,
     ) -> Result<InjectionOutcome, BarrierError> {
         let image = self.controller.current_image();
         let coordinator_epoch =
@@ -605,7 +631,9 @@ impl BarrierCoordinator {
             epoch,
             triggered_at,
         };
-        let placed = self.fan_out(&marker, expand_targets(&start.targets)).await;
+        let placed = self
+            .fan_out(&marker, expand_targets(&start.targets), timeout)
+            .await;
 
         // A coordinator that lost the state partition during the fan-out must
         // not write the cut. The new coordinator finalises the epoch from the
@@ -650,6 +678,7 @@ impl BarrierCoordinator {
         &self,
         marker: &BarrierMarker,
         targets: Vec<TargetPartition>,
+        timeout: Time,
     ) -> BTreeMap<TargetPartition, Offset> {
         MarkerFanout {
             node_id: self.node_id,
@@ -659,7 +688,7 @@ impl BarrierCoordinator {
             metrics: self.metrics.as_ref(),
             config: &self.config,
         }
-        .run(marker, targets)
+        .run(marker, targets, timeout)
         .await
     }
 
@@ -900,6 +929,31 @@ fn keep_decoded<T>(
 
 #[cfg(test)]
 mod tests {
+    /// The configured timeout is a ceiling, not a default a caller can raise.
+    /// A request that asks for longer would otherwise hold the group's lock
+    /// past what the operator allows.
+    #[test]
+    fn a_requested_timeout_is_clamped_to_the_configured_ceiling() {
+        let ceiling = crabka_units::secs(30);
+        let cases = [
+            ("no opinion takes the ceiling", None, ceiling),
+            (
+                "under the ceiling is honoured",
+                Some(crabka_units::secs(5)),
+                crabka_units::secs(5),
+            ),
+            (
+                "over the ceiling is clamped",
+                Some(crabka_units::secs(600)),
+                ceiling,
+            ),
+            ("exactly the ceiling", Some(ceiling), ceiling),
+        ];
+        for (case, requested, expected) in cases {
+            assert!(clamp_timeout(requested, ceiling) == expected, "{case}");
+        }
+    }
+
     use assert2::{assert, check};
     use crabka_metadata::MetadataRecord;
     use crabka_units::millis;
@@ -1115,7 +1169,7 @@ mod tests {
             .expect("the group is created");
 
         let outcome = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(outcome.epoch == 1);
@@ -1174,7 +1228,7 @@ mod tests {
         for _ in 0..3 {
             epochs.push(
                 coordinator
-                    .trigger_injection(GROUP)
+                    .trigger_injection(GROUP, None)
                     .await
                     .expect("the injection runs")
                     .epoch,
@@ -1201,7 +1255,7 @@ mod tests {
             .expect("the group is created");
 
         let outcome = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(outcome.epoch == 1);
@@ -1216,7 +1270,7 @@ mod tests {
 
         // The epoch is consumed. The next injection takes epoch 2.
         let next = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(next.epoch == 2);
@@ -1231,7 +1285,7 @@ mod tests {
             .await
             .expect("the group is created");
         let first = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(first.cut.topics.len() == 1);
@@ -1241,7 +1295,7 @@ mod tests {
             .await
             .expect("the group is updated");
         let second = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         let topics: Vec<&str> = second.cut.topics.iter().map(|t| t.topic.as_str()).collect();
@@ -1259,7 +1313,7 @@ mod tests {
             .expect("the group is created");
         for _ in 0..4 {
             coordinator
-                .trigger_injection(GROUP)
+                .trigger_injection(GROUP, None)
                 .await
                 .expect("the injection runs");
         }
@@ -1295,7 +1349,7 @@ mod tests {
             .expect("the group is created");
         for _ in 0..4 {
             coordinator
-                .trigger_injection(GROUP)
+                .trigger_injection(GROUP, None)
                 .await
                 .expect("the injection runs");
         }
@@ -1304,7 +1358,7 @@ mod tests {
             .await
             .expect("the group is updated");
         coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
 
@@ -1337,11 +1391,11 @@ mod tests {
             .await
             .expect("the group is created");
         let first = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         let second = coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
 
@@ -1376,7 +1430,7 @@ mod tests {
 
         // The recovered coordinator allocates the next epoch, never a used one.
         let third = replayed
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(third.epoch == 3);
@@ -1439,7 +1493,7 @@ mod tests {
 
         // The epoch is consumed and it is never reused.
         let next = replayed
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
         assert!(next.epoch == 2);
@@ -1454,7 +1508,7 @@ mod tests {
             .await
             .expect("the group is created");
         coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
 
@@ -1476,7 +1530,7 @@ mod tests {
         assert!(let Err(BarrierError::UnknownGroup { .. }) = coordinator.delete_group(GROUP).await);
         assert!(
             let Err(BarrierError::UnknownGroup { .. }) =
-                coordinator.trigger_injection(GROUP).await
+                coordinator.trigger_injection(GROUP, None).await
         );
     }
 
@@ -1519,11 +1573,11 @@ mod tests {
             .live_entry(GROUP)
             .expect("the group entry is there");
         let held = handle.lock().await;
-        let refused = coordinator.trigger_injection(GROUP).await;
+        let refused = coordinator.trigger_injection(GROUP, None).await;
         assert!(let Err(BarrierError::InjectionInProgress { .. }) = refused);
         drop(held);
 
-        assert!(coordinator.trigger_injection(GROUP).await.is_ok());
+        assert!(coordinator.trigger_injection(GROUP, None).await.is_ok());
     }
 
     #[tokio::test]
@@ -1535,7 +1589,7 @@ mod tests {
             .await
             .expect("the group is created");
         coordinator
-            .trigger_injection(GROUP)
+            .trigger_injection(GROUP, None)
             .await
             .expect("the injection runs");
 
