@@ -1188,13 +1188,16 @@ mod tests {
             io::{Error, ErrorKind},
         };
 
-        /// A reader replaying a script of results, recording the offset each
-        /// call was made at.
+        /// The offset of every call the scripted reader received, in order.
+        type SeenOffsets = std::rc::Rc<RefCell<Vec<u64>>>;
+
+        /// A reader that replays a script of results and records the offset of
+        /// each call.
         fn scripted(
             script: Vec<std::io::Result<usize>>,
         ) -> (
             impl Fn(u64, &mut [u8]) -> std::io::Result<usize>,
-            std::rc::Rc<RefCell<Vec<u64>>>,
+            SeenOffsets,
         ) {
             let offsets = std::rc::Rc::new(RefCell::new(Vec::new()));
             let seen = std::rc::Rc::clone(&offsets);

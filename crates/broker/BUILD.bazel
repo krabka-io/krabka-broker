@@ -57,6 +57,7 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        "jvm_barrier_markers": ["cp_kafka_7_5_0"],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",

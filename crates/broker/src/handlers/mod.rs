@@ -23,6 +23,36 @@ pub type ErrorCode = i16;
 /// Client-chosen request correlation id. The response header echoes it exactly.
 pub type CorrelationId = i32;
 
+/// Lowest `api_key` in the krabka-private range.
+///
+/// Apache Kafka assigns api keys upward from 0, so krabka reserves 1000 and
+/// above for RPCs that only krabka speaks. A later Kafka assignment cannot
+/// reach that far by normal growth. `crates/raft/src/wire.rs` follows the same
+/// convention for the controller-only RPCs at 1003 and 1004.
+///
+/// The broker registers a krabka-private key for dispatch but never advertises
+/// it in [`crate::api_catalog::supported_apis`]. An advertised row would print
+/// as `UNKNOWN(1010)` in `kafka-broker-api-versions.sh` output, which a real
+/// Kafka broker never prints. A client that finds no row negotiates version
+/// `(0, 0)`, and every krabka-private api is version 0 only.
+pub(crate) const KRABKA_PRIVATE_API_KEY_FLOOR: ApiKeyCode = 1000;
+
+/// `AlterBarrierGroups` (1010): creates, updates, and deletes barrier groups.
+pub(crate) const ALTER_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1010;
+
+/// `DescribeBarrierGroups` (1011): reads back the barrier group definitions.
+pub(crate) const DESCRIBE_BARRIER_GROUPS_API_KEY: ApiKeyCode = 1011;
+
+/// `TriggerBarrier` (1012): starts one injection for a barrier group.
+pub(crate) const TRIGGER_BARRIER_API_KEY: ApiKeyCode = 1012;
+
+/// `ListBarrierCuts` (1013): lists the cuts that a barrier group retains.
+pub(crate) const LIST_BARRIER_CUTS_API_KEY: ApiKeyCode = 1013;
+
+/// `WriteBarrierMarkers` (1014): inter-broker append of markers into the
+/// partitions that the receiving broker leads.
+pub(crate) const WRITE_BARRIER_MARKERS_API_KEY: ApiKeyCode = 1014;
+
 /// Kafka topics owned by the broker rather than an application.
 pub(crate) fn is_internal_topic(name: &str) -> bool {
     matches!(

@@ -184,7 +184,7 @@ mod tests {
         };
 
         // now - retention == the segment's max timestamp: on the cutoff.
-        let on_cutoff = SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(6_000);
+        let on_cutoff = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(6);
         check!(
             time_based_evict(&refs, &config, on_cutoff).is_empty(),
             "a segment on the cutoff is still within retention"

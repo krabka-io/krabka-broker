@@ -457,6 +457,20 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub transaction_max_timeout: Option<Time>,
+    pub barrier_state_num_partitions: Option<i32>,
+    pub barrier_state_replication_factor: Option<i16>,
+    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub barrier_min_injection_interval: Option<Time>,
+    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub barrier_injection_timeout: Option<Time>,
+    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<String>")]
+    pub barrier_recovery_read_max: Option<ByteSize>,
+    pub barrier_retained_cuts: Option<i32>,
+    pub barrier_max_groups: Option<usize>,
+    pub barrier_max_topics_per_group: Option<usize>,
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub partition_disk_scan_interval: Option<Time>,
@@ -2016,6 +2030,7 @@ impl RuntimeFileConfig {
         self.apply_recovery_and_queues(cfg)?;
         self.apply_network_limits(cfg)?;
         self.apply_transactions(cfg)?;
+        self.apply_barrier(cfg)?;
         self.apply_broker_policy(cfg)?;
         self.apply_share_group(cfg)?;
         self.apply_streams_group(cfg)
@@ -2536,6 +2551,53 @@ impl RuntimeFileConfig {
             transaction_max_timeout,
             cfg.transaction_max_timeout,
             positive_i32
+        );
+        Ok(())
+    }
+
+    /// Applies the `barrier.*` runtime keys.
+    ///
+    /// `barrier_min_injection_interval` is a floor. A group asks for its own
+    /// periodic interval through `AlterBarrierGroups`, and the coordinator
+    /// refuses one below this value.
+    fn apply_barrier(
+        &mut self,
+        cfg: &mut crate::config::BrokerConfig,
+    ) -> Result<(), FileConfigError> {
+        let runtime = self;
+        set_runtime_i32!(
+            runtime,
+            barrier_state_num_partitions,
+            cfg.barrier_state_num_partitions
+        );
+        if let Some(value) = runtime.barrier_state_replication_factor {
+            cfg.barrier_state_replication_factor =
+                positive_i16("barrier_state_replication_factor", value)?;
+        }
+        set_runtime_time_millis!(
+            runtime,
+            barrier_min_injection_interval,
+            cfg.barrier_min_injection_interval,
+            positive_i64
+        );
+        set_runtime_time_millis!(
+            runtime,
+            barrier_injection_timeout,
+            cfg.barrier_injection_timeout,
+            positive_i64
+        );
+        set_runtime_size_bytes!(
+            runtime,
+            barrier_recovery_read_max,
+            cfg.barrier_recovery_read_max,
+            whole_bytes_usize
+        );
+        set_runtime_i32!(runtime, barrier_retained_cuts, cfg.barrier_retained_cuts);
+        set_runtime_usize!(runtime, barrier_max_groups, cfg.barrier_max_groups);
+        set_runtime_usize!(
+            runtime,
+            barrier_max_topics_per_group,
+            cfg.barrier_max_topics_per_group
         );
         Ok(())
     }
@@ -5018,6 +5080,63 @@ streams_group_max_size = 19
             .expect("accept positive trim lag");
 
         assert!(config.diskless_wal_trim_safety_lag == 7);
+    }
+
+    #[test]
+    fn barrier_runtime_keys_land_in_the_broker_config() {
+        let file: FileConfig = toml::from_str(
+            r#"
+[runtime]
+barrier_state_num_partitions = 12
+barrier_state_replication_factor = 2
+barrier_min_injection_interval = "5s"
+barrier_injection_timeout = "45s"
+barrier_recovery_read_max = "4MiB"
+barrier_retained_cuts = 25
+barrier_max_groups = 8
+barrier_max_topics_per_group = 16
+"#,
+        )
+        .expect("parse barrier runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg)
+            .expect("apply barrier runtime config");
+
+        let actual = (
+            cfg.barrier_state_num_partitions,
+            cfg.barrier_state_replication_factor,
+            cfg.barrier_min_injection_interval,
+            cfg.barrier_injection_timeout,
+            cfg.barrier_recovery_read_max,
+            cfg.barrier_retained_cuts,
+            cfg.barrier_max_groups,
+            cfg.barrier_max_topics_per_group,
+        );
+
+        assert!(actual == (12, 2, secs(5), secs(45), mebibytes(4), 25, 8, 16));
+    }
+
+    #[test]
+    fn barrier_runtime_keys_reject_nonpositive_values() {
+        let cases = [
+            "barrier_state_num_partitions = 0",
+            "barrier_state_replication_factor = 0",
+            "barrier_min_injection_interval = \"0s\"",
+            "barrier_injection_timeout = \"0s\"",
+            "barrier_recovery_read_max = \"0B\"",
+            "barrier_retained_cuts = 0",
+            "barrier_max_groups = 0",
+            "barrier_max_topics_per_group = 0",
+        ];
+
+        for case in cases {
+            let file: FileConfig = toml::from_str(&format!("[runtime]\n{case}\n"))
+                .unwrap_or_else(|error| panic!("parse {case}: {error}"));
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            assert!(file.apply_to(&mut cfg).is_err(), "{case}");
+        }
     }
 
     /// Every time and byte-size runtime key must survive the round trip

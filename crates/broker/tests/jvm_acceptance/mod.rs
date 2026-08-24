@@ -146,8 +146,19 @@ pub(crate) const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka
 /// Spawn the broker on `broker0_listen()`. The advertised listener is
 /// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
-
 pub(crate) async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+    start_host_broker_with(|_| {}).await
+}
+
+/// [`start_host_broker`], letting the caller adjust the config first.
+///
+/// A suite that drives one of the coordinators needs its internal topic to be
+/// hostable here: the defaults ask for 50 partitions at replication factor 3,
+/// which one node cannot satisfy, so the partition a key hashes to may never
+/// open.
+pub(crate) async fn start_host_broker_with(
+    adjust: impl FnOnce(&mut BrokerConfig),
+) -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -176,6 +187,8 @@ pub(crate) async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfil
         bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
+    let mut config = config;
+    adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
         "CRABKA[test] broker started listen={listen} advertised={bootstrap}",
