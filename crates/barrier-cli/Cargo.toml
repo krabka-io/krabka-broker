@@ -1,0 +1,43 @@
+[package]
+name = "crabka-barrier"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Administers krabka barrier groups: define a group, trigger a cut, list cuts, and verify a cut against the log"
+
+[lints]
+workspace = true
+
+# A library as well as a binary, for the same reason `crabka-format` is one: a
+# test that spawns the binary needs a Cargo working tree to build it from, and a
+# Bazel test sandbox has none. Tests call `run_from_args` in process instead.
+[lib]
+name = "crabka_barrier"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crabka-barrier"
+path = "src/main.rs"
+
+[dependencies]
+# `parse_barrier_marker` reads a marker back out of a fetched batch. The decoder
+# lives with the injector so the two cannot drift.
+crabka-broker = { version = "0.4.0", path = "../broker" }
+crabka-client-core = { version = "0.4.0" }
+crabka-protocol = { version = "0.4.0" }
+crabka-units = { workspace = true }
+
+clap = { workspace = true, features = ["env"] }
+bytes = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+crabka-client-admin = { version = "0.4.0" }
+crabka-broker-test-helpers = { version = "0.4.0", path = "../broker/test-helpers" }
+tempfile = { workspace = true }

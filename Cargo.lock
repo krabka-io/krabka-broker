@@ -1017,6 +1017,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabka-barrier"
+version = "0.4.0"
+dependencies = [
+ "assert2",
+ "bytes",
+ "clap",
+ "crabka-broker",
+ "crabka-broker-test-helpers",
+ "crabka-client-admin",
+ "crabka-client-core",
+ "crabka-protocol",
+ "crabka-units",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "crabka-broker"
 version = "0.4.0"
 dependencies = [
