@@ -465,7 +465,7 @@ pub fn manifest_head(body: &ManifestBody) -> ChainHead {
 /// Canonical signed payload for a manifest.
 ///
 /// The layout is
-/// `MANIFEST_DOMAIN ‖ kid_len(u32 BE) ‖ kid ‖ epoch_id(16) ‖ seq(u64 BE) ‖ head(32)`.
+/// `MANIFEST_DOMAIN ‖ kid_len(u64 BE) ‖ kid ‖ epoch_id(16) ‖ seq(u64 BE) ‖ head(32)`.
 /// The writer calls it to sign and the verifier calls it to verify.
 #[must_use]
 pub fn manifest_signing_bytes(
@@ -475,7 +475,7 @@ pub fn manifest_signing_bytes(
     head: ChainHead,
 ) -> Vec<u8> {
     let kid = key_id.as_bytes();
-    let mut out = Vec::with_capacity(MANIFEST_DOMAIN.len() + 4 + kid.len() + 16 + 8 + 32);
+    let mut out = Vec::with_capacity(MANIFEST_DOMAIN.len() + 8 + kid.len() + 16 + 8 + 32);
     out.extend_from_slice(MANIFEST_DOMAIN);
     push_bytes(&mut out, kid);
     out.extend_from_slice(epoch_id.0.as_bytes());
@@ -869,6 +869,41 @@ mod tests {
 
         let (_other_signer, other_public_key) = fresh_signer("worm-key-2");
         check!(!verify_manifest_signature(&authentic, &other_public_key));
+    }
+
+    /// Pins the exact bytes an Ed25519 signature covers.
+    ///
+    /// This layout is a wire contract. An auditor writing an independent
+    /// verifier reads the rustdoc on [`manifest_signing_bytes`] and reproduces
+    /// it, so the doc being wrong is worse than a slow encoder. Nothing else
+    /// here fixes these bytes: every other row goes through sign-then-verify,
+    /// which agrees with itself whatever the layout happens to be, so a drift
+    /// between the documented layout and the encoder passes unnoticed. That is
+    /// precisely what happened when the length prefix widened from `u32` to
+    /// `u64` and the rustdoc kept saying `u32`.
+    ///
+    /// The expectation is assembled from its parts rather than from the
+    /// function under test, so this asserts against the documented layout and
+    /// not against whatever the encoder currently emits.
+    #[test]
+    fn manifest_signing_bytes_match_the_documented_layout() {
+        let key_id = "worm-key-1";
+        let epoch_id = EpochId(Uuid::from_u128(0x99));
+        let seq = ManifestSeq(7);
+        let head = ChainHead([0xab; 32]);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(MANIFEST_DOMAIN);
+        expected.extend_from_slice(&(key_id.len() as u64).to_be_bytes());
+        expected.extend_from_slice(key_id.as_bytes());
+        expected.extend_from_slice(epoch_id.0.as_bytes());
+        expected.extend_from_slice(&seq.0.to_be_bytes());
+        expected.extend_from_slice(&head.0);
+
+        check!(manifest_signing_bytes(key_id, epoch_id, seq, head) == expected);
+        // The widths the doc names, restated as arithmetic so a change to any
+        // one of them fails here and not only in the byte comparison above.
+        check!(expected.len() == MANIFEST_DOMAIN.len() + 8 + key_id.len() + 16 + 8 + 32);
     }
 
     #[test]
