@@ -1409,6 +1409,7 @@ name = "crabka-remote-storage"
 version = "0.4.0"
 dependencies = [
  "assert2",
+ "async-trait",
  "base64 0.23.1",
  "bytes",
  "clap",

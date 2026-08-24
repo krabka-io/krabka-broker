@@ -86,9 +86,23 @@ struct VerifyArgs {
     /// catches a body replaced with different bytes of the same length.
     #[arg(long)]
     deep: bool,
+    #[command(flatten)]
+    grading: GradingArgs,
+}
+
+/// How the run grades what the walk found.
+///
+/// Separate from the rest because these two say nothing about *what* to read
+/// and everything about which findings are worth a non-zero exit: both cover a
+/// state that is expected in one deployment and unacceptable in another.
+#[derive(Debug, Args)]
+struct GradingArgs {
     /// Accept a chain restart instead of grading it as an attestation hole.
     #[arg(long)]
     allow_epoch_restarts: bool,
+    /// Grade orphan objects as a failure. They are reported either way.
+    #[arg(long)]
+    strict_orphans: bool,
 }
 
 /// Parses a chain head written as 64 hex characters.
@@ -143,7 +157,7 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
         // The tip comparison happens below, so a tip mismatch grades as its own
         // outcome and is never reported as tampering.
         expect_head: None,
-        allow_epoch_restarts: args.allow_epoch_restarts,
+        allow_epoch_restarts: args.grading.allow_epoch_restarts,
     };
     match verify_archive(&store, &request, &trusted).await {
         Ok(report) => grade(&report, &args),
@@ -230,21 +244,10 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         .flat_map(|partition| partition.orphan_objects.iter())
         .collect();
     if !orphans.is_empty() {
-        eprintln!(
-            "ORPHAN OBJECTS: {} object(s) with no manifest",
-            orphans.len()
-        );
-        for key in orphans.iter().take(ORPHANS_SHOWN) {
-            eprintln!("  {key}");
+        report_orphans(&orphans, args.grading.strict_orphans);
+        if args.grading.strict_orphans {
+            return ExitCode::FAILURE;
         }
-        if let Some(hidden) = orphans.len().checked_sub(ORPHANS_SHOWN).filter(|n| *n > 0) {
-            eprintln!("  ... and {hidden} more");
-        }
-        eprintln!(
-            "  An object no manifest names makes no integrity claim: nothing signed says what \
-             its bytes should be."
-        );
-        return ExitCode::FAILURE;
     }
 
     let restarts: usize = report
@@ -252,7 +255,7 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         .iter()
         .map(|partition| partition.epochs.len().saturating_sub(1))
         .sum();
-    if restarts > 0 && !args.allow_epoch_restarts {
+    if restarts > 0 && !args.grading.allow_epoch_restarts {
         eprintln!("INCOMPLETE ATTESTATION: chain restarted {restarts} time(s)");
         eprintln!(
             "  A restart happens when the broker could not read back its chain tip, so it began \
@@ -284,13 +287,21 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Carried by both verdicts below: a directory holding nothing but orphans
+    // reports no manifests, and calling that "empty" would contradict the
+    // objects just listed on stderr.
+    let noted = if orphans.is_empty() {
+        String::new()
+    } else {
+        format!(" ({} orphan object(s), see stderr)", orphans.len())
+    };
+
     if report.manifests() == 0 {
-        println!("OK: empty archive");
+        println!("OK: empty archive{noted}");
         return ExitCode::SUCCESS;
     }
-
     println!(
-        "OK: {} manifests over {} partition(s), chain continuous, all signatures valid",
+        "OK: {} manifests over {} partition(s), chain continuous, all signatures valid{noted}",
         report.manifests(),
         report.partitions.len()
     );
@@ -298,6 +309,55 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         println!("{line}");
     }
     ExitCode::SUCCESS
+}
+
+/// Prints the orphan objects and says what they mean under the chosen grading.
+///
+/// An orphan is an object no manifest names. The archiver writes the manifest
+/// **last**, as the commit point, so a copy that died before sealing one leaves
+/// exactly this, and the retry ran under a fresh segment id -- the debris is
+/// inert, and no reader ever reaches it.
+///
+/// It is not fatal by default, and that is a deliberate reversal. A WORM
+/// archive refuses deletes, so orphans can never be cleared: grading them a
+/// failure makes one interrupted copy condemn the archive on every run
+/// thereafter, with no action any operator could take to fix it. A verdict
+/// nobody can act on is a verdict they stop reading, which costs more than the
+/// debris does. `--strict-orphans` restores the hard grade for a deployment
+/// that wants the bucket to hold nothing else.
+///
+/// What is lost by that default is stated rather than buried: orphans are also
+/// what a *removed* manifest leaves behind, and only `--expect-head` settles
+/// tail truncation.
+fn report_orphans(orphans: &[&String], strict: bool) {
+    eprintln!(
+        "ORPHAN OBJECTS: {} object(s) with no manifest",
+        orphans.len()
+    );
+    for key in orphans.iter().take(ORPHANS_SHOWN) {
+        eprintln!("  {key}");
+    }
+    if let Some(hidden) = orphans.len().checked_sub(ORPHANS_SHOWN).filter(|n| *n > 0) {
+        eprintln!("  ... and {hidden} more");
+    }
+    eprintln!(
+        "  An object no manifest names makes no integrity claim: nothing signed says what its \
+         bytes should be."
+    );
+    if strict {
+        eprintln!("  Graded as a failure because --strict-orphans was given.");
+        return;
+    }
+    eprintln!(
+        "  Not graded as a failure. A copy that died before sealing its manifest leaves exactly \
+         this, the retry used a fresh segment id, and nothing reads the remains. A WORM archive \
+         cannot delete them, so no run after this one could ever come back clean."
+    );
+    eprintln!(
+        "  Worth a look all the same: this is also what an object placed in the bucket by hand \
+         looks like, and what a removed manifest leaves behind. Only --expect-head settles \
+         truncation. Pass --strict-orphans to grade orphans a failure."
+    );
 }
 
 /// The first partition whose tip is not `expected`.

@@ -43,6 +43,9 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+# `object_store::ObjectStore` is an `#[async_trait]` trait, so the versioned
+# test double in `worm::verify` has to be written with the same attribute.
+async-trait = { workspace = true }
 crabka-log = { version = "0.4.0", path = "../log" }
 crabka-protocol = { version = "0.4.0", default-features = false }
 proptest = { workspace = true }

@@ -315,13 +315,48 @@ fn a_tip_that_differs_from_expect_head_is_a_head_mismatch() {
     check!(result.stderr.contains("tail truncation"));
 }
 
+/// An orphan is reported in full and does not fail the run.
+///
+/// A WORM archive refuses deletes, so an orphan can never be cleared. Failing
+/// on one would mean a single interrupted copy condemns the archive on every
+/// run from then on, with no action anyone could take -- and a verdict nobody
+/// can act on is one they stop reading.
 #[test]
-fn an_object_no_manifest_names_is_reported_as_an_orphan() {
+fn an_object_no_manifest_names_is_reported_but_does_not_fail_the_run() {
     let fixture = Fixture::build(true);
     let stray = format!("{}/stray.bin", fixture.partition_dir);
     std::fs::write(fixture.root().join(&stray), b"nothing names me").unwrap();
 
     let result = run(&fixture.base_args());
+
+    check!(result.code == Some(0), "stderr: {}", result.stderr);
+    check!(
+        result
+            .stderr
+            .contains("ORPHAN OBJECTS: 1 object(s) with no manifest")
+    );
+    check!(result.stderr.contains(&stray));
+    check!(result.stderr.contains("Not graded as a failure"));
+    // The verdict on stdout has to carry it too: a script that reads only the
+    // exit code and the OK line must not be told the bucket is spotless.
+    check!(
+        result.stdout.contains("1 orphan object(s)"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+/// `--strict-orphans` restores the hard grade for a deployment that wants the
+/// bucket to hold nothing but the archive.
+#[test]
+fn strict_orphans_grades_an_orphan_as_a_failure() {
+    let fixture = Fixture::build(true);
+    let stray = format!("{}/stray.bin", fixture.partition_dir);
+    std::fs::write(fixture.root().join(&stray), b"nothing names me").unwrap();
+
+    let mut args = fixture.base_args();
+    args.push("--strict-orphans".to_string());
+    let result = run(&args);
 
     check!(result.code == Some(1), "stdout: {}", result.stdout);
     check!(
@@ -329,7 +364,7 @@ fn an_object_no_manifest_names_is_reported_as_an_orphan() {
             .stderr
             .contains("ORPHAN OBJECTS: 1 object(s) with no manifest")
     );
-    check!(result.stderr.contains(&stray));
+    check!(result.stderr.contains("--strict-orphans was given"));
 }
 
 #[test]

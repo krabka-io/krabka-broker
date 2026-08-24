@@ -41,14 +41,14 @@ use std::{
 
 use crabka_object_store::{ObjectStoreError, read_capped};
 use futures::TryStreamExt as _;
-use object_store::{ObjectStore, ObjectStoreExt as _, path::Path};
+use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
 use crate::worm::{
     error::WormError,
     manifest::{
         ChainHead, EpochId, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, ManifestBody, ManifestSeq,
-        SegmentManifest, Sha256Digest, manifest_head, verify_manifest_signature,
+        ObjectEntry, SegmentManifest, Sha256Digest, manifest_head, verify_manifest_signature,
     },
 };
 
@@ -714,10 +714,11 @@ async fn check_objects(
             )));
         }
         if depth == VerifyDepth::Deep {
-            let digest = object_digest(store, &object.key).await?;
+            let digest = object_digest(store, &object.key, None).await?;
             if digest != object.sha256 {
+                let pinned = pinned_version_note(store, object).await;
                 return Ok(Some(format!(
-                    "object `{}` hashes to {digest}, the manifest records {}",
+                    "object `{}` hashes to {digest}, the manifest records {}{pinned}",
                     object.key, object.sha256
                 )));
             }
@@ -730,10 +731,22 @@ async fn check_objects(
 ///
 /// The body is hashed chunk by chunk and never buffered whole, so the memory
 /// cost does not follow the object size.
-async fn object_digest(store: &Arc<dyn ObjectStore>, key: &str) -> Result<Sha256Digest, WormError> {
+///
+/// `version` selects one stored version of the key. `None` reads whatever the
+/// key resolves to now, which is what the digest walk wants: the current
+/// version is the one a reader gets, so it is the one that has to match.
+async fn object_digest(
+    store: &Arc<dyn ObjectStore>,
+    key: &str,
+    version: Option<&str>,
+) -> Result<Sha256Digest, WormError> {
     let path = Path::from(key);
+    let options = GetOptions {
+        version: version.map(ToString::to_string),
+        ..GetOptions::default()
+    };
     let fetch = store
-        .get(&path)
+        .get_opts(&path, options)
         .await
         .map_err(|e| WormError::Archive(format!("cannot read object `{key}`: {e}")))?;
     let mut stream = fetch.into_stream();
@@ -747,6 +760,40 @@ async fn object_digest(store: &Arc<dyn ObjectStore>, key: &str) -> Result<Sha256
         hasher.update(&chunk);
     }
     Ok(Sha256Digest(hasher.finalize().into()))
+}
+
+/// Asks whether the version the manifest pinned still holds the bytes it
+/// recorded, and says so in one clause appended to the mismatch.
+///
+/// An overwrite on a versioned bucket does not replace the locked original: it
+/// stacks a new current version on top of it. [`object_digest`] reads the
+/// current version, so the mismatch that brings us here is the detection this
+/// feature exists for. What the mismatch alone does not say is whether the
+/// archive is *recoverable*, and on an Object Lock bucket it usually is --
+/// which is the difference between restoring a segment and declaring it lost.
+///
+/// Reading the pinned version is never the default. A walk that always read it
+/// would confirm bytes no reader can reach by key any more, and would be blind
+/// to the very overwrite this reports.
+///
+/// Supplementary, so it never fails the run: an unreadable pinned version is
+/// reported in the clause rather than raised, because the mismatch is already
+/// the finding.
+async fn pinned_version_note(store: &Arc<dyn ObjectStore>, object: &ObjectEntry) -> String {
+    let Some(version) = object.version_id.as_deref() else {
+        return String::new();
+    };
+    match object_digest(store, &object.key, Some(version)).await {
+        Ok(digest) if digest == object.sha256 => format!(
+            ". The pinned version `{version}` still matches, so the original bytes survive \
+             beneath the overwrite and the segment is recoverable"
+        ),
+        Ok(digest) => format!(
+            ". The pinned version `{version}` hashes to {digest}, so it does not hold the \
+             recorded bytes either"
+        ),
+        Err(e) => format!(". The pinned version `{version}` could not be read: {e}"),
+    }
 }
 
 /// Opens or widens the span that describes the run being walked.
@@ -801,7 +848,7 @@ mod tests {
     use crabka_audit::signing::{FileEd25519Signer, SigningKeyProvider};
     use crabka_ids::LeaderEpoch;
     use crabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest};
-    use object_store::memory::InMemory;
+    use object_store::{ObjectStoreExt as _, memory::InMemory};
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
     use uuid::Uuid;
 
@@ -884,7 +931,11 @@ mod tests {
         /// through [`WormArchiver`], so the fixture never borrows the backend's
         /// idea of what a correct archive looks like.
         async fn build(runs: &[usize]) -> Self {
-            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            Self::build_on(Arc::new(InMemory::new()), runs).await
+        }
+
+        /// The same archive, on a store the caller chose.
+        async fn build_on(store: Arc<dyn ObjectStore>, runs: &[usize]) -> Self {
             let ops = ObjectStoreClient::new(Arc::clone(&store));
             let (signer, public_key) = signer(KEY_ID);
             let archiver = WormArchiver::new(Some(Arc::clone(&signer)));
@@ -979,6 +1030,136 @@ mod tests {
 
         async fn delete(&self, key: &str) {
             self.ops.delete(&Path::from(key)).await.unwrap();
+        }
+    }
+
+    /// An in-memory store that actually keeps versions.
+    ///
+    /// [`InMemory`] reports `version: None` on every put and ignores a version
+    /// asked for on get, so a test built on it would be asserting that fake's
+    /// indifference rather than the verifier's handling of a versioned bucket.
+    /// This keeps each put's bytes to one side and serves them back when a get
+    /// pins that version, which is what an Object Lock bucket does and the
+    /// whole reason [`pinned_version_note`] exists.
+    ///
+    /// The versions live outside the inner store, so they never appear in a
+    /// listing: the verifier walks the same archive it would on S3, and the
+    /// history is reachable only by asking for it.
+    #[derive(Debug)]
+    struct VersionedStore {
+        inner: InMemory,
+        history: std::sync::Mutex<HashMap<(String, String), Bytes>>,
+        next: std::sync::atomic::AtomicU64,
+    }
+
+    impl VersionedStore {
+        fn new() -> Self {
+            Self {
+                inner: InMemory::new(),
+                history: std::sync::Mutex::new(HashMap::new()),
+                next: std::sync::atomic::AtomicU64::new(0),
+            }
+        }
+    }
+
+    impl std::fmt::Display for VersionedStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "VersionedStore({})", self.inner)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for VersionedStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: object_store::PutPayload,
+            opts: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            let version = format!(
+                "v{}",
+                self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            );
+            let bytes = Bytes::from(payload.iter().flatten().copied().collect::<Vec<u8>>());
+            let mut result = self.inner.put_opts(location, payload, opts).await?;
+            self.history
+                .lock()
+                .expect("no test panics while holding this")
+                .insert((location.to_string(), version.clone()), bytes);
+            result.version = Some(version);
+            Ok(result)
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let Some(version) = options.version.clone() else {
+                return self.inner.get_opts(location, options).await;
+            };
+            let bytes = self
+                .history
+                .lock()
+                .expect("no test panics while holding this")
+                .get(&(location.to_string(), version.clone()))
+                .cloned();
+            let Some(bytes) = bytes else {
+                return Err(object_store::Error::NotFound {
+                    path: format!("{location}?versionId={version}"),
+                    source: "no such version".into(),
+                });
+            };
+            let mut meta = self.inner.head(location).await?;
+            meta.size = bytes.len() as u64;
+            meta.version = Some(version);
+            Ok(object_store::GetResult {
+                range: 0..meta.size,
+                payload: object_store::GetResultPayload::Stream(Box::pin(futures::stream::once(
+                    async move { Ok(bytes) },
+                ))),
+                meta,
+                attributes: object_store::Attributes::default(),
+            })
+        }
+
+        fn delete_stream(
+            &self,
+            locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
+        ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
         }
     }
 
@@ -1557,5 +1738,100 @@ mod tests {
                 check!(false, "an oversized manifest must record a break");
             }
         }
+    }
+
+    /// Overwriting a body on a versioned bucket does not remove the bytes the
+    /// manifest recorded: it stacks a new current version over a locked one.
+    /// The walk must still fail -- a reader gets the current version -- and the
+    /// verdict must say the original survives, because that is the difference
+    /// between restoring the segment and writing it off.
+    #[tokio::test]
+    async fn a_deep_digest_mismatch_says_when_the_pinned_version_still_holds() {
+        let archive = Archive::build_on(Arc::new(VersionedStore::new()), &[1]).await;
+        let segment = &archive.segments[0];
+        check!(
+            segment.entries.iter().all(|e| e.version_id.is_some()),
+            "the fixture store must record a version per object"
+        );
+
+        // Same length, different bytes: the case only a deep run catches.
+        let swapped: Vec<u8> = segment.log_body.iter().map(|b| b ^ 0xff).collect();
+        check!(swapped.len() == segment.log_body.len());
+        put_raw(&archive.ops, &segment.log_key, Bytes::from(swapped)).await;
+
+        let request = VerifyRequest {
+            depth: VerifyDepth::Deep,
+            ..VerifyRequest::default()
+        };
+        let report = verify_archive(&archive.store, &request, &archive.trusted())
+            .await
+            .unwrap();
+
+        check!(!report.ok(), "an overwritten body is a break");
+        let reason = report
+            .first_break()
+            .map(|found| found.reason.clone())
+            .unwrap_or_default();
+        check!(reason.contains("hashes to"), "reason was: {reason}");
+        check!(
+            reason.contains("still matches") && reason.contains("recoverable"),
+            "the verdict must say the locked original survives. reason was: {reason}"
+        );
+    }
+
+    /// The same overwrite on a bucket without versioning. There is no version
+    /// to pin, so the mismatch stands alone rather than growing a clause that
+    /// claims a recovery nobody can perform.
+    #[tokio::test]
+    async fn a_deep_digest_mismatch_adds_no_note_without_versioning() {
+        let archive = Archive::build(&[1]).await;
+        let segment = &archive.segments[0];
+        check!(
+            segment.entries.iter().all(|e| e.version_id.is_none()),
+            "InMemory records no versions, which is the point of this row"
+        );
+
+        let swapped: Vec<u8> = segment.log_body.iter().map(|b| b ^ 0xff).collect();
+        put_raw(&archive.ops, &segment.log_key, Bytes::from(swapped)).await;
+
+        let request = VerifyRequest {
+            depth: VerifyDepth::Deep,
+            ..VerifyRequest::default()
+        };
+        let report = verify_archive(&archive.store, &request, &archive.trusted())
+            .await
+            .unwrap();
+
+        check!(!report.ok());
+        let reason = report
+            .first_break()
+            .map(|found| found.reason.clone())
+            .unwrap_or_default();
+        check!(reason.contains("hashes to"), "reason was: {reason}");
+        check!(
+            !reason.contains("pinned version"),
+            "nothing was pinned, so nothing may be claimed about one. reason was: {reason}"
+        );
+    }
+
+    /// A version the manifest names but the bucket no longer holds. The note
+    /// reports it and the run carries on: the digest mismatch is already the
+    /// finding, and a failed lookup for the supplementary answer must not
+    /// become an error of its own.
+    #[tokio::test]
+    async fn pinned_version_note_reports_a_version_that_cannot_be_read() {
+        let store: Arc<dyn ObjectStore> = Arc::new(VersionedStore::new());
+        let ops = ObjectStoreClient::new(Arc::clone(&store));
+        let key = format!("{PREFIX}/gone.log");
+        let entry = put_entry(&ops, ".log", &key, b"body").await;
+        let missing = ObjectEntry {
+            version_id: Some("v-never-written".to_string()),
+            ..entry
+        };
+
+        let note = pinned_version_note(&store, &missing).await;
+
+        check!(note.contains("v-never-written"), "note was: {note}");
+        check!(note.contains("could not be read"), "note was: {note}");
     }
 }

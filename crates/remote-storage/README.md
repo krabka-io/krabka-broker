@@ -102,7 +102,9 @@ An unsigned archive is legal: leave both key fields unset and the archive keeps 
 
 ### The bucket enforces WORM, not the broker
 
-The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, which is how a compliance deployment is built anyway. Crabka does not set the lock: `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so the header is not reachable from this code.
+The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, which is how a compliance deployment is built anyway. Crabka does not set the lock. `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so bumping it alone splits the dependency graph.
+
+There is an untyped way through — `ClientOptions::with_default_headers` — and it was considered and rejected rather than missed. `x-amz-object-lock-retain-until-date` is an absolute timestamp, so a default header pins one date for the lifetime of the process instead of holding each object for a period measured from its own write, and the header would ride every request the client makes, reads included. A bucket default expresses the policy correctly and outlives any broker that writes to it.
 
 The broker's contribution is narrower and still worth having. It never issues a delete, it never overwrites, and it leaves a signed chain that shows what the archive held. A bucket with Object Lock and a broker that writes once are the two halves of the guarantee. Neither half is enough alone.
 
@@ -150,7 +152,7 @@ crabka-worm-verify verify \
   --deep
 ```
 
-Use `--local-dir PATH` in place of `--bucket` for a mounted copy, and `--endpoint URL` with `--allow-http` for an S3-compatible endpoint served without TLS. Narrow a run with `--prefix`, `--topic`, and `--partition`. `--allow-epoch-restarts` accepts a chain restart instead of grading it as a hole.
+Use `--local-dir PATH` in place of `--bucket` for a mounted copy, and `--endpoint URL` with `--allow-http` for an S3-compatible endpoint served without TLS. Narrow a run with `--prefix`, `--topic`, and `--partition`. `--allow-epoch-restarts` accepts a chain restart instead of grading it as a hole, and `--strict-orphans` turns an orphan object into a failure.
 
 `--deep` downloads every object and recomputes its SHA-256. It is the only check that catches a body replaced with different bytes of the same length: a shallow run checks that each object exists with the recorded size, and a same-size substitution passes that check.
 
@@ -162,11 +164,23 @@ The verdict goes to stdout and the diagnostics go to stderr, so a script can rea
 | `OK: empty archive` | 0 | Nothing to verify. |
 | `TAMPER DETECTED at KEY (seq N)` | 1 | A manifest was rewritten, reordered, or removed, or an object does not match what its manifest records. |
 | `HEAD MISMATCH: expected X, archive tip Y` | 1 | The chain is internally perfect but stops short of the head the run was given. This is what tail truncation looks like. |
-| `ORPHAN OBJECTS: N object(s) with no manifest` | 1 | An object that no manifest names makes no integrity claim. |
+| `ORPHAN OBJECTS: N object(s) with no manifest` | 0, or 1 under `--strict-orphans` | An object that no manifest names makes no integrity claim. Reported either way, and counted on the `OK:` line. |
 | `INCOMPLETE ATTESTATION: chain restarted N time(s)` | 1 | The chain has holes between epochs. Use a topic-backed RLMM, or accept them with `--allow-epoch-restarts`. |
 | `INCOMPLETE ATTESTATION: N manifest(s) unsigned, M signed by an untrusted key` | 1 | The archive is not attested to the key the run trusts. |
 
 A failure to read the archive is a different outcome from a broken archive, and the tool keeps them apart. "I could not look" exits with an error message and no verdict.
+
+### Why an orphan does not fail the run
+
+The archiver writes the manifest **last**, as the commit point, so a copy that died before sealing one leaves its objects behind with nothing naming them. The retry runs under a fresh segment id, so those objects are inert: no manifest claims them and no reader reaches them.
+
+A WORM archive refuses deletes, so they can never be cleared. Grading them a failure would mean one interrupted copy condemns the archive on every run from then on, with no action any operator could take to get back to green — and a verdict nobody can act on is one they stop reading. They are reported in full instead, on stderr and in the `OK:` line, and `--strict-orphans` restores the hard grade for a deployment that wants the bucket to hold nothing but the archive.
+
+What that costs is worth stating: orphans are also what a *removed* manifest leaves behind. Only `--expect-head` settles tail truncation, and it is the check to run if that is the concern.
+
+### When a body has been overwritten
+
+On a versioned bucket an overwrite does not replace the locked original; it stacks a new current version over it. `--deep` reads the current version, because that is what a reader gets, so the overwrite is reported as tampering. When the manifest recorded a version id, the run then re-reads that pinned version and says whether it still matches — the difference between restoring the segment and writing it off. The pinned version is never read first: a check that always read it would confirm bytes no reader can reach by key any more, and would be blind to the overwrite itself.
 
 ## Documentation
 
