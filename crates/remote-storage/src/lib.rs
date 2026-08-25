@@ -24,6 +24,10 @@
 //!   [`RemoteLogSegmentState`], [`LogSegmentData`], [`IndexType`],
 //!   [`CustomMetadata`], and the partition-delete lifecycle
 //!   ([`RemotePartitionDeleteMetadata`] / [`RemotePartitionDeleteState`]).
+//! - The archive key codec ([`partition_dir_name`] / [`parse_partition_dir_name`],
+//!   [`segment_file_name`] / [`parse_segment_file_name`]) and the index
+//!   decoders in [`index`], which together let a reader discover and decode an
+//!   archive from object storage alone.
 //! - [`LocalTieredStorage`] is a filesystem [`RemoteStorageManager`].
 //! - [`InmemoryRemoteLogMetadataManager`] is a process-memory
 //!   [`RemoteLogMetadataManager`].
@@ -129,6 +133,7 @@ mod cache;
 pub mod dump;
 mod error;
 mod gcs;
+pub mod index;
 mod inmemory;
 mod local;
 mod metadata;
@@ -143,6 +148,12 @@ pub use crabka_object_store::{
 };
 pub use dump::{PartitionDump, RlmmCacheDump};
 pub use error::RemoteStorageError;
+pub use index::{
+    AbortedTxnIndexEntry, BytePosition, LogOffset, OffsetIndexEntry, RelativeOffset,
+    TimeIndexEntry, TimestampMs, corrupt_log, end_position_for, first_batch_at_or_after,
+    first_record_at_or_after_timestamp, parse_offset_index, parse_time_index, parse_txn_index,
+    position_for_relative_offset, relative_offset_floor_for_timestamp, txn_overlaps,
+};
 pub use inmemory::InmemoryRemoteLogMetadataManager;
 pub use local::LocalTieredStorage;
 pub use metadata::{
@@ -152,7 +163,11 @@ pub use metadata::{
 };
 pub use metadata_manager::RemoteLogMetadataManager;
 pub use s3::S3RemoteStorage;
-pub use storage_manager::{IndexType, LogSegmentData, RemoteStorageManager};
+pub use storage_manager::{
+    IndexType, LOG_FILE_SUFFIX, LogSegmentData, PartitionDirName, RemoteStorageManager,
+    SegmentFileName, decode_kafka_uuid, kafka_uuid, parse_partition_dir_name,
+    parse_segment_file_name, partition_dir_name, segment_file_name,
+};
 pub use worm::{
     ArchiveVerifyReport, ChainHead, ChainStamp, EpochId, EpochSpan, HexBytes, MANIFEST_BODY_DOMAIN,
     MANIFEST_DOMAIN, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, MAX_MANIFEST_BYTES, ManifestBody,

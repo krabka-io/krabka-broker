@@ -48,27 +48,140 @@ impl IndexType {
             IndexType::Transaction => ".txnindex",
         }
     }
+
+    /// The index type that a filename suffix names.
+    ///
+    /// It is the inverse of [`IndexType::suffix`]. A reader that discovers an
+    /// archive from the object store alone identifies each artifact by the
+    /// suffix of its key, and every key that is not an index ends in
+    /// [`LOG_FILE_SUFFIX`], so `None` means "not an index".
+    #[must_use]
+    pub fn from_suffix(suffix: &str) -> Option<Self> {
+        match suffix {
+            ".index" => Some(IndexType::Offset),
+            ".timeindex" => Some(IndexType::Timestamp),
+            ".snapshot" => Some(IndexType::ProducerSnapshot),
+            ".leader_epoch_checkpoint" => Some(IndexType::LeaderEpoch),
+            ".txnindex" => Some(IndexType::Transaction),
+            _ => None,
+        }
+    }
 }
 
+/// Filename suffix of a segment's data, as distinct from one of its indexes.
+pub const LOG_FILE_SUFFIX: &str = ".log";
+
+/// Character count of a Kafka Base64-rendered UUID.
+///
+/// The 16 raw bytes encode to 22 URL-safe unpadded Base64 characters. The
+/// width is fixed, which is what lets [`parse_partition_dir_name`] find the
+/// topic id in a name whose topic component may itself contain `-`.
+const KAFKA_UUID_LEN: usize = 22;
+
+/// Character count of the zero-padded base offset that starts a segment
+/// filename. `i64::MAX` is 19 digits, so the field never overflows its width.
+const BASE_OFFSET_LEN: usize = 20;
+
 /// Kafka renders UUIDs in URL-safe, unpadded Base64 for remote-tier paths.
-pub(crate) fn kafka_uuid(uuid: Uuid) -> String {
+#[must_use]
+pub fn kafka_uuid(uuid: Uuid) -> String {
     URL_SAFE_NO_PAD.encode(uuid.as_bytes())
 }
 
+/// Reads back a UUID that [`kafka_uuid`] rendered.
+///
+/// Returns `None` unless the input is URL-safe unpadded Base64 that decodes to
+/// exactly the 16 bytes of a UUID. The engine rejects a non-canonical encoding,
+/// so one UUID has one accepted spelling and the round trip is exact.
+#[must_use]
+pub fn decode_kafka_uuid(encoded: &str) -> Option<Uuid> {
+    let bytes: [u8; 16] = URL_SAFE_NO_PAD.decode(encoded).ok()?.try_into().ok()?;
+    Some(Uuid::from_bytes(bytes))
+}
+
 /// Directory name used by Kafka's `LocalTieredStorage` for a partition.
-pub(crate) fn partition_dir_name(metadata: &RemoteLogSegmentMetadata) -> String {
+#[must_use]
+pub fn partition_dir_name(metadata: &RemoteLogSegmentMetadata) -> String {
     let tp = &metadata.remote_log_segment_id().topic_id_partition;
     format!("{}-{}-{}", tp.topic, tp.partition, kafka_uuid(tp.topic_id))
 }
 
+/// The partition that a remote-tier directory name identifies.
+///
+/// A reader that discovers an archive from object storage alone has nothing but
+/// the keys, so the directory component of a key is where the partition comes
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionDirName {
+    /// Topic name.
+    pub topic: String,
+    /// Partition index.
+    pub partition: i32,
+    /// Stable topic UUID, as assigned at topic creation.
+    pub topic_id: Uuid,
+}
+
+/// Reads back the partition that [`partition_dir_name`] rendered.
+///
+/// The name is parsed from the right, because a topic name may contain `-`
+/// while neither the partition index nor the fixed-width topic id can. Returns
+/// `None` when a component is absent or malformed, which includes a topic that
+/// is empty or that holds the `/` key separator.
+#[must_use]
+pub fn parse_partition_dir_name(name: &str) -> Option<PartitionDirName> {
+    let (head, topic_id) = name.split_at_checked(name.len().checked_sub(KAFKA_UUID_LEN)?)?;
+    let topic_id = decode_kafka_uuid(topic_id)?;
+    let (topic, partition) = head.strip_suffix('-')?.rsplit_once('-')?;
+    if topic.is_empty() || topic.contains('/') || !partition.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(PartitionDirName {
+        topic: topic.to_owned(),
+        partition: partition.parse().ok()?,
+        topic_id,
+    })
+}
+
 /// Filename used by Kafka's `LocalTieredStorage` for one segment artifact.
-pub(crate) fn segment_file_name(metadata: &RemoteLogSegmentMetadata, suffix: &str) -> String {
+#[must_use]
+pub fn segment_file_name(metadata: &RemoteLogSegmentMetadata, suffix: &str) -> String {
     format!(
         "{:020}-{}{}",
         metadata.start_offset(),
         kafka_uuid(metadata.remote_log_segment_id().id),
         suffix
     )
+}
+
+/// The segment artifact that a remote-tier filename identifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SegmentFileName<'a> {
+    /// First offset the segment holds.
+    pub base_offset: i64,
+    /// Random per-segment UUID.
+    pub segment_id: Uuid,
+    /// Which artifact of the segment this is: [`LOG_FILE_SUFFIX`] for the data,
+    /// or an [`IndexType::suffix`] for one of the indexes.
+    pub suffix: &'a str,
+}
+
+/// Reads back the segment artifact that [`segment_file_name`] rendered.
+///
+/// Both leading components have a fixed width, so the name parses from the
+/// left even though the Base64 alphabet contains the `-` separator. Returns
+/// `None` when a component is absent or malformed.
+#[must_use]
+pub fn parse_segment_file_name(name: &str) -> Option<SegmentFileName<'_>> {
+    let (base_offset, rest) = name.split_at_checked(BASE_OFFSET_LEN)?;
+    if !base_offset.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (segment_id, suffix) = rest.strip_prefix('-')?.split_at_checked(KAFKA_UUID_LEN)?;
+    Some(SegmentFileName {
+        base_offset: base_offset.parse().ok()?,
+        segment_id: decode_kafka_uuid(segment_id)?,
+        suffix,
+    })
 }
 
 /// The local files, and the in-memory leader-epoch bytes, that make up one
@@ -168,9 +281,46 @@ pub trait RemoteStorageManager: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use assert2::check;
+    use crabka_ids::LeaderEpoch;
+    use proptest::prelude::*;
 
     use super::*;
+    use crate::metadata::{
+        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentState, TopicIdPartition,
+    };
+
+    fn metadata(
+        topic: &str,
+        partition: i32,
+        topic_id: Uuid,
+        segment_id: Uuid,
+        base_offset: i64,
+    ) -> RemoteLogSegmentMetadata {
+        RemoteLogSegmentMetadata::new(
+            RemoteLogSegmentId::new(
+                TopicIdPartition::new(topic_id, topic, partition),
+                segment_id,
+            ),
+            base_offset,
+            base_offset,
+            0,
+            1,
+            0,
+            RemoteLogSegmentDetails::new(
+                1,
+                RemoteLogSegmentState::CopySegmentStarted,
+                BTreeMap::from([(LeaderEpoch(0), base_offset)]),
+            ),
+        )
+        .unwrap()
+    }
+
+    fn sample() -> RemoteLogSegmentMetadata {
+        metadata("orders", 7, Uuid::from_u128(1), Uuid::from_u128(0xfe), 11)
+    }
 
     #[test]
     fn index_suffixes_match_kafka() {
@@ -183,41 +333,181 @@ mod tests {
             (IndexType::Transaction, ".txnindex"),
         ] {
             check!(index_type.suffix() == want, "{index_type:?}");
+            check!(IndexType::from_suffix(want) == Some(index_type));
+        }
+    }
+
+    #[test]
+    fn from_suffix_rejects_non_index_suffixes() {
+        for suffix in [LOG_FILE_SUFFIX, "", ".INDEX", "index", ".timeindex2"] {
+            check!(IndexType::from_suffix(suffix) == None, "{suffix:?}");
         }
     }
 
     #[test]
     fn local_tiered_storage_names_match_kafka() {
-        use std::collections::BTreeMap;
-
-        use crabka_ids::LeaderEpoch;
-
-        use crate::metadata::{
-            RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentState, TopicIdPartition,
-        };
-
-        let metadata = RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(
-                TopicIdPartition::new(Uuid::from_u128(1), "orders", 7),
-                Uuid::from_u128(0xfe),
-            ),
-            11,
-            19,
-            0,
-            1,
-            0,
-            RemoteLogSegmentDetails::new(
-                1,
-                RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 11)]),
-            ),
-        )
-        .unwrap();
+        let metadata = sample();
 
         check!(partition_dir_name(&metadata) == "orders-7-AAAAAAAAAAAAAAAAAAAAAQ");
         check!(
             segment_file_name(&metadata, IndexType::ProducerSnapshot.suffix())
                 == "00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot"
         );
+    }
+
+    #[test]
+    fn object_store_key_components_match_kafka() {
+        // The two halves of the S3 key that the object-store backend writes.
+        let metadata = metadata("orders", 0, Uuid::from_u128(1), Uuid::from_u128(30), 0);
+
+        check!(partition_dir_name(&metadata) == "orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
+        check!(
+            segment_file_name(&metadata, LOG_FILE_SUFFIX)
+                == "00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log"
+        );
+    }
+
+    #[test]
+    fn parses_the_pinned_kafka_names() {
+        check!(
+            parse_partition_dir_name("orders-7-AAAAAAAAAAAAAAAAAAAAAQ")
+                == Some(PartitionDirName {
+                    topic: "orders".to_owned(),
+                    partition: 7,
+                    topic_id: Uuid::from_u128(1),
+                })
+        );
+        check!(
+            parse_segment_file_name("00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot")
+                == Some(SegmentFileName {
+                    base_offset: 11,
+                    segment_id: Uuid::from_u128(0xfe),
+                    suffix: ".snapshot",
+                })
+        );
+        check!(
+            parse_segment_file_name("00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log")
+                == Some(SegmentFileName {
+                    base_offset: 0,
+                    segment_id: Uuid::from_u128(30),
+                    suffix: ".log",
+                })
+        );
+    }
+
+    #[test]
+    fn parse_partition_dir_name_splits_a_hyphenated_topic_from_the_right() {
+        // "orders-7" is a topic name, not a topic and a partition index.
+        check!(
+            parse_partition_dir_name("orders-7-3-AAAAAAAAAAAAAAAAAAAAAQ")
+                == Some(PartitionDirName {
+                    topic: "orders-7".to_owned(),
+                    partition: 3,
+                    topic_id: Uuid::from_u128(1),
+                })
+        );
+        // A partition index is never negative, so the leading `-` of "-1"
+        // belongs to the topic name and the index is 1.
+        check!(
+            parse_partition_dir_name("orders--1-AAAAAAAAAAAAAAAAAAAAAQ")
+                == Some(PartitionDirName {
+                    topic: "orders-".to_owned(),
+                    partition: 1,
+                    topic_id: Uuid::from_u128(1),
+                })
+        );
+    }
+
+    #[test]
+    fn parse_partition_dir_name_rejects_malformed_names() {
+        for name in [
+            // Topic id one character short of the fixed Base64 width.
+            "orders-7-AAAAAAAAAAAAAAAAAAAAA",
+            // Topic id that decodes to more than 16 bytes.
+            "orders-7-AAAAAAAAAAAAAAAAAAAAAQAA",
+            // Non-numeric partition index.
+            "orders-x-AAAAAAAAAAAAAAAAAAAAAQ",
+            // Empty topic.
+            "-7-AAAAAAAAAAAAAAAAAAAAAQ",
+            // A key separator cannot appear inside one directory name.
+            "or/ders-7-AAAAAAAAAAAAAAAAAAAAAQ",
+            // No partition index at all.
+            "orders-AAAAAAAAAAAAAAAAAAAAAQ",
+            "",
+        ] {
+            check!(parse_partition_dir_name(name) == None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn parse_segment_file_name_rejects_malformed_names() {
+        for name in [
+            // Base offset one digit short of the fixed width.
+            "0000000000000000001-AAAAAAAAAAAAAAAAAAAA_g.snapshot",
+            // Non-numeric base offset.
+            "0000000000000000001x-AAAAAAAAAAAAAAAAAAAA_g.snapshot",
+            // Segment id one character short of the fixed Base64 width.
+            "00000000000000000011-AAAAAAAAAAAAAAAAAAAA_",
+            // Missing the separator between base offset and segment id.
+            "00000000000000000011xAAAAAAAAAAAAAAAAAAAA_g.snapshot",
+            // Segment id that is not Base64 at all.
+            "00000000000000000011-**********************.snapshot",
+            "",
+        ] {
+            check!(parse_segment_file_name(name) == None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn decode_kafka_uuid_rejects_wrong_length_base64() {
+        for encoded in ["", "AAAA", "AAAAAAAAAAAAAAAAAAAAAQAA", "A"] {
+            check!(decode_kafka_uuid(encoded) == None, "{encoded:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn partition_dir_name_round_trips(
+            topic in "[a-z0-9]{1,6}(-[a-z0-9]{1,6}){0,3}",
+            partition in 0_i32..=i32::MAX,
+            topic_id in any::<u128>(),
+        ) {
+            let topic_id = Uuid::from_u128(topic_id);
+            let metadata = metadata(&topic, partition, topic_id, Uuid::nil(), 0);
+            let name = partition_dir_name(&metadata);
+            prop_assert!(
+                parse_partition_dir_name(&name)
+                    == Some(PartitionDirName { topic, partition, topic_id }),
+                "{name}"
+            );
+        }
+
+        #[test]
+        fn segment_file_name_round_trips(
+            base_offset in 0_i64..=i64::MAX,
+            segment_id in any::<u128>(),
+            index_type in prop_oneof![
+                Just(None),
+                Just(Some(IndexType::Offset)),
+                Just(Some(IndexType::Timestamp)),
+                Just(Some(IndexType::ProducerSnapshot)),
+                Just(Some(IndexType::LeaderEpoch)),
+                Just(Some(IndexType::Transaction)),
+            ],
+        ) {
+            let segment_id = Uuid::from_u128(segment_id);
+            let suffix = index_type.map_or(LOG_FILE_SUFFIX, IndexType::suffix);
+            let metadata = metadata("orders", 0, Uuid::nil(), segment_id, base_offset);
+            let name = segment_file_name(&metadata, suffix);
+            let parsed = parse_segment_file_name(&name);
+            prop_assert!(
+                parsed == Some(SegmentFileName { base_offset, segment_id, suffix }),
+                "{name}"
+            );
+            prop_assert!(
+                parsed.and_then(|p| IndexType::from_suffix(p.suffix)) == index_type,
+                "{name}"
+            );
+        }
     }
 }

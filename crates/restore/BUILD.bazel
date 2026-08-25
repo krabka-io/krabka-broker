@@ -1,0 +1,25 @@
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "restore")
+
+# `krabka-restore`, not `crabka-restore`. The `krabka` operator CLI resolves an
+# unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves
+# `git foo` to `git-foo`, so this exact spelling is what makes `krabka restore`
+# work. `bazel run //crates/restore:krabka-restore -- --help`.
+crate_binary(
+    name = "krabka-restore",
+    crate_root = "src/main.rs",
+    lib = ":restore",
+)
+
+crate_tests(
+    # `cli_surface` runs the binary to check the flags it accepts.
+    data = [":krabka-restore"],
+    env = {"CARGO_BIN_EXE_krabka-restore": "$(rootpath :krabka-restore)"},
+    lib = "restore",
+)

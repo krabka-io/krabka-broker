@@ -5,6 +5,11 @@
 //! `meta.properties.json`, the bootstrap records, and the singleton
 //! `VotersRecord`, and can provision seed SCRAM credentials at the same time.
 //!
+//! [`run_with_records`] takes further [`MetadataRecord`]s from the caller and
+//! seeds them into the same stream. A restore tool that rebuilds a cluster from
+//! tiered-storage archives hands over the topic and partition records it
+//! recovered that way, and the broker then boots with those topics present.
+//!
 //! This is the `crabka format` command from the monorepo's `crabka-cli`. That
 //! crate also drives the gres layer, which is why it could not follow the broker
 //! into this repository; the command itself needs only [`crabka_metadata`] and
@@ -16,7 +21,11 @@ use clap::Parser;
 mod format;
 mod ids;
 
-pub use format::{FormatArgs, ScramSpec, run};
+/// The seed record type [`run_with_records`] accepts, re-exported so a caller
+/// building a bootstrap stream does not have to name [`crabka_metadata`]
+/// itself.
+pub use crabka_metadata::MetadataRecord;
+pub use format::{FormatArgs, ScramSpec, run, run_with_records};
 pub use ids::{ClusterId, DirectoryId};
 
 /// The formatter's command line.
@@ -52,5 +61,27 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    run(Cli::parse_from(argv).args).await
+    run_from_args_with_records(argv, Vec::new()).await
+}
+
+/// Run the formatter from an argv-style iterator, seeding `extra` alongside the
+/// records the flags produce, and return its exit code.
+///
+/// This is the entry point for a tool that materializes a cluster and then has
+/// to hand the formatter the metadata it recovered, such as the topic and
+/// partition records behind a point-in-time restore. [`FormatArgs`] holds
+/// private fields, so an argv is how such a caller states the rest of the
+/// format; [`run_with_records`] documents where `extra` lands in the seed
+/// stream.
+///
+/// # Panics
+///
+/// Panics if `argv` does not parse, which for a caller passing a literal
+/// argument list is a bug in that list rather than a runtime condition.
+pub async fn run_from_args_with_records<I, T>(argv: I, extra: Vec<MetadataRecord>) -> i32
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    run_with_records(Cli::parse_from(argv).args, extra).await
 }

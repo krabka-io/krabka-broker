@@ -1233,6 +1233,7 @@ name = "crabka-format"
 version = "0.4.0"
 dependencies = [
  "assert2",
+ "base64 0.23.1",
  "clap",
  "crabka-broker",
  "crabka-metadata",
@@ -1240,6 +1241,7 @@ dependencies = [
  "crabka-security",
  "derive_more",
  "ring",
+ "serde",
  "serde-wincode",
  "serde_json",
  "tempfile",
@@ -1443,6 +1445,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1468,6 +1471,34 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "crabka-restore"
+version = "0.4.0"
+dependencies = [
+ "assert2",
+ "bytes",
+ "clap",
+ "crabka-format",
+ "crabka-ids",
+ "crabka-log",
+ "crabka-metadata",
+ "crabka-object-store",
+ "crabka-protocol",
+ "crabka-remote-storage",
+ "crabka-remote-storage-topic",
+ "crc32c",
+ "object_store",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
