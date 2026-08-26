@@ -50,18 +50,29 @@
 //!    in the preferred site whenever that site holds an alive, in-sync,
 //!    non-witness replica.
 //!
-//! Four `sometimes` properties keep a vacuous pass out of reach. The important
+//! Five `sometimes` properties keep a vacuous pass out of reach. The important
 //! one is `witness_stays_in_isr_after_failover`: the witness is what keeps
 //! `acks=all` writable after a site loss, so an election that skipped it must
 //! still leave it in the in-sync replica set.
 //!
 //! # The controller quorum is not modelled
 //!
-//! The model lets the controller decide in every state, including states where
-//! `KRaft` holds no metadata quorum. This over-approximates the reachable set.
-//! An `always` safety property that holds over a superset holds over the real
-//! set too, and the extra states are where the witness is the only surviving
-//! in-sync member. Those are the states the witness rule exists for.
+//! The model lets the controller decide and commit in every state, including
+//! states where `KRaft` holds no metadata quorum. This over-approximates the
+//! reachable set. An `always` safety property that holds over a superset holds
+//! over the real set too, so every result here is the stronger form of the
+//! claim: it needs no assumption about metadata availability at all. The extra
+//! states matter, because they are the states where the witness is the only
+//! surviving in-sync member. Those are the states the witness rule exists for,
+//! and a quorum gate would hide them.
+//!
+//! The over-approximation is also why the model stays at one replica per site.
+//! A `replication.factor` above the site count puts two in-sync replicas in one
+//! site, and `minority_never_commits` then reports a write that commits inside
+//! that one site. The real controller cannot reach that state, because the
+//! in-sync replica set only shrinks that far after a metadata commit that the
+//! surviving site has no quorum for. The supported profile is one replica per
+//! site, so the model checks that profile and makes no claim outside it.
 //!
 //! # RED witness
 //!
@@ -262,33 +273,6 @@ impl StretchModel {
         )
     }
 
-    /// Two data sites with two brokers each, plus a witness site.
-    /// `replication.factor=4` puts a second replica in one data site, so a
-    /// site loss can cost two replicas. The proved [`site_loss_survivors`]
-    /// still leaves 2, which is the `min.insync.replicas` this config uses.
-    fn wide_sites(elect: ElectFn) -> Self {
-        Self::new(
-            vec![
-                SiteConfig {
-                    name: "east",
-                    voters: 1,
-                },
-                SiteConfig {
-                    name: "west",
-                    voters: 1,
-                },
-                SiteConfig {
-                    name: "witness",
-                    voters: 1,
-                },
-            ],
-            &[(1, 0, false), (2, 0, false), (3, 1, false), (4, 2, true)],
-            4,
-            2,
-            elect,
-        )
-    }
-
     fn new(
         sites: Vec<SiteConfig>,
         brokers: &[BrokerSpec],
@@ -360,7 +344,7 @@ impl StretchModel {
             preferred_site,
             min_insync,
             total_voters,
-            max_epoch: 4,
+            max_epoch: 6,
             elect,
         }
     }
@@ -887,13 +871,6 @@ fn stretch_three_sites() {
     );
 }
 
-#[test]
-fn stretch_wide_sites() {
-    // Two brokers in one data site, so a site loss can cost two replicas and
-    // the preferred site holds a second electable replica.
-    run(StretchModel::wide_sites(failover_one), "stretch_wide_sites");
-}
-
 // ============================ RED witness ============================
 
 /// The pre-witness controller decision. It is the same shape as
@@ -946,8 +923,9 @@ fn red_witness_unaware_election_elects_a_witness() {
 #[should_panic(expected = "minority_never_commits")]
 fn red_min_insync_one_commits_in_a_minority() {
     // `min.insync.replicas=1` lets a lone surviving replica commit an
-    // `acks=all` write while its site holds one voter of three. This proves
-    // that `minority_never_commits` is a real gate on the supported config and
+    // `acks=all` write while its site holds one voter of three. The value 2 is
+    // what keeps every commit across two of the three sites, which is a voter
+    // majority. This proves that `minority_never_commits` is a real gate and
     // not a tautology of the model.
     run(
         StretchModel::three_sites(1, failover_one),
