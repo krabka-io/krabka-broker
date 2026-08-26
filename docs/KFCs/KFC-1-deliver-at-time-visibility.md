@@ -96,6 +96,14 @@ batch   |  active |  active |  active | pending | pending |  active |
 
 The figure shows the rule that matters. The batch at 105 is due, but it sits behind two pending batches, so the watermark stops at 103 and no consumer sees 105 yet. The next section explains why that is the contract and not a defect.
 
+#### What Bounds the Pending Span
+
+The gap between the delivery watermark and the log end is the set of durable records no consumer may read yet. `delivery.max.delay.ms` is what bounds it. A batch scheduled further ahead than that is rejected at produce time with `INVALID_TIMESTAMP`, so a record stamped at `i64::MAX` never reaches the log while the default 7 days is in force. Set the config to `-1` and the bound is gone: the span then grows as far as a producer cares to schedule.
+
+The bound matters more than a read cap usually would, because a pending record also pins the log. A segment holding an undelivered record survives both retention paths, by design, and [Retention, Compaction, and DeleteRecords](#retention-compaction-and-deleterecords) explains why. The consequence is worth stating in one line: on a scheduled topic, **`delivery.max.delay.ms` is the disk bound, not `retention.bytes`**. A partition carrying a 7-day schedule carries 7 days of log whatever `retention.bytes` says.
+
+`delivery_pending_records` is the gauge that shows this, and it is the one to alert on. It reports the log end minus the watermark per partition. A value that climbs and never falls is a schedule whose head-of-line record is further out than the operator intended.
+
 ### Why Visibility Is Offset-Ordered for Classic Groups
 
 A classic Kafka consumer's position in a partition is a single offset. The group commits one number per partition, and the fetch loop reads forward from it. Everything to the left of the position is unreachable, forever, for that group.
@@ -104,7 +112,11 @@ That fact decides the design. Suppose the broker let a later record overtake an 
 
 So head-of-line order is the contract. A scheduled topic is a schedule: the broker delivers its records in offset order, and the timestamps say when each one comes due. A record with an earlier offset and a later delivery time holds up the records behind it. That is by design, because the alternative is to lose them.
 
-`delivery.schedule.monotonic=true` is the guard for the operator who does not want that. A partition whose delivery times go backwards is a partition whose schedule stalls. A stall is hard to see from the outside. The topic looks healthy, the lag is real, and nothing is wrong with the broker. The config turns that silent stall into an `INVALID_TIMESTAMP` at produce time, where the producer that caused it can see it and fix it.
+This is a sharp edge, and calling it the contract does not blunt it. One record scheduled a week out stops every record behind it in that partition, however soon those are due. The design cannot remove that for a classic group, so it does two things instead: it makes the stall loud rather than silent, and it offers a delivery model that does not have the problem at all.
+
+A workload whose records carry independent, unordered delays does not belong on a classic group on one partition. Two shapes fit it. A share group tracks per-record delivery state and skips a pending record to reach a due one behind it, which is exactly this case, and [Share Groups Deliver Out of Order](#share-groups-deliver-out-of-order) describes it. Failing that, partition by delay class, so that records which share a deadline share a partition and head-of-line order is the order you wanted anyway.
+
+`delivery.schedule.monotonic=true` is the guard for the operator who stays on a classic group and does not want a silent stall. A partition whose delivery times go backwards is a partition whose schedule stalls. A stall is hard to see from the outside. The topic looks healthy, the lag is real, and nothing is wrong with the broker. The config turns that silent stall into an `INVALID_TIMESTAMP` at produce time, where the producer that caused it can see it and fix it.
 
 The guard is best-effort, and an operator should know why. The broker tests a batch against the partition's schedule before it hands the batch to the writer, so two producers writing to one partition at the same time can both pass the test and still append out of order. A single idempotent producer cannot, because its own batches reach the partition in sequence. Making the rule absolute needs the test inside the writer, where appends are already serialised. Nothing about correctness rests on this: the guard reports a schedule that will stall, and a stall delays delivery rather than losing a record.
 
