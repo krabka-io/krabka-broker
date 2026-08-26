@@ -1560,51 +1560,7 @@ impl BrokerConfig {
         self.validate_stretch()?;
         self.record_decompression_policy()?;
 
-        if self.self_registration_backoff_min > self.self_registration_backoff_max {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "self registration minimum backoff exceeds maximum".into(),
-            ));
-        }
-        if self.rlmm_bootstrap_backoff_initial > self.rlmm_bootstrap_backoff_max {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "RLMM bootstrap initial backoff exceeds maximum".into(),
-            ));
-        }
-        if self.replication.fetch_min > self.replication.fetch_max {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "replication fetch minimum bytes exceeds maximum".into(),
-            ));
-        }
-        if self.replication.reconnect_initial_delay > self.replication.reconnect_delay_cap {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "replication reconnect initial delay exceeds cap".into(),
-            ));
-        }
-        if self.heartbeat_interval >= self.heartbeat_timeout {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "broker heartbeat interval must be below timeout".into(),
-            ));
-        }
-        if self.controller_heartbeat_interval >= self.controller_election_timeout {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "controller heartbeat interval must be below election timeout".into(),
-            ));
-        }
-        if self.delegation_token_default_renew_period > self.delegation_token_max_lifetime {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "delegation token default renew period exceeds maximum lifetime".into(),
-            ));
-        }
-        if self.client_metrics_stale_floor < self.client_metrics_eviction_tick {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "client metrics stale floor is below eviction tick".into(),
-            ));
-        }
-        if self.unclean_recovery_aggressive_deadline > self.unclean_recovery_balanced_deadline {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "unclean recovery aggressive deadline exceeds balanced deadline".into(),
-            ));
-        }
+        self.validate_runtime_relations()?;
         self.validate_additional_runtime_relations()?;
 
         let validate_group = |name: &str,
@@ -1788,6 +1744,57 @@ impl BrokerConfig {
             return Err(BrokerError::InvalidLeaderRebalanceThreshold {
                 percent: self.leader_imbalance_per_broker.percent_f64(),
             });
+        }
+        Ok(())
+    }
+
+    /// Checks the pairs of runtime scalars that must keep an order between
+    /// them, such as a minimum below its maximum.
+    fn validate_runtime_relations(&self) -> Result<(), BrokerError> {
+        if self.self_registration_backoff_min > self.self_registration_backoff_max {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "self registration minimum backoff exceeds maximum".into(),
+            ));
+        }
+        if self.rlmm_bootstrap_backoff_initial > self.rlmm_bootstrap_backoff_max {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "RLMM bootstrap initial backoff exceeds maximum".into(),
+            ));
+        }
+        if self.replication.fetch_min > self.replication.fetch_max {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "replication fetch minimum bytes exceeds maximum".into(),
+            ));
+        }
+        if self.replication.reconnect_initial_delay > self.replication.reconnect_delay_cap {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "replication reconnect initial delay exceeds cap".into(),
+            ));
+        }
+        if self.heartbeat_interval >= self.heartbeat_timeout {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "broker heartbeat interval must be below timeout".into(),
+            ));
+        }
+        if self.controller_heartbeat_interval >= self.controller_election_timeout {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "controller heartbeat interval must be below election timeout".into(),
+            ));
+        }
+        if self.delegation_token_default_renew_period > self.delegation_token_max_lifetime {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "delegation token default renew period exceeds maximum lifetime".into(),
+            ));
+        }
+        if self.client_metrics_stale_floor < self.client_metrics_eviction_tick {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "client metrics stale floor is below eviction tick".into(),
+            ));
+        }
+        if self.unclean_recovery_aggressive_deadline > self.unclean_recovery_balanced_deadline {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "unclean recovery aggressive deadline exceeds balanced deadline".into(),
+            ));
         }
         Ok(())
     }

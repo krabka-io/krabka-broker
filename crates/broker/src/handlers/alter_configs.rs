@@ -258,7 +258,7 @@ fn broker_config_records(
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use crabka_protocol::owned::alter_configs_request::{
         AlterConfigsRequest, AlterConfigsResource, AlterableConfig,
     };
@@ -286,6 +286,25 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// A metadata image that holds one registered broker and nothing else.
+    fn image_with_broker(node_id: u64) -> crabka_metadata::MetadataImage {
+        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            crabka_metadata::BrokerRegistrationRecord {
+                node_id: crabka_metadata::NodeId(node_id),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: Vec::new(),
+                features: std::collections::BTreeMap::new(),
+            },
+        ));
+        image
     }
 
     fn broker_resource(resource_name: &str, configs: &[(&str, &str)]) -> AlterConfigsResource {
@@ -423,20 +442,7 @@ mod tests {
 
     #[test]
     fn broker_full_replacement_sets_requested_and_deletes_omitted_configs() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1BrokerRegistration(
-            crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_metadata::NodeId(1),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: Vec::new(),
-                features: std::collections::BTreeMap::new(),
-            },
-        ));
+        let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: crabka_metadata::NodeId(1),
             config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.into(),
@@ -502,21 +508,65 @@ mod tests {
     }
 
     #[test]
+    fn broker_full_replacement_rejects_controller_managed_configs() {
+        let image = image_with_broker(1);
+        for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
+            for resource_name in ["1", ""] {
+                let error = broker_config_records(
+                    &broker_resource(resource_name, &[(key, "true")]),
+                    &image,
+                )
+                .expect_err("controller-managed key must be rejected");
+
+                check!(error.0 == codes::INVALID_CONFIG, "key {key}");
+                check!(
+                    error.1 == format!("broker config {key} is controller-managed and read-only"),
+                    "key {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn broker_full_replacement_leaves_controller_managed_configs_alone() {
+        let mut image = image_with_broker(1);
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: crabka_metadata::NodeId(1),
+            config_name: crate::config_keys::BROKER_WITNESS.into(),
+            config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
+        }));
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: crabka_metadata::NodeId(1),
+            config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
+            config_value: Some("512".into()),
+        }));
+
+        let records = broker_config_records(
+            &broker_resource("1", &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")]),
+            &image,
+        )
+        .expect("valid broker replacement");
+
+        assert!(
+            records
+                == vec![
+                    MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                        node_id: crabka_metadata::NodeId(1),
+                        config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.into(),
+                        config_value: Some("2048".into()),
+                    }),
+                    MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                        node_id: crabka_metadata::NodeId(1),
+                        config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
+                        config_value: None,
+                    }),
+                ]
+        );
+    }
+
+    #[test]
     fn broker_full_replacement_rejects_per_broker_recovery_setting() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1BrokerRegistration(
-            crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_metadata::NodeId(1),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: Vec::new(),
-                features: std::collections::BTreeMap::new(),
-            },
-        ));
+        let image = image_with_broker(1);
 
         let error = broker_config_records(
             &broker_resource(

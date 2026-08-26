@@ -158,7 +158,11 @@ mod tests {
             ),
             (
                 "a same-rack non-witness wins over a lower-id witness",
-                vec![view(1, "a", true), witness(2, "b", true), view(3, "b", true)],
+                vec![
+                    view(1, "a", true),
+                    witness(2, "b", true),
+                    view(3, "b", true),
+                ],
                 3,
             ),
             (

@@ -106,10 +106,7 @@ pub(crate) fn failover_one(
         .collect();
     if pr.leader == dead {
         // The new leader is the first alive ISR member that can serve clients.
-        let electable = alive_isr
-            .iter()
-            .copied()
-            .find(|n| !witnesses.contains(n));
+        let electable = alive_isr.iter().copied().find(|n| !witnesses.contains(n));
         if let Some(new_leader) = electable {
             // Clean: the new leader was in the ISR, so it holds every committed
             // record. No data loss.
@@ -1228,10 +1225,16 @@ mod tests {
     async fn shutdown_replacement_unknown_partition() {
         let img = MetadataImage::new(Uuid::nil());
         let l = liveness_with_alive(&[1]).await;
-        let err =
-            select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "ghost", 0, NodeId(1))
-                .await
-                .unwrap_err();
+        let err = select_replacement_leader_for_shutdown(
+            &img,
+            &l,
+            &no_witnesses(),
+            "ghost",
+            0,
+            NodeId(1),
+        )
+        .await
+        .unwrap_err();
         assert!(err == ElectError::UnknownTopicOrPartition);
     }
 
@@ -2514,8 +2517,7 @@ mod tests {
         strategy: RecoveryStrategy,
         unclean_enabled: bool,
     ) -> super::FailoverDecision {
-        let alive: std::collections::HashSet<NodeId> =
-            alive.iter().copied().map(NodeId).collect();
+        let alive: std::collections::HashSet<NodeId> = alive.iter().copied().map(NodeId).collect();
         failover_one(
             pr,
             NodeId(dead),
@@ -2661,7 +2663,14 @@ mod tests {
         // with no witnesses, and the expected value is the pre-witness answer.
         let clean = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
         let empty_isr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
-        let cases: [(&PartitionRecord, u64, &[u64], RecoveryStrategy, bool, super::FailoverDecision); 6] = [
+        let cases: [(
+            &PartitionRecord,
+            u64,
+            &[u64],
+            RecoveryStrategy,
+            bool,
+            super::FailoverDecision,
+        ); 6] = [
             // Clean election picks the first alive ISR member.
             (
                 &clean,
@@ -2843,16 +2852,10 @@ mod tests {
         // witness, so the drain target is data replica 3.
         let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
         let l = liveness_with_alive(&[1, 2, 3]).await;
-        let new_pr = select_replacement_leader_for_shutdown(
-            &img,
-            &l,
-            &witnesses(&[2]),
-            "foo",
-            0,
-            NodeId(1),
-        )
-        .await
-        .expect("should pick the data replica");
+        let new_pr =
+            select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
+                .await
+                .expect("should pick the data replica");
         let expected = PartitionRecord {
             topic: "foo".into(),
             partition: 0,
@@ -2874,16 +2877,10 @@ mod tests {
         // the drain gate must not count this partition.
         let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
         let l = liveness_with_alive(&[1, 2, 3]).await;
-        let err = select_replacement_leader_for_shutdown(
-            &img,
-            &l,
-            &witnesses(&[2]),
-            "foo",
-            0,
-            NodeId(1),
-        )
-        .await
-        .unwrap_err();
+        let err =
+            select_replacement_leader_for_shutdown(&img, &l, &witnesses(&[2]), "foo", 0, NodeId(1))
+                .await
+                .unwrap_err();
         assert!(err == ElectError::NoEligibleReplica);
     }
 }

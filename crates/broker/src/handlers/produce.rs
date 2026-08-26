@@ -1581,9 +1581,13 @@ mod tests {
     use crabka_compression::{CompressionType, RecordDecompressionPolicy};
     use crabka_ids::Offset;
     use crabka_metadata::{
-        MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
+        BrokerConfigRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord,
+        TopicRecord,
     };
-    use crabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload};
+    use crabka_protocol::{
+        owned::produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
+        records::{Attributes, Record, RecordBatch, RecordsPayload},
+    };
     use crabka_units::{Time, bytes, convert::TimeExt, fraction, secs};
     use uuid::Uuid;
 
@@ -1696,6 +1700,134 @@ mod tests {
             .install_leader_change(record.leader.0, record.leader_epoch.0 + 1)
             .await;
         assert!(!diskless_role_ready(&partition, record));
+    }
+
+    /// Spawn one local partition and run the Produce gate over it.
+    ///
+    /// Returns `None` when the gate admits the write, or the complete gate
+    /// error when it refuses.
+    async fn produce_gate(
+        image: &MetadataImage,
+        node_id: crabka_audit::NodeId,
+        is_witness: bool,
+        diskless: bool,
+    ) -> Option<(i16, Option<LeaderIdAndEpoch>)> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = crabka_log::Log::open(
+            crate::log_dir::partition_dir(dir.path(), "orders", 0),
+            crabka_log::LogConfig::default(),
+        )
+        .expect("open log");
+        let partitions = crate::partition_registry::PartitionRegistry::new();
+        partitions.insert(
+            "orders".into(),
+            crabka_ids::PartitionIndex(0),
+            crate::broker::spawn_partition(
+                "orders".into(),
+                crabka_ids::PartitionIndex(0),
+                dir.path().to_path_buf(),
+                log,
+                crate::log_dir_status::LogDirRegistry::default(),
+                Arc::new(crate::producer_state::ProducerState::new()),
+                diskless,
+            ),
+        );
+        validate_partition_gate(
+            "orders",
+            0,
+            1,
+            &partitions,
+            &crate::log_dir_status::LogDirRegistry::default(),
+            image,
+            BrokerProducePolicy {
+                node_id,
+                default_min_insync_replicas: 1,
+                is_witness,
+            },
+        )
+        .err()
+        .map(|error| (error.code, error.current_leader))
+    }
+
+    #[tokio::test]
+    async fn witness_refuses_every_produce_including_a_diskless_partition() {
+        // Node 1 leads `orders` at epoch 0 and node 2 follows. A refused row
+        // carries the real leader, so a Kafka client re-targets without a full
+        // Metadata round-trip.
+        let image = image_with_topic("orders", &[1, 2]);
+        let refused = Some((
+            crate::codes::NOT_LEADER_OR_FOLLOWER,
+            Some(LeaderIdAndEpoch {
+                leader_id: 1,
+                leader_epoch: 0,
+                ..Default::default()
+            }),
+        ));
+        for (name, node_id, is_witness, diskless, want) in [
+            (
+                "witness leads a classic partition",
+                1,
+                true,
+                false,
+                refused.clone(),
+            ),
+            // The leader check reads `leader != this_node && !diskless`, so a
+            // diskless partition skips it. The witness guard is the only thing
+            // that refuses these two rows.
+            (
+                "witness leads a diskless partition",
+                1,
+                true,
+                true,
+                refused.clone(),
+            ),
+            (
+                "witness follows a diskless partition",
+                2,
+                true,
+                true,
+                refused.clone(),
+            ),
+            (
+                "plain broker leads a classic partition",
+                1,
+                false,
+                false,
+                None,
+            ),
+            (
+                "plain broker follows a diskless partition",
+                2,
+                false,
+                true,
+                None,
+            ),
+            (
+                "plain broker follows a classic partition",
+                2,
+                false,
+                false,
+                refused.clone(),
+            ),
+        ] {
+            let got =
+                produce_gate(&image, crabka_audit::NodeId(node_id), is_witness, diskless).await;
+            assert!(got == want, "{name}: got {got:?}, want {want:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn witness_on_another_node_leaves_this_brokers_produce_gate_alone() {
+        // Node 2 carries `broker.witness=true` in the image. This node is 1
+        // and it leads the partition, so the gate must still admit the write.
+        let mut image = image_with_topic("orders", &[1, 2]);
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: crabka_audit::NodeId(2),
+            config_name: crate::config_keys::BROKER_WITNESS.into(),
+            config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
+        }));
+        let got = produce_gate(&image, crabka_audit::NodeId(1), false, false).await;
+        assert!(got.is_none(), "got {got:?}");
     }
 
     fn set_min_isr(img: &mut MetadataImage, topic: &str, n: i32) {
@@ -2063,9 +2195,6 @@ mod tests {
 
     #[tokio::test]
     async fn process_partition_non_leader_preserves_current_leader_hint() {
-        use crabka_protocol::owned::produce_response::{
-            LeaderIdAndEpoch, PartitionProduceResponse,
-        };
         let mut img = image_with_topic("orders", &[2, 3]);
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "orders".into(),
@@ -2155,9 +2284,6 @@ mod tests {
         // the "transient not-leader" branch, whose `current_leader` hint must
         // still carry the real leader id + epoch from the image — not the 0
         // defaults a struct-field-deletion mutant would leave.
-        use crabka_protocol::owned::produce_response::{
-            LeaderIdAndEpoch, PartitionProduceResponse,
-        };
         let mut img = image_with_topic("orders", &[2, 3]);
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "orders".into(),

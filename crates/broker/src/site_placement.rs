@@ -22,9 +22,9 @@
 //! always gives the same output: it sorts the brokers by node id and it never
 //! iterates a hash container.
 //!
-//! Like [`crate::wal::quorum::placement`], this code fails closed. When it
-//! cannot satisfy the site guarantee, it returns an empty outer vec, and the
-//! caller reports `INVALID_REPLICATION_FACTOR`.
+//! Like the WAL voter placement in `crate::wal::quorum::placement`, this code
+//! fails closed. When it cannot satisfy the site guarantee, it returns an
+//! empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
 
 use crabka_raft::NodeId;
 
@@ -96,7 +96,9 @@ impl SiteTable {
 ///
 /// 1. When no broker declares a site, the cluster is not a stretch cluster.
 ///    The result is then the plain Kafka placement,
-///    [`round_robin_replicas`] over the same brokers in node-id order.
+///    [`round_robin_replicas`] over the same brokers in node-id order. A
+///    cluster without a site has no witness site either, so this rule also
+///    ignores `is_witness` and `preferred_site`.
 /// 2. In every other cluster, the replicas of a partition go in different
 ///    sites. The rotation of the sites advances with the partition index, so
 ///    the partitions spread over the sites. Inside a site, the brokers also
@@ -289,8 +291,8 @@ mod tests {
         broker(node_id, Some(site), true)
     }
 
-    /// Two brokers in each of the sites `a`, `b`, and `c`, out of node-id
-    /// order so every test also covers the sort.
+    // Two brokers in each of the sites "a", "b", and "c", out of node-id order
+    // so every test also covers the sort.
     fn six_brokers() -> Vec<SiteBrokerView> {
         vec![
             replica(5, "c"),

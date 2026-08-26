@@ -369,6 +369,8 @@ mod tests {
     };
     use uuid::Uuid;
 
+    use crate::config_keys;
+
     /// Builds a minimal `MetadataImage` with one broker config entry.
     fn image_with_broker_config(node_id: u64, key: &str, value: &str) -> MetadataImage {
         let mut img = MetadataImage::new(Uuid::nil());
@@ -593,6 +595,60 @@ mod tests {
                         value: Some("1".into()),
                         read_only: true,
                         config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                        ..Default::default()
+                    },
+                ]
+        );
+    }
+
+    #[test]
+    fn broker_describe_reports_controller_managed_configs_as_read_only() {
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            config_name: config_keys::STRETCH_PREFERRED_LEADER_SITE.into(),
+            config_value: Some("dc-a".into()),
+        }));
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: crabka_metadata::NodeId(1),
+            config_name: config_keys::BROKER_WITNESS.into(),
+            config_value: Some(config_keys::WITNESS_TRUE.into()),
+        }));
+
+        let result = super::describe_one(
+            &image,
+            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+                resource_type: super::RESOURCE_TYPE_BROKER,
+                resource_name: "1".into(),
+                configuration_keys: None,
+                ..Default::default()
+            },
+            300_000,
+            &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        );
+
+        assert!(
+            result.configs
+                == vec![
+                    DescribeConfigsResourceResult {
+                        name: config_keys::BROKER_WITNESS.into(),
+                        value: Some(config_keys::WITNESS_TRUE.into()),
+                        read_only: true,
+                        config_source: super::CONFIG_SOURCE_DYNAMIC_BROKER,
+                        ..Default::default()
+                    },
+                    DescribeConfigsResourceResult {
+                        name: "node.id".into(),
+                        value: Some("1".into()),
+                        read_only: true,
+                        config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                        ..Default::default()
+                    },
+                    DescribeConfigsResourceResult {
+                        name: config_keys::STRETCH_PREFERRED_LEADER_SITE.into(),
+                        value: Some("dc-a".into()),
+                        read_only: true,
+                        config_source: super::CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
                         ..Default::default()
                     },
                 ]

@@ -56,6 +56,10 @@ The broker validates the file at startup and re-reads it for every new
 connection, so replacing the mounted token rotates credentials without a
 broker restart. Inbound validation uses the existing `[oauthbearer]` policy.
 
+## Design documents
+
+- [Witness broker role and stretch cluster](../../docs/superpowers/specs/2026-08-26-witness-broker-stretch-cluster-design.md) — the data-bearing witness role, and the three-site profile that keeps `acks=all` writes alive through the loss of any one site.
+
 ## Documentation
 
 Read the API documentation on [docs.rs/crabka-broker](https://docs.rs/crabka-broker). The repository README contains the project-wide setup, development, and release notes.

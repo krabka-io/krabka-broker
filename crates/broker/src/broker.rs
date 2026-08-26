@@ -662,7 +662,13 @@ async fn register_broker(
     if !config.is_broker() {
         return Ok(());
     }
-    submit_self_registration(config, controller, broker_registration_batch(config), "broker").await
+    submit_self_registration(
+        config,
+        controller,
+        broker_registration_batch(config),
+        "broker",
+    )
+    .await
 }
 
 async fn submit_bootstrap_records(
@@ -1153,9 +1159,10 @@ fn start_audit_pipeline(
 /// Counts the partitions `node_id` leads from a site other than the stretch
 /// cluster's preferred leader site.
 ///
-/// The count is zero when the cluster pins leadership to no site, and zero
-/// when the image reports no rack for the node. `node_id` leads every
-/// partition the count considers, so one rack lookup covers all of them.
+/// The count is zero when the cluster pins leadership to no site. A node
+/// whose registration names no rack does not sit in the preferred site, so
+/// its partitions count as drift. `node_id` leads every partition the count
+/// considers, so one rack lookup covers all of them.
 fn leader_site_drift_partitions(
     image: &crabka_metadata::MetadataImage,
     node_id: crabka_metadata::NodeId,
@@ -1163,7 +1170,9 @@ fn leader_site_drift_partitions(
     let Some(preferred) = crate::config_keys::resolve_preferred_leader_site(image) else {
         return 0;
     };
-    let leader_site = image.broker(node_id).and_then(|broker| broker.rack.as_deref());
+    let leader_site = image
+        .broker(node_id)
+        .and_then(|broker| broker.rack.as_deref());
     if leader_site == Some(preferred) {
         return 0;
     }
@@ -6483,6 +6492,174 @@ protocol = "Plaintext"
                     ("INTERNAL", "internal.example", 29093),
                 ]
         );
+    }
+
+    /// A stretch profile with two data sites and one witness site, with
+    /// leadership pinned to `dc-a`.
+    fn three_site_profile() -> crate::config::StretchProfile {
+        crate::config::StretchProfile {
+            sites: vec!["dc-a".to_string(), "dc-b".to_string(), "dc-w".to_string()],
+            witness_site: "dc-w".to_string(),
+            preferred_leader_site: "dc-a".to_string(),
+        }
+    }
+
+    /// A node of node id 4 that carries `roles`.
+    fn node_with_roles(roles: Vec<crate::config::NodeRole>) -> BrokerConfig {
+        BrokerConfig {
+            node_id: crabka_metadata::NodeId(4),
+            roles,
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        }
+    }
+
+    fn broker_witness_record(node_id: u64, value: Option<&str>) -> crabka_metadata::MetadataRecord {
+        crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
+            node_id: crabka_metadata::NodeId(node_id),
+            config_name: "broker.witness".into(),
+            config_value: value.map(str::to_string),
+        })
+    }
+
+    #[test]
+    fn a_witness_registration_batch_publishes_the_witness_role() {
+        let config = node_with_roles(vec![
+            crate::config::NodeRole::Controller,
+            crate::config::NodeRole::Broker,
+            crate::config::NodeRole::Witness,
+        ]);
+
+        assert!(
+            broker_registration_batch(&config)
+                == vec![
+                    crabka_metadata::MetadataRecord::V1BrokerRegistration(
+                        self_registration_record(&config)
+                    ),
+                    broker_witness_record(4, Some("true")),
+                ]
+        );
+    }
+
+    #[test]
+    fn a_plain_broker_registration_batch_clears_the_witness_role() {
+        let config = node_with_roles(vec![
+            crate::config::NodeRole::Controller,
+            crate::config::NodeRole::Broker,
+        ]);
+
+        assert!(
+            broker_registration_batch(&config)
+                == vec![
+                    crabka_metadata::MetadataRecord::V1BrokerRegistration(
+                        self_registration_record(&config)
+                    ),
+                    broker_witness_record(4, None),
+                ]
+        );
+    }
+
+    #[test]
+    fn a_stretch_profile_publishes_the_preferred_leader_site_as_a_cluster_default() {
+        let config = BrokerConfig {
+            stretch: Some(three_site_profile()),
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        };
+
+        assert!(
+            stretch_default_records(&config)
+                == vec![crabka_metadata::MetadataRecord::V1BrokerConfig(
+                    crabka_metadata::BrokerConfigRecord {
+                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                        config_name: "stretch.preferred.leader.site".into(),
+                        config_value: Some("dc-a".into()),
+                    }
+                )]
+        );
+    }
+
+    #[test]
+    fn a_node_without_a_stretch_profile_publishes_no_cluster_default() {
+        let config = BrokerConfig::for_tests(std::path::PathBuf::new());
+
+        assert!(stretch_default_records(&config) == vec![]);
+    }
+
+    /// An image where node 1 sits in `rack` and leads `led` partitions of one
+    /// topic, and node 2 sits in `dc-a` and leads one more.
+    fn stretch_image(rack: &str, led: i32) -> crabka_metadata::MetadataImage {
+        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (node_id, node_rack) in [(1_u64, rack), (2_u64, "dc-a")] {
+            image.apply(&crabka_metadata::MetadataRecord::V1BrokerRegistration(
+                crabka_metadata::BrokerRegistrationRecord {
+                    node_id: crabka_metadata::NodeId(node_id),
+                    broker_epoch: 0,
+                    incarnation_id: uuid::Uuid::nil(),
+                    host: "127.0.0.1".into(),
+                    port: 9092,
+                    rack: Some(node_rack.to_string()),
+                    log_dirs: Vec::new(),
+                    endpoints: Vec::new(),
+                    features: std::collections::BTreeMap::new(),
+                },
+            ));
+        }
+        image.apply(&crabka_metadata::MetadataRecord::V1BrokerConfig(
+            crabka_metadata::BrokerConfigRecord {
+                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: "stretch.preferred.leader.site".into(),
+                config_value: Some("dc-a".into()),
+            },
+        ));
+        for partition in 0..=led {
+            let leader = if partition < led { 1 } else { 2 };
+            image.apply(&crabka_metadata::MetadataRecord::V1Partition(
+                crabka_metadata::PartitionRecord {
+                    topic: "stretch-topic".into(),
+                    partition,
+                    leader: crabka_metadata::NodeId(leader),
+                    replicas: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
+                    isr: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
+                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    adding_replicas: Vec::new(),
+                    removing_replicas: Vec::new(),
+                    directories: Vec::new(),
+                    partition_epoch: 0,
+                },
+            ));
+        }
+        image
+    }
+
+    #[test]
+    fn leader_site_drift_counts_only_partitions_led_outside_the_preferred_site() {
+        for (rack, led, expected) in [("dc-b", 2, 2), ("dc-a", 2, 0)] {
+            let image = stretch_image(rack, led);
+
+            check!(
+                leader_site_drift_partitions(&image, crabka_metadata::NodeId(1)) == expected,
+                "rack {rack}"
+            );
+            // Node 2 leads one partition from the preferred site, so it never
+            // drifts whatever node 1 does.
+            check!(
+                leader_site_drift_partitions(&image, crabka_metadata::NodeId(2)) == 0,
+                "rack {rack}"
+            );
+        }
+    }
+
+    #[test]
+    fn leader_site_drift_is_zero_when_the_cluster_pins_no_leader_site() {
+        let mut image = stretch_image("dc-b", 2);
+        image.apply(&crabka_metadata::MetadataRecord::V1BrokerConfig(
+            crabka_metadata::BrokerConfigRecord {
+                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: "stretch.preferred.leader.site".into(),
+                config_value: None,
+            },
+        ));
+
+        assert!(leader_site_drift_partitions(&image, crabka_metadata::NodeId(1)) == 0);
     }
 
     #[test]
