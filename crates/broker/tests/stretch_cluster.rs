@@ -21,6 +21,50 @@
 //! at the end: the poll asserts that the witness is not the leader on *every*
 //! observation it makes while it waits.
 //!
+//! # Partitions, and what this harness can and cannot cut
+//!
+//! The second half of the file leaves every broker running and takes away the
+//! network instead, with `support::relay`'s [`SiteLink`] in front of a site's
+//! controller and client listeners. A stopped site and an unreachable site are
+//! different failures, and only the second one leaves a *live* site that could
+//! misbehave — acknowledge a write it can no longer replicate, or elect a
+//! second leader.
+//!
+//! The cut is **one-way**, and the tests are written to that. A relay sits in
+//! front of a site's *listeners*, so cutting it stops the rest of the cluster
+//! from reaching that site; the site's own outbound dials still land, because
+//! they go to the relays of the other two sites. Making the cut two-way is not
+//! reachable here:
+//!
+//! * Every node dials a given peer's controller listener at the *same*
+//!   address, because the address comes from the committed `VotersRecord` in
+//!   the metadata log, not from each node's own configuration. One relay per
+//!   site is therefore the finest controller-plane cut available; a relay per
+//!   ordered pair collapses onto it as soon as the voter set commits.
+//! * Inter-broker data traffic — replication fetches, and the broker heartbeat
+//!   that drives partition failover — resolves the target's single advertised
+//!   endpoint out of the metadata image. Cutting a site's *outbound* data path
+//!   means cutting the relay in front of whatever it dials, which is the same
+//!   relay the surviving sites use to reach each other.
+//!
+//! So the partition test here asserts the half the harness can produce
+//! honestly: what an isolated **leader** must stop doing once its replicas can
+//! no longer reach it, and that healing puts the cluster back. Two things stay
+//! out of reach, and are named here rather than faked with a weaker assertion:
+//!
+//! * **A live minority that must refuse while a live majority serves.** It
+//!   needs a two-way cut, for the reason above. With a one-way cut the isolated
+//!   site keeps its outbound reach, so it goes on heartbeating the controller
+//!   and is never fenced, and the failover that would let the majority side
+//!   take over never fires.
+//! * **Isolating a site that happens to hold controller leadership.** Such a
+//!   node keeps pushing to peers that can no longer dial it: it stays the
+//!   controller, declares the sites it cannot hear from dead, and rewrites the
+//!   metadata they depend on. Which node holds controller leadership is not
+//!   steerable from a test, so any case that cuts a site which might be the
+//!   controller would assert one outcome and hit another about a third of the
+//!   time. The leader-site test below is written to hold either way.
+//!
 //! # Bounded waits
 //!
 //! Every wait is bounded with `tokio::time::timeout`. CI kills a test at 600s
@@ -29,13 +73,14 @@
 use std::{
     collections::BTreeSet,
     future::Future,
+    net::SocketAddr,
     sync::OnceLock,
     time::{Duration, Instant},
 };
 
 use assert2::{assert, check};
 use crabka_broker::{
-    BrokerConfig, BrokerHandle, NodeId, codes,
+    BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId, codes,
     config::{NodeRole, StretchProfile},
 };
 use crabka_client_core::Client;
@@ -51,6 +96,8 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 mod support;
+
+use support::relay::SiteLink;
 
 /// The preferred leader site. Placement puts `replicas[0]` here.
 const SITE_A: &str = "site-a";
@@ -75,7 +122,7 @@ const N_RECORDS: i32 = 4;
 
 /// Generous enough that a loaded runner does not fail a healthy cluster, short
 /// enough that a broken one reports in seconds rather than at CI's kill.
-const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const STEP_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Serialize the whole binary: each test boots a three-node loopback cluster
 /// with short raft timings, and two at once starve the election. Same rationale
@@ -99,6 +146,41 @@ fn stretch_profile() -> StretchProfile {
     }
 }
 
+/// Put broker `index` in its site: the rack that names it, the profile every
+/// node of the cluster shares, `min.insync.replicas=2` (the only value a
+/// stretch profile accepts at rf=3 over three sites), and the witness role for
+/// the node in the witness site.
+fn apply_stretch_config(index: usize, cfg: &mut BrokerConfig) {
+    cfg.rack = Some(SITES[index].to_string());
+    cfg.stretch = Some(stretch_profile());
+    cfg.default_min_insync_replicas = 2;
+    if SITES[index] == SITE_C {
+        cfg.roles.push(NodeRole::Witness);
+    }
+}
+
+/// Await the two controller-managed records the rest of the cluster's
+/// behaviour keys on: the witness role of the `site-c` node, and the preferred
+/// leader site. Placement, the leader picks and the produce gate all read them
+/// out of the metadata image, so nothing may be created before they land.
+async fn wait_for_stretch_metadata(handle: &BrokerHandle) {
+    within(
+        "the witness role and the preferred site reach the image",
+        handle.wait_for_image(|img| {
+            img.broker_config(NodeId(WITNESS))
+                .and_then(|configs| configs.get("broker.witness"))
+                .map(String::as_str)
+                == Some("true")
+                && img
+                    .default_broker_config()
+                    .and_then(|configs| configs.get("stretch.preferred.leader.site"))
+                    .map(String::as_str)
+                    == Some(SITE_A)
+        }),
+    )
+    .await;
+}
+
 /// A running three-site cluster. Handles are taken out as sites are stopped,
 /// so `shutdown` can still drain whatever is left.
 struct Cluster {
@@ -117,36 +199,12 @@ impl Cluster {
     async fn start() -> Self {
         let mut last_err = None;
         for attempt in 1..=3 {
-            let started = support::start_n_node_with(3, |i, cfg| {
-                cfg.rack = Some(SITES[i].to_string());
-                cfg.stretch = Some(stretch_profile());
-                cfg.default_min_insync_replicas = 2;
-                if SITES[i] == SITE_C {
-                    cfg.roles.push(NodeRole::Witness);
-                }
-            })
-            .await;
+            let started = support::start_n_node_with(3, apply_stretch_config).await;
             match started {
                 Ok(cluster) => {
                     support::wait_for_all_brokers_registered(&cluster, 3).await;
                     for (handle, _, _) in &cluster {
-                        within(
-                            "the witness role and the preferred site reach the image",
-                            handle.wait_for_image(|img| {
-                                img.broker_config(NodeId(WITNESS))
-                                    .and_then(|configs| configs.get("broker.witness"))
-                                    .map(String::as_str)
-                                    == Some("true")
-                                    && img
-                                        .default_broker_config()
-                                        .and_then(|configs| {
-                                            configs.get("stretch.preferred.leader.site")
-                                        })
-                                        .map(String::as_str)
-                                        == Some(SITE_A)
-                            }),
-                        )
-                        .await;
+                        wait_for_stretch_metadata(handle).await;
                     }
                     let (handles, configs, dirs) = cluster.into_iter().fold(
                         (Vec::new(), Vec::new(), Vec::new()),
@@ -544,6 +602,231 @@ async fn both_data_sites_down_leaves_no_leader_and_the_witness_refuses_writes() 
     check!(
         view.as_ref().is_some_and(|view| view.leader != WITNESS),
         "no live broker leads the partition, and the witness is not it: {view:?}"
+    );
+
+    cluster.shutdown().await;
+}
+
+// ─── Partitions: every site alive, one of them unreachable ───────────────────
+
+/// A three-site cluster whose peers reach each site only through a relay.
+///
+/// Each site advertises its [`SiteLink`]'s addresses — the controller one in
+/// the voter set, the client one as its inter-broker endpoint — while binding
+/// its real listeners. Cutting a link therefore takes that site off the network
+/// *as its peers see it*, with every broker still running. The test's own
+/// clients bootstrap at the real listen addresses, so a client can always talk
+/// to the broker in "its" site, the way a client in a partitioned data centre
+/// still reaches the local broker.
+struct LinkedCluster {
+    handles: Vec<Option<BrokerHandle>>,
+    configs: Vec<BrokerConfig>,
+    links: Vec<SiteLink>,
+    _dirs: Vec<TempDir>,
+}
+
+impl LinkedCluster {
+    async fn start() -> Self {
+        let mut last_err = None;
+        for attempt in 1..=3 {
+            match Self::try_start().await {
+                Ok(cluster) => return cluster,
+                Err(error) => {
+                    tracing::warn!(attempt, %error, "relayed stretch cluster start failed");
+                    last_err = Some(error);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+        panic!("relayed stretch cluster start failed after 3 attempts: {last_err:?}");
+    }
+
+    async fn try_start() -> Result<Self, BrokerError> {
+        support::init_tracing();
+        let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
+            support::bind_and_hold_ports(3).await;
+
+        // One relay pair per site, in front of the listeners that site already
+        // holds. The brokers adopt the real listeners; only the *advertised*
+        // addresses go through the relays.
+        let mut links = Vec::with_capacity(3);
+        for index in 0..3 {
+            links.push(SiteLink::start(controller_addrs[index], client_addrs[index]).await);
+        }
+        let voters: Vec<(u64, SocketAddr)> = (0..3)
+            .map(|index| {
+                (
+                    u64::try_from(index + 1).unwrap(),
+                    links[index].controller_addr(),
+                )
+            })
+            .collect();
+
+        let mut starts = Vec::with_capacity(3);
+        let mut metas: Vec<(BrokerConfig, TempDir)> = Vec::with_capacity(3);
+        for (index, (data, controller)) in client_listeners
+            .into_iter()
+            .zip(controller_listeners)
+            .enumerate()
+        {
+            let dir = TempDir::new().unwrap();
+            let mut cfg = support::broker_config(
+                index,
+                &client_addrs,
+                &controller_addrs,
+                &voters,
+                dir.path(),
+                BootstrapMode::Bootstrap,
+            );
+            // Peers and clients learn this site through its relay; the broker
+            // itself binds the real port behind it.
+            cfg.advertised_listener = links[index].client_addr().to_string();
+            cfg.directory_id = uuid::Uuid::from_u128(u128::from(cfg.node_id.0));
+            cfg.auto_join = false;
+            cfg.bootstrap_servers = vec![];
+            apply_stretch_config(index, &mut cfg);
+            let spawn_cfg = cfg.clone();
+            starts.push(tokio::spawn(async move {
+                Broker::start_with_listeners(spawn_cfg, Some(controller), Some(data)).await
+            }));
+            metas.push((cfg, dir));
+        }
+
+        let mut handles = Vec::with_capacity(3);
+        let mut configs = Vec::with_capacity(3);
+        let mut dirs = Vec::with_capacity(3);
+        for (start, (cfg, dir)) in starts.into_iter().zip(metas) {
+            let handle = start
+                .await
+                .map_err(|e| BrokerError::Startup(format!("broker start task panicked: {e}")))??;
+            handles.push(Some(handle));
+            configs.push(cfg);
+            dirs.push(dir);
+        }
+
+        for handle in handles.iter().flatten() {
+            handle.wait_until_brokers_registered(3).await;
+            wait_for_stretch_metadata(handle).await;
+        }
+
+        Ok(Self {
+            handles,
+            configs,
+            links,
+            _dirs: dirs,
+        })
+    }
+
+    fn handle(&self, index: usize) -> &BrokerHandle {
+        self.handles[index].as_ref().expect("broker is running")
+    }
+
+    fn addr(&self, index: usize) -> String {
+        self.configs[index].listen_addr.to_string()
+    }
+
+    /// Take a site off the network as its peers see it, including the
+    /// connections they already hold open.
+    fn cut(&self, index: usize) {
+        self.links[index].cut();
+    }
+
+    /// Put it back.
+    fn heal(&self, index: usize) {
+        self.links[index].heal();
+    }
+
+    async fn shutdown(mut self) {
+        for handle in self.handles.drain(..).flatten() {
+            within("cluster shutdown", handle.shutdown()).await;
+        }
+        for link in self.links.drain(..) {
+            within("relay shutdown", link.shutdown()).await;
+        }
+    }
+}
+
+/// Bring a relayed cluster up with the topic and all three replicas in sync.
+async fn linked_cluster_with_topic() -> (LinkedCluster, WireUuid) {
+    let cluster = LinkedCluster::start().await;
+    let client = client_at(&cluster.addr(NODE_A)).await;
+    let topic_id = create_topic(&client).await;
+    for index in [NODE_A, NODE_B, NODE_C] {
+        within(
+            "the partition reaches every node",
+            cluster.handle(index).wait_until_partition_present(TOPIC, 0),
+        )
+        .await;
+    }
+    wait_for_leader_and_isr(
+        cluster.handle(NODE_A),
+        "the initial three-replica ISR",
+        1,
+        &[1, 2, WITNESS],
+    )
+    .await;
+    (cluster, topic_id)
+}
+
+/// A leader whose replicas can no longer reach it must stop acknowledging
+/// `acks=all` writes, and must not hand leadership to the witness on the way.
+///
+/// This is the safety half of a partitioned leader site. Nothing here is
+/// stopped: the leader is still running, still holds its log, and still
+/// believes it leads. What it has lost is the ability to have a write copied
+/// anywhere else. Its replicas stop fetching, so it drops them from the in-sync
+/// set, and the in-sync set of one no longer satisfies
+/// `min.insync.replicas=2` — `NOT_ENOUGH_REPLICAS`, before the record is even
+/// appended.
+///
+/// Healing puts it back: the replicas catch up, the ISR returns to three, and
+/// `acks=all` commits again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal() {
+    let _guard = cluster_lock().lock().await;
+    let (cluster, topic_id) = linked_cluster_with_topic().await;
+
+    let leader_addr = cluster.addr(NODE_A);
+    check!(
+        produce_until_committed(&leader_addr, topic_id).await == codes::NONE,
+        "acks=all commits while every site is reachable"
+    );
+
+    cluster.cut(NODE_A);
+
+    // The replicas stop fetching, so the leader drops them: the in-sync set
+    // becomes itself alone. Waiting for that is what makes the refusal below
+    // deterministic, and it is the observable proof that the cut reached the
+    // replication path rather than only new connections.
+    wait_for_leader_and_isr(
+        cluster.handle(NODE_A),
+        "the ISR shrinks to the unreachable leader alone",
+        1,
+        &[1],
+    )
+    .await;
+
+    let leader = client_at(&leader_addr).await;
+    let code = produce_once(&leader, topic_id, 3_000).await;
+    check!(
+        code == codes::NOT_ENOUGH_REPLICAS,
+        "a leader its replicas cannot reach must refuse an acks=all write \
+         rather than acknowledge one nothing else holds; got error_code={code}"
+    );
+    witness_never_leads(cluster.handle(NODE_C), Duration::from_secs(3)).await;
+
+    cluster.heal(NODE_A);
+
+    wait_for_leader_and_isr(
+        cluster.handle(NODE_A),
+        "the ISR returns to three replicas after the heal",
+        1,
+        &[1, 2, WITNESS],
+    )
+    .await;
+    check!(
+        produce_until_committed(&leader_addr, topic_id).await == codes::NONE,
+        "acks=all commits again once the site is reachable"
     );
 
     cluster.shutdown().await;

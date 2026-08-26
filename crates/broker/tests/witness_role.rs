@@ -95,7 +95,7 @@ const N_RECORDS: i32 = 5;
 
 /// Generous enough that a loaded runner does not fail a healthy cluster, short
 /// enough that a broken one reports in seconds rather than at CI's kill.
-const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const STEP_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Serialize the whole test binary. Each test boots a three-node loopback
 /// cluster with short raft timings; two at once starve the election. The
