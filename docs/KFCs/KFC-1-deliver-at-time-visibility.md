@@ -54,7 +54,7 @@ The first case is a delivery time further ahead than `delivery.max.delay.ms`. Th
 
 - A per-partition gauge for the delivery watermark.
 - A per-partition gauge for the count of pending records. A pending record is produced but not yet active.
-- A histogram of activation lateness. Lateness is the time from the delivery time to the first moment the record was visible.
+- A histogram of activation lateness. Lateness is the time from the instant a batch became due, which is its delivery time plus the declared clock bound, to the first moment the record was visible. It therefore reads at or near zero on a healthy broker, and any positive tail is a delay the broker did not promise. Add `delivery_clock_uncertainty` to read the delay from the record's own delivery time.
 - A counter of scheduler wakeups.
 
 The lateness histogram is the one an operator watches. It measures the promise this design makes. A rising tail points at clock skew, or at a scheduler that does not get enough CPU.
