@@ -16,6 +16,7 @@ use std::{
     time::Duration,
 };
 
+use assert2::assert;
 use crabka_metadata::PartitionRecord;
 use crabka_raft::NodeId;
 use stateright::{Checker, Model, Property};
