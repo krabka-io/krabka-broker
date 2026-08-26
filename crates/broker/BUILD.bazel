@@ -62,6 +62,9 @@ crate_tests(
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
         ],
+        # The probe compiles a Java helper in-container, so it needs the image
+        # that ships a JDK with `javac` alongside the Kafka client jars.
+        "jvm_deliver_at_time": ["cp_kafka_7_5_0"],
         "jvm_features": ["apache_kafka_4_3_1"],
         "jvm_kip320_divergence": [
             "apache_kafka_4_0_0",
