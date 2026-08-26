@@ -73,6 +73,10 @@ The key is controller-managed and read-only. `AlterConfigs` and `IncrementalAlte
 
 The durability check calls `crabka_verified::stretch::min_insync_is_site_loss_safe`. That function is formally verified. The broker calls it and does not restate the arithmetic.
 
+One consequence reaches every operator who adopts the profile. The safe range is `min.insync.replicas >= 2` and `min.insync.replicas <= site_loss_survivors(rf, sites)`. Three replicas over three sites leave two after a site loss, so the two bounds meet and 2 is the only safe value. The broker default is 1, and the profile rejects it at startup. An operator who sets `[stretch]` must also set `min.insync.replicas` to 2.
+
+The rejection is deliberate. `acks=all` at `min.insync.replicas=1` acknowledges a write that one broker holds, so a single site loss can lose it. That gives no cross-site durability, which is the one property the profile exists to supply.
+
 ## Integration
 
 **KRaft quorum.** A witness is a voter, so it appears in `controller.quorum.voters` and in the `VotersRecord`. `QuorumStateMachine` derives voter status from voter-set membership alone, so the witness needs no consensus-layer change. See `crates/kraft-core/src/core.rs`.
