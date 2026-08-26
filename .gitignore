@@ -21,3 +21,8 @@ mutants.out.old
 
 # Python bytecode from local runs of scripts
 __pycache__/
+
+# why3find's prover-result cache, written beside the proof sessions under
+# `verif/` when `cargo creusot` runs. It is a local speed-up keyed by prover
+# and goal, not a proof artifact, so it does not belong in the repository.
+/.why3find/
