@@ -6,6 +6,10 @@
 //! use Kafka-compatible per-key `V1BrokerConfig` records, including tombstones
 //! for overrides omitted from the replacement. An empty broker resource name
 //! targets Kafka's cluster-wide default broker config.
+//!
+//! Controller-managed broker keys stand outside the replacement. The handler
+//! rejects a request that names one, and the tombstone sweep leaves them in
+//! place. See [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 
 use bytes::Bytes;
 use crabka_metadata::{
@@ -183,6 +187,15 @@ fn broker_config_records(
         super::incremental_alter_configs::broker_config_node_id(&resource.resource_name, image)?;
     let mut replacement = std::collections::BTreeMap::new();
     for config in &resource.configs {
+        if config_keys::is_controller_managed_broker_config(&config.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                format!(
+                    "broker config {} is controller-managed and read-only",
+                    config.name
+                ),
+            ));
+        }
         if !super::incremental_alter_configs::is_known_broker_config(&config.name) {
             return Err((
                 codes::INVALID_CONFIG,
@@ -225,7 +238,10 @@ fn broker_config_records(
         records.extend(
             current
                 .keys()
-                .filter(|name| !replacement.contains_key(*name))
+                .filter(|name| {
+                    !replacement.contains_key(*name)
+                        && !config_keys::is_controller_managed_broker_config(name)
+                })
                 .map(|name| {
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                         node_id,

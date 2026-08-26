@@ -1,19 +1,24 @@
-(* #"/work/crates/verified/src/consensus.rs" 315 0 315 82 *)
+(* #"/home/user/krabka-broker/crates/verified/src/consensus.rs" 323 0 323 82 *)
 
-let%span sconsensus = "/work/crates/verified/src/consensus.rs" 311 10 311 33
-let%span sconsensus'0 = "/work/crates/verified/src/consensus.rs" 312 10 312 37
-let%span sconsensus'1 = "/work/crates/verified/src/consensus.rs" 313 10 313 64
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconsensus = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 319 10 319 33
+let%span sconsensus'0 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 320 10 320 37
+let%span sconsensus'1 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 321 10 321 64
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let handoff_high_watermark [#"/work/crates/verified/src/consensus.rs" 315 0 315 82] (previous_hw: Int64.t)
-  (quorum_frontier: Int64.t) (return (x: Int64.t)) = (! bb0
+let handoff_high_watermark [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 323 0 323 82]
+  (previous_hw: Int64.t) (quorum_frontier: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.ge previous_hw quorum_frontier ] s1
     | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
@@ -24,10 +29,8 @@ let handoff_high_watermark [#"/work/crates/verified/src/consensus.rs" 315 0 315 
   | & quorum_frontier: Int64.t = quorum_frontier
   | & _10: bool = Any.any_l () ])
   [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:handoff_high_watermark ensures] ([@stop_split] [@expl:handoff_high_watermark ensures #0] [%#sconsensus] Int64.to_int result
-      >= Int64.to_int previous_hw)
-    /\ ([@stop_split] [@expl:handoff_high_watermark ensures #1] [%#sconsensus'0] Int64.to_int result
-      >= Int64.to_int quorum_frontier)
+  {[@stop_split] [@expl:handoff_high_watermark ensures] ([@stop_split] [@expl:handoff_high_watermark ensures #0] [%#sconsensus] ge_log_Int (Int64.to_int result) (Int64.to_int previous_hw))
+    /\ ([@stop_split] [@expl:handoff_high_watermark ensures #1] [%#sconsensus'0] ge_log_Int (Int64.to_int result) (Int64.to_int quorum_frontier))
     /\ ([@stop_split] [@expl:handoff_high_watermark ensures #2] [%#sconsensus'1] Int64.to_int result
       = Int64.to_int previous_hw
     \/ Int64.to_int result = Int64.to_int quorum_frontier)}

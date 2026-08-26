@@ -62,6 +62,54 @@ fn self_registration_record(config: &BrokerConfig) -> crabka_metadata::BrokerReg
     }
 }
 
+/// The broker config record that publishes this node's witness role.
+///
+/// `BrokerRegistrationRecord` lives in the protocol crate and carries no
+/// role flag, so krabka publishes the role as a per-broker config instead.
+/// A witness writes `broker.witness=true`. Every other node writes a
+/// tombstone, which clears a flag that an earlier run of the same node id
+/// set. The record always states the current truth, so the role never goes
+/// stale across a restart.
+fn self_witness_record(config: &BrokerConfig) -> crabka_metadata::MetadataRecord {
+    crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
+        node_id: config.node_id,
+        config_name: crate::config_keys::BROKER_WITNESS.to_string(),
+        config_value: config
+            .is_witness()
+            .then(|| crate::config_keys::WITNESS_TRUE.to_string()),
+    })
+}
+
+/// The batch this broker submits to register itself: the registration record
+/// and the witness-role config for the same node id. One batch commits both,
+/// so the controller never sees a registered node whose role it does not
+/// know yet.
+fn broker_registration_batch(config: &BrokerConfig) -> Vec<crabka_metadata::MetadataRecord> {
+    vec![
+        crabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(config)),
+        self_witness_record(config),
+    ]
+}
+
+/// The cluster-default broker config that names the stretch cluster's
+/// preferred leader site. Site-aware placement reads it from the metadata
+/// image, so every node that later becomes controller pins leadership to the
+/// same site. A node with no stretch profile publishes nothing.
+fn stretch_default_records(config: &BrokerConfig) -> Vec<crabka_metadata::MetadataRecord> {
+    config
+        .stretch
+        .as_ref()
+        .map(|profile| {
+            crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
+                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: crate::config_keys::STRETCH_PREFERRED_LEADER_SITE.to_string(),
+                config_value: Some(profile.preferred_leader_site.clone()),
+            })
+        })
+        .into_iter()
+        .collect()
+}
+
 fn self_controller_registration_record(
     config: &BrokerConfig,
 ) -> crabka_metadata::ControllerRegistrationRecord {
@@ -498,10 +546,13 @@ async fn wait_for_metadata_leader(
     Ok(())
 }
 
+/// Submits one self-registration batch and retries it under backoff. The
+/// whole batch commits together, so a caller can pair the registration record
+/// with the configs that describe the same node.
 async fn submit_self_registration(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-    registration: crabka_metadata::MetadataRecord,
+    registration: Vec<crabka_metadata::MetadataRecord>,
     role: &str,
 ) -> Result<(), BrokerError> {
     let backoff = exponential_backoff::Backoff::new(
@@ -510,7 +561,7 @@ async fn submit_self_registration(
         Some(config.self_registration_backoff_max.to_std()),
     );
     for (attempt_index, delay) in backoff.into_iter().enumerate() {
-        match controller.submit_change(vec![registration.clone()]).await {
+        match controller.submit_change(registration.clone()).await {
             Ok(_) => return Ok(()),
             Err(error) => match delay {
                 Some(delay) => {
@@ -541,7 +592,7 @@ async fn register_controller(
     else {
         return Ok(());
     };
-    submit_self_registration(config, controller, record, "controller").await
+    submit_self_registration(config, controller, vec![record], "controller").await
 }
 
 fn controller_registration_update(
@@ -611,13 +662,7 @@ async fn register_broker(
     if !config.is_broker() {
         return Ok(());
     }
-    submit_self_registration(
-        config,
-        controller,
-        crabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(config)),
-        "broker",
-    )
-    .await
+    submit_self_registration(config, controller, broker_registration_batch(config), "broker").await
 }
 
 async fn submit_bootstrap_records(
@@ -635,6 +680,9 @@ async fn submit_bootstrap_records(
                 | crabka_metadata::MetadataRecord::V1KRaftVersion(_)
         )
     });
+    if config.is_controller() {
+        records.extend(stretch_default_records(config));
+    }
     if records.is_empty() {
         return Ok(());
     }
@@ -1102,6 +1150,29 @@ fn start_audit_pipeline(
     (led_partition, log, writer_handle)
 }
 
+/// Counts the partitions `node_id` leads from a site other than the stretch
+/// cluster's preferred leader site.
+///
+/// The count is zero when the cluster pins leadership to no site, and zero
+/// when the image reports no rack for the node. `node_id` leads every
+/// partition the count considers, so one rack lookup covers all of them.
+fn leader_site_drift_partitions(
+    image: &crabka_metadata::MetadataImage,
+    node_id: crabka_metadata::NodeId,
+) -> usize {
+    let Some(preferred) = crate::config_keys::resolve_preferred_leader_site(image) else {
+        return 0;
+    };
+    let leader_site = image.broker(node_id).and_then(|broker| broker.rack.as_deref());
+    if leader_site == Some(preferred) {
+        return 0;
+    }
+    image
+        .all_partitions()
+        .filter(|partition| partition.leader == node_id)
+        .count()
+}
+
 fn spawn_broker_gauge_updater(
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
@@ -1176,6 +1247,12 @@ fn spawn_broker_gauge_updater(
             metrics
                 .offline_partitions_count
                 .set(i64::try_from(health.2).unwrap_or(i64::MAX));
+            metrics.leader_site_drift_partitions.set(
+                i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
+            );
+            metrics.witness_role.set(i64::from(u8::from(
+                crate::config_keys::resolve_broker_witness(&image, node_id),
+            )));
             let is_controller = controller
                 .watch_leader()
                 .borrow()

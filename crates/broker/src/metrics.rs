@@ -218,6 +218,18 @@ pub struct BrokerMetrics {
     pub active_controller: Gauge,
     /// Configured static voters ignored after `kraft.version` reaches 1.
     pub ignored_static_voters: Gauge,
+    /// 1 when this node carries the data-bearing witness role, 0 otherwise.
+    /// The value comes from the `broker.witness` config in the metadata
+    /// image, not from the local flag, so it confirms that the role reached
+    /// the controller. An operator reads it to see that the role took effect
+    /// on the node they meant to configure.
+    pub witness_role: Gauge,
+    /// Count of partitions this broker leads from a site other than the
+    /// stretch cluster's preferred leader site. It stays at zero on a cluster
+    /// that pins leadership to no site. Operators alert on
+    /// `leader_site_drift_partitions > 0` to catch leadership that drifted,
+    /// such as a failover that no rebalance has undone yet.
+    pub leader_site_drift_partitions: Gauge,
     /// One-hot series for the directory identity voted for in this epoch.
     pub voted_directory: Family<DirectoryLabel, Gauge>,
     /// Cumulative count of distinct controller-leader
@@ -436,6 +448,8 @@ impl BrokerMetrics {
             offline_partitions_count: Gauge::default(),
             active_controller: Gauge::default(),
             ignored_static_voters: Gauge::default(),
+            witness_role: Gauge::default(),
+            leader_site_drift_partitions: Gauge::default(),
             voted_directory: Family::default(),
             controller_leader_changes_total: Counter::default(),
             isr_shrinks_total: Counter::default(),
@@ -602,6 +616,24 @@ impl BrokerMetrics {
             "ignored_static_voters",
             "Configured static controller voters ignored at kraft.version 1.",
             self.ignored_static_voters.clone(),
+        );
+
+        registry.register(
+            "witness_role",
+            "1 if this node carries the data-bearing witness role, 0 \
+             otherwise. The value comes from the broker.witness config in \
+             the metadata image, so it confirms that the role reached the \
+             controller.",
+            self.witness_role.clone(),
+        );
+
+        registry.register(
+            "leader_site_drift_partitions",
+            "Count of partitions this broker leads from a site other than \
+             the stretch cluster's preferred leader site. It stays at zero \
+             on a cluster that pins leadership to no site; alert on > 0 to \
+             catch leadership that drifted away from the pinned site.",
+            self.leader_site_drift_partitions.clone(),
         );
 
         registry.register(
@@ -1377,6 +1409,8 @@ mod tests {
         m.offline_partitions_count.set(1);
         m.active_controller.set(1);
         m.ignored_static_voters.set(3);
+        m.witness_role.set(1);
+        m.leader_site_drift_partitions.set(4);
         m.voted_directory
             .get_or_create(&DirectoryLabel {
                 directory_id: "00000000-0000-0000-0000-000000000001".into(),
@@ -1402,6 +1436,8 @@ mod tests {
             "crabka_broker_offline_partitions_count",
             "crabka_broker_active_controller",
             "crabka_broker_ignored_static_voters",
+            "crabka_broker_witness_role",
+            "crabka_broker_leader_site_drift_partitions",
             "crabka_broker_voted_directory",
             "crabka_broker_controller_leader_changes_total",
             "crabka_broker_isr_shrinks_total",

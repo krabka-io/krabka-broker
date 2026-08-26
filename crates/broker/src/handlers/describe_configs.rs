@@ -10,6 +10,10 @@
 //! - Every other resource type receives an empty configs list and no error.
 //!   The JVM `AdminClient` accepts that.
 //!
+//! A broker config that only the controller writes comes back with
+//! `read_only` set, next to the static `node.id` entry. See
+//! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
+//!
 //! The handler honors the `configuration_keys` filter on the request. When the
 //! client supplies an explicit key list, the response holds only those keys.
 
@@ -29,7 +33,7 @@ use crabka_units::convert::TimeExt as _;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
-    codes,
+    codes, config_keys,
     error::BrokerError,
 };
 
@@ -142,7 +146,7 @@ fn describe_one(
             .into_iter()
             .filter(|key| key_filter.is_none_or(|ks| ks.iter().any(|filter| filter == *key)))
             .map(|key| {
-                per_broker.and_then(|configs| configs.get(key)).map_or_else(
+                let mut entry = per_broker.and_then(|configs| configs.get(key)).map_or_else(
                     || {
                         make_entry(
                             key,
@@ -153,7 +157,12 @@ fn describe_one(
                         )
                     },
                     |value| make_entry(key, value, CONFIG_SOURCE_DYNAMIC_BROKER),
-                )
+                );
+                // Only the controller writes these keys, so `kafka-configs`
+                // must show them the way it shows every other read-only
+                // broker config.
+                entry.read_only = config_keys::is_controller_managed_broker_config(key);
+                entry
             })
             .collect();
         if let Some(node_id) = node_id

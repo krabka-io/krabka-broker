@@ -1,0 +1,74 @@
+(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 96 0 96 54 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 99 18 99 47
+let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 100 18 100 50
+let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 101 10 101 20
+let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 101 23 101 24
+let%span sstretch'3 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 101 9 101 25
+let%span sstretch'4 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 101 9 101 33
+let%span sstretch'5 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 101 4 101 33
+let%span sstretch'6 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 89 11 89 34
+let%span sstretch'7 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 90 11 90 40
+let%span sstretch'8 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 91 10 91 54
+let%span sstretch'9 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 92 10 92 22
+let%span sstretch'10 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 93 10 93 23
+let%span sstretch'11 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 94 10 94 38
+
+use creusot.int.Int64
+use creusot.prelude.Bool
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let site_loss_survivors [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 96 0 96 54] (rf: Int64.t)
+  (sites: Int64.t) (return (x: Int64.t)) =
+{[@stop_split] [@expl:site_loss_survivors requires] ([@stop_split] [@expl:site_loss_survivors requires #0] [%#sstretch'6] ge_log_Int (Int64.to_int rf) 1
+    /\ Int64.to_int rf <= 1024)
+  /\ ([@stop_split] [@expl:site_loss_survivors requires #1] [%#sstretch'7] ge_log_Int (Int64.to_int sites) 1
+  /\ Int64.to_int sites <= 1024)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = {[@expl:assertion] [%#sstretch] ge_log_Int ((Int64.to_int rf - 1) * (Int64.to_int sites - 1)) 0} s1
+    | s1 = {[@expl:assertion] [%#sstretch'0] Int64.to_int rf + Int64.to_int sites - 1
+      <= Int64.to_int rf * Int64.to_int sites}
+      s2
+    | s2 = Int64.add [%#sstretch'1] {rf} {sites} (fun (_x: Int64.t) -> [ &_26 <- _x ] s3)
+    | s3 = Int64.sub [%#sstretch'3] {_26} {[%#sstretch'2] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_25 <- _x ] s4)
+    | s4 = [ &_29 <- sites ] s5
+    | s5 = [ &_30 <- _29 = ([%#sstretch'4] (0: Int64.t)) ] s6
+    | s6 = {[@expl:division by zero] [%#sstretch'4] not _30} s7
+    | s7 = [ &_31 <- _29 = ([%#sstretch'4] (-1: Int64.t)) ] s8
+    | s8 = [ &_32 <- _25 = ([%#sstretch'4] (-9223372036854775808: Int64.t)) ] s9
+    | s9 = [ &_33 <- Bool.bw_and _31 _32 ] s10
+    | s10 = {[@expl:Div overflow] [%#sstretch'4] not _33} s11
+    | s11 = Int64.div [%#sstretch'4] {_25} {_29} (fun (_x: Int64.t) -> [ &_24 <- _x ] s12)
+    | s12 = Int64.sub [%#sstretch'5] {rf} {_24} (fun (_x: Int64.t) -> [ &_ret <- _x ] s13)
+    | s13 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & rf: Int64.t = rf
+  | & sites: Int64.t = sites
+  | & _24: Int64.t = Any.any_l ()
+  | & _25: Int64.t = Any.any_l ()
+  | & _26: Int64.t = Any.any_l ()
+  | & _29: Int64.t = Any.any_l ()
+  | & _30: bool = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _33: bool = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:site_loss_survivors ensures] ([@stop_split] [@expl:site_loss_survivors ensures #0] [%#sstretch'8] Int64.to_int result
+      = Int64.to_int rf - ComputerDivision.div (Int64.to_int rf + Int64.to_int sites - 1) (Int64.to_int sites))
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #1] [%#sstretch'9] ge_log_Int (Int64.to_int result) 0)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #2] [%#sstretch'10] Int64.to_int result < Int64.to_int rf)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #3] [%#sstretch'11] Int64.to_int sites = 1
+    -> Int64.to_int result = 0)}
+    (! return {result}) ]

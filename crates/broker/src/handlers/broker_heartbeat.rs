@@ -279,6 +279,9 @@ async fn drain_leaderships_for_shutdown(
 
     let mut leader_count: usize = 0;
     let mut changes: Vec<MetadataRecord> = Vec::new();
+    // Witness nodes serve no client, so leadership never drains to one. Build
+    // the set once per tick, not once per partition.
+    let witnesses = crate::config_keys::witness_node_ids(&image);
     // Single O(P) walk over every partition — this runs on every heartbeat
     // tick during a controlled shutdown.
     for pr in image.all_partitions() {
@@ -288,6 +291,7 @@ async fn drain_leaderships_for_shutdown(
         if let Ok(new_pr) = select_replacement_leader_for_shutdown(
             &image,
             liveness,
+            &witnesses,
             &pr.topic,
             pr.partition,
             shutting_down,
@@ -302,7 +306,8 @@ async fn drain_leaderships_for_shutdown(
         // Else: no live alternative ISR member to transfer to — e.g. the
         // single-replica internal topics (__consumer_offsets,
         // __transaction_state, __crabka_audit), of which every broker
-        // leads its own copy. Leadership cannot move anywhere, so counting
+        // leads its own copy, or an ISR whose only survivors are witnesses.
+        // Leadership cannot move anywhere, so counting
         // it would block controlled shutdown forever; and the broker is
         // stopping regardless (the partition has no other replica to serve
         // it either way). Do NOT count it toward the drain gate.

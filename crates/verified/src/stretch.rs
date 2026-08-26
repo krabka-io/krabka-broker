@@ -186,6 +186,8 @@ pub fn quorum_survives_any_single_site_loss(voters_per_site: &[i64]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
     use assert2::check;
     use proptest::prelude::*;
 
@@ -196,7 +198,7 @@ mod tests {
     /// is an independent implementation, and not the ceiling formula again.
     fn round_robin_oracle(rf: i64, sites: i64) -> i64 {
         let site_count = usize::try_from(sites).expect("site count fits in usize");
-        let mut buckets = vec![0i64; site_count];
+        let mut buckets: Vec<i64> = iter::repeat_n(0, site_count).collect();
         let mut next = 0usize;
         let mut placed = 0i64;
         while placed < rf {

@@ -3438,6 +3438,7 @@ protocol = "Plaintext"
             extra_log_dirs: vec![],
             rack: None,
             replica_selector: None,
+            stretch: None,
             heartbeat_interval: None,
             heartbeat_timeout: None,
             replica_lag_time_max: None,
@@ -4994,11 +4995,7 @@ url = "http://opa.invalid:8181/v1/data/k/a"
         assert!(
             cfg.stretch
                 == Some(crate::config::StretchProfile {
-                    sites: vec![
-                        "dc-a".to_string(),
-                        "dc-b".to_string(),
-                        "dc-w".to_string()
-                    ],
+                    sites: vec!["dc-a".to_string(), "dc-b".to_string(), "dc-w".to_string()],
                     witness_site: "dc-w".to_string(),
                     preferred_leader_site: "dc-a".to_string(),
                 })

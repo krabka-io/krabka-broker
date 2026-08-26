@@ -1410,9 +1410,7 @@ impl BrokerConfig {
         }
         for (i, site) in profile.sites.iter().enumerate() {
             if profile.sites[..i].contains(site) {
-                return Err(BrokerError::StretchProfileDuplicateSite {
-                    site: site.clone(),
-                });
+                return Err(BrokerError::StretchProfileDuplicateSite { site: site.clone() });
             }
         }
         if !profile.sites.contains(&profile.witness_site) {
@@ -3791,22 +3789,22 @@ mod tests {
     /// Two data sites plus a witness site, with leadership on `dc-a`.
     fn three_site_profile() -> StretchProfile {
         StretchProfile {
-            sites: vec![
-                "dc-a".to_string(),
-                "dc-b".to_string(),
-                "dc-w".to_string(),
-            ],
+            sites: vec!["dc-a".to_string(), "dc-b".to_string(), "dc-w".to_string()],
             witness_site: "dc-w".to_string(),
             preferred_leader_site: "dc-a".to_string(),
         }
     }
 
     /// A node of [`three_site_profile`], in `rack` and with `roles`.
+    ///
+    /// `min.insync.replicas` is 2, the only value that is safe at the default
+    /// replication factor of 3 spread over three sites.
     fn stretch_node(rack: &str, roles: Vec<NodeRole>) -> BrokerConfig {
         BrokerConfig {
             roles,
             rack: Some(rack.to_string()),
             stretch: Some(three_site_profile()),
+            default_min_insync_replicas: 2,
             ..BrokerConfig::default()
         }
     }
@@ -3867,7 +3865,8 @@ mod tests {
     #[test]
     fn a_three_site_stretch_profile_validates() {
         let data = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        data.validate().expect("a data-site node of a valid profile");
+        data.validate()
+            .expect("a data-site node of a valid profile");
 
         let witness = stretch_node("dc-w", witness_roles());
         witness
@@ -3890,11 +3889,7 @@ mod tests {
     fn stretch_profile_rejects_a_repeated_site() {
         let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
         let profile = c.stretch.as_mut().expect("profile");
-        profile.sites = vec![
-            "dc-a".to_string(),
-            "dc-a".to_string(),
-            "dc-w".to_string(),
-        ];
+        profile.sites = vec!["dc-a".to_string(), "dc-a".to_string(), "dc-w".to_string()];
         assert!(matches!(
             c.validate(),
             Err(BrokerError::StretchProfileDuplicateSite { site }) if site == "dc-a"
@@ -3935,6 +3930,7 @@ mod tests {
     fn stretch_profile_requires_a_rack() {
         let c = BrokerConfig {
             stretch: Some(three_site_profile()),
+            default_min_insync_replicas: 2,
             ..BrokerConfig::default()
         };
         assert!(matches!(
@@ -3972,15 +3968,20 @@ mod tests {
 
     #[test]
     fn stretch_rejects_a_min_insync_that_a_site_loss_would_break() {
-        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        c.offsets_topic_replication_factor = 3;
-        c.default_min_insync_replicas = 3;
-        assert!(matches!(
-            c.validate(),
-            Err(BrokerError::StretchMinInsyncUnsafe {
-                min_insync: 3,
-                replication_factor: 3
-            })
-        ));
+        // Three replicas over three sites leave two after a site loss, so 2
+        // is the only safe value. 1 loses an acknowledged write with one
+        // broker, and 3 stalls every acks=all write while a site is down.
+        for min_insync in [1, 3] {
+            let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+            c.offsets_topic_replication_factor = 3;
+            c.default_min_insync_replicas = min_insync;
+            check!(matches!(
+                c.validate(),
+                Err(BrokerError::StretchMinInsyncUnsafe {
+                    min_insync: got,
+                    replication_factor: 3
+                }) if got == min_insync
+            ));
+        }
     }
 }

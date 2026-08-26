@@ -70,19 +70,24 @@ pub(crate) async fn rebalance_tick(
     let image = controller.current_image();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
     let mut total: u64 = 0;
+    // Witness nodes never lead. Build the set once per tick, not once per
+    // partition, so the tick stays a single walk over the image.
+    let witnesses = crate::config_keys::witness_node_ids(&image);
     // Single O(P) walk over every partition.
     for pr in image.all_partitions() {
         total += 1;
         if let Ok(new_pr) = select_new_leader_for_partition(
             &image,
             liveness,
+            &witnesses,
             &pr.topic,
             pr.partition,
             ElectionType::Preferred,
         )
         .await
         {
-            // PreferredAlreadyLeader and any other Err are silently skipped this tick.
+            // PreferredAlreadyLeader, PreferredIsWitness and any other Err are
+            // silently skipped this tick.
             to_submit.push(MetadataRecord::V1Partition(new_pr));
         }
     }

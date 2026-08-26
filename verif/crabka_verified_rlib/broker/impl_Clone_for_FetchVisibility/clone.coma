@@ -1,4 +1,4 @@
-(* #"/workspace/crabka/crates/verified/src/broker.rs" 12 27 12 32 *)
+(* #"/home/user/krabka-broker/crates/verified/src/broker.rs" 12 27 12 32 *)
 
 (* <broker::FetchVisibility as std::clone::Clone> *)
 
@@ -18,8 +18,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FetchVisibility [#"/workspace/crabka/crates/verified/src/broker.rs" 12 27 12 32] (self: t_FetchVisibility)
-  (return (x: t_FetchVisibility)) = (! bb0
+let clone_FetchVisibility [#"/home/user/krabka-broker/crates/verified/src/broker.rs" 12 27 12 32]
+  (self: t_FetchVisibility) (return (x: t_FetchVisibility)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FetchVisibility = Any.any_l () | & self: t_FetchVisibility = self ])
   [ return (result: t_FetchVisibility) -> (! return {result}) ]

@@ -81,6 +81,9 @@ pub(crate) async fn handle(
     // Run the algorithm per target; accumulate new records to submit
     // and per-partition results to ship back.
     let liveness = broker.liveness.clone();
+    // Witness nodes never lead a partition. Build the set once for the whole
+    // request, not once per target partition.
+    let witnesses = crate::config_keys::witness_node_ids(&image);
     let mut by_topic: HashMap<String, Vec<PartitionResult>> = HashMap::new();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
     for (topic, partitions) in &targets {
@@ -104,7 +107,8 @@ pub(crate) async fn handle(
             }
 
             let result =
-                select_new_leader_for_partition(&image, &liveness, topic, p, election).await;
+                select_new_leader_for_partition(&image, &liveness, &witnesses, topic, p, election)
+                    .await;
             match result {
                 Ok(new_pr) => {
                     to_submit.push(MetadataRecord::V1Partition(new_pr));
@@ -261,6 +265,10 @@ fn elect_error_to_wire(err: ElectError) -> (i16, &'static str) {
         ElectError::PreferredNotAlive => (
             codes::PREFERRED_LEADER_NOT_AVAILABLE,
             "preferred replica not alive",
+        ),
+        ElectError::PreferredIsWitness => (
+            codes::PREFERRED_LEADER_NOT_AVAILABLE,
+            "preferred replica is a witness and cannot lead",
         ),
         ElectError::NoEligibleReplica => {
             (codes::ELIGIBLE_LEADERS_NOT_AVAILABLE, "no alive replica")

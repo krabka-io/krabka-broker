@@ -100,6 +100,11 @@ pub(crate) async fn handle(
     let producer_state = broker.producer_state.clone();
     let txn_coordinator = broker.txn_coordinator.clone();
     let log_dir_status = broker.log_dir_status.clone();
+    let broker_policy = BrokerProducePolicy {
+        node_id: broker.config.node_id,
+        default_min_insync_replicas: broker.config.default_min_insync_replicas,
+        is_witness: broker.config.is_witness(),
+    };
     // ── request decode (header-only on the verbatim-eligible path) ──
     // For v≥3 (native v2 payloads) we decode only the request FRAMING —
     // `transactional_id`, `acks`, `timeout_ms`, and per-topic / per-partition
@@ -237,8 +242,7 @@ pub(crate) async fn handle(
                         producer_state: &producer_state,
                         log_dir_status: &log_dir_status,
                         image: &image,
-                        this_node_id: broker.config.node_id,
-                        default_min_insync_replicas: broker.config.default_min_insync_replicas,
+                        broker_policy,
                         record_decompression_policy,
                         metrics: &broker.metrics,
                     },
@@ -460,8 +464,7 @@ struct PartitionServices<'a> {
     producer_state: &'a Arc<crate::producer_state::ProducerState>,
     log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     image: &'a Arc<crabka_metadata::MetadataImage>,
-    this_node_id: crabka_metadata::NodeId,
-    default_min_insync_replicas: i32,
+    broker_policy: BrokerProducePolicy,
     record_decompression_policy: RecordDecompressionPolicy,
     metrics: &'a crate::metrics::BrokerMetrics,
 }
@@ -486,8 +489,7 @@ async fn process_partition(
         producer_state,
         log_dir_status,
         image,
-        this_node_id,
-        default_min_insync_replicas,
+        broker_policy,
         record_decompression_policy,
         metrics,
     } = services;
@@ -564,7 +566,7 @@ async fn process_partition(
         partitions,
         log_dir_status,
         image,
-        (this_node_id, default_min_insync_replicas),
+        broker_policy,
     ) {
         Ok(ready) => ready,
         Err(error) => {
@@ -804,6 +806,23 @@ struct PartitionGateError {
     current_leader: Option<LeaderIdAndEpoch>,
 }
 
+/// The broker-wide policy that the per-partition Produce gate applies.
+///
+/// The gate reads one partition record out of the metadata image and compares
+/// it against this node. It needs the node id to decide whether this node
+/// leads the partition, the broker default for `min.insync.replicas` for the
+/// `acks=all` check, and the witness role, which refuses every client write.
+#[derive(Clone, Copy)]
+struct BrokerProducePolicy {
+    /// This node's id, compared against the image's partition leader.
+    node_id: crabka_metadata::NodeId,
+    /// Broker default for `min.insync.replicas`. A topic override wins over
+    /// it.
+    default_min_insync_replicas: i32,
+    /// `true` when this node is a data-bearing witness.
+    is_witness: bool,
+}
+
 fn validate_partition_gate(
     topic_name: &str,
     partition_index: i32,
@@ -811,9 +830,13 @@ fn validate_partition_gate(
     partitions: &PartitionRegistry,
     log_dir_status: &crate::log_dir_status::LogDirRegistry,
     image: &crabka_metadata::MetadataImage,
-    broker_policy: (crabka_metadata::NodeId, i32),
+    broker_policy: BrokerProducePolicy,
 ) -> Result<(Arc<crate::partition::Partition>, i32), PartitionGateError> {
-    let (this_node_id, default_min_insync_replicas) = broker_policy;
+    let BrokerProducePolicy {
+        node_id: this_node_id,
+        default_min_insync_replicas,
+        is_witness,
+    } = broker_policy;
     let Some(record) = image
         .partition(topic_name, partition_index)
         .filter(|_| !topic_name.is_empty())
@@ -835,6 +858,20 @@ fn validate_partition_gate(
             current_leader: Some(leader),
         });
     };
+    // A witness replicates the partition and counts toward
+    // `min.insync.replicas`, but it serves no client traffic, so it accepts no
+    // Produce. The guard is explicit because the leader check below reads
+    // `record.leader != this_node_id && !partition.diskless`: a diskless
+    // partition skips the leader check outright, so without this guard a
+    // diskless Produce could land on a witness. NOT_LEADER_OR_FOLLOWER is the
+    // code that makes a Kafka client refresh its metadata and produce
+    // somewhere else.
+    if is_witness {
+        return Err(PartitionGateError {
+            code: codes::NOT_LEADER_OR_FOLLOWER,
+            current_leader: Some(leader),
+        });
+    }
     if record.leader != this_node_id && !partition.diskless {
         return Err(PartitionGateError {
             code: codes::NOT_LEADER_OR_FOLLOWER,
@@ -1551,11 +1588,11 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS, PartitionInput, PartitionPayload,
-        PartitionServices, PreparedSource, build_topic_error_response, decode_owned_batch,
-        diskless_role_ready, prepare_batch, process_partition, produce_bytes_by_qos_tier,
-        replica_state_matches_image, replication_target_matches_image, resolve_topic_compression,
-        topic_min_insync_replicas,
+        BrokerProducePolicy, FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS, PartitionInput,
+        PartitionPayload, PartitionServices, PreparedSource, build_topic_error_response,
+        decode_owned_batch, diskless_role_ready, prepare_batch, process_partition,
+        produce_bytes_by_qos_tier, replica_state_matches_image, replication_target_matches_image,
+        resolve_topic_compression, topic_min_insync_replicas, validate_partition_gate,
     };
 
     fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
@@ -2081,8 +2118,11 @@ mod tests {
                 producer_state: &producer_state,
                 log_dir_status: &log_dir_status,
                 image: &image,
-                this_node_id: crabka_audit::NodeId(1),
-                default_min_insync_replicas: 1,
+                broker_policy: BrokerProducePolicy {
+                    node_id: crabka_audit::NodeId(1),
+                    default_min_insync_replicas: 1,
+                    is_witness: false,
+                },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
             },
@@ -2172,8 +2212,11 @@ mod tests {
                 log_dir_status: &log_dir_status,
                 image: &image,
                 // We are the leader (node 2), but hold no local replica.
-                this_node_id: crabka_audit::NodeId(2),
-                default_min_insync_replicas: 1,
+                broker_policy: BrokerProducePolicy {
+                    node_id: crabka_audit::NodeId(2),
+                    default_min_insync_replicas: 1,
+                    is_witness: false,
+                },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
             },
@@ -2316,8 +2359,11 @@ mod tests {
                 producer_state: &producer_state,
                 log_dir_status: &log_dir_status,
                 image: &image,
-                this_node_id: crabka_audit::NodeId(1),
-                default_min_insync_replicas: 1,
+                broker_policy: BrokerProducePolicy {
+                    node_id: crabka_audit::NodeId(1),
+                    default_min_insync_replicas: 1,
+                    is_witness: false,
+                },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
             },

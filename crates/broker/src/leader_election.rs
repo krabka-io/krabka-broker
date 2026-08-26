@@ -20,6 +20,7 @@ use tracing::warn;
 use crate::{
     config_keys::{
         RecoveryStrategy, resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
+        witness_node_ids,
     },
     error::BrokerError,
     heartbeat::controller_state::ControllerLivenessState,
@@ -79,16 +80,24 @@ pub(crate) enum FailoverDecision {
 }
 
 /// Decide the failover action for one partition. `alive` is the controller's
-/// snapshot of live brokers. `strategy` and `unclean_enabled` are the topic's
-/// resolved recovery policy.
+/// snapshot of live brokers. `witnesses` is the set of data-bearing witness
+/// nodes, which replicate the partition and count toward
+/// `min.insync.replicas` but never lead it. `strategy` and `unclean_enabled`
+/// are the topic's resolved recovery policy.
+///
+/// A witness stays in the emitted ISR. It holds every committed record, so it
+/// is what keeps `acks=all` writable after a site loss. Only the leader pick
+/// excludes it.
 pub(crate) fn failover_one(
     pr: &PartitionRecord,
     dead: NodeId,
     alive: &std::collections::HashSet<NodeId>,
+    witnesses: &std::collections::HashSet<NodeId>,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
 ) -> FailoverDecision {
     // The ISR after dropping the dead broker AND any other non-alive member.
+    // Witness members stay: they carry the data and the min-ISR count.
     let alive_isr: Vec<NodeId> = pr
         .isr
         .iter()
@@ -96,7 +105,12 @@ pub(crate) fn failover_one(
         .copied()
         .collect();
     if pr.leader == dead {
-        if let Some(&new_leader) = alive_isr.first() {
+        // The new leader is the first alive ISR member that can serve clients.
+        let electable = alive_isr
+            .iter()
+            .copied()
+            .find(|n| !witnesses.contains(n));
+        if let Some(new_leader) = electable {
             // Clean: the new leader was in the ISR, so it holds every committed
             // record. No data loss.
             FailoverDecision::Elect {
@@ -104,7 +118,7 @@ pub(crate) fn failover_one(
                 isr: alive_isr,
                 unclean: false,
             }
-        } else {
+        } else if alive_isr.is_empty() {
             match strategy {
                 RecoveryStrategy::Balanced | RecoveryStrategy::Aggressive => {
                     FailoverDecision::Recover(strategy)
@@ -112,10 +126,11 @@ pub(crate) fn failover_one(
                 RecoveryStrategy::None if unclean_enabled => {
                     // KIP-841: ISR is dead but the operator opted into possible
                     // data loss. Elect the first alive replica, singleton ISR.
+                    // A witness serves no client, so it is not a candidate.
                     match pr
                         .replicas
                         .iter()
-                        .find(|n| **n != dead && alive.contains(n))
+                        .find(|n| **n != dead && alive.contains(n) && !witnesses.contains(n))
                     {
                         Some(&new_leader) => FailoverDecision::Elect {
                             leader: new_leader,
@@ -127,6 +142,19 @@ pub(crate) fn failover_one(
                 }
                 RecoveryStrategy::None => FailoverDecision::Unavailable,
             }
+        } else {
+            // Every alive ISR member is a witness. The partition is
+            // unavailable, and that is the safe answer.
+            //
+            // A live witness is a full ISR member, so it holds every committed
+            // record. An unclean election, or an offset-aware recovery that
+            // excludes the witness, would move leadership to a data replica
+            // that is behind the witness and would discard those records.
+            // Loss of availability is recoverable. Loss of an acknowledged
+            // write is not. The partition comes back as soon as one data
+            // replica returns, and an operator who prefers availability can
+            // still force an unclean election with `kafka-leader-election`.
+            FailoverDecision::Unavailable
         }
     } else if alive_isr.len() < pr.isr.len() {
         FailoverDecision::ShrinkIsr { isr: alive_isr }
@@ -156,6 +184,9 @@ pub(crate) async fn compute_failover_changes(
         .into_iter()
         .map(NodeId)
         .collect();
+    // Witness nodes never lead a partition. Build the set once, next to the
+    // alive snapshot, so the scan stays one walk over the image.
+    let witnesses = witness_node_ids(image);
     // Single O(P) walk over every partition in the image.
     for pr in image.all_partitions() {
         if !pr.replicas.contains(&dead) && !pr.isr.contains(&dead) {
@@ -163,7 +194,7 @@ pub(crate) async fn compute_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        match failover_one(pr, dead, &alive, strategy, unclean_enabled) {
+        match failover_one(pr, dead, &alive, &witnesses, strategy, unclean_enabled) {
             FailoverDecision::Elect {
                 leader,
                 isr,
@@ -268,6 +299,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         .into_iter()
         .map(NodeId)
         .collect();
+    let witnesses = witness_node_ids(image);
     for pr in image.all_partitions() {
         let Some(slot) = pr.replicas.iter().position(|n| *n == broker) else {
             continue;
@@ -281,7 +313,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        match failover_one(pr, broker, &alive, strategy, unclean_enabled) {
+        match failover_one(pr, broker, &alive, &witnesses, strategy, unclean_enabled) {
             FailoverDecision::Elect {
                 leader,
                 isr,
@@ -639,6 +671,10 @@ pub(crate) enum ElectError {
     ElectionNotNeeded,
     PreferredNotInIsr,
     PreferredNotAlive,
+    /// `replicas[0]` carries the witness role. A witness serves no client, so
+    /// it can never take leadership. The KIP-460 auto-rebalance skips the
+    /// partition, and `kafka-leader-election` reports the refusal.
+    PreferredIsWitness,
     NoEligibleReplica,
 }
 
@@ -655,9 +691,14 @@ pub(crate) enum ElectError {
 /// - This function does not change the ISR. The shutting-down broker stays in
 ///   ISR until it actually goes offline. The heartbeat loop is what flips
 ///   it dead.
+///
+/// `witnesses` is the set of witness nodes. A controlled shutdown must not
+/// hand leadership to a node that serves no client, so the drain target is
+/// always a data replica.
 pub(crate) async fn select_replacement_leader_for_shutdown(
     image: &crabka_metadata::MetadataImage,
     liveness: &ControllerLivenessState,
+    witnesses: &std::collections::HashSet<NodeId>,
     topic: &str,
     partition: i32,
     shutting_down: NodeId,
@@ -670,7 +711,7 @@ pub(crate) async fn select_replacement_leader_for_shutdown(
     }
     let mut new_leader: Option<NodeId> = None;
     for &n in &pr.isr {
-        if n == shutting_down {
+        if n == shutting_down || witnesses.contains(&n) {
             continue;
         }
         if liveness.is_alive(n.0).await {
@@ -698,11 +739,15 @@ pub(crate) async fn select_replacement_leader_for_shutdown(
 /// Operator-triggered single-partition election. Returns the new
 /// `PartitionRecord` ready to submit, or an `ElectError`.
 ///
+/// `witnesses` is the set of witness nodes. No election of either type can
+/// give leadership to a witness. The caller builds the set once per scan.
+///
 /// Pure: no I/O, no panics. The caller must submit the returned record
 /// through the controller.
 pub(crate) async fn select_new_leader_for_partition(
     image: &crabka_metadata::MetadataImage,
     liveness: &ControllerLivenessState,
+    witnesses: &std::collections::HashSet<NodeId>,
     topic: &str,
     partition: i32,
     election: ElectionType,
@@ -716,6 +761,12 @@ pub(crate) async fn select_new_leader_for_partition(
                 .replicas
                 .first()
                 .ok_or(ElectError::UnknownTopicOrPartition)?;
+            // Site-aware placement can put a witness first in `replicas`. The
+            // preferred replica is then never electable, and the caller must
+            // skip the partition rather than move leadership to it.
+            if witnesses.contains(&preferred) {
+                return Err(ElectError::PreferredIsWitness);
+            }
             if pr.leader == preferred {
                 return Err(ElectError::PreferredAlreadyLeader);
             }
@@ -740,15 +791,19 @@ pub(crate) async fn select_new_leader_for_partition(
         }
         ElectionType::Unclean => {
             // Bail if any ISR member is alive — UNCLEAN is meant for
-            // catastrophic ISR loss, not routine rebalances.
+            // catastrophic ISR loss, not routine rebalances. A live witness
+            // does not count here: it cannot lead, so it does not make the
+            // partition available, and it must not block the operator who
+            // accepts the data loss.
             for &n in &pr.isr {
-                if liveness.is_alive(n.0).await {
+                if !witnesses.contains(&n) && liveness.is_alive(n.0).await {
                     return Err(ElectError::ElectionNotNeeded);
                 }
             }
-            // Find the first alive replica, in or out of ISR.
+            // Find the first alive replica that can serve clients, in or out
+            // of ISR.
             for &n in &pr.replicas {
-                if liveness.is_alive(n.0).await {
+                if !witnesses.contains(&n) && liveness.is_alive(n.0).await {
                     return Ok(PartitionRecord {
                         topic: pr.topic.clone(),
                         partition: pr.partition,
@@ -816,6 +871,31 @@ mod tests {
             partition_epoch: 0,
         }));
         img
+    }
+
+    /// The witness set for a plain, non-stretch cluster. Every pre-witness
+    /// behaviour must be unchanged against it.
+    fn no_witnesses() -> std::collections::HashSet<NodeId> {
+        std::collections::HashSet::new()
+    }
+
+    /// Mark `ids` as data-bearing witnesses.
+    fn witnesses(ids: &[u64]) -> std::collections::HashSet<NodeId> {
+        ids.iter().copied().map(NodeId).collect()
+    }
+
+    /// Register `ids` as brokers and publish `broker.witness=true` for each
+    /// one, which is the path the real broker takes at registration. Use this
+    /// where the code under test reads the witness set out of the image.
+    fn mark_witnesses_in_image(img: &mut MetadataImage, ids: &[u64]) {
+        register_brokers(img, ids);
+        for &id in ids {
+            img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: NodeId(id),
+                config_name: crate::config_keys::BROKER_WITNESS.into(),
+                config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
+            }));
+        }
     }
 
     async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
@@ -939,9 +1019,16 @@ mod tests {
     async fn preferred_happy_path() {
         let img = img_with_partition("foo", 0, /*leader*/ 2, &[1, 2, 3], &[1, 2, 3]);
         let l = liveness_with_alive(&[1, 2, 3]).await;
-        let new_pr = select_new_leader_for_partition(&img, &l, "foo", 0, ElectionType::Preferred)
-            .await
-            .expect("should elect");
+        let new_pr = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "foo",
+            0,
+            ElectionType::Preferred,
+        )
+        .await
+        .expect("should elect");
         let expected = PartitionRecord {
             topic: "foo".into(),
             partition: 0,
@@ -977,9 +1064,16 @@ mod tests {
         for (leader, isr, alive, expected) in cases {
             let img = img_with_partition("foo", 0, leader, &[1, 2, 3], isr);
             let l = liveness_with_alive(alive).await;
-            let err = select_new_leader_for_partition(&img, &l, "foo", 0, ElectionType::Preferred)
-                .await
-                .unwrap_err();
+            let err = select_new_leader_for_partition(
+                &img,
+                &l,
+                &no_witnesses(),
+                "foo",
+                0,
+                ElectionType::Preferred,
+            )
+            .await
+            .unwrap_err();
             assert!(
                 err == expected,
                 "leader {leader}, isr {isr:?}, alive {alive:?}"
@@ -992,9 +1086,16 @@ mod tests {
         // ISR is just {1}, broker 1 is dead, brokers 2/3 are alive.
         let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1]);
         let l = liveness_with_alive(&[2, 3]).await;
-        let new_pr = select_new_leader_for_partition(&img, &l, "foo", 0, ElectionType::Unclean)
-            .await
-            .expect("unclean should elect");
+        let new_pr = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "foo",
+            0,
+            ElectionType::Unclean,
+        )
+        .await
+        .expect("unclean should elect");
         let expected = PartitionRecord {
             topic: "foo".into(),
             partition: 0,
@@ -1014,9 +1115,16 @@ mod tests {
     async fn unclean_no_alive_replicas() {
         let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1]);
         let l = liveness_with_alive(&[]).await; // everyone dead
-        let err = select_new_leader_for_partition(&img, &l, "foo", 0, ElectionType::Unclean)
-            .await
-            .unwrap_err();
+        let err = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "foo",
+            0,
+            ElectionType::Unclean,
+        )
+        .await
+        .unwrap_err();
         assert!(err == ElectError::NoEligibleReplica);
     }
 
@@ -1024,9 +1132,16 @@ mod tests {
     async fn unclean_isr_member_alive_returns_election_not_needed() {
         let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1, 2]);
         let l = liveness_with_alive(&[1, 2]).await; // ISR has live member
-        let err = select_new_leader_for_partition(&img, &l, "foo", 0, ElectionType::Unclean)
-            .await
-            .unwrap_err();
+        let err = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "foo",
+            0,
+            ElectionType::Unclean,
+        )
+        .await
+        .unwrap_err();
         assert!(err == ElectError::ElectionNotNeeded);
     }
 
@@ -1038,6 +1153,7 @@ mod tests {
         let new_pr = select_replacement_leader_for_shutdown(
             &img,
             &l,
+            &no_witnesses(),
             "foo",
             0,
             /*shutting_down*/ NodeId(1),
@@ -1066,9 +1182,10 @@ mod tests {
         // Replacement should be 3.
         let img = img_with_partition("foo", 0, 1, &[1, 2, 3], &[1, 2, 3]);
         let l = liveness_with_alive(&[1, 3]).await;
-        let new_pr = select_replacement_leader_for_shutdown(&img, &l, "foo", 0, NodeId(1))
-            .await
-            .expect("should pick replacement");
+        let new_pr =
+            select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "foo", 0, NodeId(1))
+                .await
+                .expect("should pick replacement");
         assert!(new_pr.leader == 3);
         assert!(new_pr.leader_epoch == 6);
     }
@@ -1090,10 +1207,16 @@ mod tests {
         for (isr, alive, shutting_down, expected) in cases {
             let img = img_with_partition("foo", 0, 1, &[1, 2, 3], isr);
             let l = liveness_with_alive(alive).await;
-            let err =
-                select_replacement_leader_for_shutdown(&img, &l, "foo", 0, NodeId(shutting_down))
-                    .await
-                    .unwrap_err();
+            let err = select_replacement_leader_for_shutdown(
+                &img,
+                &l,
+                &no_witnesses(),
+                "foo",
+                0,
+                NodeId(shutting_down),
+            )
+            .await
+            .unwrap_err();
             assert!(
                 err == expected,
                 "isr {isr:?}, alive {alive:?}, shutting_down {shutting_down}"
@@ -1105,9 +1228,10 @@ mod tests {
     async fn shutdown_replacement_unknown_partition() {
         let img = MetadataImage::new(Uuid::nil());
         let l = liveness_with_alive(&[1]).await;
-        let err = select_replacement_leader_for_shutdown(&img, &l, "ghost", 0, NodeId(1))
-            .await
-            .unwrap_err();
+        let err =
+            select_replacement_leader_for_shutdown(&img, &l, &no_witnesses(), "ghost", 0, NodeId(1))
+                .await
+                .unwrap_err();
         assert!(err == ElectError::UnknownTopicOrPartition);
     }
 
@@ -1115,9 +1239,16 @@ mod tests {
     async fn unknown_topic_returns_error() {
         let img = MetadataImage::new(Uuid::nil());
         let l = liveness_with_alive(&[]).await;
-        let err = select_new_leader_for_partition(&img, &l, "ghost", 0, ElectionType::Preferred)
-            .await
-            .unwrap_err();
+        let err = select_new_leader_for_partition(
+            &img,
+            &l,
+            &no_witnesses(),
+            "ghost",
+            0,
+            ElectionType::Preferred,
+        )
+        .await
+        .unwrap_err();
         assert!(err == ElectError::UnknownTopicOrPartition);
     }
 
@@ -2366,6 +2497,394 @@ mod tests {
         let pr = one_partition_change(&plan.changes);
         assert!(pr.leader == 2, "legacy path picks first alive replica");
         assert!(pr.isr == vec![NodeId(2)]);
+    }
+
+    // ── Data-bearing witness: replicates and counts toward min-ISR, never
+    //    leads ──────────────────────────────────────────────────────────────
+
+    use super::failover_one;
+
+    /// The full failover decision for one partition, with `witnesses` given
+    /// directly. This keeps the witness tests on the pure policy function.
+    fn decide(
+        pr: &PartitionRecord,
+        dead: u64,
+        alive: &[u64],
+        witness_ids: &[u64],
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+    ) -> super::FailoverDecision {
+        let alive: std::collections::HashSet<NodeId> =
+            alive.iter().copied().map(NodeId).collect();
+        failover_one(
+            pr,
+            NodeId(dead),
+            &alive,
+            &witnesses(witness_ids),
+            strategy,
+            unclean_enabled,
+        )
+    }
+
+    fn partition_record(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
+        PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(leader),
+            replicas: replicas.iter().copied().map(NodeId).collect(),
+            isr: isr.iter().copied().map(NodeId).collect(),
+            leader_epoch: LeaderEpoch(5),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn clean_failover_skips_a_witness_that_sorts_first_in_the_isr() {
+        // Leader 1 dies. The ISR order is [1, 2, 3] and broker 2 is the
+        // witness, so the pre-witness code would have elected 2. The data
+        // replica behind it, broker 3, must take leadership instead. The
+        // whole decision is compared, so the emitted ISR is pinned too: it
+        // still carries the witness, which is what keeps `acks=all` writable.
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let decision = decide(
+            &pr,
+            /*dead*/ 1,
+            /*alive*/ &[2, 3],
+            /*witness_ids*/ &[2],
+            RecoveryStrategy::None,
+            false,
+        );
+        assert!(
+            decision
+                == super::FailoverDecision::Elect {
+                    leader: NodeId(3),
+                    isr: vec![NodeId(2), NodeId(3)],
+                    unclean: false,
+                }
+        );
+    }
+
+    #[test]
+    fn only_witnesses_alive_is_unavailable_whatever_the_unclean_flag_says() {
+        // Leader 1 and data replica 3 are dead. Only witness 2 is alive, and
+        // it holds every committed record. Electing 3 would discard them, so
+        // the answer is Unavailable — never Recover, never an unclean Elect.
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let cases: [(RecoveryStrategy, bool); 4] = [
+            (RecoveryStrategy::None, false),
+            (RecoveryStrategy::None, true),
+            (RecoveryStrategy::Balanced, false),
+            (RecoveryStrategy::Aggressive, true),
+        ];
+        for (strategy, unclean_enabled) in cases {
+            let decision = decide(
+                &pr,
+                /*dead*/ 1,
+                /*alive*/ &[2],
+                /*witness_ids*/ &[2],
+                strategy,
+                unclean_enabled,
+            );
+            assert!(
+                decision == super::FailoverDecision::Unavailable,
+                "strategy {strategy:?}, unclean_enabled {unclean_enabled}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclean_election_never_picks_a_witness() {
+        // ISR is {1} and broker 1 dies, so the KIP-841 out-of-ISR pick runs.
+        // Replica 2 is alive but is the witness; the pick must fall through
+        // to data replica 3.
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
+        let decision = decide(
+            &pr,
+            /*dead*/ 1,
+            /*alive*/ &[2, 3],
+            /*witness_ids*/ &[2],
+            RecoveryStrategy::None,
+            true,
+        );
+        assert!(
+            decision
+                == super::FailoverDecision::Elect {
+                    leader: NodeId(3),
+                    isr: vec![NodeId(3)],
+                    unclean: true,
+                }
+        );
+    }
+
+    #[test]
+    fn unclean_election_is_unavailable_when_every_alive_replica_is_a_witness() {
+        // Empty alive ISR and the only alive replica is the witness.
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
+        let decision = decide(
+            &pr,
+            /*dead*/ 1,
+            /*alive*/ &[2],
+            /*witness_ids*/ &[2],
+            RecoveryStrategy::None,
+            true,
+        );
+        assert!(decision == super::FailoverDecision::Unavailable);
+    }
+
+    #[test]
+    fn isr_shrink_for_a_non_leader_death_keeps_the_witness() {
+        // Broker 3 dies and the leader is alive, so this is a plain shrink.
+        // The witness stays in the emitted ISR.
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let decision = decide(
+            &pr,
+            /*dead*/ 3,
+            /*alive*/ &[1, 2],
+            /*witness_ids*/ &[2],
+            RecoveryStrategy::None,
+            false,
+        );
+        assert!(
+            decision
+                == super::FailoverDecision::ShrinkIsr {
+                    isr: vec![NodeId(1), NodeId(2)],
+                }
+        );
+    }
+
+    #[test]
+    fn an_empty_witness_set_leaves_every_failover_decision_unchanged() {
+        // The regression guard for non-stretch clusters: each case is decided
+        // with no witnesses, and the expected value is the pre-witness answer.
+        let clean = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let empty_isr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
+        let cases: [(&PartitionRecord, u64, &[u64], RecoveryStrategy, bool, super::FailoverDecision); 6] = [
+            // Clean election picks the first alive ISR member.
+            (
+                &clean,
+                1,
+                &[2, 3],
+                RecoveryStrategy::None,
+                false,
+                super::FailoverDecision::Elect {
+                    leader: NodeId(2),
+                    isr: vec![NodeId(2), NodeId(3)],
+                    unclean: false,
+                },
+            ),
+            // Non-leader death shrinks the ISR and keeps the leader.
+            (
+                &clean,
+                3,
+                &[1, 2],
+                RecoveryStrategy::None,
+                false,
+                super::FailoverDecision::ShrinkIsr {
+                    isr: vec![NodeId(1), NodeId(2)],
+                },
+            ),
+            // Empty ISR with unclean off stays unavailable.
+            (
+                &empty_isr,
+                1,
+                &[2, 3],
+                RecoveryStrategy::None,
+                false,
+                super::FailoverDecision::Unavailable,
+            ),
+            // Empty ISR with unclean on picks the first alive replica.
+            (
+                &empty_isr,
+                1,
+                &[2, 3],
+                RecoveryStrategy::None,
+                true,
+                super::FailoverDecision::Elect {
+                    leader: NodeId(2),
+                    isr: vec![NodeId(2)],
+                    unclean: true,
+                },
+            ),
+            // Empty ISR with an offset-aware strategy defers to the URM.
+            (
+                &empty_isr,
+                1,
+                &[2, 3],
+                RecoveryStrategy::Balanced,
+                false,
+                super::FailoverDecision::Recover(RecoveryStrategy::Balanced),
+            ),
+            // An unrelated broker changes nothing.
+            (
+                &clean,
+                9,
+                &[1, 2, 3],
+                RecoveryStrategy::None,
+                false,
+                super::FailoverDecision::NoChange,
+            ),
+        ];
+        for (pr, dead, alive, strategy, unclean_enabled, expected) in cases {
+            let decision = decide(pr, dead, alive, &[], strategy, unclean_enabled);
+            assert!(
+                decision == expected,
+                "dead {dead}, alive {alive:?}, strategy {strategy:?}, unclean {unclean_enabled}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failover_scan_reads_the_witness_role_out_of_the_image() {
+        // End-to-end through `compute_failover_changes`: the witness role
+        // arrives as a per-broker config record, exactly as the broker
+        // publishes it at registration.
+        let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        mark_witnesses_in_image(&mut img, &[2]);
+        let l = ControllerLivenessState::new(crabka_units::secs(10));
+        for n in [2u64, 3] {
+            l.record_heartbeat(n).await;
+        }
+        let plan = compute_failover_changes(
+            &img,
+            /*dead=*/ NodeId(1),
+            &l,
+            &crate::metrics::BrokerMetrics::new(),
+        )
+        .await;
+        assert!(plan.recoveries.is_empty());
+        let pr = one_partition_change(&plan.changes);
+        let expected = PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(3),
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+            isr: vec![NodeId(2), NodeId(3)],
+            leader_epoch: LeaderEpoch(6),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 1,
+        };
+        assert!(*pr == expected);
+    }
+
+    #[tokio::test]
+    async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
+        let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
+        mark_witnesses_in_image(&mut img, &[2]);
+        let l = ControllerLivenessState::new(crabka_units::secs(10));
+        l.record_heartbeat(2).await;
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
+        assert!(plan.changes.is_empty(), "got {:?}", plan.changes);
+        assert!(plan.recoveries.is_empty());
+        assert!(plan.unavailable == vec![("t".to_string(), 0)]);
+        assert!(metrics.unclean_leader_elections_total.get() == 0);
+    }
+
+    #[tokio::test]
+    async fn preferred_election_refuses_a_witness_preferred_replica() {
+        // Site-aware placement put the witness first in `replicas`, so the
+        // preferred replica can never lead.
+        let img = img_with_partition("foo", 0, /*leader*/ 2, &[1, 2, 3], &[1, 2, 3]);
+        let l = liveness_with_alive(&[1, 2, 3]).await;
+        let err = select_new_leader_for_partition(
+            &img,
+            &l,
+            &witnesses(&[1]),
+            "foo",
+            0,
+            ElectionType::Preferred,
+        )
+        .await
+        .unwrap_err();
+        assert!(err == ElectError::PreferredIsWitness);
+    }
+
+    #[tokio::test]
+    async fn operator_unclean_election_skips_a_witness_replica() {
+        // Every data replica in the ISR is dead and the operator forces an
+        // unclean election. The alive witness 2 must not take leadership, and
+        // it must not report the election as unneeded either.
+        let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
+        let l = liveness_with_alive(&[2, 3]).await;
+        let new_pr = select_new_leader_for_partition(
+            &img,
+            &l,
+            &witnesses(&[2]),
+            "foo",
+            0,
+            ElectionType::Unclean,
+        )
+        .await
+        .expect("unclean should elect the data replica");
+        let expected = PartitionRecord {
+            topic: "foo".into(),
+            partition: 0,
+            leader: NodeId(3),
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+            isr: vec![NodeId(3)],
+            leader_epoch: LeaderEpoch(6),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 1,
+        };
+        assert!(new_pr == expected);
+    }
+
+    #[tokio::test]
+    async fn controlled_shutdown_never_drains_leadership_to_a_witness() {
+        // Broker 1 leads and wants to drain. ISR is {1, 2, 3} with 2 the
+        // witness, so the drain target is data replica 3.
+        let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let l = liveness_with_alive(&[1, 2, 3]).await;
+        let new_pr = select_replacement_leader_for_shutdown(
+            &img,
+            &l,
+            &witnesses(&[2]),
+            "foo",
+            0,
+            NodeId(1),
+        )
+        .await
+        .expect("should pick the data replica");
+        let expected = PartitionRecord {
+            topic: "foo".into(),
+            partition: 0,
+            leader: NodeId(3),
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+            isr: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: LeaderEpoch(6),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 1,
+        };
+        assert!(new_pr == expected);
+    }
+
+    #[tokio::test]
+    async fn controlled_shutdown_reports_no_eligible_replica_when_only_a_witness_remains() {
+        // ISR is {1, 2} with 2 the witness. Nothing can take leadership, so
+        // the drain gate must not count this partition.
+        let img = img_with_partition("foo", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2]);
+        let l = liveness_with_alive(&[1, 2, 3]).await;
+        let err = select_replacement_leader_for_shutdown(
+            &img,
+            &l,
+            &witnesses(&[2]),
+            "foo",
+            0,
+            NodeId(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(err == ElectError::NoEligibleReplica);
     }
 }
 

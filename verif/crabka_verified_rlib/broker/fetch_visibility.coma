@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/broker.rs" 41 0 49 20 *)
+(* #"/home/user/krabka-broker/crates/verified/src/broker.rs" 41 0 49 20 *)
 
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 74 15 74 59
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 77 31 77 61
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 25 11 25 66
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 26 10 26 61
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 27 10 28 65
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 29 10 31 15
-let%span sbroker'5 = "/workspace/crates/verified/src/broker.rs" 32 10 32 74
-let%span sbroker'6 = "/workspace/crates/verified/src/broker.rs" 33 10 33 73
-let%span sbroker'7 = "/workspace/crates/verified/src/broker.rs" 34 10 36 47
-let%span sbroker'8 = "/workspace/crates/verified/src/broker.rs" 37 10 39 14
-let%span sord = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbroker = "/home/user/krabka-broker/crates/verified/src/broker.rs" 74 15 74 59
+let%span sbroker'0 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 77 31 77 61
+let%span sbroker'1 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 25 11 25 66
+let%span sbroker'2 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 26 10 26 61
+let%span sbroker'3 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 27 10 28 65
+let%span sbroker'4 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 29 10 31 15
+let%span sbroker'5 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 32 10 32 74
+let%span sbroker'6 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 33 10 33 73
+let%span sbroker'7 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 34 10 36 47
+let%span sbroker'8 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 37 10 39 14
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -33,8 +33,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let fetch_visibility [#"/workspace/crates/verified/src/broker.rs" 41 0 49 20] (is_follower: bool) (read_committed: bool)
-  (log_start: Int64.t) (hw: Int64.t) (lso: Int64.t) (log_end: Int64.t) (fetch_offset: Int64.t)
+let fetch_visibility [#"/home/user/krabka-broker/crates/verified/src/broker.rs" 41 0 49 20] (is_follower: bool)
+  (read_committed: bool) (log_start: Int64.t) (hw: Int64.t) (lso: Int64.t) (log_end: Int64.t) (fetch_offset: Int64.t)
   (return (x: t_FetchVisibility)) = {[@stop_split] [@expl:fetch_visibility requires] [%#sbroker'1] 0
     <= Int64.to_int log_start
   /\ Int64.to_int log_start <= Int64.to_int hw /\ Int64.to_int hw <= Int64.to_int log_end}
@@ -126,6 +126,6 @@ let fetch_visibility [#"/workspace/crates/verified/src/broker.rs" 41 0 49 20] (i
         if Int64.to_int lso < Int64.to_int hw then Int64.to_int lso else Int64.to_int hw
       else
         Int64.to_int hw
-
+    
     ))}
     (! return {result}) ]

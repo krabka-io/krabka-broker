@@ -1,6 +1,10 @@
 //! `CreateTopics` (`api_key=19`). Routes through `Controller::submit_change`
 //! so every topic/partition creation goes through the metadata quorum before
 //! the partition directories are materialized on disk.
+//!
+//! Automatic replica placement is site-aware. See [`crate::site_placement`]
+//! for the site spread and the leadership pinning it gives. An explicit
+//! `assignments` field still wins, as it does in Kafka.
 
 use bytes::Bytes;
 use crabka_metadata::{
@@ -22,8 +26,10 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
+    config_keys::{resolve_broker_witness, resolve_preferred_leader_site},
     error::BrokerError,
     replicator_supervisor::materialize_partition,
+    site_placement::{SiteBrokerView, stretch_replicas},
 };
 
 /// Leader epoch that a freshly created partition starts at. The committed
@@ -38,6 +44,9 @@ const INITIAL_LEADER_EPOCH: i32 = 0;
 /// is `bs[(p) % k]`, and the remaining replicas are `bs[(p + i) % k]` for
 /// `i in 1..R`. The caller must guarantee `R <= k`. Otherwise this returns an
 /// empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
+///
+/// This is the placement of a cluster that declares no site. The site-aware
+/// [`stretch_replicas`] calls it for such a cluster, so the two agree there.
 pub(crate) fn round_robin_replicas(
     sorted_brokers: &[crabka_raft::NodeId],
     num_partitions: i32,
@@ -98,6 +107,66 @@ fn manual_replicas(
         return Err(codes::INVALID_REPLICA_ASSIGNMENT);
     }
     Ok(by_partition.into_values().collect())
+}
+
+/// The registered brokers as the site-aware placement sees them, in node-id
+/// order.
+///
+/// The list keeps the race tolerance of the plain broker list. On a cluster
+/// that just started, the image may not hold the self-registration record
+/// yet. The list then holds this broker alone. That entry declares no site,
+/// so the placement stays the plain Kafka round-robin.
+pub(crate) fn site_broker_views(
+    image: &crabka_metadata::MetadataImage,
+    node_id: crabka_raft::NodeId,
+) -> Vec<SiteBrokerView> {
+    let mut views = image
+        .brokers()
+        .map(|broker| SiteBrokerView {
+            node_id: broker.node_id,
+            site: broker.rack.clone(),
+            is_witness: resolve_broker_witness(image, broker.node_id),
+        })
+        .collect::<Vec<_>>();
+    if views.is_empty() {
+        views.push(SiteBrokerView {
+            node_id,
+            site: None,
+            is_witness: false,
+        });
+    }
+    views.sort_by_key(|view| view.node_id);
+    views
+}
+
+/// The replica list of each partition of a new topic.
+///
+/// An explicit `assignments` field wins, as it does in Kafka. The handler
+/// then takes the caller's lists verbatim, after [`manual_replicas`]
+/// validates them. Without that field the placement is automatic and
+/// site-aware: see [`stretch_replicas`].
+///
+/// The result is an empty outer vec when the automatic placement cannot
+/// satisfy the request, and the caller reports `INVALID_REPLICATION_FACTOR`.
+/// An invalid explicit assignment gives the error code instead.
+fn resolve_assignments(
+    topic: &CreatableTopic,
+    brokers: &[SiteBrokerView],
+    preferred_site: Option<&str>,
+) -> Result<Vec<Vec<crabka_raft::NodeId>>, i16> {
+    if topic.assignments.is_empty() {
+        return Ok(stretch_replicas(
+            brokers,
+            topic.num_partitions,
+            topic.replication_factor,
+            preferred_site,
+        ));
+    }
+    let node_ids = brokers
+        .iter()
+        .map(|broker| broker.node_id)
+        .collect::<Vec<_>>();
+    manual_replicas(topic, &node_ids)
 }
 
 fn topic_error_result(
@@ -241,11 +310,11 @@ pub(crate) async fn handle(
     }
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
+    let preferred_site = resolve_preferred_leader_site(&image);
 
     for topic_req in req.topics {
         let name = topic_req.name.clone();
         let partition_count = topic_req.num_partitions;
-        let replication_factor = topic_req.replication_factor;
 
         // Reject invalid partition counts before attempting automatic placement.
         // Manual assignments use -1 for both count and replication factor.
@@ -254,39 +323,24 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // Read the current broker set from the controller's image; sort by
-        // node_id for determinism.
-        //
-        // Race-tolerance: on a freshly-started cluster, the self-registration
-        // V1BrokerRegistration record may not have made it into the local
-        // MetadataImage yet when this handler runs (the controller's apply is
-        // mostly synchronous on the leader but observable timing has slipped
-        // on slow runners). If `brokers()` is empty, fall back to "this broker
-        // is the only known broker" so the single-broker case (which is by
-        // far the most common) doesn't silently degrade to
-        // INVALID_REPLICATION_FACTOR.
-        let mut sorted_brokers: Vec<crabka_raft::NodeId> =
-            image.brokers().map(|b| b.node_id).collect();
-        if sorted_brokers.is_empty() {
-            sorted_brokers.push(node_id);
-        }
-        sorted_brokers.sort_unstable();
+        // Read the current broker set from the controller's image, with the
+        // site and the witness role of each broker. `site_broker_views` sorts
+        // by node id for determinism, and it covers the race in which the
+        // self-registration record has not reached the local image yet.
+        let brokers = site_broker_views(&image, node_id);
 
-        let assignments = if topic_req.assignments.is_empty() {
-            round_robin_replicas(&sorted_brokers, partition_count, replication_factor)
-        } else {
-            match manual_replicas(&topic_req, &sorted_brokers) {
-                Ok(assignments) => assignments,
-                Err(code) => {
-                    results.push(topic_error_result(name, code, None));
-                    continue;
-                }
+        let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
+            Ok(assignments) => assignments,
+            Err(code) => {
+                results.push(topic_error_result(name, code, None));
+                continue;
             }
         };
 
         if assignments.is_empty() {
-            // RF > broker count. Surface INVALID_REPLICATION_FACTOR per Apache
-            // Kafka semantics.
+            // The placement cannot satisfy the request. RF above the broker
+            // count is the common cause. Surface INVALID_REPLICATION_FACTOR
+            // per Apache Kafka semantics.
             results.push(topic_error_result(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,

@@ -23,8 +23,8 @@ mod support;
 
 use support::relay::{Relay, SiteLink};
 
-/// Generous enough that a loaded runner does not fail a healthy relay, short
-/// enough that a broken one reports in seconds.
+// Generous enough that a loaded runner does not fail a healthy relay, short
+// enough that a broken one reports in seconds.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
@@ -33,8 +33,8 @@ async fn within<F: Future>(what: &str, future: F) -> F::Output {
         .unwrap_or_else(|_| panic!("{what} did not finish within {TIMEOUT:?}"))
 }
 
-/// Bind a loopback echo server and return its address. Its tasks end when the
-/// test's runtime is dropped, which is the end of the test.
+// Bind a loopback echo server and return its address. Its tasks end when the
+// test's runtime is dropped, which is the end of the test.
 async fn start_echo() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind echo");
     let addr = listener.local_addr().expect("echo local addr");
@@ -58,12 +58,12 @@ async fn round_trip(stream: &mut TcpStream, payload: &[u8]) -> io::Result<Vec<u8
     Ok(echoed)
 }
 
-/// Connect through `addr` and echo `payload` back, as one fallible step.
-///
-/// A cut relay may refuse at either point — the connect can fail outright, or it
-/// can complete and the first read then end at once, which is what the
-/// accept-and-drop cut produces. The caller cares only that the link does not
-/// carry data, so both failures are collapsed into one `Err`.
+// Connect through `addr` and echo `payload` back, as one fallible step.
+//
+// A cut relay may refuse at either point — the connect can fail outright, or it
+// can complete and the first read then end at once, which is what the
+// accept-and-drop cut produces. The caller cares only that the link does not
+// carry data, so both failures are collapsed into one `Err`.
 async fn probe(addr: SocketAddr, payload: &[u8]) -> io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(addr).await?;
     round_trip(&mut stream, payload).await
@@ -74,7 +74,10 @@ async fn relay_forwards_bytes_to_the_upstream() {
     let upstream = start_echo().await;
     let relay = Relay::start(upstream).await;
 
-    check!(relay.addr() != upstream, "the relay binds a port of its own");
+    check!(
+        relay.addr() != upstream,
+        "the relay binds a port of its own"
+    );
     let echoed = within("round trip", probe(relay.addr(), b"ping")).await;
     check!(echoed.expect("round trip through a healthy relay") == b"ping".to_vec());
 
@@ -89,7 +92,11 @@ async fn cut_tears_down_an_open_connection_and_stops_new_ones() {
     let mut open = within("connect", TcpStream::connect(relay.addr()))
         .await
         .expect("connect through a healthy relay");
-    let before = within("round trip before the cut", round_trip(&mut open, b"before")).await;
+    let before = within(
+        "round trip before the cut",
+        round_trip(&mut open, b"before"),
+    )
+    .await;
     check!(before.expect("round trip before the cut") == b"before".to_vec());
 
     relay.cut();
@@ -158,15 +165,15 @@ async fn cut_and_heal_work_through_a_shared_relay() {
     let relay = Arc::new(Relay::start(upstream).await);
     let addr = relay.addr();
 
-    let cutter = Arc::clone(&relay);
-    tokio::spawn(async move { cutter.cut() })
+    let other = Arc::clone(&relay);
+    tokio::spawn(async move { other.cut() })
         .await
         .expect("cut from another task");
     let while_cut = within("fresh connection while cut", probe(addr, b"x")).await;
     assert!(let Err(_) = &while_cut);
 
-    let healer = Arc::clone(&relay);
-    tokio::spawn(async move { healer.heal() })
+    let other = Arc::clone(&relay);
+    tokio::spawn(async move { other.heal() })
         .await
         .expect("heal from another task");
     let healed = within("round trip after the heal", probe(addr, b"after")).await;

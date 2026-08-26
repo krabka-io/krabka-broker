@@ -246,7 +246,9 @@ fn next_follower(
     // hold the same number of replicas.
     (0..site_count)
         .map(|step| (partition + step) % site_count)
-        .filter_map(|site| free_broker(table, site, partition, chosen).map(|broker| Placed { site, broker }))
+        .filter_map(|site| {
+            free_broker(table, site, partition, chosen).map(|broker| Placed { site, broker })
+        })
         .min_by_key(|placed| load[placed.site])
 }
 
@@ -482,11 +484,14 @@ mod tests {
 
         // Two sites can hold two replicas, but not three: the third broker
         // could be in either site, so the code does not place it.
-        assert!(stretch_replicas(&brokers, 3, 2, None) == vec![
-            vec![NodeId(1), NodeId(2)],
-            vec![NodeId(2), NodeId(1)],
-            vec![NodeId(1), NodeId(2)],
-        ]);
+        assert!(
+            stretch_replicas(&brokers, 3, 2, None)
+                == vec![
+                    vec![NodeId(1), NodeId(2)],
+                    vec![NodeId(2), NodeId(1)],
+                    vec![NodeId(1), NodeId(2)],
+                ]
+        );
         assert!(stretch_replicas(&brokers, 3, 3, None).is_empty());
     }
 

@@ -1,0 +1,172 @@
+(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 154 0 154 76 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 155 12 155 33
+let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 157 25 157 26
+let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 158 16 158 17
+let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 162 14 162 21
+let%span sstretch'3 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 161 16 161 50
+let%span sstretch'4 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 160 16 160 58
+let%span sstretch'5 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 159 16 159 24
+let%span sstretch'6 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 164 22 165 71
+let%span sstretch'7 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 166 17 166 35
+let%span sstretch'8 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 166 8 166 35
+let%span sstretch'9 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 167 13 167 14
+let%span sstretch'10 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 167 8 167 14
+let%span sstretch'11 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 170 16 170 17
+let%span sstretch'12 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 171 23 171 27
+let%span sstretch'13 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 177 14 177 21
+let%span sstretch'14 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 175 16 176 95
+let%span sstretch'15 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 174 16 174 51
+let%span sstretch'16 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 173 16 173 52
+let%span sstretch'17 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 172 16 172 24
+let%span sstretch'18 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 179 24 179 42
+let%span sstretch'19 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 179 15 179 43
+let%span sstretch'20 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 179 11 179 12
+let%span sstretch'21 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 179 11 179 43
+let%span sstretch'22 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 180 23 180 28
+let%span sstretch'23 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 182 13 182 14
+let%span sstretch'24 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 182 8 182 14
+let%span sstretch'25 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 148 11 148 41
+let%span sstretch'26 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 149 11 150 65
+let%span sstretch'27 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 151 10 152 91
+let%span sstretch'28 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 20 10 20 15
+let%span sstretch'29 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 23 8 27 9
+let%span sstretch'30 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 35 16 35 38
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+function sum_prefix [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49] (s: Seq.seq Int64.t) (limit: int) : int
+
+axiom sum_prefix_def: forall s: Seq.seq Int64.t, limit: int [sum_prefix s limit]. sum_prefix s limit
+    = ([%#sstretch'29] if limit <= 0 then 0 else sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))
+
+function sum_all [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 34 0 34 34] (s: Seq.seq Int64.t) : int =
+  [%#sstretch'30] sum_prefix s (Seq.length s)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let quorum_survives_any_single_site_loss [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 154 0 154 76]
+  (voters_per_site: Slice64.slice Int64.t) (return (x: bool)) =
+{[@stop_split] [@expl:quorum_survives_any_single_site_loss requires] ([@stop_split] [@expl:quorum_survives_any_single_site_loss requires #0] [%#sstretch'25] Seq.length (Slice64.view voters_per_site)
+    <= 1024)
+  /\ ([@stop_split] [@expl:quorum_survives_any_single_site_loss requires #1] [%#sstretch'26] forall k: int. 0 <= k
+      /\ k < Seq.length (Slice64.view voters_per_site)
+    -> 0 <= Int64.to_int (Seq.get (Slice64.view voters_per_site) k)
+    /\ Int64.to_int (Seq.get (Slice64.view voters_per_site) k) <= 1024)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = len_i64 [%#sstretch] {voters_per_site} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)
+    | s1 = [ &total <- [%#sstretch'0] (0: Int64.t) ] s2
+    | s2 = [ &i <- [%#sstretch'1] (0: UInt64.t) ] s3
+    | s3 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sstretch'2] UInt64.t'int n
+      - UInt64.t'int i)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#sstretch'5] UInt64.t'int i <= UInt64.t'int n}
+      {[@expl:loop invariant #1] [%#sstretch'4] Int64.to_int total
+      = sum_prefix (Slice64.view voters_per_site) (UInt64.t'int i)}
+      {[@expl:loop invariant #2] [%#sstretch'3] 0 <= Int64.to_int total /\ Int64.to_int total <= UInt64.t'int i * 1024}
+      (! [ &variant_old_bb2 <- [%#sstretch'2] UInt64.t'int n - UInt64.t'int i ] s0)
+      [ s0 = [ &_28 <- UInt64.lt i n ] s1 | s1 = any [ br0 -> {_28 = false} (! bb6) | br1 -> {_28} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = {[@expl:assertion] [%#sstretch'6] sum_prefix (Slice64.view voters_per_site) (UInt64.t'int i + 1)
+          = sum_prefix (Slice64.view voters_per_site) (UInt64.t'int i)
+          + Int64.to_int (Seq.get (Slice64.view voters_per_site) (UInt64.t'int i))}
+          s1
+        | s1 = [ &_36 <- i ] s2
+        | s2 = [ &_37 <- Slice64.length voters_per_site ] s3
+        | s3 = [ &_38 <- UInt64.lt _36 _37 ] s4
+        | s4 = {[@expl:index in bounds] [%#sstretch'7] _38} s5
+        | s5 = Slice64.get [%#sstretch'7] <Int64.t> {voters_per_site} {_36} (fun (r: Int64.t) -> [ &_35 <- r ] s6)
+        | s6 = Int64.add [%#sstretch'8] {total} {_35} (fun (_x: Int64.t) -> [ &total <- _x ] s7)
+        | s7 = UInt64.add [%#sstretch'10] {i} {[%#sstretch'9] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s8)
+        | s8 = bb2 ] ] ]
+  | bb6 = s0
+    [ s0 = [ &k <- [%#sstretch'11] (0: UInt64.t) ] s1 | s1 = [ &survives <- [%#sstretch'12] true ] s2 | s2 = bb7 ]
+  | bb7 = bb7invariant
+    [ bb7 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb7 ([%#sstretch'13] UInt64.t'int n
+      - UInt64.t'int k)}
+      bb7invariant
+    | bb7invariant = {[@expl:loop invariant #0] [%#sstretch'17] UInt64.t'int k <= UInt64.t'int n}
+      {[@expl:loop invariant #1] [%#sstretch'16] 0 <= Int64.to_int total /\ Int64.to_int total <= 1024 * 1024}
+      {[@expl:loop invariant #2] [%#sstretch'15] Int64.to_int total = sum_all (Slice64.view voters_per_site)}
+      {[@expl:loop invariant #3] [%#sstretch'14] survives
+      = (forall j: int. 0 <= j /\ j < UInt64.t'int k
+        -> gt_log_Int (2
+        * (sum_all (Slice64.view voters_per_site)
+        - Int64.to_int (Seq.get (Slice64.view voters_per_site) j))) (sum_all (Slice64.view voters_per_site)))}
+      (! [ &variant_old_bb7 <- [%#sstretch'13] UInt64.t'int n - UInt64.t'int k ] s0)
+      [ s0 = [ &_59 <- UInt64.lt k n ] s1 | s1 = any [ br0 -> {_59 = false} (! bb14) | br1 -> {_59} (! bb9) ] ]
+      [ bb9 = s0
+        [ s0 = [ &_68 <- k ] s1
+        | s1 = [ &_69 <- Slice64.length voters_per_site ] s2
+        | s2 = [ &_70 <- UInt64.lt _68 _69 ] s3
+        | s3 = {[@expl:index in bounds] [%#sstretch'18] _70} s4
+        | s4 = Slice64.get [%#sstretch'18] <Int64.t> {voters_per_site} {_68} (fun (r: Int64.t) -> [ &_67 <- r ] s5)
+        | s5 = Int64.sub [%#sstretch'19] {total} {_67} (fun (_x: Int64.t) -> [ &_65 <- _x ] s6)
+        | s6 = Int64.mul [%#sstretch'21] {[%#sstretch'20] (2: Int64.t)} {_65} (fun (_x: Int64.t) -> [ &_64 <- _x ] s7)
+        | s7 = [ &_63 <- Int64.le _64 total ] s8
+        | s8 = any [ br0 -> {_63 = false} (! bb13) | br1 -> {_63} (! bb11) ] ]
+      | bb11 = s0 [ s0 = [ &survives <- [%#sstretch'22] false ] s1 | s1 = bb13 ]
+      | bb13 = s0
+        [ s0 = UInt64.add [%#sstretch'24] {k} {[%#sstretch'23] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &k <- _x ] s1)
+        | s1 = bb7 ] ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- survives ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & voters_per_site: Slice64.slice Int64.t = voters_per_site
+  | & n: UInt64.t = Any.any_l ()
+  | & total: Int64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _35: Int64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & k: UInt64.t = Any.any_l ()
+  | & survives: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _63: bool = Any.any_l ()
+  | & _64: Int64.t = Any.any_l ()
+  | & _65: Int64.t = Any.any_l ()
+  | & _67: Int64.t = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & _69: UInt64.t = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l ()
+  | & variant_old_bb7: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:quorum_survives_any_single_site_loss ensures] [%#sstretch'27] result
+    = (forall k: int. 0 <= k /\ k < Seq.length (Slice64.view voters_per_site)
+      -> gt_log_Int (2
+      * (sum_all (Slice64.view voters_per_site)
+      - Int64.to_int (Seq.get (Slice64.view voters_per_site) k))) (sum_all (Slice64.view voters_per_site)))}
+    (! return {result}) ]

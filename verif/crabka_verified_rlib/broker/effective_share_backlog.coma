@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/broker.rs" 121 0 121 74 *)
+(* #"/home/user/krabka-broker/crates/verified/src/broker.rs" 121 0 121 74 *)
 
-let%span sbroker = "/workspace/crates/verified/src/broker.rs" 122 26 122 27
-let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 127 21 127 45
-let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 128 20 128 21
-let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 128 44 128 45
-let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 119 10 119 72
-let%span sbroker'4 = "/workspace/crates/verified/src/broker.rs" 107 8 107 85
-let%span sord = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sbroker = "/home/user/krabka-broker/crates/verified/src/broker.rs" 122 26 122 27
+let%span sbroker'0 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 127 21 127 45
+let%span sbroker'1 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 128 20 128 21
+let%span sbroker'2 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 128 44 128 45
+let%span sbroker'3 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 119 10 119 72
+let%span sbroker'4 = "/home/user/krabka-broker/crates/verified/src/broker.rs" 107 8 107 85
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -40,7 +40,7 @@ let saturating_sub (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
       - Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
     (! return {result}) ]
 
-function effective_share_backlog_model [#"/workspace/crates/verified/src/broker.rs" 105 0 105 80] (hwm: Int64.t) (spso: Int64.t) (log_start: Int64.t) : int
+function effective_share_backlog_model [#"/home/user/krabka-broker/crates/verified/src/broker.rs" 105 0 105 80] (hwm: Int64.t) (spso: Int64.t) (log_start: Int64.t) : int
  = [%#sbroker'4] let base = if ge_log_Int (Int64.to_int spso) 0
   /\ gt_log_Int (Int64.to_int spso) (Int64.to_int log_start) then
     Int64.to_int spso
@@ -56,8 +56,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let effective_share_backlog [#"/workspace/crates/verified/src/broker.rs" 121 0 121 74] (hwm: Int64.t) (spso: Int64.t)
-  (log_start: Int64.t) (return (x: Int64.t)) = (! bb0
+let effective_share_backlog [#"/home/user/krabka-broker/crates/verified/src/broker.rs" 121 0 121 74] (hwm: Int64.t)
+  (spso: Int64.t) (log_start: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.ge spso ([%#sbroker] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_9 = false} (! bb5) | br1 -> {_9} (! bb1) ] ]

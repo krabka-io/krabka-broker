@@ -391,6 +391,14 @@ fn handle_broker_scoped(
         }
     };
     for cfg in &resource.configs {
+        if config_keys::is_controller_managed_broker_config(&cfg.name) {
+            out.error_code = codes::INVALID_CONFIG;
+            out.error_message = Some(format!(
+                "broker config {} is controller-managed and read-only",
+                cfg.name
+            ));
+            return; // halt processing this resource
+        }
         if !is_known_broker_config(&cfg.name) {
             out.error_code = codes::INVALID_CONFIG;
             out.error_message = Some(format!("unknown broker config {}", cfg.name));

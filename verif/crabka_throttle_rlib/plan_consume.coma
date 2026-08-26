@@ -1,44 +1,59 @@
-(* #"/workspace/crates/throttle/src/lib.rs" 37 0 37 90 *)
+(* #"/home/user/krabka-broker/crates/throttle/src/lib.rs" 49 0 54 34 *)
 
-let%span slib = "/workspace/crates/throttle/src/lib.rs" 38 17 38 49
-let%span slib'0 = "/workspace/crates/throttle/src/lib.rs" 38 17 38 60
-let%span slib'1 = "/workspace/crates/throttle/src/lib.rs" 39 16 39 37
-let%span slib'2 = "/workspace/crates/throttle/src/lib.rs" 40 12 40 26
-let%span slib'3 = "/workspace/crates/throttle/src/lib.rs" 28 10 28 33
-let%span slib'4 = "/workspace/crates/throttle/src/lib.rs" 29 10 29 29
-let%span slib'5 = "/workspace/crates/throttle/src/lib.rs" 30 10 30 70
-let%span slib'6 = "/workspace/crates/throttle/src/lib.rs" 31 10 35 1
-let%span slib'7 = "/workspace/crates/throttle/src/lib.rs" 17 4 21 5
-let%span snum = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 325 20 326 51
-let%span snum'0 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 329 26 329 83
-let%span snum'1 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 330 26 330 83
-let%span snum'2 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 25 28 25 33
-let%span scmp = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/cmp.rs" 87 26 87 66
-let%span scmp'0 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/cmp.rs" 88 26 88 63
-let%span scmp'1 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/cmp.rs" 89 26 89 55
-let%span scmp'2 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/cmp.rs" 90 26 90 79
-let%span scmp'3 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/cmp.rs" 91 26 91 77
+let%span slib = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 55 17 55 53
+let%span slib'0 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 55 17 55 66
+let%span slib'1 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 56 16 56 39
+let%span slib'2 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 57 40 57 54
+let%span slib'3 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 40 10 40 37
+let%span slib'4 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 41 10 41 33
+let%span slib'5 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 42 10 42 80
+let%span slib'6 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 43 10 47 1
+let%span slib'7 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 24 4 28 5
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
 use creusot.prelude.Any
 use int.Int
 
+type t_AvailableTokens = { f0: UInt64.t }
+
+type t_RefillTokens = { f0'0: UInt64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
 constant const_MIN: UInt64.t = (0: UInt64.t)
 
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
 
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
 let saturating_add (self_: UInt64.t) (rhs: UInt64.t) (return (x: UInt64.t)) = any
   [ return (result: UInt64.t) ->
-  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] UInt64.t'int self_
-            + UInt64.t'int rhs
-          >= UInt64.t'int const_MIN
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (UInt64.t'int self_
+          + UInt64.t'int rhs) (UInt64.t'int const_MIN)
         /\ UInt64.t'int self_ + UInt64.t'int rhs <= UInt64.t'int const_MAX
       -> UInt64.t'int result = UInt64.t'int self_ + UInt64.t'int rhs)
     /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] UInt64.t'int self_ + UInt64.t'int rhs
         < UInt64.t'int const_MIN -> UInt64.t'int result = UInt64.t'int const_MIN)
-    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] UInt64.t'int self_ + UInt64.t'int rhs
-      > UInt64.t'int const_MAX -> UInt64.t'int result = UInt64.t'int const_MAX)}
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (UInt64.t'int self_
+      + UInt64.t'int rhs) (UInt64.t'int const_MAX) -> UInt64.t'int result = UInt64.t'int const_MAX)}
     (! return {result}) ]
+
+type t_BurstCapacity = { f0'1: UInt64.t }
 
 function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum'2] UInt64.t'int self
 
@@ -54,43 +69,57 @@ let min_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u64 o <= deep_model_u64 self_ -> result = o)}
     (! return {result}) ]
 
-type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+type t_RequestedTokens = { f0'2: UInt64.t }
 
-function capped [#"/workspace/crates/throttle/src/lib.rs" 16 0 16 61] (available: int) (refill: int) (burst: int) : int
+type t_GrantedTokens = { f0'3: UInt64.t }
+
+type t_NewAvailable = { f0'4: UInt64.t }
+
+type tup2_GrantedTokens_NewAvailable = { f0'5: t_GrantedTokens; f1'5: t_NewAvailable }
+
+function capped [#"/home/user/krabka-broker/crates/throttle/src/lib.rs" 23 0 23 61] (available: int) (refill: int) (burst: int) : int
  = [%#slib'7] if available + refill <= burst then available + refill else burst
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let plan_consume [#"/workspace/crates/throttle/src/lib.rs" 37 0 37 90] (available: UInt64.t) (refill: UInt64.t)
-  (burst: UInt64.t) (requested: UInt64.t) (return (x: tup2_u64_u64)) = (! bb0
+let plan_consume [#"/home/user/krabka-broker/crates/throttle/src/lib.rs" 49 0 54 34] (available: t_AvailableTokens)
+  (refill: t_RefillTokens) (burst: t_BurstCapacity) (requested: t_RequestedTokens)
+  (return (x: tup2_GrantedTokens_NewAvailable)) = (! bb0
   [ bb0 = s0
-    [ s0 = saturating_add [%#slib] {available} {refill} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
-    | s1 = min_u64 [%#slib'0] {_19} {burst} (fun (_x: UInt64.t) -> [ &capped'0 <- _x ] s2)
-    | s2 = min_u64 [%#slib'1] {requested} {capped'0} (fun (_x: UInt64.t) -> [ &grant <- _x ] s3)
-    | s3 = UInt64.sub [%#slib'2] {capped'0} {grant} (fun (_x: UInt64.t) -> [ &_27 <- _x ] s4)
-    | s4 = [ &_ret <- { f0 = grant; f1 = _27 } ] s5
-    | s5 = return {_ret} ] ]
-  [ & _ret: tup2_u64_u64 = Any.any_l ()
-  | & available: UInt64.t = available
-  | & refill: UInt64.t = refill
-  | & burst: UInt64.t = burst
-  | & requested: UInt64.t = requested
+    [ s0 = saturating_add [%#slib] {available.f0} {refill.f0'0} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
+    | s1 = min_u64 [%#slib'0] {_19} {burst.f0'1} (fun (_x: UInt64.t) -> [ &capped'0 <- _x ] s2)
+    | s2 = min_u64 [%#slib'1] {requested.f0'2} {capped'0} (fun (_x: UInt64.t) -> [ &grant <- _x ] s3)
+    | s3 = [ &_26 <- { f0'3 = grant } ] s4
+    | s4 = UInt64.sub [%#slib'2] {capped'0} {grant} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s5)
+    | s5 = [ &_28 <- { f0'4 = _29 } ] s6
+    | s6 = [ &_ret <- { f0'5 = _26; f1'5 = _28 } ] s7
+    | s7 = return {_ret} ] ]
+  [ & _ret: tup2_GrantedTokens_NewAvailable = Any.any_l ()
+  | & available: t_AvailableTokens = available
+  | & refill: t_RefillTokens = refill
+  | & burst: t_BurstCapacity = burst
+  | & requested: t_RequestedTokens = requested
   | & capped'0: UInt64.t = Any.any_l ()
   | & _19: UInt64.t = Any.any_l ()
   | & grant: UInt64.t = Any.any_l ()
-  | & _27: UInt64.t = Any.any_l () ])
-  [ return (result: tup2_u64_u64) ->
-  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#slib'3] UInt64.t'int result.f0
-      <= UInt64.t'int requested)
-    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#slib'4] UInt64.t'int result.f1 <= UInt64.t'int burst)
-    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#slib'5] UInt64.t'int result.f0 + UInt64.t'int result.f1
-      = capped (UInt64.t'int available) (UInt64.t'int refill) (UInt64.t'int burst))
-    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#slib'6] UInt64.t'int result.f0
-    = (if UInt64.t'int requested <= capped (UInt64.t'int available) (UInt64.t'int refill) (UInt64.t'int burst) then
-      UInt64.t'int requested
+  | & _26: t_GrantedTokens = Any.any_l ()
+  | & _28: t_NewAvailable = Any.any_l ()
+  | & _29: UInt64.t = Any.any_l () ])
+  [ return (result: tup2_GrantedTokens_NewAvailable) ->
+  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#slib'3] UInt64.t'int result.f0'5.f0'3
+      <= UInt64.t'int requested.f0'2)
+    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#slib'4] UInt64.t'int result.f1'5.f0'4
+      <= UInt64.t'int burst.f0'1)
+    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#slib'5] UInt64.t'int result.f0'5.f0'3
+        + UInt64.t'int result.f1'5.f0'4
+      = capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1))
+    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#slib'6] UInt64.t'int result.f0'5.f0'3
+    = (if UInt64.t'int requested.f0'2
+    <= capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1) then
+      UInt64.t'int requested.f0'2
     else
-      capped (UInt64.t'int available) (UInt64.t'int refill) (UInt64.t'int burst)
+      capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1)
     ))}
     (! return {result}) ]
