@@ -498,6 +498,19 @@ mod tests {
     }
 
     #[test]
+    fn a_larger_partition_count_keeps_the_placement_of_the_first_partitions() {
+        // `CreatePartitions` grows a topic: it places the whole topic again
+        // and keeps the tail, so the placement of a partition must depend on
+        // the partition index alone.
+        let brokers = six_brokers();
+
+        let three = stretch_replicas(&brokers, 3, 3, Some("a"));
+        let seven = stretch_replicas(&brokers, 7, 3, Some("a"));
+
+        assert!(seven[..3] == three[..]);
+    }
+
+    #[test]
     fn the_same_input_always_gives_the_same_placement() {
         let brokers = six_brokers();
         let reversed = brokers.iter().rev().cloned().collect::<Vec<_>>();

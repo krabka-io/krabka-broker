@@ -58,7 +58,7 @@ broker restart. Inbound validation uses the existing `[oauthbearer]` policy.
 
 ## Design documents
 
-- [Witness broker role and stretch cluster](../../docs/superpowers/specs/2026-08-26-witness-broker-stretch-cluster-design.md) — the data-bearing witness role, and the three-site profile that keeps `acks=all` writes alive through the loss of any one site.
+- [Witness broker role and stretch cluster](../../docs/KFCs/KFC-2-witness-broker-stretch-cluster.md) — the data-bearing witness role, and the three-site profile that keeps `acks=all` writes alive through the loss of any one site.
 
 ## Documentation
 

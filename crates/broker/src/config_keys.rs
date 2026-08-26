@@ -67,7 +67,7 @@ pub(crate) const UNCLEAN_RECOVERY_STRATEGY: &str = "unclean.recovery.strategy";
 /// `DescribeConfigs` returns it with `read_only` set. An operator reads it
 /// with `kafka-configs --entity-type brokers --describe`.
 ///
-/// A witness replicates partition data and votes in KRaft, so it counts
+/// A witness replicates partition data and votes in `KRaft`, so it counts
 /// toward `min.insync.replicas`. It serves no client and leads no partition.
 pub(crate) const BROKER_WITNESS: &str = "broker.witness";
 

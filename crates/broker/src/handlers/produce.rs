@@ -1705,8 +1705,10 @@ mod tests {
     /// Spawn one local partition and run the Produce gate over it.
     ///
     /// Returns `None` when the gate admits the write, or the complete gate
-    /// error when it refuses.
-    async fn produce_gate(
+    /// error when it refuses. The gate itself is synchronous, but
+    /// `spawn_partition` starts the writer-actor task, so the callers still
+    /// need a Tokio runtime.
+    fn produce_gate(
         image: &MetadataImage,
         node_id: crabka_audit::NodeId,
         is_witness: bool,
@@ -1810,8 +1812,7 @@ mod tests {
                 refused.clone(),
             ),
         ] {
-            let got =
-                produce_gate(&image, crabka_audit::NodeId(node_id), is_witness, diskless).await;
+            let got = produce_gate(&image, crabka_audit::NodeId(node_id), is_witness, diskless);
             assert!(got == want, "{name}: got {got:?}, want {want:?}");
         }
     }
@@ -1826,7 +1827,7 @@ mod tests {
             config_name: crate::config_keys::BROKER_WITNESS.into(),
             config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
         }));
-        let got = produce_gate(&image, crabka_audit::NodeId(1), false, false).await;
+        let got = produce_gate(&image, crabka_audit::NodeId(1), false, false);
         assert!(got.is_none(), "got {got:?}");
     }
 

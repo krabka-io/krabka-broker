@@ -1,4 +1,4 @@
-# Witness Broker Role and Stretch Cluster Design
+# KFC-2: Witness Broker Role and Stretch Cluster
 
 A broker role that replicates and votes, but never serves clients and never leads a partition, and the three-site profile that uses it.
 

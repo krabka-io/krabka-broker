@@ -6504,12 +6504,18 @@ protocol = "Plaintext"
         }
     }
 
-    /// A node of node id 4 that carries `roles`.
-    fn node_with_roles(roles: Vec<crate::config::NodeRole>) -> BrokerConfig {
+    /// A node of node id 4 that carries `roles` and logs into `log_dir`.
+    ///
+    /// The registration record mints a directory id under `log_dir`, so the
+    /// caller passes a temporary directory rather than the source tree.
+    fn node_with_roles(
+        log_dir: &std::path::Path,
+        roles: Vec<crate::config::NodeRole>,
+    ) -> BrokerConfig {
         BrokerConfig {
             node_id: crabka_metadata::NodeId(4),
             roles,
-            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+            ..BrokerConfig::for_tests(log_dir.to_path_buf())
         }
     }
 
@@ -6523,11 +6529,15 @@ protocol = "Plaintext"
 
     #[test]
     fn a_witness_registration_batch_publishes_the_witness_role() {
-        let config = node_with_roles(vec![
-            crate::config::NodeRole::Controller,
-            crate::config::NodeRole::Broker,
-            crate::config::NodeRole::Witness,
-        ]);
+        let log_dir = tempdir().expect("temp log dir");
+        let config = node_with_roles(
+            log_dir.path(),
+            vec![
+                crate::config::NodeRole::Controller,
+                crate::config::NodeRole::Broker,
+                crate::config::NodeRole::Witness,
+            ],
+        );
 
         assert!(
             broker_registration_batch(&config)
@@ -6542,10 +6552,14 @@ protocol = "Plaintext"
 
     #[test]
     fn a_plain_broker_registration_batch_clears_the_witness_role() {
-        let config = node_with_roles(vec![
-            crate::config::NodeRole::Controller,
-            crate::config::NodeRole::Broker,
-        ]);
+        let log_dir = tempdir().expect("temp log dir");
+        let config = node_with_roles(
+            log_dir.path(),
+            vec![
+                crate::config::NodeRole::Controller,
+                crate::config::NodeRole::Broker,
+            ],
+        );
 
         assert!(
             broker_registration_batch(&config)

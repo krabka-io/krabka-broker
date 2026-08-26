@@ -2573,7 +2573,7 @@ mod tests {
     fn only_witnesses_alive_is_unavailable_whatever_the_unclean_flag_says() {
         // Leader 1 and data replica 3 are dead. Only witness 2 is alive, and
         // it holds every committed record. Electing 3 would discard them, so
-        // the answer is Unavailable — never Recover, never an unclean Elect.
+        // the answer is Unavailable: never Recover, never an unclean Elect.
         let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
         let cases: [(RecoveryStrategy, bool); 4] = [
             (RecoveryStrategy::None, false),
@@ -2657,90 +2657,104 @@ mod tests {
         );
     }
 
+    /// One row of the no-witness regression table.
+    struct FailoverCase<'a> {
+        pr: &'a PartitionRecord,
+        dead: u64,
+        alive: &'a [u64],
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+        expected: super::FailoverDecision,
+    }
+
     #[test]
     fn an_empty_witness_set_leaves_every_failover_decision_unchanged() {
         // The regression guard for non-stretch clusters: each case is decided
         // with no witnesses, and the expected value is the pre-witness answer.
         let clean = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
         let empty_isr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
-        let cases: [(
-            &PartitionRecord,
-            u64,
-            &[u64],
-            RecoveryStrategy,
-            bool,
-            super::FailoverDecision,
-        ); 6] = [
+        let cases = [
             // Clean election picks the first alive ISR member.
-            (
-                &clean,
-                1,
-                &[2, 3],
-                RecoveryStrategy::None,
-                false,
-                super::FailoverDecision::Elect {
+            FailoverCase {
+                pr: &clean,
+                dead: 1,
+                alive: &[2, 3],
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: false,
+                expected: super::FailoverDecision::Elect {
                     leader: NodeId(2),
                     isr: vec![NodeId(2), NodeId(3)],
                     unclean: false,
                 },
-            ),
+            },
             // Non-leader death shrinks the ISR and keeps the leader.
-            (
-                &clean,
-                3,
-                &[1, 2],
-                RecoveryStrategy::None,
-                false,
-                super::FailoverDecision::ShrinkIsr {
+            FailoverCase {
+                pr: &clean,
+                dead: 3,
+                alive: &[1, 2],
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: false,
+                expected: super::FailoverDecision::ShrinkIsr {
                     isr: vec![NodeId(1), NodeId(2)],
                 },
-            ),
+            },
             // Empty ISR with unclean off stays unavailable.
-            (
-                &empty_isr,
-                1,
-                &[2, 3],
-                RecoveryStrategy::None,
-                false,
-                super::FailoverDecision::Unavailable,
-            ),
+            FailoverCase {
+                pr: &empty_isr,
+                dead: 1,
+                alive: &[2, 3],
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: false,
+                expected: super::FailoverDecision::Unavailable,
+            },
             // Empty ISR with unclean on picks the first alive replica.
-            (
-                &empty_isr,
-                1,
-                &[2, 3],
-                RecoveryStrategy::None,
-                true,
-                super::FailoverDecision::Elect {
+            FailoverCase {
+                pr: &empty_isr,
+                dead: 1,
+                alive: &[2, 3],
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: true,
+                expected: super::FailoverDecision::Elect {
                     leader: NodeId(2),
                     isr: vec![NodeId(2)],
                     unclean: true,
                 },
-            ),
+            },
             // Empty ISR with an offset-aware strategy defers to the URM.
-            (
-                &empty_isr,
-                1,
-                &[2, 3],
-                RecoveryStrategy::Balanced,
-                false,
-                super::FailoverDecision::Recover(RecoveryStrategy::Balanced),
-            ),
+            FailoverCase {
+                pr: &empty_isr,
+                dead: 1,
+                alive: &[2, 3],
+                strategy: RecoveryStrategy::Balanced,
+                unclean_enabled: false,
+                expected: super::FailoverDecision::Recover(RecoveryStrategy::Balanced),
+            },
             // An unrelated broker changes nothing.
-            (
-                &clean,
-                9,
-                &[1, 2, 3],
-                RecoveryStrategy::None,
-                false,
-                super::FailoverDecision::NoChange,
-            ),
+            FailoverCase {
+                pr: &clean,
+                dead: 9,
+                alive: &[1, 2, 3],
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: false,
+                expected: super::FailoverDecision::NoChange,
+            },
         ];
-        for (pr, dead, alive, strategy, unclean_enabled, expected) in cases {
-            let decision = decide(pr, dead, alive, &[], strategy, unclean_enabled);
+        for case in cases {
+            let decision = decide(
+                case.pr,
+                case.dead,
+                case.alive,
+                &[],
+                case.strategy,
+                case.unclean_enabled,
+            );
             assert!(
-                decision == expected,
-                "dead {dead}, alive {alive:?}, strategy {strategy:?}, unclean {unclean_enabled}"
+                decision == case.expected,
+                "dead {}, alive {:?}, strategy {:?}, unclean {}",
+                case.dead,
+                case.alive,
+                case.strategy,
+                case.unclean_enabled
             );
         }
     }

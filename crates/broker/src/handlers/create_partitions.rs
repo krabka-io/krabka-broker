@@ -669,7 +669,7 @@ mod tests {
         for r in &out {
             assert!(r.len() == 2, "each replica list must be rf=2");
             for b in r {
-                assert!(brokers.contains(b));
+                assert!(brokers.iter().any(|known| known.node_id == *b));
             }
         }
     }
