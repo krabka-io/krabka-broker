@@ -104,23 +104,46 @@ pub fn site_loss_survivors(rf: i64, sites: i64) -> i64 {
 /// `true` if `min_insync` keeps `acks=all` writes durable and available through
 /// the loss of any one site.
 ///
-/// Two bounds define the safe range. The lower bound of 2 makes an
-/// acknowledged write durable on more than one broker, so the loss of one
-/// broker cannot lose that write. The upper bound is
-/// [`site_loss_survivors`], so enough in-sync replicas remain after a site
-/// loss and the leader keeps accepting `acks=all` writes.
+/// Two bounds define the safe range, and both are stated against the largest
+/// count of replicas that one site holds, which is `ceil(rf / sites)` under
+/// the one-replica-per-site-in-turn placement.
 ///
-/// For three replicas on three sites the two bounds meet, and 2 is the only
-/// safe value. For three replicas on two sites no value is safe: a site loss
-/// can leave one replica, and one replica is under the durable lower bound.
-/// A witness site closes that gap. It holds a replica of its own, so the
-/// replicas spread one per site over three sites again.
+/// The **lower** bound is that no single site holds `min_insync` replicas.
+/// `min.insync.replicas` is a count and not a placement: the leader accepts an
+/// `acks=all` write as soon as that many in-sync replicas hold it, wherever
+/// they sit. If one site can hold `min_insync` of them, then the in-sync set
+/// can shrink to that one site, and the leader then acknowledges a write that
+/// only that site holds. The loss of that site loses an acknowledged write,
+/// and the surviving sites still hold the voter majority, so they elect a
+/// leader that never saw it. The shrink needs no second site loss to get
+/// there: one site down and one lagging replica is enough, and a witness on a
+/// cheap link is the replica most likely to lag.
+///
+/// The **upper** bound is [`site_loss_survivors`], so enough in-sync replicas
+/// remain after a site loss and the leader keeps accepting `acks=all` writes.
+///
+/// The lower bound implies `min_insync >= 2`, because one site always holds at
+/// least one replica. It is therefore the whole of the durability condition,
+/// and 2 is not stated separately.
+///
+/// For three replicas on three sites each site holds one, so the bounds are
+/// `min_insync > 1` and `min_insync <= 2`: they meet, and 2 is the only safe
+/// value. Four replicas on three sites have no safe value at all, because one
+/// site holds two of them: the bounds become `min_insync > 2` and
+/// `min_insync <= 2`. Three replicas on two sites have none either, for the
+/// same reason. A witness site closes that gap. It holds a replica of its own,
+/// so three replicas spread one per site over three sites again.
 #[requires(rf@ >= 1 && rf@ <= 1024)]
 #[requires(sites@ >= 1 && sites@ <= 1024)]
-#[ensures(result == (min_insync@ >= 2 && min_insync@ <= rf@ - (rf@ + sites@ - 1) / sites@))]
+#[ensures(result == (min_insync@ > (rf@ + sites@ - 1) / sites@
+    && min_insync@ <= rf@ - (rf@ + sites@ - 1) / sites@))]
 #[must_use]
 pub fn min_insync_is_site_loss_safe(rf: i64, sites: i64, min_insync: i64) -> bool {
-    min_insync >= 2 && min_insync <= site_loss_survivors(rf, sites)
+    let survivors = site_loss_survivors(rf, sites);
+    // What the largest site holds. `site_loss_survivors` is `rf` less that
+    // count, so this recovers it without restating the ceiling.
+    let largest_site = rf - survivors;
+    min_insync > largest_site && min_insync <= survivors
 }
 
 /// `true` if the surviving `KRaft` voters still form a strict majority after
@@ -193,10 +216,10 @@ mod tests {
 
     use super::*;
 
-    /// Places `rf` replicas one per site in turn, then reports the count that
-    /// remains after the loss of the site that holds the most replicas. This
-    /// is an independent implementation, and not the ceiling formula again.
-    fn round_robin_oracle(rf: i64, sites: i64) -> i64 {
+    /// Places `rf` replicas one per site in turn and reports what each site
+    /// holds. This is an independent implementation, and not the ceiling
+    /// formula again. Both oracles below read it.
+    fn round_robin_buckets(rf: i64, sites: i64) -> Vec<i64> {
         let site_count = usize::try_from(sites).expect("site count fits in usize");
         let mut buckets: Vec<i64> = iter::repeat_n(0, site_count).collect();
         let mut next = 0usize;
@@ -206,8 +229,21 @@ mod tests {
             next = (next + 1) % site_count;
             placed += 1;
         }
-        let largest = buckets.iter().copied().max().expect("at least one site");
-        rf - largest
+        buckets
+    }
+
+    /// What the site holding the most replicas holds.
+    fn largest_site_oracle(rf: i64, sites: i64) -> i64 {
+        round_robin_buckets(rf, sites)
+            .into_iter()
+            .max()
+            .expect("at least one site")
+    }
+
+    /// The count that remains after the loss of the site that holds the most
+    /// replicas.
+    fn round_robin_oracle(rf: i64, sites: i64) -> i64 {
+        rf - largest_site_oracle(rf, sites)
     }
 
     /// Sums the slice and checks every site with an iterator chain.
@@ -231,10 +267,16 @@ mod tests {
             sites in 1i64..8,
             min_insync in 0i64..64,
         ) {
-            let survivors = round_robin_oracle(rf, sites);
+            let buckets = round_robin_buckets(rf, sites);
+            let survivors = rf - buckets.iter().copied().max().expect("a site");
+            // Stated as the two properties themselves rather than as the
+            // bounds: no single site can hold a full in-sync set, and a site
+            // loss leaves one.
+            let one_site_could_hold_the_whole_isr =
+                buckets.iter().any(|&held| held >= min_insync);
             prop_assert_eq!(
                 min_insync_is_site_loss_safe(rf, sites, min_insync),
-                min_insync >= 2 && min_insync <= survivors
+                !one_site_could_hold_the_whole_isr && min_insync <= survivors
             );
         }
 
@@ -272,6 +314,59 @@ mod tests {
         ] {
             check!(
                 min_insync_is_site_loss_safe(3, 3, min_insync) == expected,
+                "case {name}"
+            );
+        }
+    }
+
+    /// A replication factor that puts two replicas in one site has no safe
+    /// `min.insync.replicas` over three sites, and the reason is the lower
+    /// bound rather than the upper one.
+    ///
+    /// Four replicas over three sites land 2-1-1. A `min.insync.replicas` of 2
+    /// is then satisfiable inside the two-replica site alone, so that site can
+    /// hold every copy of an acknowledged write. Raising it to 3 fixes the
+    /// placement problem and breaks availability instead: the loss of the
+    /// two-replica site leaves 2. Nothing in between exists, so the profile
+    /// takes one replica per site and no more.
+    #[test]
+    fn a_site_holding_two_replicas_has_no_safe_min_insync() {
+        for (name, rf, sites, min_insync, expected) in [
+            (
+                "a whole in-sync set fits in the doubled site",
+                4,
+                3,
+                2,
+                false,
+            ),
+            (
+                "raising it past the doubled site loses a site loss",
+                4,
+                3,
+                3,
+                false,
+            ),
+            ("three over two sites is the same shape", 3, 2, 2, false),
+            // Six over three sites is 2-2-2: three replicas cannot share a
+            // site, and a site loss still leaves four.
+            (
+                "six over three sites has room for both bounds",
+                6,
+                3,
+                3,
+                true,
+            ),
+            ("and one more, still inside the survivors", 6, 3, 4, true),
+            (
+                "but not five, which a site loss cannot leave",
+                6,
+                3,
+                5,
+                false,
+            ),
+        ] {
+            check!(
+                min_insync_is_site_loss_safe(rf, sites, min_insync) == expected,
                 "case {name}"
             );
         }

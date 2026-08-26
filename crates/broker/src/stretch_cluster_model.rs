@@ -1,6 +1,6 @@
 //! Exhaustive stateright model of a three-site stretch cluster with a
-//! data-bearing witness. See
-//! [`docs/KFCs/KFC-2-witness-broker-stretch-cluster.md`](../../../docs/KFCs/KFC-2-witness-broker-stretch-cluster.md).
+//! data-bearing witness. The design is
+//! [KFC-2](../../../docs/KFCs/KFC-2-witness-broker-stretch-cluster.md).
 //!
 //! A witness replicates the partition, it counts toward `min.insync.replicas`,
 //! and it votes in `KRaft`. It serves no client, and it never takes partition
@@ -66,13 +66,23 @@
 //! surviving in-sync member. Those are the states the witness rule exists for,
 //! and a quorum gate would hide them.
 //!
-//! The over-approximation is also why the model stays at one replica per site.
-//! A `replication.factor` above the site count puts two in-sync replicas in one
-//! site, and `minority_never_commits` then reports a write that commits inside
-//! that one site. The real controller cannot reach that state, because the
-//! in-sync replica set only shrinks that far after a metadata commit that the
-//! surviving site has no quorum for. The supported profile is one replica per
-//! site, so the model checks that profile and makes no claim outside it.
+//! # Why the model stays at one replica per site
+//!
+//! A `replication.factor` above the site count puts two replicas in one site,
+//! and `minority_never_commits` then reports a write that commits inside that
+//! one site. That report is not an artefact of the missing quorum gate: the
+//! in-sync replica set can shrink to those two while a real `KRaft` quorum
+//! holds, because one site down plus one lagging replica is enough and the
+//! quorum lives in the other two sites. The write is then acknowledged with
+//! every copy in one site, and the loss of that site loses it while the
+//! survivors still hold the majority that elects a leader which never saw it.
+//!
+//! Such a configuration is therefore rejected before a broker starts, and not
+//! merely left out of the model.
+//! [`crabka_verified::stretch::min_insync_is_site_loss_safe`] requires that no
+//! single site hold `min.insync.replicas` replicas, which for four replicas
+//! over three sites leaves no safe value at all. The model checks the profile
+//! that validation admits, which is one replica per site.
 //!
 //! # RED witness
 //!
@@ -462,8 +472,12 @@ impl StretchModel {
         let liveness = ControllerLivenessState::new(crabka_units::secs(60));
         let alive = self.alive(state);
         block_on(async {
-            for node in &alive {
-                liveness.record_heartbeat(node.0).await;
+            // Node-id order, not hash order, so the registry is the same on
+            // every visit to the state.
+            for broker in &self.brokers {
+                if alive.contains(&broker.node_id) {
+                    liveness.record_heartbeat(broker.node_id.0).await;
+                }
             }
         });
         liveness
@@ -600,6 +614,11 @@ impl StretchModel {
 
     /// `true` when the preferred site holds a replica that can take
     /// leadership: alive, in the in-sync replica set, and not a witness.
+    ///
+    /// The model gives each site one broker, so that replica is `replicas[0]`,
+    /// which is the one replica a Kafka preferred election considers. A site
+    /// with a second broker would need this test to name `replicas[0]`
+    /// directly.
     fn preferred_site_is_electable(&self, state: &StretchState) -> bool {
         let alive = self.alive(state);
         self.replicas.iter().any(|&replica| {

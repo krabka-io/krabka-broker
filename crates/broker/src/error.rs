@@ -229,10 +229,15 @@ pub enum BrokerError {
     },
 
     /// The stretch profile cannot survive a site loss with `acks=all` intact.
+    ///
+    /// Either bound of
+    /// [`crabka_verified::stretch::min_insync_is_site_loss_safe`] can fail
+    /// here, so the message names both.
     #[error(
         "min.insync.replicas {min_insync} is unsafe at replication factor {replication_factor} \
-         across three sites: the loss of one site would drop the ISR below min.insync.replicas \
-         and stall every acks=all write"
+         across three sites: it must exceed the replicas any one site holds, so that no single \
+         site can hold every copy of an acknowledged write, and it must not exceed the replicas \
+         a site loss leaves, so that acks=all writes keep committing after one"
     )]
     StretchMinInsyncUnsafe {
         /// The configured default `min.insync.replicas`.
