@@ -139,6 +139,108 @@ pub enum BrokerError {
     #[error("node {node_id} is not a controller but appears in its own controller_quorum_voters")]
     NonControllerIsVoter { node_id: crabka_raft::NodeId },
 
+    /// `process.roles` names `witness` without `broker`.
+    #[error(
+        "process.roles names `witness` without `broker`: a witness holds a full copy of every \
+         partition it replicates, so it must also be a broker"
+    )]
+    WitnessRequiresBrokerRole,
+
+    /// `process.roles` names `witness` without `controller`.
+    #[error(
+        "process.roles names `witness` without `controller`: a witness votes in the metadata \
+         quorum, and a node that cannot vote gives the witness site no say in a site loss"
+    )]
+    WitnessRequiresControllerRole,
+
+    /// `[stretch] sites` does not name exactly three sites.
+    #[error(
+        "stretch.sites names {count} sites: a stretch profile needs exactly three, two that \
+         serve clients and one witness site"
+    )]
+    StretchProfileNeedsThreeSites {
+        /// Number of entries the operator supplied.
+        count: usize,
+    },
+
+    /// `[stretch] sites` names the same site more than once.
+    #[error(
+        "stretch.sites names {site} more than once: three distinct sites are what makes a \
+         single-site loss survivable"
+    )]
+    StretchProfileDuplicateSite {
+        /// The repeated site name.
+        site: String,
+    },
+
+    /// `[stretch] witness_site` is not one of `[stretch] sites`.
+    #[error("stretch.witness_site {site} is not one of stretch.sites")]
+    StretchWitnessSiteUnknown {
+        /// The unrecognized site name.
+        site: String,
+    },
+
+    /// `[stretch] preferred_leader_site` is not one of `[stretch] sites`.
+    #[error("stretch.preferred_leader_site {site} is not one of stretch.sites")]
+    StretchPreferredSiteUnknown {
+        /// The unrecognized site name.
+        site: String,
+    },
+
+    /// `[stretch] preferred_leader_site` names the witness site.
+    #[error(
+        "stretch.preferred_leader_site is the witness site {site}: a witness never leads a \
+         partition, so leadership cannot prefer that site"
+    )]
+    StretchPreferredSiteIsWitness {
+        /// The witness site that leadership was pinned to.
+        site: String,
+    },
+
+    /// A stretch profile is configured but this node has no rack.
+    #[error(
+        "stretch profile is configured but rack is unset: a node in a stretch cluster must name \
+         the site it runs in"
+    )]
+    StretchRequiresRack,
+
+    /// This node's rack is not one of `[stretch] sites`.
+    #[error("rack {rack} is not one of stretch.sites")]
+    StretchRackNotInProfile {
+        /// This node's rack identifier.
+        rack: String,
+    },
+
+    /// This node runs in the witness site but does not carry the witness role.
+    #[error(
+        "this node runs in the witness site but process.roles does not name `witness`: a node \
+         in the witness site must not serve clients or lead a partition"
+    )]
+    StretchWitnessSiteNeedsWitnessRole,
+
+    /// This node carries the witness role outside the witness site.
+    #[error(
+        "process.roles names `witness` but rack {rack} is not the witness site: a witness in a \
+         site that serves clients would leave that site without a leader-eligible replica"
+    )]
+    StretchWitnessRoleOutsideWitnessSite {
+        /// This node's rack identifier.
+        rack: String,
+    },
+
+    /// The stretch profile cannot survive a site loss with `acks=all` intact.
+    #[error(
+        "min.insync.replicas {min_insync} is unsafe at replication factor {replication_factor} \
+         across three sites: the loss of one site would drop the ISR below min.insync.replicas \
+         and stall every acks=all write"
+    )]
+    StretchMinInsyncUnsafe {
+        /// The configured default `min.insync.replicas`.
+        min_insync: i32,
+        /// The replication factor the check ran against.
+        replication_factor: i16,
+    },
+
     /// A SASL listener is declared but `enabled_sasl_mechanisms` is empty.
     #[error("SASL listener {name} declared but enabled_sasl_mechanisms is empty")]
     SaslListenerNoMechanisms { name: String },

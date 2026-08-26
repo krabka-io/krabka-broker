@@ -33,10 +33,55 @@ pub const DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT: Time = secs(5);
 
 /// `KRaft` `process.roles`. A node is a metadata-quorum `Controller`, a data
 /// `Broker`, or both. Default is the combined set `[Controller, Broker]`.
+///
+/// [`Witness`][NodeRole::Witness] is a modifier on that set, not a
+/// replacement for it. A witness node lists all three roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeRole {
+    /// The node votes in the `__cluster_metadata` quorum.
     Controller,
+    /// The node hosts partition replicas and registers as a broker.
     Broker,
+    /// The node is a data-bearing witness.
+    ///
+    /// A witness keeps a full copy of every partition it replicates, so it
+    /// counts toward `min.insync.replicas` and an `acks=all` write commits
+    /// through it. It serves no client traffic and never leads a partition.
+    /// The role exists for a stretch cluster with two full sites plus a
+    /// cheap third site: the third site holds the data that makes any
+    /// single-site loss survivable, without the hardware that serving
+    /// clients would need.
+    ///
+    /// The role is a modifier. A witness must also carry
+    /// [`Broker`][NodeRole::Broker], because it holds replicas, and
+    /// [`Controller`][NodeRole::Controller], because it votes in the
+    /// metadata quorum. [`BrokerConfig::validate`] rejects the other
+    /// combinations.
+    Witness,
+}
+
+/// Number of sites a [`StretchProfile`] names: two data sites and one
+/// witness site.
+const STRETCH_SITE_COUNT: i64 = 3;
+
+/// A three-site stretch deployment: two sites that serve clients and one
+/// witness site that only replicates data and votes.
+///
+/// The profile is the same on every node of the cluster. Each node finds its
+/// own place in it through [`BrokerConfig::rack`], which must name one of
+/// [`sites`][StretchProfile::sites].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StretchProfile {
+    /// The three site names, in no particular order. Each name is a
+    /// [`BrokerConfig::rack`] value that some node of the cluster reports.
+    pub sites: Vec<String>,
+    /// The site that holds the witness nodes. Nodes there carry
+    /// [`NodeRole::Witness`] and lead no partition.
+    pub witness_site: String,
+    /// The site that partition leadership prefers while both data sites are
+    /// up. It must not be [`witness_site`][StretchProfile::witness_site],
+    /// because a witness never leads.
+    pub preferred_leader_site: String,
 }
 
 /// A single named listener: the port the broker binds and the address it
@@ -497,6 +542,13 @@ pub struct BrokerConfig {
     /// `FetchResponse.preferred_read_replica` for rack-aware consumers.
     /// Default `Leader` (never redirect).
     pub replica_selector: crate::replica_selector::ReplicaSelectorKind,
+
+    /// The three-site stretch deployment this node belongs to. `None`
+    /// (default) is an ordinary, non-stretched cluster. When it is `Some`,
+    /// [`rack`][Self::rack] must name one of the profile's sites, and
+    /// [`validate`][Self::validate] checks that the roles of this node agree
+    /// with that site.
+    pub stretch: Option<StretchProfile>,
 
     // ── Auth / listener registry ─────────────────────────────────────────
     /// Named listener definitions. When this list is empty,
@@ -1214,6 +1266,7 @@ impl BrokerConfig {
             cluster_id: None,
             rack: None,
             replica_selector: crate::replica_selector::ReplicaSelectorKind::Leader,
+            stretch: None,
             listeners: vec![],
             controller_listener_protocol: crabka_security::ListenerProtocol::Plaintext,
             inter_broker_listener_name: "PLAINTEXT".to_string(),
@@ -1319,6 +1372,91 @@ impl BrokerConfig {
         Ok(())
     }
 
+    /// Checks that [`NodeRole::Witness`] comes with the roles it depends on.
+    fn validate_witness_roles(&self) -> Result<(), BrokerError> {
+        if self.is_witness() {
+            if !self.is_broker() {
+                return Err(BrokerError::WitnessRequiresBrokerRole);
+            }
+            if !self.is_controller() {
+                return Err(BrokerError::WitnessRequiresControllerRole);
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks the three-site stretch profile against the rest of the config.
+    ///
+    /// The profile describes the whole cluster, so every node validates the
+    /// same site list. On top of that, each node checks its own place in the
+    /// profile: its [`rack`][Self::rack] must name one of the sites, and its
+    /// roles must agree with the site it names.
+    ///
+    /// The durability check reads the replication factor from
+    /// [`offsets_topic_replication_factor`][Self::offsets_topic_replication_factor].
+    /// The broker has no `default.replication.factor` knob, and that field is
+    /// the broker-wide replication factor it applies to the topics it creates
+    /// itself.
+    fn validate_stretch(&self) -> Result<(), BrokerError> {
+        let Some(profile) = self.stretch.as_ref() else {
+            return Ok(());
+        };
+
+        let site_count = i64::try_from(profile.sites.len()).unwrap_or(i64::MAX);
+        if site_count != STRETCH_SITE_COUNT {
+            return Err(BrokerError::StretchProfileNeedsThreeSites {
+                count: profile.sites.len(),
+            });
+        }
+        for (i, site) in profile.sites.iter().enumerate() {
+            if profile.sites[..i].contains(site) {
+                return Err(BrokerError::StretchProfileDuplicateSite {
+                    site: site.clone(),
+                });
+            }
+        }
+        if !profile.sites.contains(&profile.witness_site) {
+            return Err(BrokerError::StretchWitnessSiteUnknown {
+                site: profile.witness_site.clone(),
+            });
+        }
+        if !profile.sites.contains(&profile.preferred_leader_site) {
+            return Err(BrokerError::StretchPreferredSiteUnknown {
+                site: profile.preferred_leader_site.clone(),
+            });
+        }
+        if profile.preferred_leader_site == profile.witness_site {
+            return Err(BrokerError::StretchPreferredSiteIsWitness {
+                site: profile.witness_site.clone(),
+            });
+        }
+
+        let Some(rack) = self.rack.as_ref() else {
+            return Err(BrokerError::StretchRequiresRack);
+        };
+        if !profile.sites.contains(rack) {
+            return Err(BrokerError::StretchRackNotInProfile { rack: rack.clone() });
+        }
+        if *rack == profile.witness_site && !self.is_witness() {
+            return Err(BrokerError::StretchWitnessSiteNeedsWitnessRole);
+        }
+        if self.is_witness() && *rack != profile.witness_site {
+            return Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() });
+        }
+
+        if !crabka_verified::stretch::min_insync_is_site_loss_safe(
+            i64::from(self.offsets_topic_replication_factor),
+            site_count,
+            i64::from(self.default_min_insync_replicas),
+        ) {
+            return Err(BrokerError::StretchMinInsyncUnsafe {
+                min_insync: self.default_min_insync_replicas,
+                replication_factor: self.offsets_topic_replication_factor,
+            });
+        }
+        Ok(())
+    }
+
     /// Validates the listener and auth configuration.
     ///
     /// [`crate::Broker::start`] calls this before any side effects, so a
@@ -1331,11 +1469,13 @@ impl BrokerConfig {
     /// - Two listeners share the same `bind_addr`.
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
+    /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
         if self.roles.is_empty() {
             return Err(BrokerError::EmptyRoles);
         }
+        self.validate_witness_roles()?;
         if !self.is_controller()
             && self
                 .controller_quorum_voters
@@ -1416,6 +1556,10 @@ impl BrokerConfig {
         self.validate_outbound_sasl(inter_broker_listener)?;
         self.validate_positive_runtime_scalars()?;
         self.validate_additional_runtime_scalars()?;
+        // After the scalar checks: the stretch durability check reads the
+        // replication factor and `min.insync.replicas`, and the kernel it
+        // calls takes a positive replication factor.
+        self.validate_stretch()?;
         self.record_decompression_policy()?;
 
         if self.self_registration_backoff_min > self.self_registration_backoff_max {
@@ -2122,6 +2266,15 @@ impl BrokerConfig {
     pub fn is_controller(&self) -> bool {
         self.roles.contains(&NodeRole::Controller)
     }
+
+    /// True when this node is a data-bearing witness.
+    ///
+    /// A witness replicates partition data and votes, but serves no client
+    /// traffic and never leads a partition. See [`NodeRole::Witness`].
+    #[must_use]
+    pub fn is_witness(&self) -> bool {
+        self.roles.contains(&NodeRole::Witness)
+    }
 }
 
 impl Default for BrokerConfig {
@@ -2253,6 +2406,7 @@ impl Default for BrokerConfig {
             cluster_id: None,
             rack: None,
             replica_selector: crate::replica_selector::ReplicaSelectorKind::Leader,
+            stretch: None,
             listeners: vec![],
             controller_listener_protocol: crabka_security::ListenerProtocol::Plaintext,
             inter_broker_listener_name: "PLAINTEXT".to_string(),
@@ -3632,5 +3786,201 @@ mod tests {
         let t = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
         assert!(t.rack == None);
         assert!(t.replica_selector == crate::replica_selector::ReplicaSelectorKind::Leader);
+    }
+
+    /// Two data sites plus a witness site, with leadership on `dc-a`.
+    fn three_site_profile() -> StretchProfile {
+        StretchProfile {
+            sites: vec![
+                "dc-a".to_string(),
+                "dc-b".to_string(),
+                "dc-w".to_string(),
+            ],
+            witness_site: "dc-w".to_string(),
+            preferred_leader_site: "dc-a".to_string(),
+        }
+    }
+
+    /// A node of [`three_site_profile`], in `rack` and with `roles`.
+    fn stretch_node(rack: &str, roles: Vec<NodeRole>) -> BrokerConfig {
+        BrokerConfig {
+            roles,
+            rack: Some(rack.to_string()),
+            stretch: Some(three_site_profile()),
+            ..BrokerConfig::default()
+        }
+    }
+
+    /// Controller + broker + witness, the only valid witness role set.
+    fn witness_roles() -> Vec<NodeRole> {
+        vec![NodeRole::Controller, NodeRole::Broker, NodeRole::Witness]
+    }
+
+    #[test]
+    fn defaults_carry_no_stretch_profile_and_no_witness_role() {
+        let d = BrokerConfig::default();
+        check!(d.stretch == None);
+        check!(!d.is_witness());
+        check!(d.roles == vec![NodeRole::Controller, NodeRole::Broker]);
+
+        let t = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        check!(t.stretch == None);
+        check!(!t.is_witness());
+        check!(t.roles == vec![NodeRole::Controller, NodeRole::Broker]);
+    }
+
+    #[test]
+    fn witness_node_is_also_a_broker_and_a_controller() {
+        let c = BrokerConfig {
+            roles: witness_roles(),
+            ..BrokerConfig::default()
+        };
+        check!(c.is_witness());
+        check!(c.is_broker());
+        check!(c.is_controller());
+    }
+
+    #[test]
+    fn witness_role_requires_the_broker_role() {
+        let c = BrokerConfig {
+            roles: vec![NodeRole::Controller, NodeRole::Witness],
+            ..BrokerConfig::default()
+        };
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::WitnessRequiresBrokerRole)
+        ));
+    }
+
+    #[test]
+    fn witness_role_requires_the_controller_role() {
+        let c = BrokerConfig {
+            roles: vec![NodeRole::Broker, NodeRole::Witness],
+            ..BrokerConfig::default()
+        };
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::WitnessRequiresControllerRole)
+        ));
+    }
+
+    #[test]
+    fn a_three_site_stretch_profile_validates() {
+        let data = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        data.validate().expect("a data-site node of a valid profile");
+
+        let witness = stretch_node("dc-w", witness_roles());
+        witness
+            .validate()
+            .expect("a witness-site node of a valid profile");
+    }
+
+    #[test]
+    fn stretch_profile_needs_exactly_three_sites() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        let profile = c.stretch.as_mut().expect("profile");
+        profile.sites = vec!["dc-a".to_string(), "dc-w".to_string()];
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchProfileNeedsThreeSites { count: 2 })
+        ));
+    }
+
+    #[test]
+    fn stretch_profile_rejects_a_repeated_site() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        let profile = c.stretch.as_mut().expect("profile");
+        profile.sites = vec![
+            "dc-a".to_string(),
+            "dc-a".to_string(),
+            "dc-w".to_string(),
+        ];
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchProfileDuplicateSite { site }) if site == "dc-a"
+        ));
+    }
+
+    #[test]
+    fn stretch_witness_site_must_name_one_of_the_sites() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        c.stretch.as_mut().expect("profile").witness_site = "dc-elsewhere".to_string();
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchWitnessSiteUnknown { site }) if site == "dc-elsewhere"
+        ));
+    }
+
+    #[test]
+    fn stretch_preferred_leader_site_must_name_one_of_the_sites() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-elsewhere".to_string();
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchPreferredSiteUnknown { site }) if site == "dc-elsewhere"
+        ));
+    }
+
+    #[test]
+    fn stretch_preferred_leader_site_must_not_be_the_witness_site() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-w".to_string();
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchPreferredSiteIsWitness { site }) if site == "dc-w"
+        ));
+    }
+
+    #[test]
+    fn stretch_profile_requires_a_rack() {
+        let c = BrokerConfig {
+            stretch: Some(three_site_profile()),
+            ..BrokerConfig::default()
+        };
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchRequiresRack)
+        ));
+    }
+
+    #[test]
+    fn stretch_rack_must_name_one_of_the_sites() {
+        let c = stretch_node("dc-elsewhere", vec![NodeRole::Controller, NodeRole::Broker]);
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchRackNotInProfile { rack }) if rack == "dc-elsewhere"
+        ));
+    }
+
+    #[test]
+    fn a_node_in_the_witness_site_needs_the_witness_role() {
+        let c = stretch_node("dc-w", vec![NodeRole::Controller, NodeRole::Broker]);
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchWitnessSiteNeedsWitnessRole)
+        ));
+    }
+
+    #[test]
+    fn the_witness_role_is_rejected_outside_the_witness_site() {
+        let c = stretch_node("dc-a", witness_roles());
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack }) if rack == "dc-a"
+        ));
+    }
+
+    #[test]
+    fn stretch_rejects_a_min_insync_that_a_site_loss_would_break() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        c.offsets_topic_replication_factor = 3;
+        c.default_min_insync_replicas = 3;
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::StretchMinInsyncUnsafe {
+                min_insync: 3,
+                replication_factor: 3
+            })
+        ));
     }
 }

@@ -226,6 +226,7 @@ mod replicator;
 mod replicator_supervisor;
 pub mod share_coordinator;
 pub mod share_partition;
+pub(crate) mod site_placement;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,

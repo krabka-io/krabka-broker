@@ -12,6 +12,13 @@
 //! crate that needs a 3-broker cluster declares `mod support;` and calls
 //! `start_n_node_with_retry`.
 //!
+//! # Fault injection
+//!
+//! [`relay`] is a test-only TCP forwarder. Point a broker at a relay instead of
+//! at its peer and the test can cut the link — including the connections that
+//! are already open — without stopping either node, which is the only way to
+//! produce a live minority.
+//!
 //! Cargo treats `tests/support/mod.rs` (rather than `tests/support.rs`) as
 //! a non-binary submodule, so it does not compile the file as its own test
 //! crate.
@@ -27,6 +34,10 @@ use assert2::assert;
 use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
 use crabka_client_core::Client;
 use tempfile::TempDir;
+
+// A cut-and-heal TCP relay for partition tests. Declared here so every suite
+// that pulls in `support` can reach it as `support::relay`.
+pub mod relay;
 
 pub struct InProcess {
     pub broker: BrokerHandle,
