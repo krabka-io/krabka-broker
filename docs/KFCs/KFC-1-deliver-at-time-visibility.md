@@ -190,6 +190,22 @@ A topic with `delivery.mode=immediate` pays nothing.
 
 The watermark call returns the log end offset before it does any work. It reads no batch header, it walks no segment, and it takes no extra lock. So that cap never limits a fetch. The fetch path reaches `sendfile` on the same branch it reaches today. Zero-copy reads and byte-exact record passthrough are untouched for every topic that does not ask for scheduled delivery.
 
+### Cancellation and Update Are Not in This KFC
+
+A scheduled record cannot be cancelled, and its delivery time cannot be changed. Once a producer appends it, it will be delivered. This is the first question an operator asks about scheduled delivery, so it is worth saying why the answer is no rather than leaving it to be discovered.
+
+The log is append-only, so nothing rewrites a record in place. That much is ordinary Kafka. What is specific to this design is that four separate mechanisms now protect a pending record from disappearing: time retention spares it, the size-retention guard spares it, `DeleteRecords` is capped at the delivery watermark, and `cleanup.policy=compact` is rejected outright. Each one exists to stop an undelivered record being lost by accident. Cancellation is that same removal performed on purpose, and the broker has no way to tell the two apart. The invariant that makes scheduled delivery trustworthy is the same invariant that forbids taking a record back.
+
+It is also not a small addition, because three properties cannot hold together: no client change, zero-copy passthrough, and broker-enforced cancellation. Removing one record from a batch means re-encoding the batch, which abandons the `sendfile` path this design is built on. Kafka's own precedent for "durable, but this must not be delivered" is the aborted transaction, and it takes the third route: the broker ships the bytes untouched and returns an `aborted_transactions` list, and the *consumer* drops the records. A cancellation list would work the same way and would need the same thing — a client that knows to read it. The central claim of this KFC is that a stock client works unchanged, so that route is closed to it here.
+
+Two patterns cover the need today.
+
+**Short-hop rescheduling** is the better one. Schedule in bounded hops rather than one long delay: deliver in an hour, and on receipt decide whether to produce the next hop. Cancelling is not producing the next hop, and updating is producing a different one. It costs write amplification proportional to the delay divided by the hop, and it needs a consumer to be running. In exchange it gives exact cancel and update semantics with no broker change, and it keeps the pending span small, which is the same thing that keeps [the disk bound](#what-bounds-the-pending-span) low.
+
+**Side-channel suppression** fits when hops do not. The producer stamps a schedule id in a record header, and the consumer checks a compacted cancellation topic keyed by that id before it acts. The record is still stored and still delivered, so this buys nothing back in disk or in delivery work; it only stops the effect.
+
+A broker-side mechanism is possible, and it is a separate KFC rather than an extension of this one. It needs a cancellation record with its own durability and replication story, a rule for what a cancellation means when it arrives after activation, and then either a protocol addition that a client must opt into or batch-granularity suppression that gives up passthrough. Those are design decisions with their own rejected alternatives, and folding them in here would bury them.
+
 ## Compatibility, Deprecation, and Migration Plan
 
 There is no wire change, no new API key, no new error code, and no client change. A stock JVM producer sets a timestamp it can already set. A stock JVM consumer polls a topic that behaves like any other topic with a slower leader.
