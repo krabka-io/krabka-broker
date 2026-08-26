@@ -8,7 +8,9 @@
 //!
 //! Delivery-state codes match Kafka's on-the-wire values: `DS_AVAILABLE=0`,
 //! `DS_ACQUIRED=1`, `DS_ACKNOWLEDGED=2`, and `DS_ARCHIVED=4`. `Acquired` is
-//! transient, and the machine persists it back as `Available(0)`.
+//! transient, and the machine persists it back as `Available(0)`. `Deferred`
+//! is KFC-1's refinement of `Available` and persists as `Available(0)` too, so
+//! scheduled delivery adds no code to the wire encoding.
 
 use std::time::{Duration, Instant};
 
@@ -34,6 +36,13 @@ pub enum RecordState {
     Acquired,
     Acknowledged,
     Archived,
+    /// KFC-1: `Available`, but the record's delivery time has not arrived.
+    ///
+    /// It has no delivery-state code of its own. The share coordinator stores
+    /// it as `Available`, so a coordinator that reloads after a leader change
+    /// re-derives the deferral against its own clock instead of inheriting the
+    /// old leader's reading of a clock it cannot check.
+    Deferred,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -125,6 +134,12 @@ impl AcquisitionState {
     /// and advances `end_offset`. `max_inflight` caps how many records can be
     /// in flight at once. The machine approximates that cap as a record
     /// count.
+    ///
+    /// A `Deferred` record is not `Available`, so a window that holds only
+    /// records the schedule has not released yet does not block this method.
+    /// That is what lets a share group reach a due record sitting behind a
+    /// waiting one. The caller bounds how far it goes, because a deferred run
+    /// is not in flight and so does not spend the in-flight budget itself.
     pub fn materialize(&mut self, hwm: Offset, max_inflight: i32) {
         let has_available = self
             .batches
@@ -188,6 +203,65 @@ impl AcquisitionState {
         }
     }
 
+    /// Holds back an offset range whose KFC-1 delivery time has not arrived,
+    /// so acquisition steps over it and reaches the due records behind it.
+    ///
+    /// Only an `Available` record defers. A record already handed out, or
+    /// already terminal, is past the point where the schedule can hold it
+    /// back, and a lock or an acknowledgement outranks a delivery time.
+    ///
+    /// This marks nothing dirty. `Deferred` persists as `Available`, so the
+    /// projection the share coordinator writes is byte-identical either way,
+    /// and a derived mark must never cost a coordinator write.
+    pub fn defer_internal(&mut self, first: Offset, last: Offset) {
+        if first > last {
+            return;
+        }
+        self.split_at_offset(first);
+        self.split_at_offset(last + 1);
+        for batch in &mut self.batches {
+            if batch.last_offset < first || batch.first_offset > last {
+                continue;
+            }
+            if batch.state == RecordState::Available {
+                batch.state = RecordState::Deferred;
+            }
+        }
+        // Unconditional: a split that retagged nothing must not leave the
+        // window fragmented.
+        self.coalesce();
+    }
+
+    /// Returns every `Deferred` record to `Available`.
+    ///
+    /// This is the only route out of `Deferred`. The `ShareFetch` handler
+    /// calls it at the start of each acquire pass and then re-derives the
+    /// deferral from the log and the clock, so a deferral is never a cached
+    /// decision that a later clock reading would overturn, and a batch becomes
+    /// acquirable on the first pass after it activates.
+    pub fn promote_deferred(&mut self) {
+        for batch in &mut self.batches {
+            if batch.state == RecordState::Deferred {
+                batch.state = RecordState::Available;
+            }
+        }
+        self.coalesce();
+    }
+
+    /// Count of offsets in the live window that the schedule holds back.
+    ///
+    /// The `ShareFetch` handler reads it to bound how far past a deferred run
+    /// it materializes, so one far-future batch at the head of the window
+    /// cannot pull the whole log into the window behind it.
+    #[must_use]
+    pub fn deferred_records(&self) -> i64 {
+        self.batches
+            .iter()
+            .filter(|b| b.state == RecordState::Deferred)
+            .map(InFlightBatch::len)
+            .sum()
+    }
+
     /// Acquires up to `max_records` Available records for `member`. It walks
     /// the window from `start_offset`.
     ///
@@ -198,6 +272,11 @@ impl AcquisitionState {
     /// `acquired_by` and `lock_deadline`, adds 1 to `delivery_count`, and adds
     /// the batch to the returned ranges. The walk stops once it has acquired
     /// `max_records`.
+    ///
+    /// A `Deferred` batch is not `Available`, so the walk steps over it as it
+    /// steps over an acquired or a terminal one, and it keeps its
+    /// `delivery_count`. A record the schedule holds back is therefore never
+    /// archived as a poison pill for an attempt nobody made.
     ///
     /// This method accepts `max_bytes` for API symmetry, but approximates it
     /// here with the record count `max_records`. The handler enforces byte
@@ -525,12 +604,19 @@ impl AcquisitionState {
     /// as `Available(0)`, so a leader that crashes and reloads offers the
     /// record again. It emits Acknowledged and Archived batches with their
     /// terminal codes.
+    ///
+    /// A `Deferred` record persists as `Available(0)` for the same reason: it
+    /// is derived from a clock reading, and the next leader must re-derive it
+    /// from its own clock. The `__share_group_state` encoding therefore does
+    /// not change by one byte on a scheduled topic.
     #[must_use]
     pub fn to_persist_batches(&self) -> (Offset, i32, Vec<StateBatch>) {
         let mut out = Vec::with_capacity(self.batches.len());
         for b in &self.batches {
             let delivery_state = match b.state {
-                RecordState::Available | RecordState::Acquired => DS_AVAILABLE,
+                RecordState::Available | RecordState::Acquired | RecordState::Deferred => {
+                    DS_AVAILABLE
+                }
                 RecordState::Acknowledged => DS_ACKNOWLEDGED,
                 RecordState::Archived => DS_ARCHIVED,
             };
@@ -904,6 +990,124 @@ mod tests {
         )
         .unwrap();
         assert!(s.start_offset == 4);
+    }
+
+    #[test]
+    fn only_available_records_defer_and_promotion_is_the_way_back() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(6), 100); // [0,5] Available
+        let _ = s.acquire("m1", 2, i32::MAX, t0(), LOCK, 5); // [0,1] Acquired
+        s.acknowledge("m1", Offset(0), Offset(1), AckType::Accept, t0())
+            .unwrap(); // SPSO -> 2
+        let _ = s.acquire("m1", 1, i32::MAX, t0(), LOCK, 5); // [2,2] Acquired
+        s.archive_internal(Offset(3), Offset(3));
+
+        s.defer_internal(Offset(2), Offset(5));
+
+        // Only [4,5] was Available, so only [4,5] deferred.
+        check!(s.deferred_records() == 2);
+        check!(s.acquire("m2", 100, i32::MAX, t0(), LOCK, 5).is_empty());
+        // The acquired record is still m1's, which proves defer left it alone.
+        s.acknowledge("m1", Offset(2), Offset(2), AckType::Accept, t0())
+            .unwrap();
+
+        s.promote_deferred();
+
+        check!(s.deferred_records() == 0);
+        check!(
+            s.acquire("m2", 100, i32::MAX, t0(), LOCK, 5)
+                == vec![AcquiredRange {
+                    first: Offset(4),
+                    last: Offset(5),
+                    delivery_count: 1,
+                }]
+        );
+    }
+
+    #[test]
+    fn a_deferred_head_holds_the_spso_but_not_materialization() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(10), 2); // [0,1]
+        s.defer_internal(Offset(0), Offset(1));
+
+        // A deferred run is not Available, so the window still grows.
+        s.materialize(Offset(10), 2); // [2,3]
+
+        check!(s.end_offset == 4);
+        check!(
+            s.acquire("m1", 100, i32::MAX, t0(), LOCK, 5)
+                == vec![AcquiredRange {
+                    first: Offset(2),
+                    last: Offset(3),
+                    delivery_count: 1,
+                }]
+        );
+        // Head-of-line order does not apply to a share group, but the deferred
+        // head is not terminal, so the SPSO stays behind it.
+        check!(s.start_offset == 0);
+        check!(s.deferred_records() == 2);
+    }
+
+    #[test]
+    fn deferral_persists_as_available_and_survives_a_reload() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(4), 100);
+        s.defer_internal(Offset(2), Offset(3));
+
+        let (start, dcc, batches) = s.to_persist_batches();
+        check!(start == 0);
+        check!(dcc == 0);
+        check!(
+            batches
+                == vec![
+                    StateBatch {
+                        first_offset: Offset(0),
+                        last_offset: Offset(1),
+                        delivery_state: DS_AVAILABLE,
+                        delivery_count: 0,
+                    },
+                    StateBatch {
+                        first_offset: Offset(2),
+                        last_offset: Offset(3),
+                        delivery_state: DS_AVAILABLE,
+                        delivery_count: 0,
+                    },
+                ]
+        );
+
+        // The next leader reads back Available over the whole window and
+        // re-derives the deferral against its own clock. No offset is lost.
+        let mut reloaded = AcquisitionState::new(Offset(0));
+        reloaded.load_from(start, 0, 0, dcc, &batches);
+        check!(reloaded.start_offset == 0);
+        check!(reloaded.end_offset == 4);
+        check!(reloaded.deferred_records() == 0);
+        check!(
+            reloaded.acquire("m1", 100, i32::MAX, t0(), LOCK, 5)
+                == vec![AcquiredRange {
+                    first: Offset(0),
+                    last: Offset(3),
+                    delivery_count: 1,
+                }]
+        );
+    }
+
+    #[test]
+    fn a_deferred_record_is_not_archived_as_a_poison_pill() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(2), 100);
+        // Burn both delivery attempts, so the record is at the archive limit.
+        for _ in 0..2 {
+            let _ = s.acquire("m1", 10, i32::MAX, t0(), LOCK, 2);
+            s.expire_locks(t0() + Duration::from_secs(31));
+        }
+        s.defer_internal(Offset(0), Offset(1));
+
+        check!(s.acquire("m1", 10, i32::MAX, t0(), LOCK, 2).is_empty());
+        // Still deferred, not archived: nobody made a third attempt.
+        check!(s.deferred_records() == 2);
+        check!(s.start_offset == 0);
+        check!(s.delivery_complete_count() == 0);
     }
 
     #[test]

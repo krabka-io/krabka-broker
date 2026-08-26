@@ -10,6 +10,15 @@
 //! lock, and reads the verbatim bytes of the acquired offset range from the
 //! log.
 //!
+//! On a KFC-1 scheduled topic this path delivers out of offset order, which is
+//! the one read path that can. A classic group commits a single position per
+//! partition, so a record it steps over is unreachable for it forever, and its
+//! fetch stops at the delivery watermark. A share group tracks per-record
+//! state, so this handler keeps its window at the high watermark and instead
+//! marks the not-yet-due ranges `Deferred`, which acquisition steps over. The
+//! group then gets what is due now and picks up the rest on a later pass, in
+//! delivery-time order.
+//!
 //! When it acquired nothing and the client asked to wait, it long-polls on the
 //! partitions' append and HW-advance notifies, and runs the acquire pass once
 //! more.
@@ -56,6 +65,22 @@ type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 /// One piggybacked acknowledgement batch, that is
 /// `(first_offset, last_offset, per-offset acknowledge_types)`.
 type AckBatch = (i64, i64, Vec<i8>);
+
+/// KFC-1: the most not-yet-due records an acquire pass leaves in one share
+/// partition's window.
+///
+/// A deferred run is not in flight, so it does not spend
+/// `share_group_max_inflight_records`, and materialization walks past it to
+/// reach the due records behind it. That is the point of the whole path, and
+/// it needs a second bound of its own: without one, a single far-future batch
+/// at the head of the window pulls the rest of the log in behind it, and every
+/// later pass re-walks all of it.
+///
+/// This should be the broker config `share_delivery_max_deferred_records`. It
+/// is a constant here because the runtime settings it belongs beside live in
+/// `file_config.rs` and in
+/// [`ShareGroupConfig`](crate::coordinator::unified::share::config::ShareGroupConfig).
+const SHARE_DELIVERY_MAX_DEFERRED_RECORDS: i64 = 1_000;
 
 /// One resolved `(topic, partition)` request row. It travels through the
 /// acquire passes, so the handler assembles the response once at the end.
@@ -384,18 +409,6 @@ fn collect_ack_batches(fp: &FetchPartition) -> Vec<AckBatch> {
         .collect()
 }
 
-/// Runs one acquire pass over the pending partitions that this broker can
-/// lead.
-///
-/// When `apply_acks` is true, this function applies the piggybacked
-/// acknowledgement batches first, and sets `acknowledge_error_code`. When
-/// `is_renew_ack` is set, those batches RENEW the acquisition lock instead of
-/// acknowledging it, per KIP-932.
-///
-/// Under a `ReadCommitted` isolation level, this function clamps the
-/// materialize and read window to the partition's last stable offset, so it
-/// never acquires an uncommitted record. It returns the total number of
-/// offsets that it acquired across all partitions in this pass.
 #[derive(Clone, Copy)]
 struct AcquireContext<'a> {
     broker: &'a Broker,
@@ -408,12 +421,45 @@ struct AcquireContext<'a> {
     config: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
 }
 
+/// Pulls freshly produced records into the acquisition window, unless the
+/// schedule already holds back [`SHARE_DELIVERY_MAX_DEFERRED_RECORDS`] of them.
+///
+/// The previous pass's deferral still stands when this runs, which is why the
+/// count means something here and would read zero after `promote_deferred`. It
+/// is one pass out of date, and that only makes the bound conservative.
+fn materialize_within_deferral_bound(
+    state: &mut crate::share_partition::state::AcquisitionState,
+    upper: Offset,
+    max_inflight: i32,
+) {
+    if state.deferred_records() < SHARE_DELIVERY_MAX_DEFERRED_RECORDS {
+        state.materialize(upper, max_inflight);
+    }
+}
+
 fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
     max_records
         .saturating_sub(i32::try_from(acquired).unwrap_or(i32::MAX))
         .max(0)
 }
 
+/// Runs one acquire pass over the pending partitions that this broker can
+/// lead.
+///
+/// When `apply_acks` is true, this function applies the piggybacked
+/// acknowledgement batches first, and sets `acknowledge_error_code`. When
+/// `is_renew_ack` is set, those batches RENEW the acquisition lock instead of
+/// acknowledging it, per KIP-932.
+///
+/// Under a `ReadCommitted` isolation level, this function clamps the
+/// materialize and read window to the partition's last stable offset, so it
+/// never acquires an uncommitted record. It returns the total number of
+/// offsets that it acquired across all partitions in this pass.
+///
+/// On a KFC-1 scheduled topic it also re-derives which ranges of the window
+/// are not due yet and marks them `Deferred`, so acquisition steps over them.
+/// The derivation is thrown away and redone on each pass, so nothing outlives
+/// the clock reading that produced it.
 async fn acquire_pass(
     context: &AcquireContext<'_>,
     pending: &mut [PendingPartition],
@@ -496,17 +542,38 @@ async fn acquire_pass(
         // Under read_committed, never surface records past the last stable
         // offset: clamp the materialize/read window to `min(lso, hwm)` so no
         // record from an OPEN transaction can be acquired.
+        //
+        // KFC-1 puts no delivery watermark here on purpose. That cap is what
+        // holds a classic group to offset order, and a share group is exactly
+        // the reader that does not need it: the window runs to the high
+        // watermark and the deferral marks below hold the waiting records
+        // back one range at a time.
         let upper = if read_committed {
             part.lso().min(hwm)
         } else {
             hwm
         };
-        st.materialize(upper, cfg.max_inflight_records);
+        materialize_within_deferral_bound(&mut st, upper, cfg.max_inflight_records);
         // Transaction markers occupy log offsets but are broker metadata, not
         // user records. Archive them before acquisition so their encoded
         // coordinator epoch can never appear in a ShareFetch response.
         for (first, last) in control_batch_ranges(&part, st.start_offset, st.end_offset).await? {
             st.archive_internal(first, last);
+        }
+        // KFC-1: re-derive the deferral from the log and this partition's own
+        // clock on every pass, exactly as the control-batch ranges above are.
+        // Dropping it first is what keeps a batch that has since come due from
+        // staying held back by an older clock reading.
+        st.promote_deferred();
+        let deferred = pending_activation_ranges(
+            &part,
+            st.start_offset,
+            st.end_offset,
+            part.delivery.now_ms(),
+        )
+        .await?;
+        for (first, last) in deferred {
+            st.defer_internal(first, last);
         }
         let remaining_records = remaining_record_budget(max_records, total);
         let acquired = if remaining_records > 0 {
@@ -701,6 +768,40 @@ async fn control_batch_ranges(
     }
 }
 
+/// Returns the offset ranges in `[start, end)` that KFC-1 scheduled delivery
+/// has not released yet, as of `now_ms`.
+///
+/// A share group is the one reader that may take a due record from behind a
+/// waiting one, so it needs every gap in the window and not the leading active
+/// prefix that caps a classic `Fetch`. The ranges come back batch-aligned and
+/// coalesced, which suits an acquisition state that is offset-based and a read
+/// path that is batch-granular.
+///
+/// `now_ms` is the partition's own delivery clock, so an append, the delivery
+/// scheduler, and this pass all decide against one timeline. A topic that
+/// delivers immediately answers with nothing before it reads a batch header,
+/// so the ordinary case costs one call and no I/O.
+async fn pending_activation_ranges(
+    part: &crate::partition::Partition,
+    start: Offset,
+    end: Offset,
+    now_ms: i64,
+) -> Result<Vec<(Offset, Offset)>, BrokerError> {
+    if end <= start {
+        return Ok(Vec::new());
+    }
+    let log = part.log.clone();
+    let join = tokio::task::spawn_blocking(move || {
+        let log = log.lock().expect("log mutex poisoned");
+        log.pending_activation_ranges(start, end - 1, now_ms)
+    });
+    join.await.map_err(|join_err| {
+        BrokerError::Io(std::io::Error::other(format!(
+            "share-fetch activation scan panicked: {join_err}"
+        )))
+    })
+}
+
 /// Parks on the append and HW-advance notifies of the partitions that this
 /// broker can lead, under a single timeout. It mirrors the wait construction
 /// in `fetch::long_poll_then_reread`.
@@ -795,7 +896,8 @@ fn encode_error_response(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
+    use crabka_log::DeliveryPolicy;
     use crabka_protocol::{
         UnknownTaggedFields,
         owned::{
@@ -804,8 +906,10 @@ mod tests {
         },
         primitives::uuid::Uuid as ProtoUuid,
     };
+    use qubit_clock::{Clock, DateTime, MockTime};
 
     use super::*;
+    use crate::delivery::test_support::{NOW_MS, scheduled_partition};
 
     fn decode_response(bytes: &Bytes) -> ShareFetchResponse {
         crate::test_support::decode_response(bytes, share_fetch_response::MAX_VERSION)
@@ -959,10 +1063,76 @@ mod tests {
     }
 
     #[test]
+    fn materialization_stops_at_the_deferred_record_bound() {
+        let bound = SHARE_DELIVERY_MAX_DEFERRED_RECORDS;
+        let inflight = i32::try_from(bound).expect("the bound fits an inflight budget");
+        for (deferred, expected_end) in [(bound - 1, bound + 9), (bound, bound)] {
+            let mut state = crate::share_partition::state::AcquisitionState::new(Offset(0));
+            state.materialize(Offset(deferred), inflight);
+            state.defer_internal(Offset(0), Offset(deferred - 1));
+            assert!(state.deferred_records() == deferred);
+
+            materialize_within_deferral_bound(&mut state, Offset(deferred + 10), 10);
+
+            assert!(
+                state.end_offset == Offset(expected_end),
+                "deferred={deferred}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_batches_that_are_not_due_are_reported_as_pending() {
+        // Three two-record batches: due, not due, due. The middle one is the
+        // case a classic Fetch cannot serve around.
+        let activations = [NOW_MS - 60_000, NOW_MS + 60_000, NOW_MS - 60_000];
+        let clock: Arc<dyn Clock> = Arc::new(
+            MockTime::at(DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"))
+                .clock(),
+        );
+
+        let dir = tempfile::tempdir().expect("a log root");
+        let scheduled = scheduled_partition(
+            &dir,
+            "scheduled",
+            DeliveryPolicy::Scheduled,
+            &activations,
+            0,
+            &clock,
+        );
+        let ranges = pending_activation_ranges(&scheduled, Offset(0), Offset(6), NOW_MS)
+            .await
+            .expect("scan the schedule");
+        assert!(ranges == vec![(Offset(2), Offset(3))]);
+
+        // The window bound is exclusive, so a window that stops below the
+        // waiting batch reports nothing.
+        let clipped = pending_activation_ranges(&scheduled, Offset(0), Offset(2), NOW_MS)
+            .await
+            .expect("scan the schedule");
+        assert!(clipped == Vec::new());
+
+        // An immediate topic answers with nothing whatever its timestamps say.
+        let immediate_dir = tempfile::tempdir().expect("a log root");
+        let immediate = scheduled_partition(
+            &immediate_dir,
+            "immediate",
+            DeliveryPolicy::Immediate,
+            &activations,
+            0,
+            &clock,
+        );
+        let none = pending_activation_ranges(&immediate, Offset(0), Offset(6), NOW_MS)
+            .await
+            .expect("scan the schedule");
+        assert!(none == Vec::new());
+    }
+
+    #[test]
     fn remaining_record_budget_is_request_wide_and_saturating() {
-        assert_eq!(remaining_record_budget(500, 300), 200);
-        assert_eq!(remaining_record_budget(500, 500), 0);
-        assert_eq!(remaining_record_budget(500, i64::MAX), 0);
+        check!(remaining_record_budget(500, 300) == 200);
+        check!(remaining_record_budget(500, 500) == 0);
+        check!(remaining_record_budget(500, i64::MAX) == 0);
     }
 
     #[test]
