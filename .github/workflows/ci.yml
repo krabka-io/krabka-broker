@@ -167,7 +167,14 @@ jobs:
               if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
                 targets="$(all)"
               else
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" | while read -r f; do
+                # `rdeps` takes a target set, so every path here must be a
+                # target Bazel knows. A crate README is not one: no rule globs
+                # it and no crate pulls one in with `include_str!`. Feeding it
+                # to `set(...)` fails the whole query, so a documentation-only
+                # change would kill the suite selection rather than select
+                # nothing.
+                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
+                  grep -vE '\.md$' | while read -r f; do
                   [ -e "${f}" ] && printf '%s\n' "${f}"
                 done)
                 if [ "${#files[@]}" -eq 0 ]; then
