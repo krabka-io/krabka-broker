@@ -140,7 +140,9 @@ Time retention closes itself. It compares a segment's maximum timestamp against 
 
 Size retention does not read timestamps, so it needs a guard. The guard stops size retention from deleting a segment that holds an undelivered record. An operator should know the consequence. A partition with a long schedule can hold more bytes than `retention.bytes`. The broker keeps a promised record and gives up the exact byte limit.
 
-`DeleteRecords` closes the third path. Its `-1` sentinel means "delete up to the current end of the log", and the broker caps that at the delivery watermark. An admin call cannot delete a record that no consumer could have read yet.
+`DeleteRecords` closes the third path. The broker caps the trim at the delivery watermark, so an admin call cannot delete a record that no consumer could have read yet.
+
+The cap applies to every resolved target, not only to the `-1` sentinel that means "delete up to the current end of the log". An explicit offset between the watermark and the end of the log destroys an undelivered record exactly as the sentinel would, so scoping the cap to the sentinel would leave the guarantee open to the more deliberate call. The cap only ever lowers a target: a trim at or below the watermark is untouched, a target past the end of the log is still the error it always was, and the response reports the offset the trim reached, so a capped call is visible to the caller rather than silent.
 
 Compaction cannot be closed the same way, so the broker rejects the combination. `cleanup.policy=compact` and `delivery.mode=scheduled` together are a configuration error at topic creation and at config alter time. Compaction deletes a record when a later record carries the same key. On a scheduled topic that later record can arrive long before the earlier one comes due. The earlier record would then be deleted without a single delivery, which is the failure the whole design exists to prevent.
 
