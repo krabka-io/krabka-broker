@@ -764,7 +764,7 @@ impl Log {
         }
 
         producer_snapshot::remove_all(&self.dir)?;
-        self.invalidate_delivery_schedule();
+        self.invalidate_delivery_schedule(new_base);
 
         // Drop every sealed segment + its on-disk files.
         while let Some(popped) = self.segments.pop() {
@@ -1956,8 +1956,9 @@ impl Log {
             return Ok(()); // nothing to truncate
         }
         // The discarded tail may hold the batch that stopped the last
-        // activation walk, so the cached deadline no longer describes the log.
-        self.invalidate_delivery_schedule();
+        // activation walk, so what that walk learned about this offset and
+        // above no longer describes the log.
+        self.invalidate_delivery_schedule(offset);
         if offset < log_start {
             return Err(LogError::OffsetTooLow {
                 requested: offset,
@@ -2228,8 +2229,11 @@ impl Log {
     ///
     /// The watermark is the first offset that is not visible yet. A fetch
     /// caps its limit offset at it, so a batch whose activation time has not
-    /// passed is never served. The value only moves forward, and it stays
-    /// inside `[log_start_offset(), log_end_offset()]`.
+    /// passed is never served. The value stays inside
+    /// `[log_start_offset(), log_end_offset()]`, and it only moves forward
+    /// while the records under it stay: a truncation carries it back down with
+    /// the records it cut away, because the offsets they held may be filled
+    /// again by a batch that is not due.
     ///
     /// A topic that does not schedule delivery answers `log_end_offset()`
     /// before any I/O: this sits on the fetch hot path and an ordinary topic
@@ -2430,13 +2434,23 @@ impl Log {
         (cursor, None)
     }
 
-    /// Forget the cached activation deadline.
+    /// Forget what the last activation walk learned at and above
+    /// `changed_from`.
     ///
-    /// Every path that removes or rewrites records at or above the watermark
-    /// calls this, so the next advance walks instead of trusting a deadline
-    /// for a batch that is no longer there.
-    fn invalidate_delivery_schedule(&mut self) {
+    /// Every path that removes or rewrites records calls this, so the next
+    /// advance walks instead of trusting a deadline for a batch that is no
+    /// longer there.
+    ///
+    /// The watermark comes down with the deadline, and that half is what keeps
+    /// the promise never to deliver early. A truncation cuts a suffix away, and
+    /// [`Log::bounded_watermark`] then masks the stale value against the lower
+    /// log end. But the field still holds it, so an append that pushes the log
+    /// end back above it unmasks it: the next walk resumes at the stale offset
+    /// and steps straight over the records that took the truncated ones' place,
+    /// declaring them visible without ever reading their activation times.
+    fn invalidate_delivery_schedule(&mut self, changed_from: Offset) {
         self.delivery_pending_ms = None;
+        self.delivery_watermark = self.delivery_watermark.min(changed_from);
     }
 
     /// First absolute offset still present on this broker's local disk
@@ -2678,9 +2692,10 @@ impl Log {
         };
 
         let now_ms = retention::now_ms(ctx.now);
-        // Compaction rewrites sealed segments, so a batch the last activation
-        // walk stopped on may not survive it.
-        self.invalidate_delivery_schedule();
+        // Compaction rewrites sealed segments, so any record the last
+        // activation walk read may not survive it.
+        let compacted_from = self.log_start_offset();
+        self.invalidate_delivery_schedule(compacted_from);
         let consumed_bases: Vec<Offset> = self.segments.iter().map(Segment::base_offset).collect();
 
         // Borrow sealed segments to run map + rewrite (which open

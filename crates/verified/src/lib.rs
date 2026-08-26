@@ -14,7 +14,7 @@ pub mod offset_allocator;
 pub mod stretch;
 
 pub use broker::{
-    FetchVisibility, delete_records_offset_out_of_range, delete_records_target,
+    FetchVisibility, FetchWatermarks, delete_records_offset_out_of_range, delete_records_target,
     effective_share_backlog, fetch_visibility,
 };
 pub use compaction::{

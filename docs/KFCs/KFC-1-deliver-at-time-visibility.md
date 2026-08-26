@@ -128,6 +128,8 @@ The delivery watermark is a derived value, in the same sense that the high water
 
 The recovery walk is bounded. Each segment carries a maximum timestamp. Recovery skips a whole segment whose records are all active, and starts its record-level work at the first segment that can hold a pending batch. The walk touches the tail of the log, not the log.
 
+A truncation carries the watermark back down with the records it removes. The watermark moves forward while the records under it stay, but a truncation cuts a suffix away, and a later append fills those offsets with different records. A watermark that stayed above them would declare them visible without ever reading their delivery times, so the log lowers it to the truncation point and the next walk reads those records again. This is the same rule Kafka applies to the high watermark, and for the same reason.
+
 ### Followers Replicate Everything
 
 Replication is not gated. A follower fetches, writes, and acknowledges a pending record as soon as the leader has it. The ISR, the high watermark, and durability all behave as they do on any other topic.
@@ -147,6 +149,16 @@ Size retention does not read timestamps, so it needs a guard. The guard stops si
 The cap applies to every resolved target, not only to the `-1` sentinel that means "delete up to the current end of the log". An explicit offset between the watermark and the end of the log destroys an undelivered record exactly as the sentinel would, so scoping the cap to the sentinel would leave the guarantee open to the more deliberate call. The cap only ever lowers a target: a trim at or below the watermark is untouched, a target past the end of the log is still the error it always was, and the response reports the offset the trim reached, so a capped call is visible to the caller rather than silent.
 
 Compaction cannot be closed the same way, so the broker rejects the combination. `cleanup.policy=compact` and `delivery.mode=scheduled` together are a configuration error at topic creation and at config alter time. Compaction deletes a record when a later record carries the same key. On a scheduled topic that later record can arrive long before the earlier one comes due. The earlier record would then be deleted without a single delivery, which is the failure the whole design exists to prevent.
+
+### Tiered Reads Check the Batch Itself
+
+A read that the local log cannot serve is the one read path the watermark cannot cap.
+
+The broker reaches the tiered path only after a local read answers `OFFSET_OUT_OF_RANGE`, which means the requested offset is below the local log start. The watermark never goes below the local log start, so every offset the tiered path can serve is already below it, and an offset cap there would be dead code. What is not closed by that argument is the lifecycle itself. Tiered storage owns the eviction of a segment that it has copied, and that eviction does not consult the delivery watermark. A pending batch that left local disk would raise the log start past it, and the record would become visible early.
+
+So the tiered path checks the batch instead of the offset. Each remote batch carries its own maximum timestamp, which is the same field the watermark is derived from, so the evidence survives the copy. A batch that is not due yet is not served.
+
+The answer to that fetch is an empty partition and no error, which is the answer the local path gives for a pending batch. `OFFSET_OUT_OF_RANGE` would send the consumer to its `auto.offset.reset` policy, and the consumer would lose the record it is waiting for. The record is due later, not never.
 
 ### ListOffsets
 
@@ -183,6 +195,8 @@ The design makes claims about a state space, so the strongest tests enumerate th
 **Model checks.** The fetch read path already carries an exhaustive `stateright` model over the visibility window and its watermarks. The model gains the delivery watermark. The checker then enumerates the extended window, and proves that the clamp contract and KIP-227 monotonicity still hold under the new cap. A second `stateright` model covers the share-partition state machine with `Deferred` added. That machine holds the most reachable interleavings in the design.
 
 **Formal verification.** The visibility decision is a pure kernel in `crabka-verified`, called by the fetch handler. The kernel gains a Creusot contract for the new cap. The proof covers every input, and not only the inputs a test picks.
+
+The checked-in proof under `verif/` is stale as of this KFC, and this note is here because nothing in the repository will report it. Creusot is not wired into CI or into Bazel, so no gate fails while the recorded verification conditions describe the contract the kernel had before the cap. A maintainer with the pinned Creusot toolchain named in `.creusot-version` must re-run it and commit the result. Until then the contract is enforced by the exhaustive decision table in the kernel's own tests, which walks the new parameter past both ends of its proved domain against an independent oracle.
 
 **Integration.** In-process broker tests drive a mock clock. They produce a scheduled batch, move the clock across the activation boundary, and assert what a fetch returns on each side of it. A mock clock is what turns the lateness bound into a deterministic assertion, and not a race against real time.
 

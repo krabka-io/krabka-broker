@@ -183,6 +183,7 @@ pub mod coordinator;
 #[cfg(test)]
 mod data_path_model;
 pub(crate) mod delegation_token_cleanup;
+pub(crate) mod delivery;
 pub mod disk_scanner;
 mod diskless;
 #[cfg(test)]

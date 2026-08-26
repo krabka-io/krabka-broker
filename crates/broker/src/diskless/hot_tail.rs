@@ -51,11 +51,21 @@ impl HotTailCache {
         }
     }
 
+    /// The cached batch that covers `fetch_offset`, or `None`.
+    ///
+    /// `limit_offset` is the exclusive upper bound of the fetch's visibility
+    /// window, and the cache honours it in whole batches: a batch that reaches
+    /// at or beyond it is a miss, and the fetch falls through to the log read
+    /// path that can clamp inside the run. Nothing here may be looser than that
+    /// window. A `read_uncommitted` fetch is capped at the lower of the high
+    /// watermark and KFC-1's delivery watermark, and the delivery watermark can
+    /// sit below a batch that is durable and quorum-committed but not yet due.
     pub(crate) fn get(
         &self,
         topic_id: Uuid,
         partition: PartitionIndex,
         fetch_offset: i64,
+        limit_offset: i64,
         max_bytes: usize,
     ) -> Option<Bytes> {
         let map = self.entries.get(&(topic_id, partition.0))?;
@@ -63,7 +73,10 @@ impl HotTailCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (_base, entry) = map.range(..=fetch_offset).next_back()?;
-        if fetch_offset <= entry.last_offset && entry.bytes.len() <= max_bytes {
+        if fetch_offset <= entry.last_offset
+            && entry.last_offset < limit_offset
+            && entry.bytes.len() <= max_bytes
+        {
             Some(entry.bytes.clone())
         } else {
             None
@@ -104,10 +117,15 @@ struct HotTailEntry {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
     use bytes::BytesMut;
     use crabka_protocol::records::Record;
 
     use super::*;
+
+    /// An offset above every cached batch, for a lookup the window does not
+    /// bound.
+    const UNBOUNDED: i64 = i64::MAX;
 
     #[test]
     fn hot_tail_cache_floor_lookup_and_bound() {
@@ -119,21 +137,58 @@ mod tests {
         cache.insert_run(topic_id, PartitionIndex(0), &first);
         cache.insert_run(topic_id, PartitionIndex(0), &second);
 
-        assert!(
+        check!(
             cache
-                .get(topic_id, PartitionIndex(0), 0, usize::MAX)
+                .get(topic_id, PartitionIndex(0), 0, UNBOUNDED, usize::MAX)
                 .is_none()
         );
-        assert_eq!(
-            cache.get(topic_id, PartitionIndex(0), 2, usize::MAX),
-            Some(second)
-        );
-        assert!(
+        check!(cache.get(topic_id, PartitionIndex(0), 2, UNBOUNDED, usize::MAX) == Some(second));
+        check!(
             cache
-                .get(topic_id, PartitionIndex(0), 3, usize::MAX)
+                .get(topic_id, PartitionIndex(0), 3, UNBOUNDED, usize::MAX)
                 .is_some()
         );
-        assert!(cache.get(topic_id, PartitionIndex(0), 3, 1).is_none());
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 3, UNBOUNDED, 1)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hot_tail_cache_serves_only_a_batch_that_ends_below_the_limit() {
+        let cache = HotTailCache::new(4);
+        let topic_id = Uuid::from_u128(11);
+        // One batch per run: [0, 1] and [2, 3].
+        cache.insert_run(topic_id, PartitionIndex(0), &batch_bytes(0, 2));
+        cache.insert_run(topic_id, PartitionIndex(0), &batch_bytes(2, 2));
+
+        // The window ends inside the second batch, which is what a delivery
+        // watermark below a batch that is not due yet looks like.
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 2, 3, usize::MAX)
+                .is_none()
+        );
+        // The window ends exactly at the batch's last offset, so the batch is
+        // still partly outside it.
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 0, 1, usize::MAX)
+                .is_none()
+        );
+        // The window covers the whole batch.
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 0, 2, usize::MAX)
+                .is_some()
+        );
+        // Nothing at all is deliverable yet.
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 0, 0, usize::MAX)
+                .is_none()
+        );
     }
 
     fn batch_bytes(base_offset: i64, records: i32) -> Bytes {

@@ -10,11 +10,14 @@
 //! native v2 `RecordBatch`. The handler fully supports clients that send a
 //! single v2 batch per partition, which is the typical modern case.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use bytes::{Bytes, BytesMut};
 use crabka_compression::RecordDecompressionPolicy;
-use crabka_log::{Offset, VerbatimBatch};
+use crabka_log::{Log, Offset, VerbatimBatch};
 use crabka_metadata::{AclOperation, ResourceType};
 use crabka_protocol::{
     Decode, Encode,
@@ -37,7 +40,10 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
-    config_keys::{COMPRESSION_TYPE, MIN_INSYNC_REPLICAS, parse_compression_type},
+    config_keys::{
+        COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, MIN_INSYNC_REPLICAS,
+        parse_compression_type, resolve_delivery_max_delay, resolve_delivery_schedule_monotonic,
+    },
     error::BrokerError,
     partition::{Partition, ProduceData, ProduceJob, WriterMessage},
     partition_registry::PartitionRegistry,
@@ -217,6 +223,14 @@ pub(crate) async fn handle(
         // decision exactly.
         let topic_compression = resolve_topic_compression(&image, &topic_name);
 
+        // Resolve the topic's KFC-1 delivery settings once, beside the
+        // compression resolve and for the same reason: they are a property of
+        // the topic, not of a partition or of a batch. `None` is
+        // `delivery.mode=immediate`, the default, and every partition of such a
+        // topic then skips the delivery gate without reading a clock, a
+        // timestamp, or the log.
+        let delivery = resolve_delivery_gate(&image, &topic_name);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the
@@ -230,6 +244,7 @@ pub(crate) async fn handle(
                     PartitionInput {
                         part_data,
                         topic_compression,
+                        delivery,
                         topic_name: topic_name.clone(),
                         topic_denied,
                         txn_id_denied,
@@ -450,6 +465,9 @@ async fn finish_produce_response(
 struct PartitionInput {
     part_data: FramedPartition,
     topic_compression: Option<crabka_compression::CompressionType>,
+    /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
+    /// `delivery.mode=immediate`, and skips the delivery gate entirely.
+    delivery: Option<DeliveryGate>,
     topic_name: String,
     topic_denied: bool,
     txn_id_denied: bool,
@@ -476,6 +494,7 @@ async fn process_partition(
     let PartitionInput {
         part_data,
         topic_compression,
+        delivery,
         topic_name,
         topic_denied,
         txn_id_denied,
@@ -634,6 +653,33 @@ async fn process_partition(
     .await
     {
         return Ok(response);
+    }
+
+    // ── KFC-1 scheduled-delivery gate ───────────────────────
+    // On a topic with `delivery.mode=scheduled` the batch's `max_timestamp` is
+    // the time it becomes visible to a consumer. Two settings reject it, and
+    // both use the existing `INVALID_TIMESTAMP` (32) that every client already
+    // classifies: a delivery time further ahead than `delivery.max.delay.ms`,
+    // and, under `delivery.schedule.monotonic`, one that precedes the largest
+    // delivery time the partition already holds.
+    //
+    // The second is the guard against a schedule that stalls in silence.
+    // Visibility is offset-ordered for a classic group, because a group's
+    // position is one offset and a record it reads past is unreachable for it
+    // forever. So a batch that comes due before an earlier one holds up
+    // everything behind it. The topic still looks healthy and the lag is real,
+    // which is why the config turns that stall into an error at the producer
+    // that caused it.
+    //
+    // The gate runs after the dedup gate on purpose. An idempotent retry is not
+    // a new entry in the schedule, and a partition that accepted a later batch
+    // in between would otherwise answer that retry with INVALID_TIMESTAMP
+    // instead of the offset it already assigned it.
+    if let Some(gate) = delivery
+        && gate.rejects(prepared.max_timestamp, part.delivery.now_ms(), &part.log)
+    {
+        out.error_code = codes::INVALID_TIMESTAMP;
+        return Ok(out);
     }
 
     dispatch_prepared(
@@ -1247,6 +1293,107 @@ fn resolve_topic_compression(
         .flatten()
 }
 
+/// The KFC-1 produce-time delivery settings of one topic.
+///
+/// [`resolve_delivery_gate`] builds this once per topic, and only for a topic
+/// whose `delivery.mode` is `scheduled`. An immediate topic resolves to `None`,
+/// so no partition of it reads a clock, takes the log mutex, or looks at a
+/// batch timestamp.
+///
+/// On a scheduled topic a batch's `max_timestamp` is its delivery time. Both
+/// rejections read that one v2 header field, which
+/// [`validate_one_v2_batch`] already extracted into
+/// [`ValidatedHeader::max_timestamp`]. Neither decodes a record, decompresses a
+/// body, or changes the verbatim-passthrough decision, so a scheduled topic
+/// keeps the same zero-copy append an immediate topic gets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DeliveryGate {
+    /// `delivery.max.delay.ms`: the largest delay accepted, measured forward
+    /// from produce time. `None` is the `-1` sentinel and removes the bound.
+    max_delay: Option<Time>,
+    /// `delivery.schedule.monotonic`: reject a batch that would make the
+    /// partition's schedule run backwards.
+    monotonic: bool,
+}
+
+impl DeliveryGate {
+    /// Whether this batch earns `INVALID_TIMESTAMP` (32).
+    ///
+    /// `delivery_ms` is the batch's `max_timestamp`, `produced_at_ms` is the
+    /// broker's clock reading for this produce, and `log` is the target
+    /// partition's log.
+    fn rejects(self, delivery_ms: i64, produced_at_ms: i64, log: &Mutex<Log>) -> bool {
+        self.exceeds_max_delay(delivery_ms, produced_at_ms)
+            || (self.monotonic && schedule_runs_backwards(log, delivery_ms))
+    }
+
+    /// Whether `delivery_ms` sits further ahead of `produced_at_ms` than
+    /// `delivery.max.delay.ms` allows.
+    ///
+    /// The bound is one-sided. It limits how far ahead a producer may schedule
+    /// a batch and says nothing about a delivery time in the past, which comes
+    /// due at once.
+    fn exceeds_max_delay(self, delivery_ms: i64, produced_at_ms: i64) -> bool {
+        self.max_delay
+            .is_some_and(|delay| delivery_ms.saturating_sub(produced_at_ms) > delay.millis_i64())
+    }
+}
+
+/// Whether `log` already holds a delivery time later than `delivery_ms`.
+///
+/// This is the `delivery.schedule.monotonic` test. KFC-1 defines it against
+/// "the largest delivery time already in the partition", and the log answers
+/// that as an existence query: one record scheduled strictly after this batch
+/// is one record this batch would hold up. Delivery is offset-ordered for a
+/// classic group, so such a batch stalls the partition's schedule instead of
+/// overtaking, and the config turns that silent stall into an error the
+/// producer that caused it can see.
+///
+/// Every batch still waiting has a delivery time above the broker's activation
+/// cutoff and every batch already delivered has one at or below it, so whenever
+/// the partition holds a waiting batch at all, the largest delivery time in it
+/// *is* the largest waiting one.
+///
+/// [`Log::offset_for_timestamp`] skips a segment whose own cached maximum sits
+/// below the target, so a schedule that runs forward — the accepted case —
+/// costs one integer comparison per segment and no disk read. Only a rejected
+/// batch pays for an index lookup and a bounded scan.
+fn schedule_runs_backwards(log: &Mutex<Log>, delivery_ms: i64) -> bool {
+    let Some(later) = delivery_ms.checked_add(1) else {
+        // Nothing can be scheduled after `i64::MAX`.
+        return false;
+    };
+    // Recover a poisoned guard rather than fail the produce. The log data stays
+    // consistent enough to read a timestamp out of, and the partition writer
+    // takes the same view of a poisoned lock.
+    log.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .offset_for_timestamp(later)
+        .is_some()
+}
+
+/// Resolve a topic's KFC-1 delivery settings from the metadata image.
+///
+/// `None` means `delivery.mode=immediate`, the default and Kafka's behavior:
+/// the produce path then does no delivery work for the topic at all. The two
+/// settings come from [`resolve_delivery_max_delay`] and
+/// [`resolve_delivery_schedule_monotonic`], which fall back to their defaults
+/// on a corrupt value exactly as the other produce-side config reads do.
+fn resolve_delivery_gate(
+    image: &crabka_metadata::MetadataImage,
+    topic: &str,
+) -> Option<DeliveryGate> {
+    let scheduled = image
+        .topic_config(topic)
+        .and_then(|configs| configs.get(DELIVERY_MODE))
+        .map(String::as_str)
+        == Some(DELIVERY_MODE_SCHEDULED);
+    scheduled.then(|| DeliveryGate {
+        max_delay: resolve_delivery_max_delay(image, topic),
+        monotonic: resolve_delivery_schedule_monotonic(image, topic),
+    })
+}
+
 /// All the per-batch HEADER fields that the broker's produce gates need.
 ///
 /// The gates are the leadership epoch stamp, the transactional verify, the
@@ -1588,15 +1735,20 @@ mod tests {
         owned::produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
-    use crabka_units::{Time, bytes, convert::TimeExt, fraction, secs};
+    use crabka_units::{Time, bytes, convert::TimeExt, fraction, millis, secs};
     use uuid::Uuid;
 
     use super::{
-        BrokerProducePolicy, FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS, PartitionInput,
-        PartitionPayload, PartitionServices, PreparedSource, build_topic_error_response,
-        decode_owned_batch, diskless_role_ready, prepare_batch, process_partition,
-        produce_bytes_by_qos_tier, replica_state_matches_image, replication_target_matches_image,
-        resolve_topic_compression, topic_min_insync_replicas, validate_partition_gate,
+        BrokerProducePolicy, DeliveryGate, FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS,
+        PartitionInput, PartitionPayload, PartitionServices, PreparedSource,
+        build_topic_error_response, decode_owned_batch, diskless_role_ready, prepare_batch,
+        process_partition, produce_bytes_by_qos_tier, replica_state_matches_image,
+        replication_target_matches_image, resolve_delivery_gate, resolve_topic_compression,
+        topic_min_insync_replicas, validate_partition_gate,
+    };
+    use crate::config_keys::{
+        DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED,
+        DELIVERY_SCHEDULE_MONOTONIC,
     };
 
     fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
@@ -2034,6 +2186,406 @@ mod tests {
         }
     }
 
+    // ── KFC-1 scheduled delivery ─────────────────────────────────────
+    //
+    // On a topic with `delivery.mode=scheduled` a batch's `max_timestamp` is
+    // the time it becomes visible to a consumer. The produce path rejects two
+    // kinds of batch with `INVALID_TIMESTAMP` (32), and does nothing at all for
+    // a topic that delivers immediately.
+
+    // The fixed clock reading the pure delivery-gate cases run against, so a
+    // schedule in a test is exact rather than nearly right.
+    const SCHEDULE_NOW_MS: i64 = 1_700_000_000_000;
+
+    // The topic-config overrides one delivery-gate table row applies.
+    type DeliveryOverrides = &'static [(&'static str, &'static str)];
+
+    fn image_with_delivery(topic: &str, overrides: &[(&str, &str)]) -> MetadataImage {
+        let mut image = image_with_topic(topic, &[1]);
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: topic.into(),
+            overrides: overrides
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }));
+        image
+    }
+
+    // A one-record batch that asks to be delivered at `delivery_ms`.
+    fn batch_delivered_at(delivery_ms: i64) -> RecordBatch {
+        RecordBatch {
+            base_timestamp: delivery_ms,
+            max_timestamp: delivery_ms,
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"v")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    // A scheduled log holding one batch per entry of `deliveries`.
+    fn scheduled_log(
+        dir: &std::path::Path,
+        deliveries: &[i64],
+    ) -> std::sync::Mutex<crabka_log::Log> {
+        let mut log = crabka_log::Log::open(
+            dir,
+            crabka_log::LogConfig {
+                delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+                ..crabka_log::LogConfig::default()
+            },
+        )
+        .expect("open the log");
+        for delivery_ms in deliveries {
+            log.append(&mut batch_delivered_at(*delivery_ms))
+                .expect("append a scheduled batch");
+        }
+        std::sync::Mutex::new(log)
+    }
+
+    #[test]
+    fn only_a_scheduled_topic_resolves_a_delivery_gate() {
+        let cases: [(DeliveryOverrides, Option<DeliveryGate>, &str); 6] = [
+            (&[], None, "no topic config at all"),
+            (
+                &[(DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE)],
+                None,
+                "the explicit default",
+            ),
+            (
+                // A mode that is not `scheduled` keeps Kafka's behavior, even
+                // when the other two keys are set.
+                &[
+                    (DELIVERY_MODE, "later"),
+                    (DELIVERY_SCHEDULE_MONOTONIC, "true"),
+                ],
+                None,
+                "a corrupt mode alongside the other keys",
+            ),
+            (
+                &[(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED)],
+                Some(DeliveryGate {
+                    max_delay: Some(millis(604_800_000)),
+                    monotonic: false,
+                }),
+                "scheduled, with both other keys defaulted",
+            ),
+            (
+                &[
+                    (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+                    (DELIVERY_MAX_DELAY_MS, "-1"),
+                    (DELIVERY_SCHEDULE_MONOTONIC, "true"),
+                ],
+                Some(DeliveryGate {
+                    max_delay: None,
+                    monotonic: true,
+                }),
+                "scheduled, with the unbounded sentinel",
+            ),
+            (
+                &[
+                    (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+                    (DELIVERY_MAX_DELAY_MS, "90000"),
+                ],
+                Some(DeliveryGate {
+                    max_delay: Some(millis(90_000)),
+                    monotonic: false,
+                }),
+                "scheduled, with an explicit bound",
+            ),
+        ];
+
+        for (overrides, want, label) in cases {
+            let image = image_with_delivery("t", overrides);
+            check!(resolve_delivery_gate(&image, "t") == want, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn the_delivery_gate_bounds_only_how_far_ahead_a_batch_is_scheduled() {
+        let dir = tempfile::tempdir().expect("log root");
+        // An empty partition holds no schedule, so `monotonic` cannot fire and
+        // every verdict below is the `delivery.max.delay.ms` verdict alone.
+        let log = scheduled_log(dir.path(), &[]);
+
+        let cases = [
+            (
+                Some(millis(60_000)),
+                SCHEDULE_NOW_MS + 59_999,
+                false,
+                "inside the bound",
+            ),
+            (
+                Some(millis(60_000)),
+                SCHEDULE_NOW_MS + 60_000,
+                false,
+                "exactly at the bound",
+            ),
+            (
+                Some(millis(60_000)),
+                SCHEDULE_NOW_MS + 60_001,
+                true,
+                "one millisecond past the bound",
+            ),
+            (
+                Some(millis(60_000)),
+                SCHEDULE_NOW_MS - 86_400_000,
+                false,
+                "a day in the past is not a delay",
+            ),
+            (
+                Some(<Time as TimeExt>::ZERO),
+                SCHEDULE_NOW_MS,
+                false,
+                "a zero bound still takes the present instant",
+            ),
+            (
+                Some(<Time as TimeExt>::ZERO),
+                SCHEDULE_NOW_MS + 1,
+                true,
+                "a zero bound rejects the next millisecond",
+            ),
+            (
+                None,
+                i64::MAX,
+                false,
+                "the -1 sentinel removes the bound entirely",
+            ),
+        ];
+
+        for (max_delay, delivery_ms, want, label) in cases {
+            let gate = DeliveryGate {
+                max_delay,
+                monotonic: true,
+            };
+            check!(
+                gate.rejects(delivery_ms, SCHEDULE_NOW_MS, &log) == want,
+                "case: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_monotonic_gate_rejects_a_batch_that_precedes_the_partitions_schedule() {
+        let dir = tempfile::tempdir().expect("log root");
+        // The partition's schedule already runs out to SCHEDULE_NOW_MS + 2_000.
+        let log = scheduled_log(
+            dir.path(),
+            &[SCHEDULE_NOW_MS + 1_000, SCHEDULE_NOW_MS + 2_000],
+        );
+
+        let cases = [
+            (
+                true,
+                SCHEDULE_NOW_MS + 2_001,
+                false,
+                "after the largest delivery time the partition holds",
+            ),
+            (
+                true,
+                SCHEDULE_NOW_MS + 2_000,
+                false,
+                "equal to it, which does not run backwards",
+            ),
+            (
+                true,
+                SCHEDULE_NOW_MS + 1_999,
+                true,
+                "one millisecond before it",
+            ),
+            (
+                true,
+                SCHEDULE_NOW_MS + 1_500,
+                true,
+                "between the two batches already scheduled",
+            ),
+            (
+                true,
+                SCHEDULE_NOW_MS - 1_000,
+                true,
+                "in the past, behind the whole schedule",
+            ),
+            (
+                false,
+                SCHEDULE_NOW_MS - 1_000,
+                false,
+                "the same batch with the guard turned off",
+            ),
+        ];
+
+        for (monotonic, delivery_ms, want, label) in cases {
+            let gate = DeliveryGate {
+                // Unbounded, so every verdict below is the monotonic verdict.
+                max_delay: None,
+                monotonic,
+            };
+            check!(
+                gate.rejects(delivery_ms, SCHEDULE_NOW_MS, &log) == want,
+                "case: {label}"
+            );
+        }
+    }
+
+    // Drive `process_partition` against a real scheduled partition: both
+    // rejections, then the batch that fits the schedule, which must reach the
+    // log as the producer's own bytes.
+    //
+    // The gate reads the broker's clock, so the delivery times here are
+    // relative to that reading and sit far from either boundary.
+    #[tokio::test]
+    async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
+        use crabka_protocol::owned::produce_response::PartitionProduceResponse;
+
+        let dir = tempfile::tempdir().unwrap();
+        let image = Arc::new(image_with_delivery(
+            "sched",
+            &[
+                (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+                (DELIVERY_MAX_DELAY_MS, "3600000"),
+                (DELIVERY_SCHEDULE_MONOTONIC, "true"),
+            ],
+        ));
+        let delivery = resolve_delivery_gate(&image, "sched");
+        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
+            crabka_audit::NodeId(1),
+            Arc::clone(&partitions),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            50,
+            crabka_units::mebibytes(1),
+        ));
+        let producer_state = Arc::new(crate::producer_state::ProducerState::new());
+        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+        let metrics = crate::metrics::BrokerMetrics::new();
+
+        let part_dir = crate::log_dir::partition_dir(dir.path(), "sched", 0);
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let log = crabka_log::Log::open(
+            &part_dir,
+            crabka_log::LogConfig {
+                delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+                ..crabka_log::LogConfig::default()
+            },
+        )
+        .unwrap();
+        let part = crate::broker::spawn_partition(
+            "sched".to_string(),
+            crabka_ids::PartitionIndex(0),
+            dir.path().to_path_buf(),
+            log,
+            log_dir_status.clone(),
+            Arc::clone(&producer_state),
+            false,
+        );
+        let record = image.partition("sched", 0).expect("partition");
+        part.install_replication_target(Some(Uuid::nil()), record.leader.0, record.leader_epoch.0)
+            .await;
+        part.install_isr(&record.isr, &record.replicas, record.leader)
+            .await;
+
+        // Seed offset 0 with a batch that comes due in ten minutes, so the
+        // partition already carries a schedule to run backwards from.
+        let now_ms = part.delivery.now_ms();
+        part.log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append(&mut batch_delivered_at(now_ms + 600_000))
+            .expect("seed the partition schedule");
+        partitions.insert("sched".to_string(), crabka_ids::PartitionIndex(0), part);
+
+        // The accepted case appends, so it comes last.
+        let accepted_delivery_ms = now_ms + 900_000;
+        let cases = [
+            (
+                now_ms + 300_000,
+                PartitionProduceResponse {
+                    index: 0,
+                    error_code: crate::codes::INVALID_TIMESTAMP,
+                    ..Default::default()
+                },
+                "before the delivery time the partition already holds",
+            ),
+            (
+                now_ms + 7_200_000,
+                PartitionProduceResponse {
+                    index: 0,
+                    error_code: crate::codes::INVALID_TIMESTAMP,
+                    ..Default::default()
+                },
+                "further ahead than delivery.max.delay.ms",
+            ),
+            (
+                accepted_delivery_ms,
+                PartitionProduceResponse {
+                    index: 0,
+                    error_code: crate::codes::NONE,
+                    base_offset: 1,
+                    ..Default::default()
+                },
+                "after the schedule and inside the bound",
+            ),
+        ];
+
+        for (delivery_ms, want, label) in cases {
+            let resp = process_partition(
+                PartitionInput {
+                    part_data: FramedPartition {
+                        index: 0,
+                        payload: PartitionPayload::Slice(encode_batch(&batch_delivered_at(
+                            delivery_ms,
+                        ))),
+                    },
+                    topic_compression: None,
+                    delivery,
+                    topic_name: "sched".into(),
+                    topic_denied: false,
+                    txn_id_denied: false,
+                    acks: 1,
+                    timeout: Duration::from_secs(5),
+                },
+                PartitionServices {
+                    partitions: &partitions,
+                    txn_coordinator: &txn_coordinator,
+                    producer_state: &producer_state,
+                    log_dir_status: &log_dir_status,
+                    image: &image,
+                    broker_policy: BrokerProducePolicy {
+                        node_id: crabka_audit::NodeId(1),
+                        default_min_insync_replicas: 1,
+                        is_witness: false,
+                    },
+                    record_decompression_policy: RecordDecompressionPolicy::default(),
+                    metrics: &metrics,
+                },
+            )
+            .await
+            .expect("process partition");
+            check!(resp == want, "case: {label}");
+        }
+
+        // The accepted batch took the verbatim path: the log holds the
+        // producer's own bytes, with only `base_offset` (v2 header bytes 0..8)
+        // and `partition_leader_epoch` (bytes 12..16) stamped. Both sit ahead
+        // of the CRC's coverage, which is what lets the writer patch them
+        // without re-encoding. A scheduled topic must keep that passthrough.
+        let accepted_wire = encode_batch(&batch_delivered_at(accepted_delivery_ms));
+        let mut want_bytes = accepted_wire.to_vec();
+        want_bytes[0..8].copy_from_slice(&1_i64.to_be_bytes());
+        want_bytes[12..16].copy_from_slice(&0_i32.to_be_bytes());
+        let part = partitions
+            .get("sched", crabka_ids::PartitionIndex(0))
+            .expect("the partition is registered");
+        let stored = part
+            .log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .read_raw(Offset(1), Offset(2), bytes(4096))
+            .expect("read the appended batch back");
+        check!(stored.bytes == Bytes::from(want_bytes));
+    }
+
     #[test]
     fn decode_owned_batch_preserves_non_default_header_and_record_fields() {
         let batch = RecordBatch {
@@ -2236,6 +2788,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
                 txn_id_denied: false,
@@ -2326,6 +2879,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
                 txn_id_denied: false,
@@ -2474,6 +3028,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
                 txn_id_denied: false,

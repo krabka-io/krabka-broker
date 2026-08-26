@@ -125,27 +125,14 @@ async fn process_resource(
     }
 
     let records = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => {
-            if image.topic(&resource.resource_name).is_none() {
-                out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
-                out.error_message = Some(format!("unknown topic `{}`", resource.resource_name));
+        RESOURCE_TYPE_TOPIC => match topic_config_record(&resource, image) {
+            Ok(record) => vec![record],
+            Err((code, message)) => {
+                out.error_code = code;
+                out.error_message = Some(message);
                 return out;
             }
-            let mut overrides = std::collections::BTreeMap::new();
-            for cfg in &resource.configs {
-                let value = cfg.value.clone().unwrap_or_default();
-                if let Err(reason) = config_keys::validate_topic_config(&cfg.name, &value) {
-                    out.error_code = codes::INVALID_CONFIG;
-                    out.error_message = Some(reason);
-                    return out;
-                }
-                overrides.insert(cfg.name.clone(), value);
-            }
-            vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: resource.resource_name.clone(),
-                overrides,
-            })]
-        }
+        },
         RESOURCE_TYPE_BROKER => match broker_config_records(&resource, image) {
             Ok(records) => records,
             Err((code, message)) => {
@@ -177,6 +164,34 @@ async fn process_resource(
         }
     }
     out
+}
+
+/// Build the authoritative `V1TopicConfig` record for a topic resource. The
+/// request carries the *complete* set of non-default values, so the map this
+/// builds is the whole override map and the cross-key rules apply to it.
+fn topic_config_record(
+    resource: &AlterConfigsResource,
+    image: &crabka_metadata::MetadataImage,
+) -> Result<MetadataRecord, (i16, String)> {
+    if image.topic(&resource.resource_name).is_none() {
+        return Err((
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            format!("unknown topic `{}`", resource.resource_name),
+        ));
+    }
+    let mut overrides = std::collections::BTreeMap::new();
+    for cfg in &resource.configs {
+        let value = cfg.value.clone().unwrap_or_default();
+        config_keys::validate_topic_config(&cfg.name, &value)
+            .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+        overrides.insert(cfg.name.clone(), value);
+    }
+    config_keys::validate_config_combination(&overrides)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: resource.resource_name.clone(),
+        overrides,
+    }))
 }
 
 fn broker_config_records(
@@ -304,6 +319,33 @@ mod tests {
                 features: std::collections::BTreeMap::new(),
             },
         ));
+        image
+    }
+
+    fn topic_resource(resource_name: &str, configs: &[(&str, &str)]) -> AlterConfigsResource {
+        AlterConfigsResource {
+            resource_type: RESOURCE_TYPE_TOPIC,
+            resource_name: resource_name.into(),
+            configs: configs
+                .iter()
+                .map(|(name, value)| AlterableConfig {
+                    name: (*name).into(),
+                    value: Some((*value).into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn image_with_topic(name: &str) -> crabka_metadata::MetadataImage {
+        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+            name: name.into(),
+            topic_id: uuid::Uuid::nil(),
+            partitions: 1,
+            replication_factor: 1,
+        }));
         image
     }
 
@@ -438,6 +480,65 @@ mod tests {
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
+    }
+
+    #[test]
+    fn topic_replacement_rejects_compaction_on_a_scheduled_topic() {
+        let image = image_with_topic("orders");
+
+        let (code, message) = topic_config_record(
+            &topic_resource(
+                "orders",
+                &[
+                    (crate::config_keys::CLEANUP_POLICY, "compact"),
+                    (crate::config_keys::DELIVERY_MODE, "scheduled"),
+                ],
+            ),
+            &image,
+        )
+        .expect_err("compaction on a scheduled topic must be rejected");
+
+        assert!(code == codes::INVALID_CONFIG);
+        assert!(
+            message.contains(crate::config_keys::CLEANUP_POLICY),
+            "got: {message}"
+        );
+        assert!(
+            message.contains(crate::config_keys::DELIVERY_MODE),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn topic_replacement_accepts_a_scheduled_topic_without_compaction() {
+        let image = image_with_topic("orders");
+
+        let record = topic_config_record(
+            &topic_resource(
+                "orders",
+                &[
+                    (crate::config_keys::CLEANUP_POLICY, "delete"),
+                    (crate::config_keys::DELIVERY_MODE, "scheduled"),
+                ],
+            ),
+            &image,
+        )
+        .expect("a scheduled delete-policy topic is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: std::collections::BTreeMap::from([
+                (
+                    crate::config_keys::CLEANUP_POLICY.to_string(),
+                    "delete".to_string(),
+                ),
+                (
+                    crate::config_keys::DELIVERY_MODE.to_string(),
+                    "scheduled".to_string(),
+                ),
+            ]),
+        });
+        assert!(record == expected);
     }
 
     #[test]

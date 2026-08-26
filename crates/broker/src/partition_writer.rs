@@ -22,6 +22,7 @@ use tokio::{
 };
 
 use crate::{
+    delivery::DeliveryHandles,
     log_dir_status::LogDirRegistry,
     partition::{ProduceData, ProduceJob, SwapOutcome, WriterMessage},
     producer_state::ProducerState,
@@ -530,6 +531,7 @@ pub async fn run(
         Arc<Notify>,
         Arc<tokio::sync::Mutex<ReplicaState>>,
         Arc<Notify>,
+        DeliveryHandles,
     ),
     services: (
         LogDirRegistry,
@@ -560,6 +562,7 @@ pub async fn run_with_sequencer(
         Arc<Notify>,
         Arc<tokio::sync::Mutex<ReplicaState>>,
         Arc<Notify>,
+        DeliveryHandles,
     ),
     services: (
         LogDirRegistry,
@@ -571,7 +574,7 @@ pub async fn run_with_sequencer(
 ) {
     let (topic, partition) = identity;
     let (log, log_dir) = storage;
-    let (append_notify, replica_state, hw_advance_notify) = signals;
+    let (append_notify, replica_state, hw_advance_notify, delivery) = signals;
     let (log_dir_status, producer_state, wal) = services;
     let (producer_id_expiration, max_produce_group) = limits;
     // `pending` holds a non-Produce message that was pulled off the channel
@@ -675,6 +678,30 @@ pub async fn run_with_sequencer(
                 // identical offsets.
             }
         }
+        // Every arm above can move the log end, the log start, or the delivery
+        // policy itself, so one refresh here covers all of them rather than
+        // leaving the mirror stale after the arms that do not append.
+        publish_delivery(&log, &delivery);
+    }
+}
+
+/// Refresh the partition's delivery watermark after a writer message, and
+/// re-arm the broker-wide delivery scheduler when the log is left with a batch
+/// waiting.
+///
+/// The writer runs this after every message, because a truncation, a trim, a
+/// compaction, a log-dir swap and a config change all move something the
+/// watermark is derived from, not only an append.
+///
+/// This is a liveness step, not a correctness one. A fetch recomputes the
+/// watermark under the log mutex it already holds, so a skipped refresh delays
+/// a parked consumer and can never let it read a batch early. On a topic that
+/// delivers immediately the call costs one uncontended mutex and no I/O.
+fn publish_delivery(log: &Mutex<Log>, delivery: &DeliveryHandles) {
+    if let Some(state) = delivery.publish_now(log)
+        && let Some(deadline_ms) = state.next_deadline_ms
+    {
+        delivery.wake_scheduler(deadline_ms);
     }
 }
 
@@ -795,13 +822,31 @@ mod tests {
 
     macro_rules! run_writer {
         ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
-         $append:expr, $replica:expr, $hw:expr, $status:expr, $producer:expr, $wal:expr $(,)?) => {
+         $append:expr, $replica:expr, $hw:expr, $delivery:expr,
+         $status:expr, $producer:expr, $wal:expr $(,)?) => {
             run(
                 ($topic, $partition),
                 ($log, $log_dir),
                 $rx,
-                ($append, $replica, $hw),
+                ($append, $replica, $hw, $delivery),
                 ($status, $producer, $wal),
+            )
+        };
+        ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
+         $append:expr, $replica:expr, $hw:expr, $status:expr, $producer:expr, $wal:expr $(,)?) => {
+            run_writer!(
+                $topic,
+                $partition,
+                $log,
+                $log_dir,
+                $rx,
+                $append,
+                $replica,
+                $hw,
+                DeliveryHandles::new(),
+                $status,
+                $producer,
+                $wal,
             )
         };
     }
@@ -1043,6 +1088,7 @@ mod tests {
                 append_notify,
                 replica_state.clone(),
                 hw_advance_notify.clone(),
+                DeliveryHandles::new(),
             ),
             (
                 crate::log_dir_status::LogDirRegistry::default(),
@@ -1123,6 +1169,7 @@ mod tests {
                     append_notify,
                     replica_state.clone(),
                     Arc::new(Notify::new()),
+                    DeliveryHandles::new(),
                 ),
                 (
                     crate::log_dir_status::LogDirRegistry::default(),
@@ -1195,6 +1242,7 @@ mod tests {
                     crate::replica_state::ReplicaState::new(),
                 )),
                 Arc::new(Notify::new()),
+                DeliveryHandles::new(),
             ),
             (
                 crate::log_dir_status::LogDirRegistry::default(),
@@ -1606,6 +1654,139 @@ mod tests {
         .expect("send truncate");
         ack_rx.await.expect("ack").expect("truncate ok");
         assert!(log.lock().unwrap().log_end_offset() == 0);
+
+        drop(tx);
+        writer.await.expect("writer join");
+    }
+
+    #[tokio::test]
+    async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_scheduler() {
+        use crate::delivery::{
+            DeliveryWaker,
+            test_support::{BOUND_MS, NOW_MS, batch_at, wait_until},
+        };
+
+        let dir = tempdir().expect("tempdir");
+        let config = LogConfig {
+            delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+            ..LogConfig::default()
+        };
+        let log = Arc::new(Mutex::new(
+            Log::open(dir.path(), config).expect("open scheduled log"),
+        ));
+        let time = qubit_clock::MockTime::at(
+            qubit_clock::DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"),
+        );
+        let delivery = DeliveryHandles::with_clock(Arc::new(time.clock()));
+        // The partition is adopted, and the scheduler sleeps for a full second.
+        let waker = Arc::new(DeliveryWaker::new());
+        waker.arm(NOW_MS + 1_000);
+        delivery.adopt(&waker);
+
+        let (tx, rx) = mpsc::channel(1);
+        let writer = tokio::spawn(run_writer!(
+            "scheduled".to_string(),
+            PartitionIndex(0),
+            log.clone(),
+            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+            rx,
+            Arc::new(Notify::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                crate::replica_state::ReplicaState::new(),
+            )),
+            Arc::new(Notify::new()),
+            delivery.clone(),
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(ProducerState::new()),
+            None,
+        ));
+
+        // A batch that is already active moves the watermark to the log end.
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Produce(ProduceJob {
+            data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
+            ack,
+        }))
+        .await
+        .expect("send the active batch");
+        ack_rx.await.expect("ack").expect("append ok");
+        // The writer publishes the watermark after it acks, so poll for it.
+        check!(wait_until(|| delivery.watermark() == Offset(2)).await);
+
+        // A batch that comes due inside the scheduler's sleep re-arms it.
+        let woken = waker.woken();
+        tokio::pin!(woken);
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Produce(ProduceJob {
+            data: ProduceData::Owned(batch_at(NOW_MS + 200)),
+            ack,
+        }))
+        .await
+        .expect("send the scheduled batch");
+        ack_rx.await.expect("ack").expect("append ok");
+
+        // The pending batch holds the watermark where it was.
+        tokio::time::timeout(std::time::Duration::from_secs(1), woken)
+            .await
+            .expect("the produce did not re-arm the delivery scheduler");
+        check!(delivery.watermark() == Offset(2));
+        check!(log.lock().unwrap().log_end_offset() == Offset(4));
+
+        // Past the activation instant, the writer's own refresh releases it.
+        time.advance(std::time::Duration::from_millis(
+            u64::try_from(200 + BOUND_MS).expect("positive"),
+        ));
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Produce(ProduceJob {
+            data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
+            ack,
+        }))
+        .await
+        .expect("send a third batch");
+        ack_rx.await.expect("ack").expect("append ok");
+        check!(wait_until(|| delivery.watermark() == Offset(6)).await);
+
+        drop(tx);
+        writer.await.expect("writer join");
+    }
+
+    #[tokio::test]
+    async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
+        let dir = tempdir().expect("tempdir");
+        let log = Arc::new(Mutex::new(
+            Log::open(dir.path(), LogConfig::default()).expect("open log"),
+        ));
+        let delivery = DeliveryHandles::new();
+        let (tx, rx) = mpsc::channel(1);
+        let writer = tokio::spawn(run_writer!(
+            "immediate".to_string(),
+            PartitionIndex(0),
+            log.clone(),
+            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+            rx,
+            Arc::new(Notify::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                crate::replica_state::ReplicaState::new(),
+            )),
+            Arc::new(Notify::new()),
+            delivery.clone(),
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(ProducerState::new()),
+            None,
+        ));
+
+        let (ack, ack_rx) = oneshot::channel();
+        tx.send(WriterMessage::Produce(ProduceJob {
+            data: ProduceData::Owned(sample_batch(3)),
+            ack,
+        }))
+        .await
+        .expect("send job");
+        ack_rx.await.expect("ack").expect("append ok");
+
+        check!(
+            crate::delivery::test_support::wait_until(|| delivery.watermark() == Offset(3)).await
+        );
 
         drop(tx);
         writer.await.expect("writer join");

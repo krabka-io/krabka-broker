@@ -395,6 +395,49 @@ fn a_truncation_drops_the_deadline_it_invalidates() {
     check!(log.log_end_offset() == Offset(2));
 }
 
+/// A truncation carries the watermark back down with the records it cut away.
+///
+/// Without that, an append that pushes the log end back above the stale
+/// watermark unmasks it, and the walk resumes past the batch that took the
+/// truncated one's place -- delivering it without ever reading its activation
+/// time.
+#[test]
+fn a_batch_appended_over_a_truncated_tail_is_still_held_until_it_is_due() {
+    let (_dir, mut log) = log_of(
+        scheduled_config(ONE_BATCH_PER_SEGMENT),
+        &[PAST_MS, PAST_MS, PAST_MS],
+    );
+
+    // Everything is due, so the watermark reaches the log end.
+    check!(
+        log.advance_delivery_watermark(NOW_MS)
+            == DeliveryAdvance {
+                watermark: Offset(6),
+                next_deadline_ms: None,
+            }
+    );
+
+    // Cut the last two batches away and put one scheduled batch in their place.
+    log.truncate_to(Offset(2)).unwrap();
+    log.append(&mut batch_at(FUTURE_MS)).unwrap();
+
+    check!(
+        log.advance_delivery_watermark(NOW_MS)
+            == DeliveryAdvance {
+                watermark: Offset(2),
+                next_deadline_ms: Some(FUTURE_MS + BOUND_MS),
+            }
+    );
+    check!(log.delivery_watermark() == Offset(2));
+
+    // And it is released once its time arrives.
+    check!(
+        log.advance_delivery_watermark(FUTURE_MS + BOUND_MS)
+            .watermark
+            == Offset(4)
+    );
+}
+
 /// An empty log has nothing to schedule, and a record appended after a walk
 /// that found nothing waiting is still picked up.
 #[test]

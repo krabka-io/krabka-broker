@@ -692,7 +692,13 @@ mod tests {
         let (_results, leo) = append_source(&store, 2).await;
         assert!(store.sync_durable(leo).await.unwrap() == Offset(2));
 
-        assert!(cache.get(topic_id, partition, 1, usize::MAX).is_some());
+        // `i64::MAX` as the visibility limit: this test asserts the cache
+        // holds the run, not that a fetch window bounds it.
+        assert!(
+            cache
+                .get(topic_id, partition, 1, i64::MAX, usize::MAX)
+                .is_some()
+        );
     }
 
     #[tokio::test]

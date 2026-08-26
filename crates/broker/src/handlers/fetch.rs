@@ -7,6 +7,13 @@
 //! the high watermark for `read_uncommitted` consumer fetches, `lso.min(hw)`
 //! for `read_committed`, and the log-end offset (LEO) for follower fetches.
 //!
+//! KFC-1 adds one more cap to a consumer fetch, and only to a consumer fetch:
+//! the partition's delivery watermark, which is the first offset whose batch
+//! has not reached its activation time. The handler recomputes it under the log
+//! mutex it already holds, so it can never serve a record before it is due. A
+//! topic that delivers immediately answers the log end offset for it with no
+//! I/O, so that cap never binds and the zero-copy path is untouched.
+//!
 //! `read_committed` does NO server-side batch filtering. Aborted batches and
 //! control batches stay in the byte stream, and the consumer drops them on
 //! the client side with the `aborted_transactions` list. This matches Apache
@@ -15,7 +22,7 @@
 use std::{sync::Arc, time::Duration};
 
 use bytes::BytesMut;
-use crabka_log::{LeaderEpoch, Offset};
+use crabka_log::{DeliveryPolicy, LeaderEpoch, Log, Offset};
 use crabka_metadata::AclOperation;
 use crabka_protocol::{
     Decode, Encode,
@@ -1005,6 +1012,11 @@ pub(crate) struct VisibilityWindow {
     /// go out.
     pub empty: bool,
     /// Exclusive upper offset the raw read may expose: `[fetch_offset, limit_offset)`.
+    ///
+    /// On a consumer fetch this is capped at the delivery watermark as well
+    /// (KFC-1), so a batch that has not reached its activation time never
+    /// leaves the broker. Every path that turns bytes into a response honours
+    /// it, including the diskless hot-tail cache.
     pub limit_offset: Offset,
     /// `read_committed` aborted-txn scan ceiling. It is `lso.min(hw)` for a
     /// `read_committed` consumer, and `lso` in every other case.
@@ -1018,25 +1030,40 @@ pub(crate) struct VisibilityWindow {
     pub response_lso: Offset,
 }
 
+/// The partition offsets a fetch reads to decide what it may expose.
+///
 /// Kafka invariants that the caller upholds: `0 <= log_start <= hw <= log_end`
-/// and `lso <= hw`. The caller sets `read_committed` for consumer fetches
-/// only, so `read_committed` implies `!is_follower`.
+/// and `lso <= hw`. KFC-1 adds `log_start <= deliverable <= hw`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct FetchWatermarks {
+    pub log_start: Offset,
+    pub hw: Offset,
+    pub lso: Offset,
+    pub log_end: Offset,
+    /// KFC-1's delivery watermark: the first offset that is not due yet. On a
+    /// topic that delivers immediately it is the high watermark, so the window
+    /// is the one Kafka computes and the zero-copy read path is unchanged.
+    pub deliverable: Offset,
+}
+
+/// The caller sets `read_committed` for consumer fetches only, so
+/// `read_committed` implies `!is_follower`.
 pub(crate) fn compute_visibility_window(
     is_follower: bool,
     read_committed: bool,
-    log_start: Offset,
-    hw: Offset,
-    lso: Offset,
-    log_end: Offset,
+    watermarks: FetchWatermarks,
     fetch_offset: Offset,
 ) -> VisibilityWindow {
     let verified = crabka_verified::fetch_visibility(
         is_follower,
         read_committed,
-        log_start.0,
-        hw.0,
-        lso.0,
-        log_end.0,
+        crabka_verified::FetchWatermarks {
+            log_start: watermarks.log_start.0,
+            hw: watermarks.hw.0,
+            lso: watermarks.lso.0,
+            log_end: watermarks.log_end.0,
+            deliverable: watermarks.deliverable.0,
+        },
         fetch_offset.0,
     );
     VisibilityWindow {
@@ -1122,14 +1149,20 @@ async fn do_read(
     );
     // Log mutex released here.
 
+    // The cache answers with whole batches, so it takes the window's limit and
+    // serves only a batch that ends below it. The high watermark is
+    // batch-aligned by construction and never cut one short, but the delivery
+    // watermark of KFC-1 is a second cap on the same window, and a cache that
+    // ignored it would hand out a batch the log read path would have held back.
     if part.diskless
         && !read_committed
-        && matches!(plan, ReadPlan::Read { .. })
+        && let ReadPlan::Read { limit_offset, .. } = &plan
         && let (Some(topic_id), Some(hot_tail)) = (topic_id, hot_tail.as_ref())
         && let Some(bytes) = hot_tail.get(
             topic_id,
             part.index,
             fetch_offset.0,
+            limit_offset.0,
             usize::try_from(max_bytes.max(0)).unwrap_or(0),
         )
     {
@@ -1304,6 +1337,48 @@ fn finish_read(
     bytes
 }
 
+/// KFC-1's delivery watermark for this fetch, capped at the high watermark.
+///
+/// The value is recomputed here, under the log mutex the fetch already holds,
+/// rather than read from the partition's lock-free mirror. The mirror is only
+/// as fresh as the last append or the last scheduler tick, and a fetch that
+/// caps itself on a stale value either holds back a batch that has come due or,
+/// after a truncation, serves one that has not. The delivery scheduler exists
+/// for liveness; this call is what makes a fetch correct.
+///
+/// The clamp is the precondition the verified kernel asks of its caller, and it
+/// is a real bound as well: the window may never expose beyond the high
+/// watermark. The lower end needs no clamp, because
+/// [`Log::advance_delivery_watermark`] already answers inside
+/// `[log_start_offset(), log_end_offset()]`.
+///
+/// A follower fetch is never gated, so it does no work here. A scheduled record
+/// replicates, and counts toward the ISR and the high watermark, long before
+/// any consumer may see it. The high watermark is what the kernel wants in that
+/// case: the kernel ignores the value, and this keeps its precondition true.
+///
+/// A topic that delivers immediately answers the log end offset before it reads
+/// a single batch header, so the clamp gives the high watermark straight back
+/// and the read path reaches `sendfile` exactly where it does today.
+///
+/// `now_ms` comes from the partition's own delivery clock rather than from the
+/// system clock directly, so an append, the scheduler and a fetch all read one
+/// timeline. That is what lets a test drive a mock clock across an activation
+/// boundary and assert what a fetch returns on each side of it.
+fn deliverable_offset(
+    log: &mut Log,
+    high_watermark: Offset,
+    follower_fetch: bool,
+    now_ms: i64,
+) -> Offset {
+    if follower_fetch {
+        return high_watermark;
+    }
+    log.advance_delivery_watermark(now_ms)
+        .watermark
+        .min(high_watermark)
+}
+
 fn plan_read(
     partition: &Partition,
     fetch_offset: Offset,
@@ -1312,15 +1387,25 @@ fn plan_read(
     follower_fetch: bool,
     response: &mut PartitionData,
 ) -> (Offset, VisibilityWindow, ReadPlan) {
-    let log = partition.log.lock().expect("log mutex poisoned");
+    let mut log = partition.log.lock().expect("log mutex poisoned");
     let log_start = log.log_start_offset();
+    let log_end = log.log_end_offset();
+    let deliverable = deliverable_offset(
+        &mut log,
+        high_watermark,
+        follower_fetch,
+        partition.delivery.now_ms(),
+    );
     let window = compute_visibility_window(
         follower_fetch,
         read_committed,
-        log_start,
-        high_watermark,
-        log.lso(),
-        log.log_end_offset(),
+        FetchWatermarks {
+            log_start,
+            hw: high_watermark,
+            lso: log.lso(),
+            log_end,
+            deliverable,
+        },
         fetch_offset,
     );
     let plan = if window.out_of_range {
@@ -1341,6 +1426,27 @@ fn plan_read(
     (log_start, window, plan)
 }
 
+/// Whether a batch the remote tier returned may go out to a consumer now.
+///
+/// The local log no longer holds this batch, so the partition's delivery
+/// watermark says nothing about it: that watermark is derived from the records
+/// the log still has, and it is clamped to at or above the log start. The
+/// evidence that survived the copy is the batch's own `max_timestamp`, which is
+/// the activation time KFC-1 defines, and this applies the log's own rule to
+/// it. A batch is active once its activation time plus the declared clock bound
+/// is at or before the broker's clock reading, so delivery is never early.
+///
+/// A topic that delivers immediately answers `true` without reading the
+/// timestamp.
+fn remote_batch_is_deliverable(
+    policy: DeliveryPolicy,
+    uncertainty_ms: i64,
+    max_timestamp: i64,
+    now_ms: i64,
+) -> bool {
+    policy != DeliveryPolicy::Scheduled || max_timestamp <= now_ms.saturating_sub(uncertainty_ms)
+}
+
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
@@ -1348,11 +1454,21 @@ fn plan_read(
 /// On success the function replaces the partition's error and records, and
 /// returns the encoded batch size. On a miss, on an error, or for a
 /// non-tiered topic, it leaves `p.out` untouched and returns `None`.
+///
+/// A consumer read of a scheduled topic is capped here as well. The remote path
+/// serves whole batches with no offset limit, and it is the one read path the
+/// local delivery watermark cannot bound, so it checks the batch's own
+/// activation time instead. See [`remote_batch_is_deliverable`].
 async fn try_remote_read(broker: &Broker, p: &mut PendingRead, part: &Partition) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
-    let remote_storage_enable = {
+    let (remote_storage_enable, delivery_policy, delivery_uncertainty_ms) = {
         let log = part.log.lock().expect("log mutex poisoned");
-        log.config_snapshot().remote_storage_enable
+        let config = log.config_snapshot();
+        (
+            config.remote_storage_enable,
+            config.delivery_policy,
+            config.delivery_clock_uncertainty.millis_i64_trunc(),
+        )
     };
     if !remote_storage_enable {
         return None;
@@ -1395,6 +1511,33 @@ async fn try_remote_read(broker: &Broker, p: &mut PendingRead, part: &Partition)
         .await
     {
         Ok(Some(batch)) => {
+            // A follower is never gated: it replicates a scheduled record, and
+            // counts it toward the ISR, before any consumer may see it.
+            if !p.is_follower_fetch
+                && !remote_batch_is_deliverable(
+                    delivery_policy,
+                    delivery_uncertainty_ms,
+                    batch.max_timestamp,
+                    part.delivery.now_ms(),
+                )
+            {
+                // Answer as the local path answers a batch that is not due: an
+                // empty partition and no error. `OFFSET_OUT_OF_RANGE` would
+                // send the consumer to its reset policy and lose the record it
+                // is waiting for, and the batch is due later, not never.
+                tracing::debug!(
+                    topic = %p.topic_name,
+                    partition = p.partition_index,
+                    offset = p.fetch_offset,
+                    max_timestamp = batch.max_timestamp,
+                    "remote-reader: batch is not due yet; holding it back"
+                );
+                p.out.error_code = codes::NONE;
+                if p.read_committed {
+                    p.out.aborted_transactions = Some(Vec::new());
+                }
+                return Some(0);
+            }
             let bytes_est = <RecordBatch as Encode>::encoded_len(&batch, 0);
             p.out.error_code = codes::NONE;
             // `log_start_offset` / HW / LSO stay at whatever `do_read`
@@ -1496,8 +1639,16 @@ async fn long_poll_then_reread(
             // KIP-392: a consumer reading from a follower becomes unblocked
             // when the follower's HW advances (via set_follower_hw), not only
             // on raw append. Follower (inter-broker) fetches don't need this.
+            //
+            // KFC-1: a consumer parked exactly at the delivery watermark is
+            // waiting for time to pass and not for bytes to arrive. Nothing
+            // appends and the HW does not move when the batch it wants comes
+            // due, so the delivery advance is its own wake. Without it the
+            // consumer sleeps out its whole long poll in the one case the
+            // feature exists for.
             if !p.is_follower_fetch {
                 notifies.push(part.hw_advance_notify.clone());
+                notifies.push(part.delivery.advance_notify.clone());
             }
         }
     }
@@ -1724,13 +1875,14 @@ mod tests {
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
     use crabka_ids::PartitionIndex;
-    use crabka_log::{Log, LogConfig, Offset};
+    use crabka_log::{DeliveryPolicy, Log, LogConfig, Offset};
     use crabka_protocol::{
         Encode as _,
         records::{Record, RecordBatch, RecordsPayload},
     };
     use crabka_security::{AuthMethod, Principal};
     use crabka_units::{Time, convert::TimeExt, millis};
+    use qubit_clock::{Clock as _, SystemClock};
 
     use crate::{
         broker::Broker,
@@ -2069,6 +2221,89 @@ mod tests {
         assert!(!super::should_use_sendfile(63, true, 64));
         assert!(!super::should_use_sendfile(64, false, 64));
     }
+
+    /// A log holding one batch per entry of `activations`, two records each.
+    fn scheduled_log(policy: DeliveryPolicy, activations: &[i64]) -> (tempfile::TempDir, Log) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = LogConfig {
+            delivery_policy: policy,
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).expect("open log");
+        for activation_ms in activations {
+            log.append(&mut crate::delivery::test_support::batch_at(*activation_ms))
+                .expect("append a batch");
+        }
+        (dir, log)
+    }
+
+    #[test]
+    fn a_consumer_is_capped_at_the_delivery_watermark_and_a_follower_is_not() {
+        let now_ms = SystemClock::new().millis();
+        // Two batches of two records: [0, 1] is due, [2, 3] is an hour out.
+        let (_dir, mut log) = scheduled_log(
+            DeliveryPolicy::Scheduled,
+            &[now_ms - 3_600_000, now_ms + 3_600_000],
+        );
+
+        assert!(super::deliverable_offset(&mut log, Offset(4), false, now_ms) == Offset(2));
+        // Replication is not gated: the follower reads the whole log.
+        assert!(super::deliverable_offset(&mut log, Offset(4), true, now_ms) == Offset(4));
+    }
+
+    #[test]
+    fn an_immediate_topic_is_capped_at_the_high_watermark_alone() {
+        let now_ms = SystemClock::new().millis();
+        let (_dir, mut log) = scheduled_log(
+            DeliveryPolicy::Immediate,
+            &[now_ms + 3_600_000, now_ms + 7_200_000],
+        );
+
+        // Nothing is held back by time, and the high watermark still caps the
+        // window below the log end.
+        assert!(super::deliverable_offset(&mut log, Offset(3), false, now_ms) == Offset(3));
+        assert!(super::deliverable_offset(&mut log, Offset(4), false, now_ms) == Offset(4));
+    }
+
+    #[test]
+    fn a_remote_batch_is_held_back_until_its_activation_time_plus_the_bound() {
+        // Immediate delivery reads no timestamp at all.
+        assert!(super::remote_batch_is_deliverable(
+            DeliveryPolicy::Immediate,
+            250,
+            10_000,
+            0
+        ));
+        // Scheduled: due at 10_000, and the 250 ms clock bound is added to it.
+        assert!(!super::remote_batch_is_deliverable(
+            DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            10_249
+        ));
+        assert!(super::remote_batch_is_deliverable(
+            DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            10_250
+        ));
+        // The bound is added to the activation time, never subtracted from it,
+        // so a clock at the far end of its own uncertainty still never delivers
+        // early.
+        assert!(!super::remote_batch_is_deliverable(
+            DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            10_000
+        ));
+        // A saturating subtraction keeps the far end of the clock range safe.
+        assert!(!super::remote_batch_is_deliverable(
+            DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            i64::MIN
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -2079,12 +2314,13 @@ mod fetch_visibility_model;
 mod visibility_fuzz {
     use proptest::prelude::*;
 
-    use super::{Offset, compute_visibility_window};
+    use super::{FetchWatermarks, Offset, compute_visibility_window};
 
     proptest! {
         /// The per-fetch visibility contract over large-N random valid
         /// watermark tuples, `log_start <= lso <= hw <= log_end`, together
-        /// with the fetch parameters.
+        /// with a delivery watermark inside `[log_start, hw]` and the fetch
+        /// parameters.
         #[test]
         fn visibility_contract_holds(
             a in 0i64..1_000_000,
@@ -2092,20 +2328,27 @@ mod visibility_fuzz {
             c in 0i64..1_000_000,
             d in 0i64..1_000_000,
             fo in 0i64..1_000_000,
+            deliverable_raw in 0i64..1_000_000,
             is_follower in any::<bool>(),
             rc_raw in any::<bool>(),
         ) {
             let mut v = [a, b, c, d];
             v.sort_unstable();
             let (log_start, lso, hw, log_end) = (v[0], v[1], v[2], v[3]);
+            // KFC-1: `plan_read` clamps the delivery watermark into the range
+            // the log still holds, so the kernel sees `log_start <= d <= hw`.
+            let deliverable = deliverable_raw.clamp(log_start, hw);
             let read_committed = rc_raw && !is_follower; // read_committed ⟹ !follower
             let w = compute_visibility_window(
                 is_follower,
                 read_committed,
-                Offset(log_start),
-                Offset(hw),
-                Offset(lso),
-                Offset(log_end),
+                FetchWatermarks {
+                    log_start: Offset(log_start),
+                    hw: Offset(hw),
+                    lso: Offset(lso),
+                    log_end: Offset(log_end),
+                    deliverable: Offset(deliverable),
+                },
                 Offset(fo),
             );
             // Unwrap the `Offset` window fields into this proptest's `i64` world.
@@ -2117,16 +2360,23 @@ mod visibility_fuzz {
             );
             prop_assert!(limit_offset >= 0 && response_hw >= 0 && response_lso >= 0);
             prop_assert_eq!(w.out_of_range, fo < log_start);
-            let upper = if is_follower { log_end } else { hw };
+            let upper = if is_follower { log_end } else { deliverable };
             if !w.out_of_range {
                 prop_assert_eq!(w.empty, fo >= upper);
             }
             if is_follower {
+                // Replication is not gated by the delivery watermark.
                 prop_assert_eq!(limit_offset, log_end);
                 prop_assert!(limit_offset >= hw);
                 prop_assert_eq!(response_hw, log_end);
             } else {
                 prop_assert!(limit_offset <= hw, "consumer fetch must not expose beyond HW");
+                prop_assert!(
+                    limit_offset <= deliverable,
+                    "consumer fetch must not expose a record before it is due"
+                );
+                // The reported watermarks do not move with the delivery
+                // watermark, so consumer lag stays honest.
                 prop_assert_eq!(response_hw, hw);
                 prop_assert!(response_lso <= response_hw);
                 if read_committed {
@@ -2154,22 +2404,31 @@ mod visibility_fuzz {
             let (hw, lso, log_end) = (base, base, base + d_end);
             // Advance all of hw/lso/log_end (still valid: lso == hw).
             let (hw2, lso2, log_end2) = (hw + d_adv, lso + d_adv, log_end + d_adv + d_end2);
+            // The delivery watermark goes the other way: nothing is deliverable
+            // in the second window even though every other watermark advanced.
+            // The reported HW and LSO must not follow it down.
             let w1 = compute_visibility_window(
                 is_follower,
                 read_committed,
-                Offset(log_start),
-                Offset(hw),
-                Offset(lso),
-                Offset(log_end),
+                FetchWatermarks {
+                    log_start: Offset(log_start),
+                    hw: Offset(hw),
+                    lso: Offset(lso),
+                    log_end: Offset(log_end),
+                    deliverable: Offset(hw),
+                },
                 Offset(0),
             );
             let w2 = compute_visibility_window(
                 is_follower,
                 read_committed,
-                Offset(log_start),
-                Offset(hw2),
-                Offset(lso2),
-                Offset(log_end2),
+                FetchWatermarks {
+                    log_start: Offset(log_start),
+                    hw: Offset(hw2),
+                    lso: Offset(lso2),
+                    log_end: Offset(log_end2),
+                    deliverable: Offset(log_start),
+                },
                 Offset(0),
             );
             prop_assert!(w2.response_hw >= w1.response_hw, "response_hw regressed");
