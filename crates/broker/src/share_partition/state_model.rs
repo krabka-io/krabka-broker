@@ -3,11 +3,17 @@
 //!
 //! The model state holds the REAL `AcquisitionState` and drives the production
 //! `materialize`, `acquire`, `acknowledge`, `renew`, `expire_locks`,
-//! `to_persist_batches`, and `load_from`. The BFS checker explores every
-//! interleaving of consumer operations, time advance, and, in the failover
-//! config, leader-reload. It asserts that the share-group delivery-safety
-//! invariants never break. Design:
+//! `defer_internal`, `promote_deferred`, `to_persist_batches`, and
+//! `load_from`. The BFS checker explores every interleaving of consumer
+//! operations, time advance, KFC-1 deferral, and, in the failover config,
+//! leader-reload. It asserts that the share-group delivery-safety invariants
+//! never break. Design:
 //! `docs/superpowers/specs/2026-06-13-crabka-share-group-model-design.md`.
+//!
+//! The model does not carry delivery times. It defers an arbitrary offset at
+//! an arbitrary point instead, which covers every deferral a log and a clock
+//! could produce and many they could not. That over-approximation is the point:
+//! the safety claims must hold for any of them.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! each run is fenced with `within_boundary`, `target_state_count`, and
@@ -17,6 +23,7 @@
 
 use std::time::{Duration, Instant};
 
+use assert2::assert;
 use crabka_log::Offset;
 use stateright::{Checker, Model, Property};
 
@@ -56,6 +63,9 @@ struct ShareModel {
     /// Whether the model generates the leader-failover `Reload` action
     /// (Task 3).
     allow_reload: bool,
+    /// Whether the model generates the KFC-1 `Defer` and `PromoteDeferred`
+    /// actions.
+    allow_defer: bool,
 }
 
 /// The fingerprinted model state. It holds the REAL machine plus the small
@@ -67,7 +77,7 @@ struct ShareState {
     hwm: Offset,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum ShareAction {
     /// Append one record to the log (raise the produced high-watermark).
     Produce,
@@ -88,6 +98,12 @@ enum ShareAction {
         first: Offset,
         last: Offset,
     },
+    /// KFC-1: hold `[first, last]` back because its delivery time has not
+    /// arrived.
+    Defer { first: Offset, last: Offset },
+    /// KFC-1: drop the whole deferral, as an acquire pass does before it
+    /// re-derives one from the log and the clock.
+    PromoteDeferred,
     /// Sweep expired acquisition locks back to Available.
     ExpireLocks,
     /// Advance the logical clock by one lock-duration.
@@ -110,6 +126,7 @@ impl ShareModel {
             max_attempts: 2,
             max_inflight,
             allow_reload: false,
+            allow_defer: false,
         }
     }
 
@@ -124,6 +141,47 @@ impl ShareModel {
             max_attempts: 2,
             max_inflight: 2,
             allow_reload: true,
+            allow_defer: false,
+        }
+    }
+
+    /// Deferral-across-failover config: the failover config plus KFC-1 `Defer`
+    /// and `PromoteDeferred`. It is what checks the persist-and-reload round
+    /// trip over a deferred window.
+    ///
+    /// The deferral coordinate is a subset of the Available offsets, so it
+    /// roughly doubles the reachable space per offset in the window. Two
+    /// offsets is the smallest window that still lets a due record sit behind a
+    /// waiting one, and it is as wide as this config goes: three offsets with
+    /// `Reload` generates 205016 states, which is past `MAX_STATES` and so
+    /// proves nothing. [`ShareModel::deferral_wide`] takes the wider window
+    /// instead, and pays for it elsewhere.
+    fn deferral() -> Self {
+        Self {
+            allow_defer: true,
+            ..Self::failover()
+        }
+    }
+
+    /// Wide deferral config: three offsets, so a due record can sit two behind
+    /// a waiting one and a deferral can span a range rather than a single
+    /// offset.
+    ///
+    /// It buys that width with one member and no `Reload`. Both are covered
+    /// elsewhere: the concurrency configs hold the two-member interleavings,
+    /// and [`ShareModel::deferral`] holds the reload. Keeping either here puts
+    /// the generated count within 300 states of `MAX_STATES`, which is not a
+    /// bound anyone can build on.
+    fn deferral_wide() -> Self {
+        Self {
+            t0: Instant::now(),
+            members: 1,
+            max_offset: Offset(3),
+            max_tick: 2,
+            max_attempts: 2,
+            max_inflight: 3,
+            allow_reload: false,
+            allow_defer: true,
         }
     }
 
@@ -152,6 +210,15 @@ fn offset_dc(sm: &AcquisitionState, off: Offset) -> Option<i16> {
         .iter()
         .find(|b| b.first_offset <= off && off <= b.last_offset)
         .map(|b| b.delivery_count)
+}
+
+/// Every offset in the window that the schedule currently holds back.
+fn deferred_offsets(sm: &AcquisitionState) -> Vec<Offset> {
+    sm.batches
+        .iter()
+        .filter(|b| b.state == RecordState::Deferred)
+        .flat_map(|b| (b.first_offset.0..=b.last_offset.0).map(Offset))
+        .collect()
 }
 
 /// Maximal contiguous offset runs currently Acquired by `member`. Adjacent
@@ -230,7 +297,22 @@ fn lock_consistency(sm: &AcquisitionState) -> bool {
 /// monotonicity or durability violation. This stays OUT of the fingerprinted
 /// state, so no path-history ghost can explode the space. That was the Phase-1
 /// OOM lesson.
-fn assert_transition(parent: &AcquisitionState, child: &AcquisitionState) {
+fn assert_transition(parent: &AcquisitionState, child: &AcquisitionState, action: ShareAction) {
+    // KFC-1: `promote_deferred` is the only route out of `Deferred`. A leader
+    // reload does write the record back as `Available`, but the new leader
+    // re-derives the deferral before the state is readable again, so the
+    // deferred set is unchanged across that transition too.
+    if action != ShareAction::PromoteDeferred {
+        for raw in parent.start_offset.0..parent.end_offset.0 {
+            let off = Offset(raw);
+            if offset_state(parent, off) == Some(RecordState::Deferred) {
+                assert!(
+                    offset_state(child, off) == Some(RecordState::Deferred),
+                    "deferred offset {off} left Deferred on {action:?}"
+                );
+            }
+        }
+    }
     assert!(
         child.start_offset >= parent.start_offset,
         "SPSO regressed: {} -> {}",
@@ -352,6 +434,27 @@ impl Model for ShareModel {
                 }
             }
         }
+        if self.allow_defer {
+            // Every sub-range of the window that covers something the schedule
+            // could still hold back. Ranges rather than single offsets, so the
+            // model exercises the splits `defer_internal` makes at its edges.
+            for first in state.sm.start_offset.0..state.sm.end_offset.0 {
+                for last in first..state.sm.end_offset.0 {
+                    let defers_something = (first..=last).any(|raw| {
+                        offset_state(&state.sm, Offset(raw)) == Some(RecordState::Available)
+                    });
+                    if defers_something {
+                        actions.push(ShareAction::Defer {
+                            first: Offset(first),
+                            last: Offset(last),
+                        });
+                    }
+                }
+            }
+            if !deferred_offsets(&state.sm).is_empty() {
+                actions.push(ShareAction::PromoteDeferred);
+            }
+        }
         if has_acquired {
             actions.push(ShareAction::ExpireLocks);
         }
@@ -385,9 +488,31 @@ impl Model for ShareModel {
             } => {
                 let name = Self::member_name(member);
                 let now = self.now(state.clock);
-                state
-                    .sm
-                    .acquire(&name, max_records, i32::MAX, now, LOCK, self.max_attempts);
+                let deferred = deferred_offsets(&state.sm);
+                let handed_out =
+                    state
+                        .sm
+                        .acquire(&name, max_records, i32::MAX, now, LOCK, self.max_attempts);
+                for range in &handed_out {
+                    for raw in range.first.0..=range.last.0 {
+                        assert!(
+                            !deferred.contains(&Offset(raw)),
+                            "acquire handed out deferred offset {raw}"
+                        );
+                    }
+                }
+            }
+            ShareAction::Defer { first, last: hi } => {
+                state.sm.defer_internal(first, hi);
+                if state.sm == last.sm {
+                    return None; // nothing in the range was Available
+                }
+            }
+            ShareAction::PromoteDeferred => {
+                state.sm.promote_deferred();
+                if state.sm == last.sm {
+                    return None; // nothing was deferred
+                }
             }
             ShareAction::Acknowledge {
                 member,
@@ -423,6 +548,8 @@ impl Model for ShareModel {
                 state.clock += 1;
             }
             ShareAction::Reload => {
+                let deferred = deferred_offsets(&state.sm);
+                let window = (state.sm.start_offset, state.sm.end_offset);
                 let (start, dcc, batches) = state.sm.to_persist_batches();
                 let mut fresh = AcquisitionState::new(start);
                 fresh.load_from(
@@ -432,15 +559,32 @@ impl Model for ShareModel {
                     dcc,
                     &batches,
                 );
+                // KFC-1: `Deferred` persists as `Available`, so the new leader
+                // re-derives it from the log and its own clock. The model's
+                // clock has not moved, so the same offsets come back deferred,
+                // and the round trip must lose none of them.
+                for off in &deferred {
+                    fresh.defer_internal(*off, *off);
+                }
+                assert!(
+                    (fresh.start_offset, fresh.end_offset) == window,
+                    "reload lost part of the window: {window:?} -> {:?}",
+                    (fresh.start_offset, fresh.end_offset)
+                );
+                assert!(
+                    deferred_offsets(&fresh) == deferred,
+                    "reload lost the deferral: {deferred:?} -> {:?}",
+                    deferred_offsets(&fresh)
+                );
                 state.sm = fresh;
             }
         }
-        assert_transition(&last.sm, &state.sm);
+        assert_transition(&last.sm, &state.sm, action);
         Some(state)
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![
+        let mut properties = vec![
             Property::always("window_integrity", |_, s: &ShareState| {
                 window_integrity(&s.sm)
             }),
@@ -479,7 +623,26 @@ impl Model for ShareModel {
             Property::sometimes("can_redeliver", |_, s: &ShareState| {
                 s.sm.batches.iter().any(|b| b.delivery_count >= 2)
             }),
-        ]
+        ];
+        if self.allow_defer {
+            properties.push(Property::sometimes("can_defer", |_, s: &ShareState| {
+                !deferred_offsets(&s.sm).is_empty()
+            }));
+            // The claim KFC-1 makes for share groups, and the one a classic
+            // group cannot have: a record is handed out while a record below it
+            // waits for its delivery time.
+            properties.push(Property::sometimes(
+                "can_deliver_behind_a_deferred_record",
+                |_, s: &ShareState| {
+                    deferred_offsets(&s.sm).first().is_some_and(|waiting| {
+                        s.sm.batches
+                            .iter()
+                            .any(|b| b.state == RecordState::Acquired && b.first_offset > *waiting)
+                    })
+                },
+            ));
+        }
+        properties
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {
@@ -543,4 +706,18 @@ fn share_concurrency_inflight_one() {
 fn share_failover() {
     // Adds leader-failover Reload; stresses acknowledged-is-terminal durability.
     run(ShareModel::failover(), "share_failover");
+}
+
+#[test]
+fn share_deferral() {
+    // Adds KFC-1 Defer/PromoteDeferred over the failover window, so the
+    // deferral invariants are checked across a leader change as well.
+    run(ShareModel::deferral(), "share_deferral");
+}
+
+#[test]
+fn share_deferral_wide() {
+    // Three offsets: a deferral can span a range, and a due record can sit two
+    // behind a waiting one.
+    run(ShareModel::deferral_wide(), "share_deferral_wide");
 }

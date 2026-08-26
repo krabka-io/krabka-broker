@@ -398,6 +398,9 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub log_segment_bytes: Option<ByteSize>,
+    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub log_delivery_clock_uncertainty: Option<Time>,
     #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub socket_request_max: Option<ByteSize>,
@@ -2568,6 +2571,11 @@ impl RuntimeFileConfig {
             log_segment_bytes,
             cfg.log_config.segment_size,
             whole_bytes_u64
+        );
+        set_runtime_time_millis!(
+            runtime,
+            log_delivery_clock_uncertainty,
+            cfg.log_config.delivery_clock_uncertainty
         );
         Ok(())
     }
@@ -5488,6 +5496,47 @@ streams_group_max_size = 19
             .expect("accept positive trim lag");
 
         assert!(config.diskless_wal_trim_safety_lag == 7);
+    }
+
+    #[test]
+    fn log_delivery_clock_uncertainty_round_trips_into_the_log_config() {
+        // KFC-1's clock bound reaches every partition through
+        // `BrokerConfig::log_config`, and it is a TOML-only key.
+        let file: FileConfig =
+            toml::from_str("[runtime]\nlog_delivery_clock_uncertainty = \"750ms\"\n")
+                .expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.delivery_clock_uncertainty == millis(750));
+        assert!(cfg.log_config.delivery_clock_uncertainty.millis_i64() == 750);
+    }
+
+    #[test]
+    fn omitted_log_delivery_clock_uncertainty_keeps_the_quarter_second_default() {
+        let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.delivery_clock_uncertainty == millis(250));
+    }
+
+    #[test]
+    fn log_delivery_clock_uncertainty_rejects_a_nonpositive_bound() {
+        let file: FileConfig =
+            toml::from_str("[runtime]\nlog_delivery_clock_uncertainty = \"0ms\"\n")
+                .expect("parse runtime config");
+
+        let error = file
+            .apply_to(&mut crate::config::BrokerConfig::default())
+            .expect_err("reject a zero clock bound");
+
+        assert!(
+            error.to_string().contains("log_delivery_clock_uncertainty"),
+            "got: {error}"
+        );
     }
 
     #[test]

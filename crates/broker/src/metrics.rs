@@ -40,6 +40,17 @@ const BARRIER_INJECTION_DURATION_BUCKETS: [f64; 12] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
+/// Latency buckets (seconds) for `delivery_activation_lateness_seconds`.
+/// KFC-1 bounds activation lateness at twice the topic's declared
+/// `delivery_clock_uncertainty` plus one scheduler tick, so the value an
+/// operator sees is normally a few hundred milliseconds at most: the span opens
+/// at 1ms and resolves the sub-second band finely. The tail runs to 30s so a
+/// broker with real clock skew, or one whose scheduler is starved of CPU, still
+/// lands in a bucket instead of in `+Inf`.
+const DELIVERY_ACTIVATION_LATENESS_BUCKETS: [f64; 12] = [
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 10.0, 30.0,
+];
+
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`
 /// to register and we want lazy registration from multiple init paths.
@@ -57,8 +68,10 @@ pub struct TopicLabel {
     pub topic: String,
 }
 
-/// Per-partition label set, paired with the new `partition_*` metric
-/// families. Consumed by the rebalancer's metric scraper.
+/// Per-partition label set, paired with the `partition_*` and `delivery_*`
+/// metric families. Consumed by the rebalancer's metric scraper. Cardinality is
+/// bounded by the number of partitions this broker hosts, because both fields
+/// come from the metadata image and never from client input.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct PartitionLabel {
     pub topic: String,
@@ -421,6 +434,36 @@ pub struct BrokerMetrics {
     /// Number of barrier groups this broker coordinates (gauge). It is zero on
     /// a broker that leads no `__barrier_state` partition.
     pub barrier_groups_coordinated: Gauge,
+    /// KFC-1 deliver-at-time watermark of each scheduled partition this broker
+    /// leads (gauge): the first offset that is not visible to a consumer yet.
+    /// Read against `partition_disk_bytes` or the log end offset to see how far
+    /// visibility trails durability. Cardinality is bounded by the number of
+    /// partitions this broker leads whose topic sets
+    /// `delivery.mode=scheduled`; an ordinary partition never creates a series,
+    /// because the scheduler drops it before it reports.
+    pub delivery_watermark: Family<PartitionLabel, Gauge>,
+    /// KFC-1 records of each scheduled partition that are durable but not
+    /// visible yet (gauge): the log end offset minus
+    /// `delivery_watermark`. A value that grows without falling is a schedule
+    /// whose head-of-line record is far in the future. Cardinality is bounded
+    /// exactly as `delivery_watermark` is.
+    pub delivery_pending_records: Family<PartitionLabel, Gauge>,
+    /// KFC-1 seconds from a batch's activation deadline to the moment the
+    /// broker first made it visible.
+    ///
+    /// The deadline is the record timestamp plus the topic's declared
+    /// `delivery_clock_uncertainty`, so this histogram measures the delay
+    /// *beyond* the bound the operator declared, and a healthy broker reports
+    /// values at zero. Add `delivery_clock_uncertainty` to read the delay from
+    /// the record's own delivery time. A rising tail says the declared bound is
+    /// not honest, or that the scheduler is starved of CPU. It carries no
+    /// labels, so it is one series per broker.
+    pub delivery_activation_lateness_seconds: Histogram,
+    /// KFC-1 cumulative count of delivery-scheduler wakeups, whether a deadline
+    /// came due, a produce re-armed the task, or its idle bound elapsed. Paired
+    /// with the lateness histogram it separates "the scheduler never ran" from
+    /// "the scheduler ran late". One series per broker.
+    pub delivery_scheduler_wakeups_total: Counter,
 }
 
 impl BrokerMetrics {
@@ -493,6 +536,12 @@ impl BrokerMetrics {
             barrier_latest_epoch: Family::default(),
             barrier_markers_written_total: Family::default(),
             barrier_groups_coordinated: Gauge::default(),
+            delivery_watermark: Family::default(),
+            delivery_pending_records: Family::default(),
+            delivery_activation_lateness_seconds: Histogram::new(
+                DELIVERY_ACTIVATION_LATENESS_BUCKETS,
+            ),
+            delivery_scheduler_wakeups_total: Counter::default(),
         }
     }
 
@@ -1014,6 +1063,42 @@ impl BrokerMetrics {
              on a broker that leads no __barrier_state partition.",
             self.barrier_groups_coordinated.clone(),
         );
+
+        registry.register(
+            "delivery_watermark",
+            "KFC-1 deliver-at-time watermark of each scheduled partition this \
+             broker leads (gauge): the first offset that is not visible to a \
+             consumer yet. A partition whose topic delivers immediately \
+             reports no series.",
+            self.delivery_watermark.clone(),
+        );
+
+        registry.register(
+            "delivery_pending_records",
+            "KFC-1 records of each scheduled partition that are durable but \
+             not visible yet (gauge): the log end offset minus the delivery \
+             watermark.",
+            self.delivery_pending_records.clone(),
+        );
+
+        registry.register(
+            "delivery_activation_lateness_seconds",
+            "KFC-1 seconds from a batch's activation deadline to the moment \
+             the broker first made it visible. The deadline is the record \
+             timestamp plus the topic's declared clock bound, so this measures \
+             the delay beyond that bound and a healthy broker sits at zero. A \
+             rising tail says the bound is not honest, or that the scheduler \
+             is starved of CPU.",
+            self.delivery_activation_lateness_seconds.clone(),
+        );
+
+        registry.register(
+            "delivery_scheduler_wakeups",
+            "KFC-1 cumulative count of delivery-scheduler wakeups, whether a \
+             deadline came due, a produce re-armed the task, or its idle \
+             bound elapsed.",
+            self.delivery_scheduler_wakeups_total.clone(),
+        );
     }
 
     /// Build and register every broker metric.
@@ -1290,6 +1375,28 @@ impl BrokerMetrics {
             partition,
         };
         self.log_compactions_total.get_or_create(&lbl).inc();
+    }
+
+    /// KFC-1: publish one scheduled partition's delivery watermark and the
+    /// count of records that are durable but not visible yet. Called from the
+    /// delivery scheduler after it recomputes the partition. A partition whose
+    /// topic delivers immediately never reaches this method, so an ordinary
+    /// topic creates no series.
+    pub fn record_delivery_watermark(
+        &self,
+        topic: &str,
+        partition: i32,
+        watermark: i64,
+        pending: i64,
+    ) {
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.delivery_watermark.get_or_create(&lbl).set(watermark);
+        self.delivery_pending_records
+            .get_or_create(&lbl)
+            .set(pending);
     }
 }
 

@@ -224,6 +224,8 @@ struct RuntimeArgs {
     log_read_buffer_cap: Option<ByteSize>,
     #[arg(long, env = "CRABKA_LOG_TIMESTAMP_SCAN_WINDOW", value_parser = crabka_units::parse::positive_byte_size)]
     log_timestamp_scan_window: Option<ByteSize>,
+    #[arg(long, env = "CRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = crabka_units::parse::positive_time)]
+    log_delivery_clock_uncertainty: Option<Time>,
     #[arg(long, env = "CRABKA_SOCKET_REQUEST_MAX", value_parser = crabka_units::parse::positive_byte_size)]
     socket_request_max: Option<ByteSize>,
     #[arg(long, env = "CRABKA_SENDFILE_MIN", value_parser = crabka_units::parse::positive_byte_size)]
@@ -474,6 +476,7 @@ impl RuntimeArgs {
             socket_receive_buffer,
             log_read_buffer_cap,
             log_timestamp_scan_window,
+            log_delivery_clock_uncertainty,
             acl_max_principal,
             acl_max_resource_name,
             telemetry_max_decompression_ratio,

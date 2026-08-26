@@ -114,6 +114,42 @@ async fn boot_with_ongoing_txn(
     producer.flush().await.unwrap();
     // Don't commit/abort — we want the txn to stay Ongoing.
 
+    // `flush()` returning does not mean the coordinator has finished the
+    // AddPartitionsToTxn round-trip that `send` triggered, so its `TxnEntry`
+    // can still read `Empty` with no partitions for a moment afterwards. Wait
+    // for it here rather than in each caller: every test below asserts against
+    // the `Ongoing` state this helper's name promises, and the one that did not
+    // wait raced it and read `Empty` on CI. `DescribeTransactions` is the
+    // strongest signal available, because it reports the state and the
+    // registered partition set together, and there is no metadata-image event
+    // to wait on instead. The deadline is generous because macOS runners are
+    // measurably slower than linux on the in-process transactional path.
+    let admin = admin_client(&bootstrap).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let r = admin
+            .send(DescribeTransactionsRequest {
+                transactional_ids: vec![tid.into()],
+                ..Default::default()
+            })
+            .await
+            .expect("DescribeTransactions");
+        let ready = matches!(
+            r.transaction_states.as_slice(),
+            [row] if row.error_code == 0
+                && row.transaction_state == "Ongoing"
+                && !row.topics.is_empty()
+        );
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "txn {tid} never reached Ongoing with its partitions: {r:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
     (broker, bootstrap, dir, producer, transaction)
 }
 
@@ -123,39 +159,10 @@ async fn list_transactions_returns_ongoing_txn() {
         boot_with_ongoing_txn("my-tid", "t-list").await;
 
     let client = admin_client(&bootstrap).await;
-    // Retry briefly — AddPartitionsToTxn races the visibility of the
-    // partitions set in the coordinator's TxnEntry. macOS runners are
-    // measurably slower than ubuntu/linux on the in-process
-    // transactional path, so the deadline is generous.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let resp = loop {
-        let r = client
-            .send(ListTransactionsRequest::default())
-            .await
-            .expect("ListTransactions");
-        let ongoing = match r.transaction_states.as_slice() {
-            [row] => {
-                *row == ListedTransactionState {
-                    transactional_id: "my-tid".into(),
-                    producer_id: row.producer_id,
-                    transaction_state: "Ongoing".into(),
-                    ..Default::default()
-                }
-            }
-            _ => false,
-        };
-        if ongoing {
-            break r;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "ListTransactions never saw the ongoing txn: {r:?}"
-        );
-        // intentional: polls RPC response until the txn is visible as Ongoing
-        // (coordinator TxnEntry state after AddPartitionsToTxn); no
-        // metadata-image signal for this
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resp = client
+        .send(ListTransactionsRequest::default())
+        .await
+        .expect("ListTransactions");
 
     let row = resp
         .transaction_states
@@ -241,33 +248,15 @@ async fn describe_transactions_returns_full_state_for_known_tid() {
         boot_with_ongoing_txn("describe-tid", "t-describe").await;
 
     let client = admin_client(&bootstrap).await;
-    // 30 s deadline matches `list_transactions_returns_ongoing_txn` —
-    // the txn's `Ongoing` state + partition set both ride on the same
-    // AddPartitionsToTxn round-trip the producer's `send()` triggers,
-    // and macOS scheduling can be slow.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let row = loop {
-        let r = client
-            .send(DescribeTransactionsRequest {
-                transactional_ids: vec!["describe-tid".into()],
-                ..Default::default()
-            })
-            .await
-            .expect("DescribeTransactions");
-        assert!(r.transaction_states.len() == 1);
-        let row = &r.transaction_states[0];
-        if row.error_code == 0 && !row.topics.is_empty() {
-            break row.clone();
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "Ongoing txn never showed its partitions: {row:?}"
-        );
-        // intentional: polls RPC response until the txn shows its registered
-        // partitions (coordinator TxnEntry state after AddPartitionsToTxn); no
-        // metadata-image signal for this
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let r = client
+        .send(DescribeTransactionsRequest {
+            transactional_ids: vec!["describe-tid".into()],
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeTransactions");
+    assert!(r.transaction_states.len() == 1);
+    let row = r.transaction_states[0].clone();
 
     check!(row.producer_id >= 0);
     check!(row.transaction_start_time_ms > 0);

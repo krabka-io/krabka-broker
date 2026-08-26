@@ -1,8 +1,8 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes fifteen topic keys. Five propagate live to `Log.config`:
-//! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`, and
-//! `compression.type`. The tiered-storage local-retention pair
+//! The broker recognizes eighteen topic keys. Six propagate live to `Log.config`:
+//! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
+//! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
 //! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
 //! delete-horizon grace window (`delete.retention.ms`) propagate live too.
 //!
@@ -22,6 +22,16 @@
 //! a topic override takes precedence. One
 //! key is krabka's `QoS` routing key, `qos.tier`. Producer quota enforcement
 //! uses it to partition runtime buckets by topic tier.
+//!
+//! Three keys carry KFC-1 scheduled delivery: `delivery.mode`,
+//! `delivery.max.delay.ms`, and `delivery.schedule.monotonic`. Only the first
+//! propagates live to `Log.config`. The produce path reads the other two,
+//! which bound how far ahead of produce time a batch may be scheduled and
+//! whether a partition's schedule may run backwards.
+//!
+//! `cleanup.policy=compact` and `delivery.mode=scheduled` exclude each other.
+//! [`validate_topic_config`] sees one pair at a time and cannot see that, so
+//! [`validate_config_combination`] checks the rule over a whole override map.
 //!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
 
@@ -174,6 +184,27 @@ pub(crate) const DELETE_RETENTION_MS: &str = "delete.retention.ms";
 pub(crate) const QOS_TIER: &str = "qos.tier";
 pub(crate) const DEFAULT_QOS_TIER: &str = "default";
 
+/// KFC-1: per-topic delivery mode. `immediate`, the default, is Kafka's
+/// behavior. `scheduled` makes each batch's `max_timestamp` its delivery time,
+/// so a record stays invisible to consumers until it comes due. This is the
+/// one delivery key that reaches [`LogConfig::delivery_policy`].
+pub(crate) const DELIVERY_MODE: &str = "delivery.mode";
+pub(crate) const DELIVERY_MODE_IMMEDIATE: &str = "immediate";
+pub(crate) const DELIVERY_MODE_SCHEDULED: &str = "scheduled";
+
+/// KFC-1: the largest delay the produce path accepts, measured forward from
+/// produce time. `-1` removes the limit. A batch scheduled further ahead is
+/// rejected with `INVALID_TIMESTAMP` (32).
+pub(crate) const DELIVERY_MAX_DELAY_MS: &str = "delivery.max.delay.ms";
+/// Default `delivery.max.delay.ms`: 7 days.
+pub(crate) const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
+
+/// KFC-1: when `true`, the produce path rejects a batch whose delivery time is
+/// before the largest delivery time already in the partition. It turns a
+/// silently stalled schedule into an `INVALID_TIMESTAMP` (32) at the producer
+/// that caused it. Default `false`.
+pub(crate) const DELIVERY_SCHEDULE_MONOTONIC: &str = "delivery.schedule.monotonic";
+
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker
 /// config and defaults it to 30 seconds.
@@ -184,6 +215,10 @@ pub(crate) const DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT: Duration = Duratio
 /// Kafka sentinel for `retention.ms` / `retention.bytes`: `-1` means
 /// unlimited retention, and is the lowest legal value.
 const RETENTION_UNLIMITED: i64 = -1;
+
+/// KFC-1 sentinel for `delivery.max.delay.ms`: `-1` means no bound on how far
+/// ahead a batch may be scheduled, and is the lowest legal value.
+const DELIVERY_MAX_DELAY_UNLIMITED: i64 = -1;
 
 /// KIP-405 sentinel for `local.retention.ms` / `local.retention.bytes`:
 /// `-2` means "inherit the corresponding non-local retention setting", and
@@ -229,12 +264,71 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
             )),
         },
         QOS_TIER => validate_qos_tier(value),
+        DELIVERY_MODE => match value {
+            DELIVERY_MODE_IMMEDIATE | DELIVERY_MODE_SCHEDULED => Ok(()),
+            _ => Err(format!(
+                "delivery.mode={value} not supported; expected \
+                 `{DELIVERY_MODE_IMMEDIATE}` or `{DELIVERY_MODE_SCHEDULED}`"
+            )),
+        },
+        DELIVERY_MAX_DELAY_MS => {
+            parse_i64_at_least(DELIVERY_MAX_DELAY_UNLIMITED, value).map(|_| ())
+        }
+        DELIVERY_SCHEDULE_MONOTONIC => match value {
+            "true" | "false" => Ok(()),
+            _ => Err(format!(
+                "delivery.schedule.monotonic={value} not supported; expected `true` or `false`"
+            )),
+        },
         crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
         | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
             crate::throttle::ThrottledReplicas::parse(value).map(|_| ())
         }
         unknown => Err(format!("unrecognized config key `{unknown}`")),
     }
+}
+
+/// Validate a topic's complete override map: every key/value pair through
+/// [`validate_topic_config`], then the cross-key rules in
+/// [`validate_config_combination`]. `CreateTopics` builds the whole map before
+/// it commits anything, so it validates in one call.
+pub(crate) fn validate_topic_config_map(
+    overrides: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    for (key, value) in overrides {
+        validate_topic_config(key, value)?;
+    }
+    validate_config_combination(overrides)
+}
+
+/// Validate the rules that span two keys, over a topic's complete override
+/// map. [`validate_topic_config`] takes one pair and cannot see them.
+///
+/// KFC-1 states the one such rule: `cleanup.policy=compact` and
+/// `delivery.mode=scheduled` exclude each other. Compaction deletes a record
+/// once a later record carries the same key, and on a scheduled topic that
+/// later record can arrive long before the earlier one comes due. The earlier
+/// record would then be deleted without a single delivery, which is the
+/// failure scheduled delivery exists to prevent.
+pub(crate) fn validate_config_combination(
+    overrides: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let compacting = overrides
+        .get(CLEANUP_POLICY)
+        .is_some_and(|policy| policy == "compact");
+    let scheduled = overrides
+        .get(DELIVERY_MODE)
+        .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED);
+    if compacting && scheduled {
+        return Err(format!(
+            "{CLEANUP_POLICY}=compact cannot be combined with \
+             {DELIVERY_MODE}={DELIVERY_MODE_SCHEDULED}: compaction deletes a record once a \
+             later record carries the same key, and on a scheduled topic that later record \
+             can arrive long before the earlier one comes due, so the earlier record would \
+             be deleted without a single delivery"
+        ));
+    }
+    Ok(())
 }
 
 /// Map the wire-side `compression.type` value to the matching
@@ -315,6 +409,9 @@ pub(crate) fn is_recognized(key: &str) -> bool {
             | LOCAL_RETENTION_BYTES
             | DELETE_RETENTION_MS
             | QOS_TIER
+            | DELIVERY_MODE
+            | DELIVERY_MAX_DELAY_MS
+            | DELIVERY_SCHEDULE_MONOTONIC
             | crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
             | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY
     )
@@ -333,6 +430,41 @@ pub(crate) fn resolve_qos_tier<'a>(
         .and_then(|m| m.get(QOS_TIER))
         .filter(|v| validate_qos_tier(v).is_ok())
         .map_or(DEFAULT_QOS_TIER, String::as_str)
+}
+
+/// Resolve `delivery.max.delay.ms` for `topic`: the largest delay the produce
+/// path accepts, measured forward from produce time. `None` is the `-1`
+/// sentinel and removes the bound. A missing or unparseable value resolves to
+/// the 7-day default, which matches the permissive runtime behavior of the
+/// other Produce-side topic config reads.
+#[must_use]
+pub(crate) fn resolve_delivery_max_delay(
+    image: &crabka_metadata::MetadataImage,
+    topic: &str,
+) -> Option<Time> {
+    let millis = image
+        .topic_config(topic)
+        .and_then(|configs| configs.get(DELIVERY_MAX_DELAY_MS))
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|millis| *millis >= DELIVERY_MAX_DELAY_UNLIMITED)
+        .unwrap_or(DEFAULT_DELIVERY_MAX_DELAY_MS);
+    opt_time_from_millis_i64(millis)
+}
+
+/// Resolve `delivery.schedule.monotonic` for `topic`. `true` makes the produce
+/// path reject a batch whose delivery time is before the largest delivery time
+/// already in the partition. A missing or unparseable value resolves to
+/// `false`.
+#[must_use]
+pub(crate) fn resolve_delivery_schedule_monotonic(
+    image: &crabka_metadata::MetadataImage,
+    topic: &str,
+) -> bool {
+    image
+        .topic_config(topic)
+        .and_then(|configs| configs.get(DELIVERY_SCHEDULE_MONOTONIC))
+        .map(String::as_str)
+        == Some("true")
 }
 
 fn topic_or_cluster_default<'a>(
@@ -459,6 +591,13 @@ pub(crate) fn apply_to_log_config(
             REMOTE_STORAGE_ENABLE => {
                 out.remote_storage_enable = v == "true";
             }
+            DELIVERY_MODE => {
+                out.delivery_policy = if v == DELIVERY_MODE_SCHEDULED {
+                    crabka_log::DeliveryPolicy::Scheduled
+                } else {
+                    crabka_log::DeliveryPolicy::Immediate
+                };
+            }
             DELETE_RETENTION_MS => {
                 if let Ok(ms) = v.parse::<i64>()
                     && ms >= 0
@@ -577,6 +716,27 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         description: "Crabka QoS tier used to partition producer quota buckets.",
     },
     TopicConfigDoc {
+        key: DELIVERY_MODE,
+        value_type: "string",
+        default: Some(DELIVERY_MODE_IMMEDIATE),
+        kip: Some("KFC-1"),
+        description: "`immediate` or `scheduled`. Under `scheduled` a batch stays invisible to consumers until its own timestamp comes due.",
+    },
+    TopicConfigDoc {
+        key: DELIVERY_MAX_DELAY_MS,
+        value_type: "long (ms)",
+        default: Some("604800000"),
+        kip: Some("KFC-1"),
+        description: "Largest delivery delay accepted at produce time, measured forward from produce time; -1 removes the bound.",
+    },
+    TopicConfigDoc {
+        key: DELIVERY_SCHEDULE_MONOTONIC,
+        value_type: "boolean",
+        default: Some("false"),
+        kip: Some("KFC-1"),
+        description: "Reject a batch whose delivery time precedes the largest delivery time already in the partition.",
+    },
+    TopicConfigDoc {
         key: crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
         value_type: "string",
         default: None,
@@ -636,6 +796,9 @@ mod doc_tests {
             LOCAL_RETENTION_BYTES,
             DELETE_RETENTION_MS,
             QOS_TIER,
+            DELIVERY_MODE,
+            DELIVERY_MAX_DELAY_MS,
+            DELIVERY_SCHEDULE_MONOTONIC,
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
             crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
         ] {
@@ -1214,6 +1377,207 @@ mod tests {
         assert!(is_controller_managed_broker_config(BROKER_WITNESS));
         assert!(!is_recognized(BROKER_WITNESS));
         assert!(validate_topic_config(BROKER_WITNESS, WITNESS_TRUE).is_err());
+    }
+
+    #[test]
+    fn validate_delivery_mode_accepts_the_two_modes_only() {
+        let cases = [
+            (DELIVERY_MODE_IMMEDIATE, true),
+            (DELIVERY_MODE_SCHEDULED, true),
+            ("later", false),
+            ("", false),
+        ];
+        for (value, want_ok) in cases {
+            assert!(
+                validate_topic_config(DELIVERY_MODE, value).is_ok() == want_ok,
+                "delivery.mode={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_delivery_max_delay_ms_boundary_cases() {
+        let cases = [
+            ("0", true),         // no delay at all is legal
+            ("604800000", true), // the default, 7 days
+            ("-1", true),        // -1 (unbounded) accepted
+            ("-2", false),       // below -1 rejected
+            ("soon", false),     // non-integer rejected
+        ];
+        for (value, want_ok) in cases {
+            assert!(
+                validate_topic_config(DELIVERY_MAX_DELAY_MS, value).is_ok() == want_ok,
+                "delivery.max.delay.ms={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_delivery_schedule_monotonic_accepts_bools_only() {
+        let cases = [("true", true), ("false", true), ("yes", false), ("", false)];
+        for (value, want_ok) in cases {
+            assert!(
+                validate_topic_config(DELIVERY_SCHEDULE_MONOTONIC, value).is_ok() == want_ok,
+                "delivery.schedule.monotonic={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_recognized_includes_delivery_keys() {
+        assert!(is_recognized(DELIVERY_MODE));
+        assert!(is_recognized(DELIVERY_MAX_DELAY_MS));
+        assert!(is_recognized(DELIVERY_SCHEDULE_MONOTONIC));
+    }
+
+    #[test]
+    fn apply_delivery_mode_propagates_both_ways() {
+        let mut scheduled = BTreeMap::new();
+        scheduled.insert(DELIVERY_MODE.into(), DELIVERY_MODE_SCHEDULED.into());
+        assert!(
+            apply_to_log_config(&scheduled, &LogConfig::default())
+                == LogConfig {
+                    delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+                    ..LogConfig::default()
+                }
+        );
+
+        let base = LogConfig {
+            delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+            ..LogConfig::default()
+        };
+        let mut immediate = BTreeMap::new();
+        immediate.insert(DELIVERY_MODE.into(), DELIVERY_MODE_IMMEDIATE.into());
+        assert!(apply_to_log_config(&immediate, &base) == LogConfig::default());
+    }
+
+    #[test]
+    fn apply_leaves_delivery_policy_alone_for_the_produce_side_keys() {
+        // Both keys are enforced on the produce path, so neither may move the
+        // log's own visibility policy.
+        let mut overrides = BTreeMap::new();
+        overrides.insert(DELIVERY_MAX_DELAY_MS.into(), "1000".into());
+        overrides.insert(DELIVERY_SCHEDULE_MONOTONIC.into(), "true".into());
+        assert!(apply_to_log_config(&overrides, &LogConfig::default()) == LogConfig::default());
+    }
+
+    #[test]
+    fn compact_and_scheduled_delivery_exclude_each_other() {
+        let cases = [
+            (Some("compact"), Some(DELIVERY_MODE_SCHEDULED), false),
+            (Some("compact"), Some(DELIVERY_MODE_IMMEDIATE), true),
+            (Some("compact"), None, true),
+            (Some("delete"), Some(DELIVERY_MODE_SCHEDULED), true),
+            (None, Some(DELIVERY_MODE_SCHEDULED), true),
+            (None, None, true),
+        ];
+        for (policy, mode, want_ok) in cases {
+            let mut overrides = BTreeMap::new();
+            if let Some(policy) = policy {
+                overrides.insert(CLEANUP_POLICY.to_string(), policy.to_string());
+            }
+            if let Some(mode) = mode {
+                overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
+            }
+            assert!(
+                validate_config_combination(&overrides).is_ok() == want_ok,
+                "overrides {overrides:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_plus_scheduled_rejection_names_both_keys() {
+        let overrides = BTreeMap::from([
+            (CLEANUP_POLICY.to_string(), "compact".to_string()),
+            (
+                DELIVERY_MODE.to_string(),
+                DELIVERY_MODE_SCHEDULED.to_string(),
+            ),
+        ]);
+        let error = validate_config_combination(&overrides).unwrap_err();
+        assert!(error.contains(CLEANUP_POLICY), "got: {error}");
+        assert!(error.contains(DELIVERY_MODE), "got: {error}");
+    }
+
+    #[test]
+    fn validate_topic_config_map_checks_pairs_and_then_combinations() {
+        let accepted = BTreeMap::from([
+            (RETENTION_MS.to_string(), "60000".to_string()),
+            (
+                DELIVERY_MODE.to_string(),
+                DELIVERY_MODE_SCHEDULED.to_string(),
+            ),
+        ]);
+        assert!(validate_topic_config_map(&accepted) == Ok(()));
+
+        let bad_pair = BTreeMap::from([(DELIVERY_MODE.to_string(), "later".to_string())]);
+        assert!(validate_topic_config_map(&bad_pair).is_err());
+
+        let unknown_key = BTreeMap::from([("flush.ms".to_string(), "1000".to_string())]);
+        assert!(validate_topic_config_map(&unknown_key).is_err());
+
+        let bad_combination = BTreeMap::from([
+            (CLEANUP_POLICY.to_string(), "compact".to_string()),
+            (
+                DELIVERY_MODE.to_string(),
+                DELIVERY_MODE_SCHEDULED.to_string(),
+            ),
+        ]);
+        assert!(validate_topic_config_map(&bad_combination).is_err());
+    }
+
+    #[test]
+    fn delivery_settings_resolve_topic_overrides_over_defaults() {
+        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+        use uuid::Uuid;
+
+        let mut image = MetadataImage::new(Uuid::nil());
+        assert!(resolve_delivery_max_delay(&image, "t") == Some(millis(604_800_000)));
+        assert!(!resolve_delivery_schedule_monotonic(&image, "t"));
+
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "t".into(),
+            overrides: BTreeMap::from([
+                (DELIVERY_MAX_DELAY_MS.into(), "90000".into()),
+                (DELIVERY_SCHEDULE_MONOTONIC.into(), "true".into()),
+            ]),
+        }));
+        assert!(resolve_delivery_max_delay(&image, "t") == Some(millis(90_000)));
+        assert!(resolve_delivery_schedule_monotonic(&image, "t"));
+
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "t".into(),
+            overrides: BTreeMap::from([(DELIVERY_MAX_DELAY_MS.into(), "-1".into())]),
+        }));
+        assert!(resolve_delivery_max_delay(&image, "t") == None);
+        assert!(!resolve_delivery_schedule_monotonic(&image, "t"));
+    }
+
+    #[test]
+    fn corrupt_delivery_settings_resolve_to_their_defaults() {
+        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+        use uuid::Uuid;
+
+        let cases = ["soon", "-5", ""];
+        for value in cases {
+            let mut image = MetadataImage::new(Uuid::nil());
+            image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: BTreeMap::from([
+                    (DELIVERY_MAX_DELAY_MS.into(), value.into()),
+                    (DELIVERY_SCHEDULE_MONOTONIC.into(), value.into()),
+                ]),
+            }));
+            assert!(
+                resolve_delivery_max_delay(&image, "t") == Some(millis(604_800_000)),
+                "delivery.max.delay.ms={value}"
+            );
+            assert!(
+                !resolve_delivery_schedule_monotonic(&image, "t"),
+                "delivery.schedule.monotonic={value}"
+            );
+        }
     }
 
     #[test]

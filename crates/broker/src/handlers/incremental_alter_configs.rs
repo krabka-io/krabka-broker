@@ -370,6 +370,10 @@ fn topic_config_record(
             }
         }
     }
+    // The ops alone cannot show a conflict: `merged` is what the topic ends up
+    // with, so the cross-key rules are checked against that.
+    config_keys::validate_config_combination(&merged)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides: merged,
@@ -819,6 +823,139 @@ mod tests {
         handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
         assert!(out.error_code == codes::INVALID_CONFIG);
         assert!(to_submit.is_empty());
+    }
+
+    fn make_topic_resource(name: &str, configs: Vec<AlterableConfig>) -> AlterConfigsResource {
+        AlterConfigsResource {
+            resource_type: RESOURCE_TYPE_TOPIC,
+            resource_name: name.into(),
+            configs,
+            ..Default::default()
+        }
+    }
+
+    fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) -> MetadataImage {
+        let mut img = MetadataImage::new(uuid::Uuid::nil());
+        img.apply(&MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+            name: name.into(),
+            topic_id: uuid::Uuid::nil(),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: name.into(),
+            overrides: overrides
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }));
+        img
+    }
+
+    #[test]
+    fn compaction_op_conflicts_with_scheduled_delivery_already_on_the_topic() {
+        // The ops alone are legal. Only the merge with the topic's existing
+        // config shows the conflict.
+        let img = image_with_topic_config("orders", &[(config_keys::DELIVERY_MODE, "scheduled")]);
+
+        let (code, message) = topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg(config_keys::CLEANUP_POLICY, "compact")],
+            ),
+            &img,
+        )
+        .expect_err("compaction merged onto a scheduled topic must be rejected");
+
+        assert!(code == codes::INVALID_CONFIG);
+        assert!(
+            message.contains(config_keys::CLEANUP_POLICY),
+            "got: {message}"
+        );
+        assert!(
+            message.contains(config_keys::DELIVERY_MODE),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn scheduled_delivery_op_conflicts_with_compaction_already_on_the_topic() {
+        let img = image_with_topic_config("orders", &[(config_keys::CLEANUP_POLICY, "compact")]);
+
+        let (code, _) = topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg(config_keys::DELIVERY_MODE, "scheduled")],
+            ),
+            &img,
+        )
+        .expect_err("scheduling a compacted topic must be rejected");
+
+        assert!(code == codes::INVALID_CONFIG);
+    }
+
+    #[test]
+    fn deleting_the_delivery_mode_clears_the_conflict_in_the_same_request() {
+        let img = image_with_topic_config("orders", &[(config_keys::DELIVERY_MODE, "scheduled")]);
+
+        let record = topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![
+                    make_del_cfg(config_keys::DELIVERY_MODE),
+                    make_set_cfg(config_keys::CLEANUP_POLICY, "compact"),
+                ],
+            ),
+            &img,
+        )
+        .expect("removing the schedule leaves a plain compacted topic");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: std::collections::BTreeMap::from([(
+                config_keys::CLEANUP_POLICY.to_string(),
+                "compact".to_string(),
+            )]),
+        });
+        assert!(record == expected);
+    }
+
+    #[test]
+    fn scheduled_delivery_keys_merge_onto_an_existing_topic_config() {
+        let img = image_with_topic_config("retries", &[(config_keys::RETENTION_MS, "60000")]);
+
+        let record = topic_config_record(
+            &make_topic_resource(
+                "retries",
+                vec![
+                    make_set_cfg(config_keys::DELIVERY_MODE, "scheduled"),
+                    make_set_cfg(config_keys::DELIVERY_MAX_DELAY_MS, "3600000"),
+                    make_set_cfg(config_keys::DELIVERY_SCHEDULE_MONOTONIC, "true"),
+                ],
+            ),
+            &img,
+        )
+        .expect("valid scheduled delivery ops");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "retries".into(),
+            overrides: std::collections::BTreeMap::from([
+                (config_keys::RETENTION_MS.to_string(), "60000".to_string()),
+                (
+                    config_keys::DELIVERY_MODE.to_string(),
+                    "scheduled".to_string(),
+                ),
+                (
+                    config_keys::DELIVERY_MAX_DELAY_MS.to_string(),
+                    "3600000".to_string(),
+                ),
+                (
+                    config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_string(),
+                    "true".to_string(),
+                ),
+            ]),
+        });
+        assert!(record == expected);
     }
 
     #[test]

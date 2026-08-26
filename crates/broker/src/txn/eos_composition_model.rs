@@ -45,7 +45,7 @@ use super::{
     state::{TxnEntry, TxnState},
     version::TxnVersion,
 };
-use crate::handlers::fetch::compute_visibility_window;
+use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
 
 const TARGET_STATE_COUNT: usize = 20_000_000;
 const MAX_UNIQUE_STATES: usize = 2_000_000;
@@ -168,12 +168,17 @@ fn effective_lso(log: &[Batch], hw: Offset) -> Offset {
     let log_end = Offset(model_offset(log.len()));
     let l = lso(log);
     let vw = compute_visibility_window(
-        false,     // consumer, not follower
-        true,      // read_committed
-        Offset(0), // log_start
-        hw,        // hw (may be < log_end: replication lag)
-        l,         // lso
-        log_end,   // log_end
+        false, // consumer, not follower
+        true,  // read_committed
+        FetchWatermarks {
+            log_start: Offset(0),
+            // The HW may sit below the log end: replication lag.
+            hw,
+            lso: l,
+            log_end,
+            // This model's topic delivers immediately.
+            deliverable: hw,
+        },
         Offset(0), // fetch_offset
     );
     vw.effective_lso // = lso.min(hw)

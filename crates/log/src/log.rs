@@ -14,7 +14,8 @@ use crabka_units::prelude::{ByteSize, ByteSizeExt, TimeExt as _, bytes};
 use tracing::instrument;
 
 use crate::{
-    config::LogConfig,
+    config::{DeliveryPolicy, LogConfig},
+    delivery::{self, DeliveryAdvance},
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
     name,
@@ -115,6 +116,19 @@ pub struct Log {
     /// append-at bases must then equal
     /// `max(log_end_offset, reconciled_frontier)`.
     reconciled_frontier: Offset,
+
+    /// Cached deliver-at-time watermark: the first offset whose activation
+    /// time has not passed. It only ever moves forward, and it is derived
+    /// from the batch timestamps on disk, so nothing persists it.
+    /// [`Log::advance_delivery_watermark`] recomputes it.
+    delivery_watermark: Offset,
+
+    /// Activation time of the batch that stopped the last activation walk.
+    /// While that instant is still in the future, no walk can get past that
+    /// batch, so a repeat advance answers from this field and does no I/O.
+    /// `None` means the last walk found nothing waiting, or that a truncation
+    /// or a compaction may have removed the batch it named.
+    delivery_pending_ms: Option<i64>,
 }
 
 /// Result of [`Log::read`]: the absolute offset of the first batch
@@ -357,6 +371,11 @@ impl Log {
                 // offset — which after a restart manufactures an offset gap that
                 // strands a follower fetching from a low offset.
                 seg.seal_at(Offset(base_offsets[i + 1] - 1));
+                // `Segment::open` also leaves `max_timestamp` unknown, and
+                // `retention::time_based_evict` reads it as "older than any
+                // cutoff". Without this the first tick after a restart deletes
+                // every sealed segment.
+                seg.restore_max_timestamp()?;
                 segments.push(seg);
             } else {
                 active = Some(Segment::open_active(
@@ -406,7 +425,12 @@ impl Log {
             stamp_indexes: BTreeMap::new(),
             epoch_checkpoint,
             reconciled_frontier: Offset(0),
+            delivery_watermark: Offset(0),
+            delivery_pending_ms: None,
         };
+        // Recovery needs no durable watermark: the schedule is in the records,
+        // so the first advance rebuilds it from the log start.
+        log.delivery_watermark = log.log_start_offset();
         log.rebuild_producer_and_transaction_state()?;
         Ok(log)
     }
@@ -740,6 +764,7 @@ impl Log {
         }
 
         producer_snapshot::remove_all(&self.dir)?;
+        self.invalidate_delivery_schedule(new_base);
 
         // Drop every sealed segment + its on-disk files.
         while let Some(popped) = self.segments.pop() {
@@ -1930,6 +1955,10 @@ impl Log {
         if offset >= log_end {
             return Ok(()); // nothing to truncate
         }
+        // The discarded tail may hold the batch that stopped the last
+        // activation walk, so what that walk learned about this offset and
+        // above no longer describes the log.
+        self.invalidate_delivery_schedule(offset);
         if offset < log_start {
             return Err(LogError::OffsetTooLow {
                 requested: offset,
@@ -2139,6 +2168,14 @@ impl Log {
         if self.config.read().unwrap().remote_storage_enable {
             return Ok(());
         }
+        // Refresh the visibility watermark before retention reads it, so a
+        // partition that no consumer has fetched from still gets an accurate
+        // floor. On a topic that delivers immediately this returns the log
+        // end and does no I/O.
+        let visible_floor = self
+            .advance_delivery_watermark(retention::now_ms(now))
+            .watermark;
+
         let sealed_refs: Vec<&Segment> = self.segments.iter().collect();
         let active_size = self.active.as_ref().map_or(ByteSize::ZERO, Segment::size);
 
@@ -2156,6 +2193,20 @@ impl Log {
             }
         }
 
+        // Guard: never evict a segment that still holds a record nobody has
+        // been allowed to read. Time retention already spares a future
+        // timestamp, because it never falls below the age cutoff, but size
+        // retention has no such property and would delete a scheduled batch
+        // before its activation time. On a topic that does not schedule
+        // delivery the floor is the log end, so nothing is spared.
+        let scheduled: HashSet<Offset> = self
+            .segments
+            .iter()
+            .filter(|segment| segment.last_offset() >= visible_floor)
+            .map(Segment::base_offset)
+            .collect();
+        to_evict.retain(|base| !scheduled.contains(base));
+
         // Guard: never drop the only remaining segment. `total_segments`
         // includes the active one.
         let total_segments = self.segments.len() + usize::from(self.active.is_some());
@@ -2171,6 +2222,235 @@ impl Log {
             let _ = retention::delete_segment_files(&self.dir, base);
         }
         Ok(())
+    }
+
+    /// Recompute the deliver-at-time watermark for the clock reading
+    /// `now_ms`, and report when the next scheduled batch comes due.
+    ///
+    /// The watermark is the first offset that is not visible yet. A fetch
+    /// caps its limit offset at it, so a batch whose activation time has not
+    /// passed is never served. The value stays inside
+    /// `[log_start_offset(), log_end_offset()]`, and it only moves forward
+    /// while the records under it stay: a truncation carries it back down with
+    /// the records it cut away, because the offsets they held may be filled
+    /// again by a batch that is not due.
+    ///
+    /// A topic that does not schedule delivery answers `log_end_offset()`
+    /// before any I/O: this sits on the fetch hot path and an ordinary topic
+    /// must pay nothing for it. A scheduled topic walks batch headers forward
+    /// from the cached watermark, and skips whole segments whose own maximum
+    /// timestamp proves everything in them is active. A repeat call with no
+    /// change of time and no new records answers from the cache.
+    ///
+    /// Nothing here is persisted. The schedule is in the record timestamps,
+    /// so after a restart or a leader change the walk starts again from the
+    /// log start and derives the same answer, at worst more slowly.
+    ///
+    /// # Panics
+    ///
+    /// Panics when another thread poisoned the log configuration lock.
+    pub fn advance_delivery_watermark(&mut self, now_ms: i64) -> DeliveryAdvance {
+        let (scheduled, uncertainty_ms) = self.delivery_settings();
+        if !scheduled {
+            return DeliveryAdvance {
+                watermark: self.log_end_offset(),
+                next_deadline_ms: None,
+            };
+        }
+
+        let end = self.log_end_offset();
+        let cursor = self.bounded_watermark();
+        let active_through_ms = now_ms.saturating_sub(uncertainty_ms);
+
+        if cursor == self.delivery_watermark {
+            match self.delivery_pending_ms {
+                // The batch that stopped the last walk is still waiting, and
+                // no walk can get past it, so the watermark cannot have moved.
+                Some(activation_ms) if activation_ms > active_through_ms => {
+                    return DeliveryAdvance {
+                        watermark: cursor,
+                        next_deadline_ms: Some(delivery::visible_at_ms(
+                            activation_ms,
+                            uncertainty_ms,
+                        )),
+                    };
+                }
+                // The last walk reached the log end and nothing was appended.
+                None if cursor == end => {
+                    return DeliveryAdvance {
+                        watermark: cursor,
+                        next_deadline_ms: None,
+                    };
+                }
+                _ => {}
+            }
+        }
+
+        let (watermark, pending_ms) = self.walk_activation(cursor, end, active_through_ms);
+        self.delivery_watermark = watermark;
+        self.delivery_pending_ms = pending_ms;
+        DeliveryAdvance {
+            watermark,
+            next_deadline_ms: pending_ms
+                .map(|activation_ms| delivery::visible_at_ms(activation_ms, uncertainty_ms)),
+        }
+    }
+
+    /// Deliver-at-time watermark as the last advance left it.
+    ///
+    /// This method reads the cached value and walks nothing, so a reader that
+    /// must not do I/O can use it. It answers `log_end_offset()` on a topic
+    /// that does not schedule delivery, where every durable record is visible.
+    ///
+    /// # Panics
+    ///
+    /// Panics when another thread poisoned the log configuration lock.
+    #[must_use]
+    pub fn delivery_watermark(&self) -> Offset {
+        if self.config.read().unwrap().delivery_policy != DeliveryPolicy::Scheduled {
+            return self.log_end_offset();
+        }
+        self.bounded_watermark()
+    }
+
+    /// Inclusive, batch-aligned offset ranges inside `[start, end]` that are
+    /// not visible yet.
+    ///
+    /// A share consumer may skip a waiting record and come back to it later,
+    /// so it needs every gap in the window and not only the leading prefix
+    /// that [`Log::advance_delivery_watermark`] reports. Adjacent ranges are
+    /// merged. Each range covers whole batches even where the window cuts
+    /// through one, because the share reader fetches with [`Log::read_raw`]
+    /// and that is batch-granular.
+    ///
+    /// The result is empty on a topic that does not schedule delivery, and
+    /// empty when the window holds no records.
+    ///
+    /// # Panics
+    ///
+    /// Panics when another thread poisoned the log configuration lock.
+    #[must_use]
+    pub fn pending_activation_ranges(
+        &self,
+        start: Offset,
+        end: Offset,
+        now_ms: i64,
+    ) -> Vec<(Offset, Offset)> {
+        let (scheduled, uncertainty_ms) = self.delivery_settings();
+        if !scheduled {
+            return Vec::new();
+        }
+        let low = start.max(self.log_start_offset());
+        let high = end.min(self.log_end_offset() - 1);
+        if low > high {
+            return Vec::new();
+        }
+        let active_through_ms = now_ms.saturating_sub(uncertainty_ms);
+
+        let mut ranges: Vec<(Offset, Offset)> = Vec::new();
+        let mut cursor = low;
+        for segment in self.segments.iter().chain(self.active.as_ref()) {
+            if cursor > high {
+                break;
+            }
+            if segment.last_offset() < cursor {
+                continue;
+            }
+            if let Err(error) =
+                segment.pending_activation_ranges_into(cursor, high, active_through_ms, &mut ranges)
+            {
+                tracing::warn!(
+                    %error,
+                    base_offset = segment.base_offset().0,
+                    "activation scan failed; treating the rest of the window as pending",
+                );
+                // What cannot be read must not be served.
+                ranges.push((cursor, high));
+                break;
+            }
+            cursor = (segment.last_offset() + 1).max(cursor);
+        }
+        delivery::coalesce_ranges(ranges)
+    }
+
+    /// Whether this topic schedules delivery, and its clock bound in
+    /// milliseconds.
+    fn delivery_settings(&self) -> (bool, i64) {
+        let config = self.config.read().unwrap();
+        (
+            config.delivery_policy == DeliveryPolicy::Scheduled,
+            config.delivery_clock_uncertainty.millis_i64_trunc(),
+        )
+    }
+
+    /// The cached watermark held inside the offsets the log still has.
+    ///
+    /// A truncation lowers the log end below the watermark, and a raised log
+    /// start moves past it, so the cached value is bounded on each read rather
+    /// than reset at every mutation site.
+    fn bounded_watermark(&self) -> Offset {
+        self.delivery_watermark
+            .max(self.log_start_offset())
+            .min(self.log_end_offset())
+    }
+
+    /// Walk segments from `from` and stop at the first batch that is not
+    /// active. Returns the new watermark and that batch's activation time.
+    ///
+    /// A failed scan stops the walk and keeps the watermark where it reached,
+    /// because a watermark that is too low delays delivery while one that is
+    /// too high breaks the promise never to deliver early.
+    fn walk_activation(
+        &self,
+        from: Offset,
+        end: Offset,
+        active_through_ms: i64,
+    ) -> (Offset, Option<i64>) {
+        let mut cursor = from;
+        for segment in self.segments.iter().chain(self.active.as_ref()) {
+            if cursor >= end {
+                break;
+            }
+            if segment.last_offset() < cursor {
+                continue;
+            }
+            match segment.scan_activation(cursor, active_through_ms) {
+                Ok(scan) => {
+                    cursor = scan.active_end.max(cursor).min(end);
+                    if let Some(activation_ms) = scan.pending_at {
+                        return (cursor, Some(activation_ms));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        base_offset = segment.base_offset().0,
+                        "activation scan failed; delivery watermark holds",
+                    );
+                    return (cursor, None);
+                }
+            }
+        }
+        (cursor, None)
+    }
+
+    /// Forget what the last activation walk learned at and above
+    /// `changed_from`.
+    ///
+    /// Every path that removes or rewrites records calls this, so the next
+    /// advance walks instead of trusting a deadline for a batch that is no
+    /// longer there.
+    ///
+    /// The watermark comes down with the deadline, and that half is what keeps
+    /// the promise never to deliver early. A truncation cuts a suffix away, and
+    /// [`Log::bounded_watermark`] then masks the stale value against the lower
+    /// log end. But the field still holds it, so an append that pushes the log
+    /// end back above it unmasks it: the next walk resumes at the stale offset
+    /// and steps straight over the records that took the truncated ones' place,
+    /// declaring them visible without ever reading their activation times.
+    fn invalidate_delivery_schedule(&mut self, changed_from: Offset) {
+        self.delivery_pending_ms = None;
+        self.delivery_watermark = self.delivery_watermark.min(changed_from);
     }
 
     /// First absolute offset still present on this broker's local disk
@@ -2199,7 +2479,10 @@ impl Log {
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
         let scan_window = self.config.read().unwrap().timestamp_scan_window;
         for seg in &self.segments {
-            if (seg.max_timestamp() == i64::MIN || seg.max_timestamp() >= target_ts)
+            // A sealed segment restores its maximum on open, so the unknown
+            // sentinel survives only where the segment holds no readable
+            // batch. There is nothing in such a segment to find.
+            if seg.max_timestamp() >= target_ts
                 && let Some(hit) = seg.offset_for_timestamp_with_window(target_ts, scan_window)
             {
                 return Some(hit);
@@ -2409,6 +2692,10 @@ impl Log {
         };
 
         let now_ms = retention::now_ms(ctx.now);
+        // Compaction rewrites sealed segments, so any record the last
+        // activation walk read may not survive it.
+        let compacted_from = self.log_start_offset();
+        self.invalidate_delivery_schedule(compacted_from);
         let consumed_bases: Vec<Offset> = self.segments.iter().map(Segment::base_offset).collect();
 
         // Borrow sealed segments to run map + rewrite (which open
@@ -2439,7 +2726,9 @@ impl Log {
         crate::compact::atomic_swap(&self.dir, &consumed_bases, &rewrite)?;
 
         // open_active(validate=true) tail-scans the new .log to populate
-        // last_offset + max_timestamp; then seal() flips the flag.
+        // last_offset + max_timestamp; then seal() flips the flag. The rewrite
+        // leaves the index sidecars empty, so that scan starts at position 0
+        // and sees every batch: the segment's maximum is exact.
         let mut new_seg = Segment::open_active(&self.dir, rewrite.new_base_offset, true)?;
         new_seg.seal();
         self.segments.push(new_seg);

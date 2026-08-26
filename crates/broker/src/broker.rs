@@ -4528,6 +4528,21 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         ));
 
+        // KFC-1 deliver-at-time visibility. The task is a liveness aid only: it
+        // wakes a consumer parked at the delivery watermark when the next batch
+        // comes due. A fetch recomputes that watermark under the log mutex, so
+        // this task can die without making a single fetch wrong.
+        tokio::spawn(crate::delivery::scheduler::run(
+            Arc::clone(&partitions),
+            config.node_id,
+            crate::delivery::config::DeliveryConfig::default(),
+            Arc::new(crate::delivery::metrics::BrokerDeliveryMetrics::new(
+                runtime.metrics.clone(),
+            )),
+            Arc::new(crate::delivery::DeliveryWaker::new()),
+            runtime.supervisor_shutdown.child_token(),
+        ));
+
         crate::share_partition::backlog_poller::BacklogPoller {
             node_id: config.node_id,
             coordinator: Arc::clone(&group_coordinator),
@@ -5093,6 +5108,10 @@ pub(crate) fn try_spawn_partition_with_replication_target(
     )?;
     let (tx, rx) = tokio::sync::mpsc::channel::<WriterMessage>(partition_writer_queue_depth);
     let notify = Arc::new(tokio::sync::Notify::new());
+    let delivery = crate::delivery::DeliveryHandles::new();
+    // Seed the watermark mirror from the log the recovery walk just opened, so
+    // a reader that takes no lock never sees the placeholder zero.
+    delivery.publish_now(&log);
     let mut initial_replica_state = crate::replica_state::ReplicaState::new();
     initial_replica_state.current_leader_epoch =
         crabka_ids::LeaderEpoch(initial_target.leader_epoch.0);
@@ -5117,6 +5136,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
             notify.clone(),
             replica_state.clone(),
             hw_advance_notify.clone(),
+            delivery.clone(),
         ),
         (log_dir_status, producer_state, wal),
         (producer_id_expiration, max_produce_group),
@@ -5156,6 +5176,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         append_notify: notify,
         replica_state,
         hw_advance_notify,
+        delivery,
         current_leader,
         current_leader_epoch,
         replication_target,

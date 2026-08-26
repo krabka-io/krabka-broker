@@ -6,6 +6,9 @@
 //!   task drains the channel; see `partition_writer.rs`.
 //! - a [`Notify`] that fires after every successful append. Long-poll Fetch
 //!   uses it to wake when new data arrives.
+//! - the partition's deliver-at-time state: a lock-free mirror of the delivery
+//!   watermark and a second [`Notify`] that fires when a scheduled batch comes
+//!   due. See [`crate::delivery`].
 
 use std::{
     path::PathBuf,
@@ -27,8 +30,11 @@ use tokio::{
 
 // `std::sync::Mutex` is kept for `log` (sync hot-path callers);
 // `replica_state` uses `tokio::sync::Mutex` to avoid blocking worker threads.
-use crate::error::BrokerError;
-use crate::replica_state::ReplicaState;
+use crate::{
+    delivery::{DeliveryHandles, DeliveryWaker, PartitionDelivery},
+    error::BrokerError,
+    replica_state::ReplicaState,
+};
 
 /// Immutable topic identity plus the leader generation allowed to mutate a
 /// follower log. A read guard over this value linearizes replication writes
@@ -242,6 +248,13 @@ pub struct Partition {
     pub append_notify: Arc<Notify>,
     pub(crate) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,
+    /// Deliver-at-time state: the lock-free delivery-watermark mirror, the
+    /// wake a long poll parks on until a scheduled batch comes due, and the
+    /// slot the broker-wide delivery scheduler installs its poke into.
+    ///
+    /// The writer actor holds a clone of the same handles, so an append
+    /// refreshes the mirror without reaching back through this struct.
+    pub(crate) delivery: DeliveryHandles,
     /// Current leader's `NodeId` from the metadata image. Atomic for
     /// lock-free reads in the Produce/Fetch hot paths.
     pub current_leader: Arc<AtomicU64>,
@@ -590,6 +603,36 @@ impl Partition {
         self.replica_state.lock().await.hw
     }
 
+    /// Cached deliver-at-time watermark: the first offset that is not visible
+    /// to a consumer yet. Reads a mirror, so it takes no lock and does no I/O.
+    ///
+    /// The value is as fresh as the last recompute left it. A fetch must not
+    /// cap itself on it, because a batch can come due between two recomputes.
+    /// A fetch calls [`Self::advance_delivery_watermark`], or recomputes on the
+    /// log it already holds. This accessor is for a reader that must not take
+    /// the log mutex, such as the metric sweep.
+    #[must_use]
+    pub(crate) fn delivery_watermark(&self) -> Offset {
+        self.delivery.watermark()
+    }
+
+    /// Recompute the deliver-at-time watermark against `now_ms`, publish it to
+    /// the mirror, and wake a long poll parked at the old value.
+    ///
+    /// Returns `None` on a topic that delivers immediately, which has no
+    /// schedule to track. The mirror is refreshed either way, and an ordinary
+    /// topic pays one uncontended mutex and no I/O for it.
+    pub(crate) fn advance_delivery_watermark(&self, now_ms: i64) -> Option<PartitionDelivery> {
+        self.delivery.publish(&self.log, now_ms)
+    }
+
+    /// Let an append to this partition re-arm the broker-wide delivery
+    /// scheduler. The scheduler calls this on every sweep that sees the
+    /// partition, and a repeat install of the same waker stores nothing.
+    pub(crate) fn adopt_delivery_waker(&self, waker: &Arc<DeliveryWaker>) {
+        self.delivery.adopt(waker);
+    }
+
     /// KIP-392: record the high watermark the leader reported in a follower
     /// Fetch response, so that consumer reads served from this follower are
     /// bounded correctly. It clamps to the local log end, so the broker never
@@ -856,6 +899,7 @@ impl std::fmt::Debug for Partition {
         f.debug_struct("Partition")
             .field("topic", &self.topic)
             .field("partition_id", &self.index)
+            .field("delivery", &self.delivery)
             .finish_non_exhaustive()
     }
 }
@@ -888,6 +932,7 @@ mod tests {
             hw_advance_notify,
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -974,6 +1019,10 @@ mod tests {
             crate::replica_state::ReplicaState::new(),
         ));
         let hw_advance_notify = Arc::new(Notify::new());
+        // The writer and the partition share one set of delivery handles, as
+        // they do in production: the writer refreshes the mirror the partition
+        // reads.
+        let delivery = DeliveryHandles::new();
         let writer = tokio::spawn(crate::partition_writer::run(
             ("t".to_string(), PartitionIndex(0)),
             (log.clone(), log_dir.clone()),
@@ -982,6 +1031,7 @@ mod tests {
                 append_notify.clone(),
                 replica_state.clone(),
                 hw_advance_notify.clone(),
+                delivery.clone(),
             ),
             (
                 crate::log_dir_status::LogDirRegistry::default(),
@@ -1000,6 +1050,7 @@ mod tests {
             hw_advance_notify,
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery,
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1107,6 +1158,7 @@ mod tests {
             hw_advance_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1149,6 +1201,7 @@ mod tests {
             hw_advance_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1175,6 +1228,7 @@ mod tests {
             hw_advance_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1383,6 +1437,7 @@ mod tests {
             hw_advance_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1412,6 +1467,7 @@ mod tests {
             hw_advance_notify: Arc::new(Notify::new()),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1443,6 +1499,7 @@ mod tests {
             hw_advance_notify: hw_advance_notify.clone(),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),
@@ -1546,6 +1603,7 @@ mod tests {
             hw_advance_notify: hw_advance_notify.clone(),
             current_leader: Arc::new(AtomicU64::new(0)),
             current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            delivery: DeliveryHandles::new(),
             replication_target: initial_replication_target(None),
             diskless: false,
             writer_handle: Arc::new(Mutex::new(Some(writer))),

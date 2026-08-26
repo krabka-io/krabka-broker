@@ -30,7 +30,7 @@ use stateright::{Checker, Model, Property};
 
 use crate::{
     config_keys::RecoveryStrategy,
-    handlers::fetch::compute_visibility_window,
+    handlers::fetch::{FetchWatermarks, compute_visibility_window},
     leader_election::{FailoverDecision, failover_one},
     replica_state::ReplicaState,
     unclean_recovery::{ReplicaLogInfo, select_best_replica},
@@ -523,10 +523,14 @@ impl Model for DpModel {
                 let vw = compute_visibility_window(
                     false, // consumer, not follower
                     read_committed,
-                    Offset(0), // log_start
-                    Offset(s.hwm),
-                    Offset(s.hwm), // lso = hwm (no txns in v1)
-                    Offset(leader_log_len),
+                    FetchWatermarks {
+                        log_start: Offset(0),
+                        hw: Offset(s.hwm),
+                        lso: Offset(s.hwm), // lso = hwm (no txns in v1)
+                        log_end: Offset(leader_log_len),
+                        // This model's topic delivers immediately.
+                        deliverable: Offset(s.hwm),
+                    },
                     Offset(fetch_offset),
                 );
                 assert!(

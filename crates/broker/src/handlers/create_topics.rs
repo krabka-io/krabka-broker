@@ -26,7 +26,7 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
-    config_keys::{resolve_broker_witness, resolve_preferred_leader_site},
+    config_keys::{self, resolve_broker_witness, resolve_preferred_leader_site},
     error::BrokerError,
     replicator_supervisor::materialize_partition,
     site_placement::{SiteBrokerView, stretch_replicas},
@@ -316,6 +316,18 @@ pub(crate) async fn handle(
         let name = topic_req.name.clone();
         let partition_count = topic_req.num_partitions;
 
+        // Kafka validates a topic's configs before it looks at placement, so a
+        // rejected config wins over INVALID_PARTITIONS on the same topic.
+        let config_overrides = topic_config_overrides(&topic_req);
+        if let Err(reason) = config_keys::validate_topic_config_map(&config_overrides) {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_CONFIG,
+                Some(reason),
+            ));
+            continue;
+        }
+
         // Reject invalid partition counts before attempting automatic placement.
         // Manual assignments use -1 for both count and replication factor.
         if topic_req.assignments.is_empty() && partition_count <= 0 {
@@ -352,18 +364,8 @@ pub(crate) async fn handle(
         let topic_id = Uuid::new_v4();
 
         // Build the batch: one TopicRecord + N PartitionRecords.
-        let records = topic_records(&topic_req, topic_id, &assignments);
-        let topic_config_overrides = topic_req
-            .configs
-            .iter()
-            .filter_map(|config| {
-                config
-                    .value
-                    .as_ref()
-                    .map(|value| (config.name.clone(), value.clone()))
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let diskless = crate::broker::diskless_topic_config(Some(&topic_config_overrides));
+        let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+        let diskless = crate::broker::diskless_topic_config(Some(&config_overrides));
 
         let result = controller.submit_change(records).await;
 
@@ -558,10 +560,26 @@ async fn materialize_topic(
     }
 }
 
+/// A topic's config overrides, as `CreateTopics` carries them. A config with
+/// no value is Kafka's "use the default", so it contributes no override.
+fn topic_config_overrides(request: &CreatableTopic) -> std::collections::BTreeMap<String, String> {
+    request
+        .configs
+        .iter()
+        .filter_map(|config| {
+            config
+                .value
+                .as_ref()
+                .map(|value| (config.name.clone(), value.clone()))
+        })
+        .collect()
+}
+
 fn topic_records(
     request: &CreatableTopic,
     topic_id: Uuid,
     assignments: &[Vec<crabka_raft::NodeId>],
+    overrides: &std::collections::BTreeMap<String, String>,
 ) -> Vec<MetadataRecord> {
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: request.name.clone(),
@@ -586,20 +604,10 @@ fn topic_records(
             partition_epoch: 0,
         })
     }));
-    let overrides = request
-        .configs
-        .iter()
-        .filter_map(|config| {
-            config
-                .value
-                .as_ref()
-                .map(|value| (config.name.clone(), value.clone()))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
     if !overrides.is_empty() {
         records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: request.name.clone(),
-            overrides,
+            overrides: overrides.clone(),
         }));
     }
     records
@@ -1043,6 +1051,20 @@ mod handler_tests {
         }
     }
 
+    fn topic_with_configs(name: &str, configs: &[(&str, &str)]) -> CreatableTopic {
+        CreatableTopic {
+            configs: configs
+                .iter()
+                .map(|(key, value)| CreatableTopicConfig {
+                    name: (*key).into(),
+                    value: Some((*value).into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..topic(name, 1, 1)
+        }
+    }
+
     fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {
         CreateTopicsRequest {
             topics,
@@ -1321,6 +1343,116 @@ mod handler_tests {
         assert!(topic.partitions == 2);
         let configs = image.topic_config("configured").expect("topic configs");
         assert!(configs.get("retention.ms").map(String::as_str) == Some("60000"));
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
+        /// One rejection case: the row's label, a config map that must never
+        /// reach the metadata quorum, and the substrings the operator needs to
+        /// see in the rejection.
+        type RejectedConfig<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
+
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+
+        let cases: [RejectedConfig<'_>; 4] = [
+            ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
+            (
+                "bad-delivery-mode",
+                &[("delivery.mode", "later")],
+                &["delivery.mode"],
+            ),
+            (
+                "bad-delivery-delay",
+                &[("delivery.max.delay.ms", "-2")],
+                &["-2"],
+            ),
+            (
+                "compacted-schedule",
+                &[
+                    ("cleanup.policy", "compact"),
+                    ("delivery.mode", "scheduled"),
+                ],
+                &["cleanup.policy", "delivery.mode"],
+            ),
+        ];
+
+        for (name, configs, needles) in cases {
+            let request = request(vec![topic_with_configs(name, configs)]);
+
+            let resp = drive(&broker, &request, &p, &peer).await;
+
+            assert!(resp.topics.len() == 1, "topic {name}");
+            check!(
+                resp.topics[0].error_code == codes::INVALID_CONFIG,
+                "topic {name}"
+            );
+            let message = resp.topics[0].error_message.clone().unwrap_or_default();
+            for needle in needles {
+                check!(message.contains(needle), "topic {name}: {message}");
+            }
+            check!(
+                broker_handle
+                    .controller_image_for_test()
+                    .topic(name)
+                    .is_none(),
+                "topic {name} must not be created"
+            );
+        }
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let req = request(vec![topic_with_configs(
+            "retries",
+            &[
+                ("delivery.mode", "scheduled"),
+                ("delivery.max.delay.ms", "-1"),
+                ("delivery.schedule.monotonic", "true"),
+            ],
+        )]);
+
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        assert!(resp.topics.len() == 1);
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![CreatableTopicResult {
+                name: "retries".into(),
+                topic_id: resp.topics[0].topic_id,
+                error_code: codes::NONE,
+                error_message: None,
+                num_partitions: 1,
+                replication_factor: 1,
+                configs: Some(Vec::new()),
+                topic_config_error_code: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert!(resp == expected);
+
+        let image = broker_handle.controller_image_for_test();
+        let configs = image.topic_config("retries").expect("topic configs");
+        let expected_configs = std::collections::BTreeMap::from([
+            ("delivery.mode".to_string(), "scheduled".to_string()),
+            ("delivery.max.delay.ms".to_string(), "-1".to_string()),
+            (
+                "delivery.schedule.monotonic".to_string(),
+                "true".to_string(),
+            ),
+        ]);
+        assert!(*configs == expected_configs);
         broker_handle.shutdown().await;
     }
 

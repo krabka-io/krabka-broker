@@ -2,26 +2,32 @@
 //! (`super::compute_visibility_window`).
 //!
 //! The state is the advancing partition watermarks
-//! `{log_start, hw, lso, log_end}`, with the Kafka invariant
-//! `0 <= log_start <= lso <= hw <= log_end`. `Advance*` actions raise them
+//! `{log_start, hw, lso, deliverable, log_end}`, with the Kafka invariant
+//! `0 <= log_start <= lso <= hw <= log_end` and KFC-1's
+//! `log_start <= deliverable <= hw`. `Advance*` actions raise them
 //! monotonically: appends raise LEO, ISR catch-up raises HW, txn commits raise
-//! LSO, and retention raises `log_start`. `Fetch` probes drive the real
-//! decision.
+//! LSO, retention raises `log_start`, and a batch coming due raises the
+//! delivery watermark. `Fetch` probes drive the real decision.
 //!
 //! For each `Fetch` the model asserts the clamp contract. A consumer fetch
 //! never exposes an offset beyond the high-watermark, so there is no dirty
-//! read. The broker clamps a `read_committed` consumer at `lso.min(hw)`, and it
-//! serves a follower up to the log-end. The model also asserts the
-//! single-source-of-truth response-field contract, the de-dup'd hazard from
-//! `do_read`. For each `Advance*` the model asserts KIP-227 monotonicity: the
-//! reported HW/LSO never regress as the log progresses. See the design spec
+//! read, and it never exposes one at or beyond the delivery watermark, so it
+//! never delivers a record before it is due. The broker clamps a
+//! `read_committed` consumer at `lso.min(hw)`, and it serves a follower up to
+//! the log-end whatever the delivery watermark says, because replication is not
+//! gated. The model also asserts the single-source-of-truth response-field
+//! contract, the de-dup'd hazard from `do_read`. For each `Advance*` it asserts
+//! KIP-227 monotonicity: the reported HW/LSO never regress as the log
+//! progresses, and the delivery watermark does not enter those two formulas at
+//! all. See the design spec
 //! `docs/superpowers/specs/2026-06-14-crabka-fetch-hwm-visibility-model-design.md`.
 
 use std::time::Duration;
 
+use assert2::assert;
 use stateright::{Checker, Model, Property};
 
-use super::{Offset, compute_visibility_window};
+use super::{FetchWatermarks, Offset, compute_visibility_window};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 40;
@@ -36,6 +42,8 @@ struct VisState {
     log_start: i64,
     hw: i64,
     lso: i64,
+    /// KFC-1's delivery watermark: the first offset that is not due yet.
+    deliverable: i64,
     log_end: i64,
 }
 
@@ -45,18 +53,22 @@ enum VisAction {
     AdvanceHw,
     AdvanceLso,
     AdvanceLogStart,
+    /// A scheduled batch reached its activation time.
+    AdvanceDeliverable,
     /// `(is_follower, read_committed, fetch_offset)`. `read_committed` implies
     /// `!is_follower`.
     Fetch(bool, bool, i64),
 }
 
 /// Mirror of the `response_hw` formula of the fn. This is the contract that
-/// the model asserts.
+/// the model asserts. The delivery watermark is deliberately not an input: the
+/// broker reports the true high watermark on a scheduled topic too.
 fn response_hw(is_follower: bool, hw: i64, log_end: i64) -> i64 {
     if is_follower { log_end } else { hw }
 }
 
-/// Mirror of the fn's `response_lso` formula.
+/// Mirror of the fn's `response_lso` formula. The delivery watermark is not an
+/// input here either.
 fn response_lso(is_follower: bool, read_committed: bool, hw: i64, lso: i64, log_end: i64) -> i64 {
     if read_committed && !is_follower {
         lso.min(hw)
@@ -76,13 +88,14 @@ impl Model for VisModel {
             log_start: 0,
             hw: 0,
             lso: 0,
+            deliverable: 0,
             log_end: 0,
         }]
     }
 
     fn actions(&self, s: &Self::State, actions: &mut Vec<Self::Action>) {
         // Advance watermarks, preserving 0 <= log_start <= lso <= hw <= log_end
-        // <= max_offset.
+        // <= max_offset, and log_start <= deliverable <= hw.
         if s.log_end < self.max_offset {
             actions.push(VisAction::AdvanceLogEnd);
         }
@@ -94,6 +107,11 @@ impl Model for VisModel {
         }
         if s.log_start < s.lso {
             actions.push(VisAction::AdvanceLogStart);
+        }
+        // The delivery watermark trails the HW independently of the LSO: a
+        // batch comes due because time passed, not because a txn committed.
+        if s.deliverable < s.hw {
+            actions.push(VisAction::AdvanceDeliverable);
         }
         // Probe every fetch shape over a bounded fetch-offset window (incl. one
         // past log_end so the empty/out-of-range edges are exercised).
@@ -128,16 +146,31 @@ impl Model for VisModel {
                 // log_start advancing never lowers response_hw/lso.
                 let mut s = last.clone();
                 s.log_start += 1;
+                // `plan_read` clamps the delivery watermark into the range the
+                // log still holds, so retention carries it along rather than
+                // leaving it below the first offset that exists.
+                s.deliverable = s.deliverable.max(s.log_start);
+                Some(s)
+            }
+            VisAction::AdvanceDeliverable => {
+                // A batch coming due widens what a consumer may read and moves
+                // no reported watermark, so KIP-227 holds here too.
+                let mut s = last.clone();
+                s.deliverable += 1;
+                assert_monotonic(last, &s);
                 Some(s)
             }
             VisAction::Fetch(is_follower, read_committed, fetch_offset) => {
                 let w = compute_visibility_window(
                     is_follower,
                     read_committed,
-                    Offset(last.log_start),
-                    Offset(last.hw),
-                    Offset(last.lso),
-                    Offset(last.log_end),
+                    FetchWatermarks {
+                        log_start: Offset(last.log_start),
+                        hw: Offset(last.hw),
+                        lso: Offset(last.lso),
+                        log_end: Offset(last.log_end),
+                        deliverable: Offset(last.deliverable),
+                    },
                     Offset(fetch_offset),
                 );
                 assert_fetch_contract(last, is_follower, read_committed, fetch_offset, &w);
@@ -149,10 +182,25 @@ impl Model for VisModel {
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
             Property::always("watermarks_ordered", |_, s: &VisState| {
-                0 <= s.log_start && s.log_start <= s.lso && s.lso <= s.hw && s.hw <= s.log_end
+                0 <= s.log_start
+                    && s.log_start <= s.lso
+                    && s.lso <= s.hw
+                    && s.hw <= s.log_end
+                    && s.log_start <= s.deliverable
+                    && s.deliverable <= s.hw
             }),
             // A read_committed clamp strictly below HW is reachable (lso < hw).
             Property::sometimes("can_clamp_lso", |_, s: &VisState| s.lso < s.hw),
+            // A delivery clamp strictly below HW is reachable, and it is the
+            // one that binds: a scheduled record is committed but not due.
+            Property::sometimes("can_clamp_deliverable", |_, s: &VisState| {
+                s.deliverable < s.hw && s.deliverable < s.lso
+            }),
+            // The delivery watermark can also be the loosest of the three, so
+            // the LSO clamp is still reachable under it.
+            Property::sometimes("deliverable_above_lso", |_, s: &VisState| {
+                s.lso < s.deliverable
+            }),
             // A follower can be served strictly beyond HW (hw < log_end).
             Property::sometimes("follower_beyond_hw", |_, s: &VisState| s.hw < s.log_end),
             // OFFSET_OUT_OF_RANGE is reachable (log_start > 0 ⟹ a sub-log_start
@@ -167,7 +215,8 @@ impl Model for VisModel {
 }
 
 /// KIP-227: a watermark advance must never lower the reported HW/LSO for any
-/// fixed fetch shape.
+/// fixed fetch shape. The delivery watermark is not an input to either formula,
+/// so an advance of it must leave both exactly where they were.
 fn assert_monotonic(old: &VisState, new: &VisState) {
     for &fol in &[false, true] {
         for &rc in &[false, true] {
@@ -202,26 +251,35 @@ fn assert_fetch_contract(
     // Valid targets.
     assert!(limit_offset >= 0 && win_response_hw >= 0 && win_response_lso >= 0);
     // out_of_range / empty correctness.
-    assert_eq!(w.out_of_range, (fetch_offset < s.log_start));
-    let upper = if is_follower { s.log_end } else { s.hw };
+    assert!(w.out_of_range == (fetch_offset < s.log_start));
+    let upper = if is_follower {
+        s.log_end
+    } else {
+        s.deliverable
+    };
     if !w.out_of_range {
-        assert_eq!(w.empty, (fetch_offset >= upper));
+        assert!(w.empty == (fetch_offset >= upper));
     }
-    // Response single-source-of-truth contract (OOR and success paths share it).
-    assert_eq!(win_response_hw, response_hw(is_follower, s.hw, s.log_end));
-    assert_eq!(
-        win_response_lso,
-        response_lso(is_follower, read_committed, s.hw, s.lso, s.log_end)
-    );
+    // Response single-source-of-truth contract (OOR and success paths share
+    // it). Neither field moves with the delivery watermark.
+    assert!(win_response_hw == response_hw(is_follower, s.hw, s.log_end));
+    assert!(win_response_lso == response_lso(is_follower, read_committed, s.hw, s.lso, s.log_end));
     if is_follower {
-        // Follower bound: serve up to the log-end (>= hw).
+        // Follower bound: serve up to the log-end (>= hw), ungated by the
+        // delivery watermark, so a scheduled record replicates and counts
+        // toward the ISR before any consumer can see it.
         assert!(limit_offset == s.log_end && limit_offset >= s.hw);
     } else {
         // No dirty read: never expose beyond the high-watermark.
         assert!(limit_offset <= s.hw, "consumer fetch exposed beyond HW");
+        // KFC-1: never expose a record before it is due.
+        assert!(
+            limit_offset <= s.deliverable,
+            "consumer fetch exposed beyond the delivery watermark"
+        );
         assert!(win_response_lso <= win_response_hw);
         if read_committed {
-            assert_eq!(effective_lso, s.lso.min(s.hw));
+            assert!(effective_lso == s.lso.min(s.hw));
             assert!(limit_offset <= s.lso.min(s.hw));
         }
     }
