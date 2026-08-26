@@ -71,7 +71,7 @@ A batch is active once `max_timestamp + delivery_clock_uncertainty` is at or bef
 
 Call the broker's clock reading `c` and the declared bound `e`. The bound says true time lies somewhere in the interval from `c - e` to `c + e`. The broker activates a batch with delivery time `T` only when `c` is at or past `T + e`. In that case true time is at least `c - e`, and `c - e` is at least `T`. So true time is at or past the delivery time whenever the broker activates a batch.
 
-Two properties follow. **Delivery is never early.** Delivery is late by at most `e` plus one scheduler tick. The broker waits out the full bound, and then it acts on its next wakeup. Early delivery is the failure that breaks a retry backoff or an SLA timer, and this design rules it out. Bounded lateness is the price, and an operator can measure that price on the lateness histogram.
+Two properties follow. **Delivery is never early.** Delivery is late by at most `2e` plus one scheduler tick. The broker waits out the full bound before it acts, which costs `e` against its own clock, and true time can already sit a further `e` ahead of that reading. Early delivery is the failure that breaks a retry backoff or an SLA timer, and this design rules it out. Bounded lateness is the price, and an operator can measure that price on the lateness histogram.
 
 ### The Delivery Watermark
 

@@ -419,8 +419,13 @@ impl TimeIndex {
         Ok(())
     }
 
+    /// Newest `(timestamp, relative_offset)` entry, or `None` when the index
+    /// holds none.
+    ///
+    /// The entry's timestamp is the running maximum as of the batch it
+    /// indexes, so it is the floor a reopened segment restores its
+    /// `max_timestamp` from.
     #[must_use]
-    #[cfg(test)]
     pub fn last_entry(&self) -> Option<(i64, u32)> {
         self.entries.last().copied()
     }

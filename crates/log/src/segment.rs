@@ -4,6 +4,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{IoSlice, Seek, SeekFrom, Write},
+    ops::ControlFlow,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -195,6 +196,30 @@ impl RawSegmentRead {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+}
+
+/// The fields of one v2 batch header that an activation walk reads.
+#[derive(Debug, Clone, Copy)]
+struct BatchHeaderView {
+    base_offset: Offset,
+    /// `base_offset + last_offset_delta`: the batch's highest offset.
+    last_offset: Offset,
+    /// The batch's activation time. A scheduled topic makes the batch visible
+    /// once this instant has passed.
+    max_timestamp: i64,
+}
+
+/// What an activation walk found in one segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActivationScan {
+    /// Exclusive end of the run of active batches that begins at the offset
+    /// the walk started from. It equals that offset when the first batch is
+    /// already waiting.
+    pub active_end: Offset,
+    /// Activation time of the first batch that is not active yet, or `None`
+    /// when every batch from the starting offset to the end of this segment
+    /// is active.
+    pub pending_at: Option<i64>,
 }
 
 impl Segment {
@@ -520,6 +545,193 @@ impl Segment {
             let last_read = Offset(last.base_offset + i64::from(last.last_offset_delta));
             cursor = last_read + 1;
         }
+    }
+
+    /// Restore `max_timestamp` for a segment loaded through the no-scan
+    /// [`Segment::open`] path.
+    ///
+    /// `open` leaves the field at its unknown sentinel. Retention compares
+    /// that sentinel against the age cutoff, so without this call every
+    /// reopened segment looks older than any window and the first
+    /// [`Log::tick`](crate::Log::tick) after a restart deletes all of them.
+    ///
+    /// Kafka's `LogSegment` reads `maxTimestampSoFar` back from the time
+    /// index, and this method starts there. The sparse index lags the writes,
+    /// though: its newest entry holds the running maximum as of the last
+    /// *indexed* batch, and every batch appended after it is unaccounted for.
+    /// The method therefore also walks the batch headers from the newest
+    /// offset-index entry to the end of the file. That walk is bounded by
+    /// `index_interval` plus one batch, and it reads no record body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogError::Io`] when the `.log` file cannot be read.
+    pub fn restore_max_timestamp(&mut self) -> Result<(), LogError> {
+        let mut max_timestamp = self
+            .time_index
+            .last_entry()
+            .map_or(i64::MIN, |(timestamp, _)| timestamp);
+        let scan_from = self
+            .offset_index
+            .last_entry()
+            .map_or(0, |(_, position)| u64::from(position));
+        self.walk_batch_headers(scan_from, |view| {
+            max_timestamp = max_timestamp.max(view.max_timestamp);
+            ControlFlow::Continue(())
+        })?;
+        self.max_timestamp = self.max_timestamp.max(max_timestamp);
+        Ok(())
+    }
+
+    /// Walk forward from `from` and find where the active prefix ends.
+    ///
+    /// A batch is active when its `max_timestamp` is at or below
+    /// `active_through_ms`. The caller has already subtracted its
+    /// clock-uncertainty bound from the current time, so this method compares
+    /// two plain instants.
+    ///
+    /// The walk stops at the first batch that is still waiting and reports
+    /// that batch's activation time. Batches are not ordered by timestamp, so
+    /// a later batch may well be active; the *prefix* is what a fetch limit
+    /// can use, and [`Segment::pending_activation_ranges_into`] answers the
+    /// other question.
+    pub(crate) fn scan_activation(
+        &self,
+        from: Offset,
+        active_through_ms: i64,
+    ) -> Result<ActivationScan, LogError> {
+        let segment_end = (self.last_offset + 1).max(from);
+        if self.is_wholly_active(active_through_ms) {
+            return Ok(ActivationScan {
+                active_end: segment_end,
+                pending_at: None,
+            });
+        }
+
+        let mut active_end = from;
+        let mut pending_at = None;
+        self.walk_batch_headers(self.position_for(from)?, |view| {
+            if view.last_offset < from {
+                return ControlFlow::Continue(());
+            }
+            if view.max_timestamp > active_through_ms {
+                pending_at = Some(view.max_timestamp);
+                return ControlFlow::Break(());
+            }
+            active_end = view.last_offset + 1;
+            ControlFlow::Continue(())
+        })?;
+        if pending_at.is_none() {
+            // Nothing in this segment is waiting, so the prefix runs to its
+            // end even where a torn trailing batch cut the walk short: those
+            // bytes are not readable through `read_raw` either.
+            active_end = active_end.max(segment_end);
+        }
+        Ok(ActivationScan {
+            active_end,
+            pending_at,
+        })
+    }
+
+    /// Append every not-yet-active batch that overlaps `[start, end]` to
+    /// `out`, as inclusive, batch-aligned offset ranges.
+    ///
+    /// Share consumers may skip a waiting batch and come back to it, so they
+    /// need the gaps and not only the leading prefix that
+    /// [`Segment::scan_activation`] reports. A range covers a whole batch even
+    /// where the window cuts through it, because the share reader fetches with
+    /// `read_raw` and that is batch-granular.
+    pub(crate) fn pending_activation_ranges_into(
+        &self,
+        start: Offset,
+        end: Offset,
+        active_through_ms: i64,
+        out: &mut Vec<(Offset, Offset)>,
+    ) -> Result<(), LogError> {
+        if self.is_wholly_active(active_through_ms) {
+            return Ok(());
+        }
+        self.walk_batch_headers(self.position_for(start)?, |view| {
+            if view.last_offset < start {
+                return ControlFlow::Continue(());
+            }
+            if view.base_offset > end {
+                return ControlFlow::Break(());
+            }
+            if view.max_timestamp > active_through_ms {
+                out.push((view.base_offset, view.last_offset));
+            }
+            ControlFlow::Continue(())
+        })
+    }
+
+    /// `true` when the segment's own maximum proves every batch in it is
+    /// active, so an activation walk has nothing to find.
+    ///
+    /// The sentinel means "not known yet", not "very old", so it never takes
+    /// this shortcut: an active segment opened without validation, and a
+    /// segment whose indexes were lost, must be walked.
+    fn is_wholly_active(&self, active_through_ms: i64) -> bool {
+        self.max_timestamp != i64::MIN && self.max_timestamp <= active_through_ms
+    }
+
+    /// Byte position the sparse offset index gives as a floor for `offset`.
+    fn position_for(&self, offset: Offset) -> Result<u64, LogError> {
+        let rel = u32::try_from((offset.0 - self.base_offset.0).max(0))
+            .map_err(|_| LogError::Corrupt("activation scan offset out of range".into()))?;
+        Ok(u64::from(self.offset_index.lookup(rel)))
+    }
+
+    /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
+    /// one to `visit`.
+    ///
+    /// The walk reads headers only. It steps by the header's `batch_length`,
+    /// so it never touches a record body and nothing decompresses. It reads a
+    /// window at a time rather than one header per system call, because a
+    /// segment full of small batches would otherwise cost one `pread` per
+    /// batch. It ends at the end of the file, at a torn trailing batch, or
+    /// when `visit` breaks.
+    fn walk_batch_headers(
+        &self,
+        start_pos: u64,
+        mut visit: impl FnMut(&BatchHeaderView) -> ControlFlow<()>,
+    ) -> Result<(), LogError> {
+        let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize().max(HEADER_LEN);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut pos = start_pos;
+        while pos < self.log_size {
+            buf.clear();
+            self.read_log_range(pos, &mut buf, window)?;
+            let mut at = 0usize;
+            while at + HEADER_LEN <= buf.len() {
+                let header = RecordBatchHeader::ref_from_bytes(&buf[at..at + HEADER_LEN])
+                    .map_err(|_| LogError::Corrupt("record batch header".into()))?;
+                // Wire values from the fixed v2 header stay raw `i64`.
+                let batch_len = usize::try_from(header.batch_length.get().max(0)).unwrap_or(0);
+                let total = 12 + batch_len;
+                if total < HEADER_LEN {
+                    // A batch cannot be shorter than its own header. The tail
+                    // is torn, and a step of `total` would not terminate.
+                    return Ok(());
+                }
+                let base = header.base_offset.get();
+                let view = BatchHeaderView {
+                    base_offset: Offset(base),
+                    last_offset: Offset(base + i64::from(header.last_offset_delta.get())),
+                    max_timestamp: header.max_timestamp.get(),
+                };
+                if visit(&view).is_break() {
+                    return Ok(());
+                }
+                at += total;
+            }
+            if at == 0 {
+                // Less than one header left: a torn trailing batch.
+                return Ok(());
+            }
+            pos += at as u64;
+        }
+        Ok(())
     }
 
     /// `true` once [`Segment::seal`] has sealed the segment. Sealed segments

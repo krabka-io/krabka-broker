@@ -13,6 +13,8 @@
 //! - Read sequentially from an absolute offset.
 //! - Truncate the log to an offset, for replication and leader election.
 //! - Time-based and size-based retention.
+//! - Deliver-at-time visibility, where a batch becomes readable only once its
+//!   activation time has passed.
 //!
 //! ## Scope and boundaries
 //!
@@ -91,6 +93,7 @@ pub(crate) use sendfile_cfg;
 
 mod compact;
 mod config;
+mod delivery;
 mod error;
 mod filter;
 mod index;
@@ -105,8 +108,9 @@ mod stamp_index;
 mod stamp_source;
 mod txn_index;
 
-pub use config::{CleanupPolicy, LogConfig};
+pub use config::{CleanupPolicy, DeliveryPolicy, LogConfig};
 pub use crabka_ids::{LeaderEpoch, Offset, ProducerId};
+pub use delivery::DeliveryAdvance;
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};
 pub use leader_epoch_checkpoint::{

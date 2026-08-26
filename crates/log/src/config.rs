@@ -1,7 +1,7 @@
 //! Tunables for `Log`. Defaults match Apache Kafka 4.2.
 
 use crabka_compression::CompressionType;
-use crabka_units::prelude::{ByteSize, Time, days, gibibytes, hours, kibibytes, mebibytes};
+use crabka_units::prelude::{ByteSize, Time, days, gibibytes, hours, kibibytes, mebibytes, millis};
 
 /// Kafka's `segment.bytes` default: roll the active segment at 1 GiB.
 const DEFAULT_SEGMENT_SIZE: ByteSize = gibibytes(1);
@@ -22,6 +22,10 @@ const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
 /// stays readable for a day after it first becomes compaction-eligible.
 const DEFAULT_DELETE_RETENTION: Time = hours(24);
 
+/// Default clock-confidence bound for scheduled delivery: the broker treats
+/// its own clock as accurate to within a quarter of a second.
+const DEFAULT_DELIVERY_CLOCK_UNCERTAINTY: Time = millis(250);
+
 /// Default upper bound on a single read's initial allocation.
 pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 
@@ -38,6 +42,25 @@ pub enum CleanupPolicy {
     #[default]
     Delete,
     Compact,
+}
+
+/// Per-topic policy for when a durable record becomes visible to consumers.
+///
+/// `Immediate` is the default and is every ordinary topic. `Scheduled` gates
+/// visibility on each batch's activation time, so a producer can write a
+/// record now and have it delivered later. `crate::delivery` implements it,
+/// and [`Log::advance_delivery_watermark`](crate::Log::advance_delivery_watermark)
+/// computes the offset that separates the visible prefix from the scheduled
+/// tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeliveryPolicy {
+    /// A batch is visible as soon as it is durable.
+    #[default]
+    Immediate,
+    /// A batch is visible once its activation time has passed. The activation
+    /// time is the batch's `max_timestamp`, the v2 header field, so the
+    /// schedule travels with the records and needs no sidecar.
+    Scheduled,
 }
 
 /// Tunables for [`Log`](crate::Log) behavior.
@@ -111,6 +134,22 @@ pub struct LogConfig {
     /// compaction-eligible, the log retains it for at least this long before
     /// deletion. This is the delete-horizon grace window. Default 24h.
     pub delete_retention: Time,
+
+    /// When a durable record becomes visible. Defaults to
+    /// [`DeliveryPolicy::Immediate`]. See [`DeliveryPolicy`].
+    pub delivery_policy: DeliveryPolicy,
+
+    /// Declared bound on how far this broker's clock can be from true time.
+    /// Default 250 ms. It has an effect only under
+    /// [`DeliveryPolicy::Scheduled`].
+    ///
+    /// A batch is visible once
+    /// `max_timestamp + delivery_clock_uncertainty <= now`. If the clock
+    /// reads `c` while true time is somewhere in `[c - e, c + e]`, then
+    /// `c >= activation + e` proves true time has reached the activation
+    /// instant. Delivery is therefore never early, and it is late by at most
+    /// `2 * delivery_clock_uncertainty`.
+    pub delivery_clock_uncertainty: Time,
 }
 
 impl Default for LogConfig {
@@ -135,6 +174,10 @@ impl Default for LogConfig {
             local_retention: None,
             local_retention_size: None,
             delete_retention: DEFAULT_DELETE_RETENTION,
+            // Scheduled delivery is opt-in per topic; an ordinary topic pays
+            // nothing for it.
+            delivery_policy: DeliveryPolicy::Immediate,
+            delivery_clock_uncertainty: DEFAULT_DELIVERY_CLOCK_UNCERTAINTY,
         }
     }
 }
@@ -166,6 +209,8 @@ mod tests {
                     local_retention: None,
                     local_retention_size: None,
                     delete_retention: secs(24 * 60 * 60),
+                    delivery_policy: DeliveryPolicy::Immediate,
+                    delivery_clock_uncertainty: crabka_units::prelude::millis(250),
                 }
         );
     }
@@ -193,6 +238,13 @@ mod tests {
     fn default_compression_is_producer_passthrough() {
         let c = LogConfig::default();
         assert2::assert!(c.compression_type == None);
+    }
+
+    #[test]
+    fn delivery_is_immediate_with_a_quarter_second_clock_bound() {
+        let c = LogConfig::default();
+        assert2::check!(c.delivery_policy == DeliveryPolicy::Immediate);
+        assert2::check!(c.delivery_clock_uncertainty.millis_i64() == 250);
     }
 
     #[test]
