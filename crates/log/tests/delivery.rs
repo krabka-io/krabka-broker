@@ -224,6 +224,41 @@ fn a_reopened_log_rebuilds_the_same_watermark() {
     );
 }
 
+/// A log opened without tail validation must not serve an undue batch.
+///
+/// `validate_on_open: false` skips `recover_active_tail`, so the active
+/// segment keeps the unknown-timestamp sentinel while holding real batches.
+/// This is the end-to-end promise over that recovery gap; the segment-level
+/// shortcut that must not read the sentinel as an old timestamp is pinned
+/// next to it, in `Segment`'s own tests.
+#[test]
+fn a_log_opened_without_validation_still_holds_an_undue_batch() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        validate_on_open: false,
+        ..scheduled_config(ONE_BATCH_PER_SEGMENT)
+    };
+    {
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        log.append(&mut batch_at(PAST_MS)).unwrap();
+        log.append(&mut batch_at(FUTURE_MS)).unwrap();
+        log.sync().unwrap();
+    }
+
+    let mut reopened = Log::open(dir.path(), config).unwrap();
+    let advance = reopened.advance_delivery_watermark(NOW_MS);
+
+    // Offset 2 is where the scheduled batch begins: nothing may go past it.
+    check!(advance.watermark <= Offset(2));
+    check!(
+        reopened
+            .read_raw(Offset(0), advance.watermark, gibibytes(1))
+            .unwrap()
+            .last_offset
+            < Some(Offset(2))
+    );
+}
+
 /// A share consumer needs every gap in a window, not just the leading run.
 /// Ranges are whole batches, adjacent ones merge, and a batch that is due
 /// splits the run.

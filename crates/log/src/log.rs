@@ -14,7 +14,7 @@ use crabka_units::prelude::{ByteSize, ByteSizeExt, TimeExt as _, bytes};
 use tracing::instrument;
 
 use crate::{
-    config::LogConfig,
+    config::{DeliveryPolicy, LogConfig},
     delivery::{self, DeliveryAdvance},
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
@@ -2246,7 +2246,7 @@ impl Log {
     ///
     /// Panics when another thread poisoned the log configuration lock.
     pub fn advance_delivery_watermark(&mut self, now_ms: i64) -> DeliveryAdvance {
-        let (scheduled, uncertainty_ms) = self.delivery_policy();
+        let (scheduled, uncertainty_ms) = self.delivery_settings();
         if !scheduled {
             return DeliveryAdvance {
                 watermark: self.log_end_offset(),
@@ -2303,7 +2303,7 @@ impl Log {
     /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn delivery_watermark(&self) -> Offset {
-        if self.config.read().unwrap().delivery_policy != crate::DeliveryPolicy::Scheduled {
+        if self.config.read().unwrap().delivery_policy != DeliveryPolicy::Scheduled {
             return self.log_end_offset();
         }
         self.bounded_watermark()
@@ -2332,7 +2332,7 @@ impl Log {
         end: Offset,
         now_ms: i64,
     ) -> Vec<(Offset, Offset)> {
-        let (scheduled, uncertainty_ms) = self.delivery_policy();
+        let (scheduled, uncertainty_ms) = self.delivery_settings();
         if !scheduled {
             return Vec::new();
         }
@@ -2371,10 +2371,10 @@ impl Log {
 
     /// Whether this topic schedules delivery, and its clock bound in
     /// milliseconds.
-    fn delivery_policy(&self) -> (bool, i64) {
+    fn delivery_settings(&self) -> (bool, i64) {
         let config = self.config.read().unwrap();
         (
-            config.delivery_policy == crate::DeliveryPolicy::Scheduled,
+            config.delivery_policy == DeliveryPolicy::Scheduled,
             config.delivery_clock_uncertainty.millis_i64_trunc(),
         )
     }
@@ -2711,11 +2711,10 @@ impl Log {
         crate::compact::atomic_swap(&self.dir, &consumed_bases, &rewrite)?;
 
         // open_active(validate=true) tail-scans the new .log to populate
-        // last_offset; then seal() flips the flag. That scan starts at the
-        // last index entry, so it sees only the tail's timestamps: the
-        // segment's maximum comes from the index plus that tail.
+        // last_offset + max_timestamp; then seal() flips the flag. The rewrite
+        // leaves the index sidecars empty, so that scan starts at position 0
+        // and sees every batch: the segment's maximum is exact.
         let mut new_seg = Segment::open_active(&self.dir, rewrite.new_base_offset, true)?;
-        new_seg.restore_max_timestamp()?;
         new_seg.seal();
         self.segments.push(new_seg);
         Ok(())

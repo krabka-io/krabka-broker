@@ -668,10 +668,20 @@ impl Segment {
     /// `true` when the segment's own maximum proves every batch in it is
     /// active, so an activation walk has nothing to find.
     ///
-    /// The sentinel means "not known yet", not "very old", so it never takes
-    /// this shortcut: an active segment opened without validation, and a
-    /// segment whose indexes were lost, must be walked.
+    /// This is what lets a scheduled topic skip whole segments of records
+    /// that came due long ago.
     fn is_wholly_active(&self, active_through_ms: i64) -> bool {
+        // Emptiness is decided by the file, not by `last_offset`. The same
+        // unvalidated open that leaves the maximum unknown also leaves
+        // `last_offset` at `base_offset - 1` over a segment full of records,
+        // so that comparison would call a full segment empty.
+        if self.log_size == 0 {
+            return true;
+        }
+        // The sentinel means "not known yet", not "very old". An active
+        // segment opened with `validate_on_open` off keeps it while holding
+        // real batches, so a shortcut here would serve a batch before its
+        // activation time.
         self.max_timestamp != i64::MIN && self.max_timestamp <= active_through_ms
     }
 
@@ -2242,6 +2252,56 @@ mod tests {
             .append_verbatim(&wire.freeze(), Offset(0), 0, 0, LeaderEpoch(0), DENSE_INDEX)
             .unwrap_err();
         assert2::assert!(matches!(err, LogError::Io(_)));
+        drop(dir);
+    }
+
+    /// A segment whose maximum timestamp is unknown must be walked, never
+    /// skipped.
+    ///
+    /// `Segment::open` is the no-scan load, and it leaves `max_timestamp` at
+    /// its sentinel. `Log::open` follows it with `restore_max_timestamp`, but
+    /// an active segment opened with `validate_on_open` off does not, and it
+    /// keeps the sentinel over real batches. Reading that sentinel as an old
+    /// timestamp would take the whole-segment shortcut and report a batch as
+    /// visible before its activation time, which scheduled delivery has to
+    /// rule out.
+    #[test]
+    fn a_segment_with_an_unknown_maximum_is_never_skipped_as_active() {
+        let dir = tempdir().unwrap();
+        {
+            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            seg.append(&sample_batch(0, 1, 9_000), DENSE_INDEX).unwrap();
+        }
+
+        // The no-scan load: real bytes on disk, maximum still unknown.
+        let seg = Segment::open(dir.path(), Offset(0)).unwrap();
+        assert2::assert!(seg.max_timestamp == i64::MIN);
+
+        // 9_000 is in the future against this clock, so the batch is waiting.
+        let scan = seg.scan_activation(Offset(0), 1_000).unwrap();
+        assert2::check!(scan.active_end == Offset(0));
+        assert2::check!(scan.pending_at == Some(9_000));
+
+        let mut pending = Vec::new();
+        seg.pending_activation_ranges_into(Offset(0), Offset(0), 1_000, &mut pending)
+            .unwrap();
+        assert2::check!(pending == vec![(Offset(0), Offset(0))]);
+        drop(dir);
+    }
+
+    /// A segment with no bytes takes the shortcut: there is nothing to walk.
+    #[test]
+    fn an_empty_segment_is_wholly_active() {
+        let dir = tempdir().unwrap();
+        let seg = Segment::create(dir.path(), Offset(0)).unwrap();
+
+        let scan = seg.scan_activation(Offset(0), 1_000).unwrap();
+        assert2::check!(scan.pending_at == None);
+
+        let mut pending = Vec::new();
+        seg.pending_activation_ranges_into(Offset(0), Offset(0), 1_000, &mut pending)
+            .unwrap();
+        assert2::check!(pending == Vec::new());
         drop(dir);
     }
 }
