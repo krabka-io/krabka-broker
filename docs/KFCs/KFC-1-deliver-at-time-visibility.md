@@ -180,7 +180,13 @@ The watermark call returns the log end offset before it does any work. It reads 
 
 ## Compatibility, Deprecation, and Migration Plan
 
-There is no wire change, no new API key, no new error code, and no client change. A stock JVM producer sets a timestamp it can already set. A stock JVM consumer polls a topic that behaves like any other topic with a slower leader. The admin tools set the new configs the same way they set `retention.ms`.
+There is no wire change, no new API key, no new error code, and no client change. A stock JVM producer sets a timestamp it can already set. A stock JVM consumer polls a topic that behaves like any other topic with a slower leader.
+
+One admin tool cannot set the new configs. `kafka-topics` validates every `--config` name against the `LogConfig.configNames` set compiled into the client, and it does that before it sends `CreateTopics`. It therefore answers `InvalidConfigurationException: Unknown topic config name: delivery.mode` without the request ever reaching the broker. This is not a version gap that a newer image closes. The KIP-405 keys behaved the same way until the Kafka that introduced them shipped, and a krabka extension never becomes known to Apache Kafka's client.
+
+The check lives in `TopicCommand`, not in the protocol and not in `AdminClient`, which sends a config map it does not inspect and leaves the names for the broker to validate. So a client that speaks `CreateTopics` directly sets the key, and `jvm_deliver_at_time` creates its topics that way. This document does not claim the `AdminClient` path is proved: no test here drives it, and the suite that would is the one to extend if that guarantee is ever wanted in writing.
+
+This is a limitation of the config surface, not of the data path, and it is the price of naming the feature at all: any key Apache Kafka does not know is a key `kafka-topics` will not send. The alternative is to overload a config name that Kafka already knows, which trades a tool error for a silent misreading of an operator's intent, and that is the worse of the two.
 
 krabka is greenfield and undeployed, so there is no migration. No on-disk format changes. No record already in a log means something different after this change.
 

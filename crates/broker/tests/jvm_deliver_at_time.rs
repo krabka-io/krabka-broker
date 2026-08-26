@@ -47,6 +47,9 @@ use std::{
 use assert2::{assert, check};
 use crabka_broker::BrokerHandle;
 use crabka_log::DeliveryPolicy;
+use crabka_protocol::owned::create_topics_request::{
+    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
+};
 use jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image, start_host_broker,
 };
@@ -151,25 +154,52 @@ public final class DeliverAtTimeProbe {
 }
 "#;
 
-// Create `topic` with the given `delivery.mode` through the JVM admin tool, the
-// same way an operator sets `retention.ms`.
-fn jvm_create_topic(bootstrap: &str, topic: &str, mode: &str) {
-    docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE_TXN,
-        &[
-            "kafka-topics",
-            "--create",
-            "--topic",
-            topic,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--config",
-            &format!("delivery.mode={mode}"),
-            "--bootstrap-server",
-            bootstrap,
-        ],
+// Create `topic` with the given `delivery.mode`, over the wire, from the host.
+//
+// This does not go through `kafka-topics`, and it cannot. That tool validates
+// `--config` names against the `LogConfig.configNames` set compiled into the
+// client before it sends `CreateTopics`, so it rejects `delivery.mode` with
+// `InvalidConfigurationException: Unknown topic config name` without ever
+// reaching the broker. Bumping the image does not help the way it does for the
+// KIP-405 keys in [`jvm_acceptance::create_tiered_topic`]: those became known
+// to a later Kafka, and a krabka extension never will be. `AdminClient` carries
+// no such list and passes the config through for the broker to validate, which
+// is why a JVM application can set the key even though the shell wrapper
+// cannot.
+//
+// None of that touches what this suite exists to prove. Scheduling a record is
+// a producer action and reading one is a consumer action, and both stay stock;
+// configuring the topic is an operator action, and the KFC records the tool
+// limitation under Compatibility.
+async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
+    let client = crabka_client_core::Client::builder()
+        .bootstrap(bootstrap)
+        .build()
+        .await
+        .expect("client for the host listener");
+    let response = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: topic.to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                configs: vec![CreatableTopicConfig {
+                    name: "delivery.mode".to_owned(),
+                    value: Some(mode.to_owned()),
+                    ..CreatableTopicConfig::default()
+                }],
+                ..CreatableTopic::default()
+            }],
+            timeout_ms: 5_000,
+            ..CreateTopicsRequest::default()
+        })
+        .await
+        .expect("CreateTopics");
+    let created = response.topics.first().expect("one topic result");
+    assert!(
+        created.error_code == 0,
+        "create {topic}: {:?}",
+        created.error_message
     );
 }
 
@@ -297,8 +327,11 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
     // through `--add-host=host.docker.internal:host-gateway`.
     let bootstrap = broker0_advertised();
 
-    jvm_create_topic(bootstrap, SCHEDULED_TOPIC, "scheduled");
-    jvm_create_topic(bootstrap, IMMEDIATE_TOPIC, "immediate");
+    // Topic creation runs against the broker's own listener rather than the
+    // advertised container name, because this client runs on the host.
+    let host_bootstrap = broker.listen_addr().to_string();
+    create_topic(&host_bootstrap, SCHEDULED_TOPIC, "scheduled").await;
+    create_topic(&host_bootstrap, IMMEDIATE_TOPIC, "immediate").await;
     wait_for_delivery_policy(&broker, SCHEDULED_TOPIC, DeliveryPolicy::Scheduled).await;
     wait_for_delivery_policy(&broker, IMMEDIATE_TOPIC, DeliveryPolicy::Immediate).await;
 
