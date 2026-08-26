@@ -106,6 +106,8 @@ So head-of-line order is the contract. A scheduled topic is a schedule: the brok
 
 `delivery.schedule.monotonic=true` is the guard for the operator who does not want that. A partition whose delivery times go backwards is a partition whose schedule stalls. A stall is hard to see from the outside. The topic looks healthy, the lag is real, and nothing is wrong with the broker. The config turns that silent stall into an `INVALID_TIMESTAMP` at produce time, where the producer that caused it can see it and fix it.
 
+The guard is best-effort, and an operator should know why. The broker tests a batch against the partition's schedule before it hands the batch to the writer, so two producers writing to one partition at the same time can both pass the test and still append out of order. A single idempotent producer cannot, because its own batches reach the partition in sequence. Making the rule absolute needs the test inside the writer, where appends are already serialised. Nothing about correctness rests on this: the guard reports a schedule that will stall, and a stall delays delivery rather than losing a record.
+
 ### Share Groups Deliver Out of Order
 
 Share groups from KIP-932 do not have the constraint that forces offset order.
