@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_sum_prefix_nonnegative": {
+        "prover": "alt-ergo",
+        "time": 0.033
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 43 0 43 53 *)
+
+let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 41 11 41 41
+let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 42 10 42 74
+let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 20 10 20 15
+let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 23 8 27 9
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+function sum_prefix [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49] (s: Seq.seq Int64.t) (limit: int) : int
+
+axiom sum_prefix_def: forall s: Seq.seq Int64.t, limit: int [sum_prefix s limit]. sum_prefix s limit
+    = ([%#sstretch'2] if limit <= 0 then 0 else sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant s : Seq.seq Int64.t
+
+constant limit : int
+
+function lemma_sum_prefix_step [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 43 0 43 53] (s: Seq.seq Int64.t) (limit: int) : ()
+
+goal vc_lemma_sum_prefix_step: ([%#sstretch] 1 <= limit /\ limit <= Seq.length s)
+  -> ([@stop_split] [@expl:lemma_sum_prefix_step ensures] [%#sstretch'0] sum_prefix s limit
+  = sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))

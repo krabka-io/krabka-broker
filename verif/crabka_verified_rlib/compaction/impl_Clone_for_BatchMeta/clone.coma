@@ -1,4 +1,4 @@
-(* #"/work/crates/verified/src/compaction.rs" 21 27 21 32 *)
+(* #"/home/user/krabka-broker/crates/verified/src/compaction.rs" 23 27 23 32 *)
 
 (* <compaction::BatchMeta as std::clone::Clone> *)
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BatchMeta [#"/work/crates/verified/src/compaction.rs" 21 27 21 32] (self: t_BatchMeta)
+let clone_BatchMeta [#"/home/user/krabka-broker/crates/verified/src/compaction.rs" 23 27 23 32] (self: t_BatchMeta)
   (return (x: t_BatchMeta)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BatchMeta = Any.any_l () | & self: t_BatchMeta = self ])

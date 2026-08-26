@@ -11,6 +11,7 @@ pub mod compaction;
 pub mod consensus;
 pub mod log_index;
 pub mod offset_allocator;
+pub mod stretch;
 
 pub use broker::{
     FetchVisibility, delete_records_offset_out_of_range, delete_records_target,
@@ -24,3 +25,6 @@ pub use consensus::{
 };
 pub use log_index::offset_index_lookup;
 pub use offset_allocator::reserve_offsets;
+pub use stretch::{
+    min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
+};

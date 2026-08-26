@@ -58,6 +58,84 @@ pub(crate) const UNCLEAN_LEADER_ELECTION_ENABLE: &str = "unclean.leader.election
 /// topic override first and then the cluster-wide default broker config.
 pub(crate) const UNCLEAN_RECOVERY_STRATEGY: &str = "unclean.recovery.strategy";
 
+/// Marks a node as a data-bearing witness. The broker publishes this key for
+/// itself, in the same metadata batch that carries its registration record,
+/// so the controller can read the role from the metadata image.
+///
+/// The key is controller-managed and read-only. `AlterConfigs` and
+/// `IncrementalAlterConfigs` reject it with `INVALID_CONFIG`, and
+/// `DescribeConfigs` returns it with `read_only` set. An operator reads it
+/// with `kafka-configs --entity-type brokers --describe`.
+///
+/// A witness replicates partition data and votes in `KRaft`, so it counts
+/// toward `min.insync.replicas`. It serves no client and leads no partition.
+pub(crate) const BROKER_WITNESS: &str = "broker.witness";
+
+/// Names the site that should hold partition leadership in a stretch
+/// cluster. The controller leader publishes it as a cluster-default broker
+/// config, so every node that later becomes controller reads the same value.
+///
+/// The value is a `broker.rack` value. Site-aware placement puts a broker
+/// from this site first in the replica list. In Kafka the preferred leader
+/// is `replicas[0]`, so that ordering is what pins leadership.
+///
+/// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
+pub(crate) const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
+
+/// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
+pub(crate) const WITNESS_TRUE: &str = "true";
+
+/// Broker-scoped config keys that only the controller writes. `AlterConfigs`
+/// and `IncrementalAlterConfigs` must reject every key in this list, and
+/// `DescribeConfigs` must report each one as read-only.
+pub(crate) const CONTROLLER_MANAGED_BROKER_CONFIGS: [&str; 2] =
+    [BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE];
+
+/// `true` when `key` is a broker config that only the controller writes.
+pub(crate) fn is_controller_managed_broker_config(key: &str) -> bool {
+    CONTROLLER_MANAGED_BROKER_CONFIGS.contains(&key)
+}
+
+/// Resolve [`BROKER_WITNESS`] for one node. A missing or unparseable value
+/// resolves to `false`, so a cluster with no witness behaves as it did
+/// before the role existed.
+pub(crate) fn resolve_broker_witness(
+    image: &crabka_metadata::MetadataImage,
+    node_id: crabka_metadata::NodeId,
+) -> bool {
+    image
+        .broker_config(node_id)
+        .and_then(|configs| configs.get(BROKER_WITNESS))
+        .map(String::as_str)
+        == Some(WITNESS_TRUE)
+}
+
+/// Every registered node that carries the witness role.
+///
+/// The controller builds this set once for each scan and then excludes its
+/// members from leader selection. Building it once keeps the scan a single
+/// walk over the image rather than a lookup for each partition replica.
+pub(crate) fn witness_node_ids(
+    image: &crabka_metadata::MetadataImage,
+) -> std::collections::HashSet<crabka_metadata::NodeId> {
+    image
+        .brokers()
+        .filter(|broker| resolve_broker_witness(image, broker.node_id))
+        .map(|broker| broker.node_id)
+        .collect()
+}
+
+/// Resolve [`STRETCH_PREFERRED_LEADER_SITE`] from the cluster defaults.
+/// `None` means the cluster pins leadership to no site.
+pub(crate) fn resolve_preferred_leader_site(
+    image: &crabka_metadata::MetadataImage,
+) -> Option<&str> {
+    image
+        .default_broker_config()?
+        .get(STRETCH_PREFERRED_LEADER_SITE)
+        .map(String::as_str)
+}
+
 /// Resolved value of `unclean.recovery.strategy` for a topic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryStrategy {
@@ -1036,6 +1114,106 @@ mod tests {
         }));
         assert!(resolve_recovery_strategy(&img, "t") == RecoveryStrategy::Aggressive);
         assert!(!resolve_unclean_leader_election_enabled(&img, "t"));
+    }
+
+    /// Register `node_id` and, when `witness` is set, publish
+    /// `broker.witness=true` for it. This is the path the broker takes at
+    /// registration.
+    fn register_node(
+        img: &mut crabka_metadata::MetadataImage,
+        node_id: u64,
+        witness: Option<&str>,
+    ) {
+        use crabka_metadata::{
+            BrokerConfigRecord, BrokerRegistrationRecord, MetadataRecord, NodeId,
+        };
+        img.apply(&MetadataRecord::V1BrokerRegistration(
+            BrokerRegistrationRecord {
+                node_id: NodeId(node_id),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9_092,
+                rack: None,
+                endpoints: vec![],
+                log_dirs: vec![],
+                features: BTreeMap::new(),
+            },
+        ));
+        if let Some(value) = witness {
+            img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: NodeId(node_id),
+                config_name: BROKER_WITNESS.into(),
+                config_value: Some(value.into()),
+            }));
+        }
+    }
+
+    #[test]
+    fn resolve_broker_witness_reads_only_an_exact_true() {
+        use crabka_metadata::NodeId;
+        // (published value, expected role)
+        let cases = [
+            (None, false),
+            (Some(WITNESS_TRUE), true),
+            (Some("false"), false),
+            (Some("TRUE"), false),
+            (Some(""), false),
+            (Some("yes"), false),
+        ];
+        for (value, want) in cases {
+            let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            register_node(&mut img, 1, value);
+            assert!(
+                resolve_broker_witness(&img, NodeId(1)) == want,
+                "broker.witness={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_broker_witness_is_false_for_an_unregistered_node() {
+        use crabka_metadata::NodeId;
+        let img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        assert!(!resolve_broker_witness(&img, NodeId(7)));
+    }
+
+    #[test]
+    fn resolve_broker_witness_does_not_read_the_cluster_default() {
+        use crabka_metadata::{
+            BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, NodeId,
+        };
+        // The role is per node. A cluster default must not turn every broker
+        // into a witness.
+        let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        register_node(&mut img, 1, None);
+        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
+            config_name: BROKER_WITNESS.into(),
+            config_value: Some(WITNESS_TRUE.into()),
+        }));
+        assert!(!resolve_broker_witness(&img, NodeId(1)));
+    }
+
+    #[test]
+    fn witness_node_ids_collects_every_marked_node() {
+        use std::collections::HashSet;
+
+        use crabka_metadata::NodeId;
+        let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        assert!(witness_node_ids(&img) == HashSet::new());
+        register_node(&mut img, 1, None);
+        register_node(&mut img, 2, Some(WITNESS_TRUE));
+        register_node(&mut img, 3, Some("false"));
+        register_node(&mut img, 4, Some(WITNESS_TRUE));
+        assert!(witness_node_ids(&img) == HashSet::from([NodeId(2), NodeId(4)]));
+    }
+
+    #[test]
+    fn broker_witness_is_controller_managed_and_not_a_topic_config() {
+        assert!(is_controller_managed_broker_config(BROKER_WITNESS));
+        assert!(!is_recognized(BROKER_WITNESS));
+        assert!(validate_topic_config(BROKER_WITNESS, WITNESS_TRUE).is_err());
     }
 
     #[test]

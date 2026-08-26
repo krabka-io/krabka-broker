@@ -391,6 +391,14 @@ fn handle_broker_scoped(
         }
     };
     for cfg in &resource.configs {
+        if config_keys::is_controller_managed_broker_config(&cfg.name) {
+            out.error_code = codes::INVALID_CONFIG;
+            out.error_message = Some(format!(
+                "broker config {} is controller-managed and read-only",
+                cfg.name
+            ));
+            return; // halt processing this resource
+        }
         if !is_known_broker_config(&cfg.name) {
             out.error_code = codes::INVALID_CONFIG;
             out.error_message = Some(format!("unknown broker config {}", cfg.name));
@@ -492,7 +500,7 @@ fn handle_client_metrics_scoped(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
     use super::*;
 
@@ -680,6 +688,32 @@ mod tests {
 
             assert!(out.error_code == codes::INVALID_CONFIG, "key {key}");
             assert!(to_submit.is_empty(), "key {key}");
+        }
+    }
+
+    #[test]
+    fn controller_managed_broker_configs_are_rejected_as_read_only() {
+        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
+            for cfg in [make_set_cfg(key, "true"), make_del_cfg(key)] {
+                for resource_name in ["1", ""] {
+                    let resource = make_resource(resource_name, vec![cfg.clone()]);
+                    let mut out = AlterConfigsResourceResponse::default();
+                    let mut to_submit = Vec::new();
+
+                    handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
+
+                    check!(out.error_code == codes::INVALID_CONFIG, "key {key}");
+                    check!(
+                        out.error_message
+                            == Some(format!(
+                                "broker config {key} is controller-managed and read-only"
+                            )),
+                        "key {key}"
+                    );
+                    check!(to_submit.is_empty(), "key {key}");
+                }
+            }
         }
     }
 

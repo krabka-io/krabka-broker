@@ -1,20 +1,30 @@
-(* #"/work/crates/verified/src/consensus.rs" 202 0 207 9 *)
+(* #"/home/user/krabka-broker/crates/verified/src/consensus.rs" 208 0 213 9 *)
 
-let%span sconsensus = "/work/crates/verified/src/consensus.rs" 208 4 208 78
-let%span sconsensus'0 = "/work/crates/verified/src/consensus.rs" 208 29 208 78
-let%span sconsensus'1 = "/work/crates/verified/src/consensus.rs" 199 10 200 61
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconsensus = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 214 4 214 78
+let%span sconsensus'0 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 214 29 214 78
+let%span sconsensus'1 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 205 10 206 61
 
 use creusot.int.UInt32
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
 
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let log_is_up_to_date [#"/work/crates/verified/src/consensus.rs" 202 0 207 9] (my_epoch: UInt32.t) (my_end: Int64.t)
-  (cand_epoch: UInt32.t) (cand_offset: Int64.t) (return (x: bool)) = (! bb0
+let log_is_up_to_date [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 208 0 213 9] (my_epoch: UInt32.t)
+  (my_end: Int64.t) (cand_epoch: UInt32.t) (cand_offset: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- UInt32.gt cand_epoch my_epoch ] s1
     | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
@@ -31,6 +41,6 @@ let log_is_up_to_date [#"/work/crates/verified/src/consensus.rs" 202 0 207 9] (m
   | & _10: bool = Any.any_l ()
   | & _13: bool = Any.any_l () ])
   [ return (result: bool) -> {[@stop_split] [@expl:log_is_up_to_date ensures] [%#sconsensus'1] result
-    = (UInt32.t'int cand_epoch > UInt32.t'int my_epoch
-    \/ UInt32.t'int cand_epoch = UInt32.t'int my_epoch /\ Int64.to_int cand_offset >= Int64.to_int my_end)}
+    = (gt_log_Int (UInt32.t'int cand_epoch) (UInt32.t'int my_epoch)
+    \/ UInt32.t'int cand_epoch = UInt32.t'int my_epoch /\ ge_log_Int (Int64.to_int cand_offset) (Int64.to_int my_end))}
     (! return {result}) ]

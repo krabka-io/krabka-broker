@@ -2,6 +2,10 @@
 //! (`failover_one`) and the KIP-966 winner selection (Task 3). See
 //! `docs/superpowers/specs/2026-06-13-crabka-failover-recovery-model-design.md`.
 //!
+//! Each failover configuration also runs with a data-bearing witness in the
+//! replica set. The witness stays in every emitted ISR, and no reachable state
+//! has a witness leader.
+//!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! `within_boundary` + `target_state_count` + `timeout` fence each run. You
 //! MUST run these models under the host memory watchdog while you tune the
@@ -12,6 +16,7 @@ use std::{
     time::Duration,
 };
 
+use assert2::assert;
 use crabka_metadata::PartitionRecord;
 use crabka_raft::NodeId;
 use stateright::{Checker, Model, Property};
@@ -31,6 +36,10 @@ const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 /// Bounded config for the failover-scan model.
 struct FailoverModel {
     replicas: Vec<NodeId>, // replicas[0] is the fixed initial leader
+    /// Data-bearing witnesses among `replicas`. A witness stays in the ISR and
+    /// counts toward min-ISR, and it never leads. `replicas[0]` must not be a
+    /// witness, because it is the initial leader.
+    witnesses: HashSet<NodeId>,
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
     max_epoch: i32,
@@ -53,13 +62,19 @@ enum FailoverAction {
 }
 
 impl FailoverModel {
-    fn config(strategy: RecoveryStrategy, unclean_enabled: bool) -> Self {
+    /// `witness_ids` names the replicas that carry the witness role.
+    fn config(strategy: RecoveryStrategy, unclean_enabled: bool, witness_ids: &[u64]) -> Self {
         Self {
             replicas: vec![
                 crabka_audit::NodeId(1),
                 crabka_audit::NodeId(2),
                 crabka_audit::NodeId(3),
             ],
+            witnesses: witness_ids
+                .iter()
+                .copied()
+                .map(crabka_audit::NodeId)
+                .collect(),
             strategy,
             unclean_enabled,
             max_epoch: 6,
@@ -87,7 +102,13 @@ fn pr_of(s: &FailoverState) -> PartitionRecord {
 
 /// Verify a `failover_one` decision against the pre-failover state. These are
 /// the safety-critical invariants. They hold per-decision under any ordering.
-fn assert_decision(pre: &FailoverState, dead: NodeId, d: &FailoverDecision, unclean_enabled: bool) {
+fn assert_decision(
+    pre: &FailoverState,
+    dead: NodeId,
+    d: &FailoverDecision,
+    unclean_enabled: bool,
+    witnesses: &HashSet<NodeId>,
+) {
     match d {
         FailoverDecision::Elect {
             leader,
@@ -103,6 +124,10 @@ fn assert_decision(pre: &FailoverState, dead: NodeId, d: &FailoverDecision, uncl
                 isr.contains(leader),
                 "elected leader {leader} not in new ISR {isr:?}"
             );
+            assert!(
+                !witnesses.contains(leader),
+                "elected witness {leader} as leader"
+            );
             if *unclean {
                 assert!(unclean_enabled, "unclean election without unclean_enabled");
             } else {
@@ -112,6 +137,15 @@ fn assert_decision(pre: &FailoverState, dead: NodeId, d: &FailoverDecision, uncl
                     pre.isr.contains(leader),
                     "clean election picked {leader} not in pre-failover ISR {:?} (data loss!)",
                     pre.isr
+                );
+                // A live witness is what keeps min-ISR satisfied after a site
+                // loss, so a clean election must keep it in the ISR.
+                assert!(
+                    pre.isr
+                        .iter()
+                        .filter(|n| **n != dead && pre.alive.contains(n) && witnesses.contains(n))
+                        .all(|n| isr.contains(n)),
+                    "clean election dropped a live witness from ISR {isr:?}"
                 );
             }
         }
@@ -193,8 +227,21 @@ impl Model for FailoverModel {
                 }
                 let pr = pr_of(&state);
                 let alive: HashSet<NodeId> = state.alive.iter().copied().collect();
-                let decision = failover_one(&pr, dead, &alive, self.strategy, self.unclean_enabled);
-                assert_decision(&state, dead, &decision, self.unclean_enabled);
+                let decision = failover_one(
+                    &pr,
+                    dead,
+                    &alive,
+                    &self.witnesses,
+                    self.strategy,
+                    self.unclean_enabled,
+                );
+                assert_decision(
+                    &state,
+                    dead,
+                    &decision,
+                    self.unclean_enabled,
+                    &self.witnesses,
+                );
                 match decision {
                     FailoverDecision::Elect { leader, isr, .. } => {
                         state.leader = leader;
@@ -214,19 +261,35 @@ impl Model for FailoverModel {
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![
+        let mut properties = vec![
             Property::always("isr_subset_replicas", |_, s: &FailoverState| {
                 s.isr.iter().all(|n| s.replicas.contains(n))
             }),
             Property::always("leader_in_replicas", |_, s: &FailoverState| {
                 s.replicas.contains(&s.leader)
             }),
+            // The witness invariant: no reachable state has a witness leader.
+            Property::always(
+                "leader_never_witness",
+                |model: &FailoverModel, s: &FailoverState| !model.witnesses.contains(&s.leader),
+            ),
             Property::sometimes("can_elect", |_, s: &FailoverState| s.leader_epoch > 0),
             Property::sometimes("can_singleton_isr", |_, s: &FailoverState| s.isr.len() == 1),
             Property::sometimes("can_lose_isr_member", |_, s: &FailoverState| {
                 s.isr.iter().any(|n| !s.alive.contains(n))
             }),
-        ]
+        ];
+        if !self.witnesses.is_empty() {
+            // The witness must survive an election that skipped it, because it
+            // is what keeps `acks=all` writable after a site loss.
+            properties.push(Property::sometimes(
+                "witness_stays_in_isr_after_election",
+                |model: &FailoverModel, s: &FailoverState| {
+                    s.leader_epoch > 0 && s.isr.iter().any(|n| model.witnesses.contains(n))
+                },
+            ));
+        }
+        properties
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {
@@ -259,12 +322,16 @@ fn run_failover(model: FailoverModel, label: &str) {
     checker.assert_properties();
 }
 
+/// The three-site stretch shape: replica 2 is a data-bearing witness. It is
+/// not `replicas[0]`, so the initial leader is a data replica.
+const WITNESS_REPLICA: [u64; 1] = [2];
+
 #[test]
 fn failover_safe() {
     // unclean disabled: a clean election (or unavailability) is the only path;
     // the decision asserts guarantee no out-of-ISR election ever happens.
     run_failover(
-        FailoverModel::config(RecoveryStrategy::None, false),
+        FailoverModel::config(RecoveryStrategy::None, false, &[]),
         "failover_safe",
     );
 }
@@ -273,7 +340,7 @@ fn failover_safe() {
 fn failover_unclean() {
     // KIP-841: out-of-ISR election permitted when ISR is empty.
     run_failover(
-        FailoverModel::config(RecoveryStrategy::None, true),
+        FailoverModel::config(RecoveryStrategy::None, true, &[]),
         "failover_unclean",
     );
 }
@@ -282,8 +349,37 @@ fn failover_unclean() {
 fn failover_recover() {
     // KIP-966: empty-ISR leader death defers to offset-aware recovery.
     run_failover(
-        FailoverModel::config(RecoveryStrategy::Balanced, false),
+        FailoverModel::config(RecoveryStrategy::Balanced, false, &[]),
         "failover_recover",
+    );
+}
+
+#[test]
+fn failover_witness_safe() {
+    // Same as `failover_safe`, with a witness in the replica set. Leadership
+    // skips the witness, and the witness stays in the ISR.
+    run_failover(
+        FailoverModel::config(RecoveryStrategy::None, false, &WITNESS_REPLICA),
+        "failover_witness_safe",
+    );
+}
+
+#[test]
+fn failover_witness_unclean() {
+    // The KIP-841 out-of-ISR pick must skip the witness too.
+    run_failover(
+        FailoverModel::config(RecoveryStrategy::None, true, &WITNESS_REPLICA),
+        "failover_witness_unclean",
+    );
+}
+
+#[test]
+fn failover_witness_recover() {
+    // With a witness present, an ISR that holds only live witnesses is
+    // `Unavailable`, and only a truly empty ISR reaches KIP-966 recovery.
+    run_failover(
+        FailoverModel::config(RecoveryStrategy::Balanced, false, &WITNESS_REPLICA),
+        "failover_witness_recover",
     );
 }
 

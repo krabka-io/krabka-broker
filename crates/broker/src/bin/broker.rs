@@ -36,8 +36,10 @@ fn parse_roles_arg(roles: &[String]) -> Result<Vec<crabka_broker::config::NodeRo
         .map(|r| match r.to_ascii_lowercase().as_str() {
             "controller" => Ok(NodeRole::Controller),
             "broker" => Ok(NodeRole::Broker),
+            "witness" => Ok(NodeRole::Witness),
             other => Err(format!(
-                "unknown --process-roles value `{other}` (expected `controller` or `broker`)"
+                "unknown --process-roles value `{other}` \
+                 (expected `controller`, `broker`, or `witness`)"
             )),
         })
         .collect()
@@ -602,9 +604,10 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     broker_id: i32,
 
-    /// `KRaft` `process.roles`, comma-separated (`controller`, `broker`).
-    /// Default: the combined set. The operator normally sets this in the
-    /// `[process]` section of `--config-file` instead.
+    /// `KRaft` `process.roles`, comma-separated (`controller`, `broker`,
+    /// `witness`). Default: the combined set. `witness` is a modifier that
+    /// comes with the other two roles. The operator normally sets this in
+    /// the `[process]` section of `--config-file` instead.
     #[arg(
         long,
         env = "CRABKA_PROCESS_ROLES",
@@ -1311,6 +1314,23 @@ mod tests {
     #[test]
     fn parse_roles_arg_rejects_unknown() {
         assert!(parse_roles_arg(&["nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parse_roles_arg_accepts_witness_case_insensitively() {
+        assert!(
+            parse_roles_arg(&[
+                "BROKER".to_string(),
+                "Controller".to_string(),
+                "WiTnEsS".to_string(),
+            ])
+            .unwrap()
+                == vec![
+                    crabka_broker::config::NodeRole::Broker,
+                    crabka_broker::config::NodeRole::Controller,
+                    crabka_broker::config::NodeRole::Witness
+                ]
+        );
     }
 
     #[test]

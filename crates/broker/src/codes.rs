@@ -337,6 +337,18 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::InvalidInterBrokerListener { .. }
         | BrokerError::EmptyRoles
         | BrokerError::NonControllerIsVoter { .. }
+        | BrokerError::WitnessRequiresBrokerRole
+        | BrokerError::WitnessRequiresControllerRole
+        | BrokerError::StretchProfileNeedsThreeSites { .. }
+        | BrokerError::StretchProfileDuplicateSite { .. }
+        | BrokerError::StretchWitnessSiteUnknown { .. }
+        | BrokerError::StretchPreferredSiteUnknown { .. }
+        | BrokerError::StretchPreferredSiteIsWitness { .. }
+        | BrokerError::StretchRequiresRack
+        | BrokerError::StretchRackNotInProfile { .. }
+        | BrokerError::StretchWitnessSiteNeedsWitnessRole
+        | BrokerError::StretchWitnessRoleOutsideWitnessSite { .. }
+        | BrokerError::StretchMinInsyncUnsafe { .. }
         | BrokerError::SaslListenerNoMechanisms { .. }
         | BrokerError::GssapiConfigMissing
         | BrokerError::Tls(_)

@@ -290,10 +290,13 @@ fn do_failover(s: &mut DpState, dead: u8, unclean: bool) {
     } else {
         RecoveryStrategy::None
     };
+    // This model has no witness broker: every replica can lead.
+    let witnesses: HashSet<crabka_audit::NodeId> = HashSet::new();
     match failover_one(
         &pr,
         crabka_audit::NodeId(node(dead)),
         &alive,
+        &witnesses,
         strategy,
         unclean,
     ) {

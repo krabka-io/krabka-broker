@@ -1,18 +1,20 @@
-(* #"/work/crates/verified/src/compaction.rs" 114 0 121 19 *)
+(* #"/home/user/krabka-broker/crates/verified/src/compaction.rs" 119 0 126 19 *)
 
-let%span scompaction = "/work/crates/verified/src/compaction.rs" 128 51 128 95
-let%span scompaction'0 = "/work/crates/verified/src/compaction.rs" 145 43 145 87
-let%span scompaction'1 = "/work/crates/verified/src/compaction.rs" 94 10 95 38
-let%span scompaction'2 = "/work/crates/verified/src/compaction.rs" 96 10 98 67
-let%span scompaction'3 = "/work/crates/verified/src/compaction.rs" 99 10 101 93
-let%span scompaction'4 = "/work/crates/verified/src/compaction.rs" 102 10 102 80
-let%span scompaction'5 = "/work/crates/verified/src/compaction.rs" 103 10 103 101
-let%span scompaction'6 = "/work/crates/verified/src/compaction.rs" 104 10 105 38
-let%span scompaction'7 = "/work/crates/verified/src/compaction.rs" 106 10 109 67
-let%span scompaction'8 = "/work/crates/verified/src/compaction.rs" 110 10 112 93
-let%span scompaction'9 = "/work/crates/verified/src/compaction.rs" 74 10 74 71
-let%span scompaction'10 = "/work/crates/verified/src/compaction.rs" 75 10 81 1
-let%span scompaction'11 = "/work/crates/verified/src/compaction.rs" 64 8 70 9
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span scompaction = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 133 51 133 95
+let%span scompaction'0 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 150 43 150 87
+let%span scompaction'1 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 99 10 100 38
+let%span scompaction'2 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 101 10 103 67
+let%span scompaction'3 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 104 10 106 93
+let%span scompaction'4 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 107 10 107 80
+let%span scompaction'5 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 108 10 108 101
+let%span scompaction'6 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 109 10 110 38
+let%span scompaction'7 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 111 10 114 67
+let%span scompaction'8 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 115 10 117 93
+let%span scompaction'9 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 79 10 79 71
+let%span scompaction'10 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 80 10 86 1
+let%span scompaction'11 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 69 8 75 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -34,15 +36,19 @@ let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
 
 type t_RetainDecision = Keep | SetHorizon Int64.t | Delete
 
-function compute_horizon_model [#"/work/crates/verified/src/compaction.rs" 62 0 62 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
- = [%#scompaction'11] if Int64.to_int now_ms + Int64.to_int delete_retention_ms > 9223372036854775807 then
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function compute_horizon_model [#"/home/user/krabka-broker/crates/verified/src/compaction.rs" 67 0 67 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
+ = [%#scompaction'11] if gt_log_Int (Int64.to_int now_ms + Int64.to_int delete_retention_ms) 9223372036854775807 then
     9223372036854775807
   else
     if Int64.to_int now_ms + Int64.to_int delete_retention_ms < - 9223372036854775807 - 1 then
       - 9223372036854775807 - 1
     else
       Int64.to_int now_ms + Int64.to_int delete_retention_ms
-
+  
 
 
 let compute_horizon (now_ms: Int64.t) (delete_retention_ms: Int64.t) (return (x: Int64.t)) = any
@@ -50,25 +56,29 @@ let compute_horizon (now_ms: Int64.t) (delete_retention_ms: Int64.t) (return (x:
   {[@stop_split] [@expl:compute_horizon ensures] ([@stop_split] [@expl:compute_horizon ensures #0] [%#scompaction'9] Int64.to_int result
       = compute_horizon_model now_ms delete_retention_ms)
     /\ ([@stop_split] [@expl:compute_horizon ensures #1] [%#scompaction'10] Int64.to_int result
-    = (if Int64.to_int now_ms + Int64.to_int delete_retention_ms > 9223372036854775807 then
+    = (if gt_log_Int (Int64.to_int now_ms + Int64.to_int delete_retention_ms) 9223372036854775807 then
       9223372036854775807
     else
       if Int64.to_int now_ms + Int64.to_int delete_retention_ms < - 9223372036854775807 - 1 then
         - 9223372036854775807 - 1
       else
         Int64.to_int now_ms + Int64.to_int delete_retention_ms
-
+    
     ))}
     (! return {result}) ]
 
 type t_RecordMeta = { has_key: bool; has_value: bool }
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let retain_decision [#"/work/crates/verified/src/compaction.rs" 114 0 121 19] (rec': t_RecordMeta) (batch: t_BatchMeta)
-  (is_newest_for_key: bool) (txn: t_TxnDataState) (now_ms: Int64.t) (delete_retention_ms: Int64.t)
+let retain_decision [#"/home/user/krabka-broker/crates/verified/src/compaction.rs" 119 0 126 19] (rec': t_RecordMeta)
+  (batch: t_BatchMeta) (is_newest_for_key: bool) (txn: t_TxnDataState) (now_ms: Int64.t) (delete_retention_ms: Int64.t)
   (return (x: t_RetainDecision)) = (! bb0
   [ bb0 = any [ br0 -> {batch.is_control = false} (! bb15) | br1 -> {batch.is_control} (! bb1) ]
   | bb1 = any
@@ -138,7 +148,7 @@ let retain_decision [#"/work/crates/verified/src/compaction.rs" 114 0 121 19] (r
         /\ Int64.to_int h = compute_horizon_model now_ms delete_retention_ms))
     /\ ([@stop_split] [@expl:retain_decision ensures #2] [%#scompaction'3] forall h: Int64.t. batch.is_control
           /\ txn = DataFullyGone /\ batch.existing_horizon = Some h
-        -> result = (if Int64.to_int now_ms >= Int64.to_int h then Delete else Keep))
+        -> result = (if ge_log_Int (Int64.to_int now_ms) (Int64.to_int h) then Delete else Keep))
     /\ ([@stop_split] [@expl:retain_decision ensures #3] [%#scompaction'4] not batch.is_control /\ not rec'.has_key
       -> result = Delete)
     /\ ([@stop_split] [@expl:retain_decision ensures #4] [%#scompaction'5] not batch.is_control
@@ -151,5 +161,5 @@ let retain_decision [#"/work/crates/verified/src/compaction.rs" 114 0 121 19] (r
         /\ Int64.to_int h = compute_horizon_model now_ms delete_retention_ms))
     /\ ([@stop_split] [@expl:retain_decision ensures #7] [%#scompaction'8] forall h: Int64.t. not batch.is_control
         /\ rec'.has_key /\ is_newest_for_key /\ not rec'.has_value /\ batch.existing_horizon = Some h
-      -> result = (if Int64.to_int now_ms >= Int64.to_int h then Delete else Keep))}
+      -> result = (if ge_log_Int (Int64.to_int now_ms) (Int64.to_int h) then Delete else Keep))}
     (! return {result}) ]

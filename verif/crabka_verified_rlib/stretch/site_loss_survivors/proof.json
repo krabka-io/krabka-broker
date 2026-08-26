@@ -1,0 +1,6 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": { "vc_site_loss_survivors": { "prover": "z3", "time": 0.06 } }
+  }
+}

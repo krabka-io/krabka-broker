@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_handoff_high_watermark": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_handoff_high_watermark": { "prover": "alt-ergo", "time": 0.02 }
     }
   }
 }

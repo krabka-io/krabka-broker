@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_lemma_two_sites_never_survive": {
+        "prover": "alt-ergo",
+        "time": 0.077
+      }
+    }
+  }
+}

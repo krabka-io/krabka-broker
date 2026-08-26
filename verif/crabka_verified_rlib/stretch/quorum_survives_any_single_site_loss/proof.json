@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.016 },
+      "vc_quorum_survives_any_single_site_loss": {
+        "prover": "z3",
+        "time": 0.039
+      }
+    }
+  }
+}

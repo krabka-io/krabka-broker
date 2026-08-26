@@ -374,6 +374,7 @@ fn preferred_read_replica(
             node_id: i32::try_from(node_id.0).unwrap_or(-1),
             rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
             in_isr: isr.contains(&node_id),
+            is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
         })
         .collect();
     broker.config.replica_selector.select(
@@ -457,6 +458,19 @@ async fn plan_partition_read(
     }
     if let Some(error_code) = topic_error {
         output.error_code = error_code;
+        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+    }
+    // A witness replicates the partition and counts toward
+    // `min.insync.replicas`, but it serves no client traffic. A consumer that
+    // reaches one gets NOT_LEADER_OR_FOLLOWER, the partition-level code that
+    // makes a Kafka client refresh its metadata and read somewhere else. A
+    // FOLLOWER fetch passes: replication is the reason the witness holds the
+    // data at all. The check sits below the two topic gates, so an
+    // authorization failure still wins, and it sits above the partition
+    // lookup, so a witness answers a consumer the same way whether or not it
+    // hosts the partition.
+    if !context.mode.1 && context.broker.config.is_witness() {
+        output.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
     let partition = context
@@ -1873,6 +1887,145 @@ mod tests {
 
         assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
         assert!(pending[0].out.records.is_none());
+        broker_handle.shutdown().await;
+    }
+
+    /// A three-site image: node 1 leads `orders` from `dc-a`, node 2 replicates
+    /// it from `dc-b`, and both are in the ISR. Every node in `witness_ids`
+    /// carries `broker.witness=true`, the way a real witness registers.
+    fn stretch_image(witness_ids: &[u64]) -> crabka_metadata::MetadataImage {
+        use crabka_metadata::{
+            BrokerConfigRecord, BrokerRegistrationRecord, MetadataImage, MetadataRecord,
+            PartitionRecord, TopicRecord,
+        };
+
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (node_id, rack) in [(1u64, "dc-a"), (2u64, "dc-b")] {
+            image.apply(&MetadataRecord::V1BrokerRegistration(
+                BrokerRegistrationRecord {
+                    node_id: crabka_audit::NodeId(node_id),
+                    broker_epoch: 0,
+                    incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
+                    host: "127.0.0.1".into(),
+                    port: 9_092,
+                    rack: Some(rack.into()),
+                    endpoints: vec![],
+                    log_dirs: vec![],
+                    features: BTreeMap::new(),
+                },
+            ));
+        }
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "orders".into(),
+            topic_id: uuid::Uuid::nil(),
+            partitions: 1,
+            replication_factor: 2,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: "orders".into(),
+            partition: 0,
+            leader: crabka_audit::NodeId(1),
+            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        }));
+        for &node_id in witness_ids {
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: crabka_audit::NodeId(node_id),
+                config_name: crate::config_keys::BROKER_WITNESS.into(),
+                config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
+            }));
+        }
+        image
+    }
+
+    #[tokio::test]
+    async fn witness_refuses_a_client_fetch_and_still_serves_a_follower_fetch() {
+        const TOPIC: &str = "witness-fetch";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.roles.push(crate::config::NodeRole::Witness);
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join(format!("{TOPIC}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        broker.partitions.insert(
+            TOPIC.to_string(),
+            PartitionIndex(0),
+            crate::broker::spawn_partition(
+                TOPIC.to_string(),
+                PartitionIndex(0),
+                dir.path().to_path_buf(),
+                Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+                broker.log_dir_status.clone(),
+                broker.producer_state.clone(),
+                false,
+            ),
+        );
+        let image = broker.controller.current_image();
+        let denied_topics = std::collections::HashSet::new();
+        let request = super::EffectivePartition {
+            partition: 0,
+            current_leader_epoch: -1,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            partition_max_bytes: 1024,
+        };
+
+        for (name, is_follower_fetch, follower_id, want_error) in [
+            (
+                "client fetch",
+                false,
+                -1,
+                crate::codes::NOT_LEADER_OR_FOLLOWER,
+            ),
+            ("follower fetch", true, 2, crate::codes::NONE),
+        ] {
+            let context = super::PendingPlanContext {
+                broker: &broker,
+                image: &image,
+                denied_topics: &denied_topics,
+                rack_id: "",
+                mode: (false, is_follower_fetch),
+                follower_id,
+            };
+            let read =
+                super::plan_partition_read(&context, TOPIC, super::WireUuid::ZERO, None, &request)
+                    .await;
+            let want = super::PartitionData {
+                partition_index: 0,
+                error_code: want_error,
+                ..Default::default()
+            };
+            assert!(read.out == want, "{name}: got {:?}", read.out);
+        }
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn rack_aware_preferred_read_replica_never_names_a_witness() {
+        // The consumer sits in `dc-b`, the witness site. Node 2 is the only
+        // same-rack in-ISR replica, so it is exactly the redirect a rack-aware
+        // selector wants to make.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        for (name, witness_ids, want) in [
+            ("node 2 is a plain broker in dc-b", &[][..], 2),
+            ("node 2 is the witness in dc-b", &[2u64][..], -1),
+        ] {
+            let image = stretch_image(witness_ids);
+            let got = super::preferred_read_replica(&broker, &image, "orders", 0, "dc-b");
+            assert!(got == want, "{name}: got {got}, want {want}");
+        }
         broker_handle.shutdown().await;
     }
 

@@ -1,6 +1,10 @@
 //! `CreateTopics` (`api_key=19`). Routes through `Controller::submit_change`
 //! so every topic/partition creation goes through the metadata quorum before
 //! the partition directories are materialized on disk.
+//!
+//! Automatic replica placement is site-aware. See [`crate::site_placement`]
+//! for the site spread and the leadership pinning it gives. An explicit
+//! `assignments` field still wins, as it does in Kafka.
 
 use bytes::Bytes;
 use crabka_metadata::{
@@ -22,8 +26,10 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
+    config_keys::{resolve_broker_witness, resolve_preferred_leader_site},
     error::BrokerError,
     replicator_supervisor::materialize_partition,
+    site_placement::{SiteBrokerView, stretch_replicas},
 };
 
 /// Leader epoch that a freshly created partition starts at. The committed
@@ -38,6 +44,9 @@ const INITIAL_LEADER_EPOCH: i32 = 0;
 /// is `bs[(p) % k]`, and the remaining replicas are `bs[(p + i) % k]` for
 /// `i in 1..R`. The caller must guarantee `R <= k`. Otherwise this returns an
 /// empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
+///
+/// This is the placement of a cluster that declares no site. The site-aware
+/// [`stretch_replicas`] calls it for such a cluster, so the two agree there.
 pub(crate) fn round_robin_replicas(
     sorted_brokers: &[crabka_raft::NodeId],
     num_partitions: i32,
@@ -98,6 +107,66 @@ fn manual_replicas(
         return Err(codes::INVALID_REPLICA_ASSIGNMENT);
     }
     Ok(by_partition.into_values().collect())
+}
+
+/// The registered brokers as the site-aware placement sees them, in node-id
+/// order.
+///
+/// The list keeps the race tolerance of the plain broker list. On a cluster
+/// that just started, the image may not hold the self-registration record
+/// yet. The list then holds this broker alone. That entry declares no site,
+/// so the placement stays the plain Kafka round-robin.
+pub(crate) fn site_broker_views(
+    image: &crabka_metadata::MetadataImage,
+    node_id: crabka_raft::NodeId,
+) -> Vec<SiteBrokerView> {
+    let mut views = image
+        .brokers()
+        .map(|broker| SiteBrokerView {
+            node_id: broker.node_id,
+            site: broker.rack.clone(),
+            is_witness: resolve_broker_witness(image, broker.node_id),
+        })
+        .collect::<Vec<_>>();
+    if views.is_empty() {
+        views.push(SiteBrokerView {
+            node_id,
+            site: None,
+            is_witness: false,
+        });
+    }
+    views.sort_by_key(|view| view.node_id);
+    views
+}
+
+/// The replica list of each partition of a new topic.
+///
+/// An explicit `assignments` field wins, as it does in Kafka. The handler
+/// then takes the caller's lists verbatim, after [`manual_replicas`]
+/// validates them. Without that field the placement is automatic and
+/// site-aware: see [`stretch_replicas`].
+///
+/// The result is an empty outer vec when the automatic placement cannot
+/// satisfy the request, and the caller reports `INVALID_REPLICATION_FACTOR`.
+/// An invalid explicit assignment gives the error code instead.
+fn resolve_assignments(
+    topic: &CreatableTopic,
+    brokers: &[SiteBrokerView],
+    preferred_site: Option<&str>,
+) -> Result<Vec<Vec<crabka_raft::NodeId>>, i16> {
+    if topic.assignments.is_empty() {
+        return Ok(stretch_replicas(
+            brokers,
+            topic.num_partitions,
+            topic.replication_factor,
+            preferred_site,
+        ));
+    }
+    let node_ids = brokers
+        .iter()
+        .map(|broker| broker.node_id)
+        .collect::<Vec<_>>();
+    manual_replicas(topic, &node_ids)
 }
 
 fn topic_error_result(
@@ -241,11 +310,11 @@ pub(crate) async fn handle(
     }
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
+    let preferred_site = resolve_preferred_leader_site(&image);
 
     for topic_req in req.topics {
         let name = topic_req.name.clone();
         let partition_count = topic_req.num_partitions;
-        let replication_factor = topic_req.replication_factor;
 
         // Reject invalid partition counts before attempting automatic placement.
         // Manual assignments use -1 for both count and replication factor.
@@ -254,39 +323,24 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // Read the current broker set from the controller's image; sort by
-        // node_id for determinism.
-        //
-        // Race-tolerance: on a freshly-started cluster, the self-registration
-        // V1BrokerRegistration record may not have made it into the local
-        // MetadataImage yet when this handler runs (the controller's apply is
-        // mostly synchronous on the leader but observable timing has slipped
-        // on slow runners). If `brokers()` is empty, fall back to "this broker
-        // is the only known broker" so the single-broker case (which is by
-        // far the most common) doesn't silently degrade to
-        // INVALID_REPLICATION_FACTOR.
-        let mut sorted_brokers: Vec<crabka_raft::NodeId> =
-            image.brokers().map(|b| b.node_id).collect();
-        if sorted_brokers.is_empty() {
-            sorted_brokers.push(node_id);
-        }
-        sorted_brokers.sort_unstable();
+        // Read the current broker set from the controller's image, with the
+        // site and the witness role of each broker. `site_broker_views` sorts
+        // by node id for determinism, and it covers the race in which the
+        // self-registration record has not reached the local image yet.
+        let brokers = site_broker_views(&image, node_id);
 
-        let assignments = if topic_req.assignments.is_empty() {
-            round_robin_replicas(&sorted_brokers, partition_count, replication_factor)
-        } else {
-            match manual_replicas(&topic_req, &sorted_brokers) {
-                Ok(assignments) => assignments,
-                Err(code) => {
-                    results.push(topic_error_result(name, code, None));
-                    continue;
-                }
+        let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
+            Ok(assignments) => assignments,
+            Err(code) => {
+                results.push(topic_error_result(name, code, None));
+                continue;
             }
         };
 
         if assignments.is_empty() {
-            // RF > broker count. Surface INVALID_REPLICATION_FACTOR per Apache
-            // Kafka semantics.
+            // The placement cannot satisfy the request. RF above the broker
+            // count is the common cause. Surface INVALID_REPLICATION_FACTOR
+            // per Apache Kafka semantics.
             results.push(topic_error_result(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,
@@ -560,7 +614,106 @@ mod replica_assignment_tests {
     use crabka_raft::NodeId;
     use crabka_units::{Time, convert::TimeExt, secs};
 
-    use super::{codes, manual_replicas, round_robin_replicas};
+    use super::{
+        MetadataRecord, codes, manual_replicas, resolve_assignments, resolve_preferred_leader_site,
+        round_robin_replicas, site_broker_views,
+    };
+
+    /// One broker in each of the sites `a`, `b`, and `c`.
+    const THREE_SITES: [(u64, Option<&str>); 3] = [(1, Some("a")), (2, Some("b")), (3, Some("c"))];
+
+    /// Two brokers in each of the sites `a`, `b`, and `c`.
+    const SIX_BROKERS: [(u64, Option<&str>); 6] = [
+        (1, Some("a")),
+        (2, Some("b")),
+        (3, Some("c")),
+        (4, Some("a")),
+        (5, Some("b")),
+        (6, Some("c")),
+    ];
+
+    /// A metadata image that registers `brokers` with their racks, marks
+    /// `witnesses` with the witness role, and pins `preferred_site` as the
+    /// cluster-wide default.
+    fn stretch_image(
+        brokers: &[(u64, Option<&str>)],
+        witnesses: &[u64],
+        preferred_site: Option<&str>,
+    ) -> crabka_metadata::MetadataImage {
+        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (node_id, rack) in brokers {
+            image.apply(&MetadataRecord::V1BrokerRegistration(
+                crabka_metadata::BrokerRegistrationRecord {
+                    node_id: NodeId(*node_id),
+                    broker_epoch: 0,
+                    incarnation_id: uuid::Uuid::from_u128(u128::from(*node_id)),
+                    host: "127.0.0.1".into(),
+                    port: 9_092,
+                    rack: rack.map(str::to_string),
+                    endpoints: vec![],
+                    log_dirs: vec![],
+                    features: std::collections::BTreeMap::new(),
+                },
+            ));
+        }
+        for node_id in witnesses {
+            image.apply(&MetadataRecord::V1BrokerConfig(
+                crabka_metadata::BrokerConfigRecord {
+                    node_id: NodeId(*node_id),
+                    config_name: crate::config_keys::BROKER_WITNESS.into(),
+                    config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
+                },
+            ));
+        }
+        if let Some(site) = preferred_site {
+            image.apply(&MetadataRecord::V1BrokerConfig(
+                crabka_metadata::BrokerConfigRecord {
+                    node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                    config_name: crate::config_keys::STRETCH_PREFERRED_LEADER_SITE.into(),
+                    config_value: Some(site.into()),
+                },
+            ));
+        }
+        image
+    }
+
+    /// A topic request that asks for automatic placement.
+    fn auto_topic(partitions: i32, rf: i16) -> CreatableTopic {
+        CreatableTopic {
+            name: "orders".into(),
+            num_partitions: partitions,
+            replication_factor: rf,
+            ..Default::default()
+        }
+    }
+
+    /// The `(node id, site, witness)` triple of each view, in list order.
+    fn view_rows(views: &[super::SiteBrokerView]) -> Vec<(NodeId, Option<String>, bool)> {
+        views
+            .iter()
+            .map(|view| (view.node_id, view.site.clone(), view.is_witness))
+            .collect()
+    }
+
+    fn site_of(brokers: &[(u64, Option<&str>)], node_id: NodeId) -> String {
+        brokers
+            .iter()
+            .find(|(id, _)| NodeId(*id) == node_id)
+            .and_then(|(_, rack)| *rack)
+            .expect("the placement returns a broker that declared a site")
+            .to_string()
+    }
+
+    /// The sites of one replica list, sorted, so the caller can compare the
+    /// spread without depending on the replica order.
+    fn sites_of(brokers: &[(u64, Option<&str>)], replicas: &[NodeId]) -> Vec<String> {
+        let mut sites = replicas
+            .iter()
+            .map(|node_id| site_of(brokers, *node_id))
+            .collect::<Vec<_>>();
+        sites.sort();
+        sites
+    }
 
     #[test]
     fn manual_assignments_preserve_partition_order_and_validate_brokers() {
@@ -630,6 +783,182 @@ mod replica_assignment_tests {
         let bs = vec![NodeId(1)];
         let out = round_robin_replicas(&bs, 2, 1);
         assert!(out == vec![vec![NodeId(1)], vec![NodeId(1)]]);
+    }
+
+    #[test]
+    fn site_broker_views_read_the_rack_and_the_witness_role() {
+        let image = stretch_image(&[(3, Some("c")), (1, Some("a")), (2, None)], &[3], None);
+
+        let views = site_broker_views(&image, NodeId(9));
+
+        // The views come back in node-id order, whatever order the image
+        // holds them in.
+        let expected = vec![
+            (NodeId(1), Some("a".to_string()), false),
+            (NodeId(2), None, false),
+            (NodeId(3), Some("c".to_string()), true),
+        ];
+        assert!(view_rows(&views) == expected);
+    }
+
+    #[test]
+    fn an_image_without_a_registration_places_on_this_broker_alone() {
+        let image = stretch_image(&[], &[], None);
+
+        let views = site_broker_views(&image, NodeId(7));
+
+        assert!(view_rows(&views) == vec![(NodeId(7), None, false)]);
+    }
+
+    #[test]
+    fn three_sites_hold_one_replica_of_every_partition() {
+        let image = stretch_image(&THREE_SITES, &[], None);
+        let views = site_broker_views(&image, NodeId(1));
+
+        let assignments =
+            resolve_assignments(&auto_topic(4, 3), &views, None).expect("automatic placement");
+
+        // Every list holds all three brokers, one for each site, and the
+        // leader rotates over the sites.
+        assert!(
+            assignments
+                == vec![
+                    vec![NodeId(1), NodeId(2), NodeId(3)],
+                    vec![NodeId(2), NodeId(3), NodeId(1)],
+                    vec![NodeId(3), NodeId(1), NodeId(2)],
+                    vec![NodeId(1), NodeId(2), NodeId(3)],
+                ]
+        );
+    }
+
+    #[test]
+    fn the_preferred_site_leads_every_partition() {
+        let image = stretch_image(&SIX_BROKERS, &[], Some("b"));
+        let views = site_broker_views(&image, NodeId(1));
+
+        let assignments = resolve_assignments(
+            &auto_topic(6, 3),
+            &views,
+            resolve_preferred_leader_site(&image),
+        )
+        .expect("automatic placement");
+
+        let leader_sites = assignments
+            .iter()
+            .map(|replicas| site_of(&SIX_BROKERS, replicas[0]))
+            .collect::<Vec<_>>();
+        assert!(leader_sites == vec!["b"; 6]);
+        let spread = assignments
+            .iter()
+            .map(|replicas| sites_of(&SIX_BROKERS, replicas))
+            .collect::<Vec<_>>();
+        assert!(spread == vec![vec!["a", "b", "c"]; 6]);
+    }
+
+    #[test]
+    fn a_witness_replicates_but_leads_no_partition() {
+        let brokers = [(1, Some("a")), (2, Some("b")), (3, Some("w"))];
+        let image = stretch_image(&brokers, &[3], None);
+        let views = site_broker_views(&image, NodeId(1));
+
+        let assignments =
+            resolve_assignments(&auto_topic(6, 3), &views, None).expect("automatic placement");
+
+        // The witness takes a replica of every partition, and leadership
+        // rotates over the two brokers that serve clients.
+        let holds_witness = assignments
+            .iter()
+            .map(|replicas| replicas.contains(&NodeId(3)))
+            .collect::<Vec<_>>();
+        assert!(holds_witness == vec![true; 6]);
+        let leaders = assignments
+            .iter()
+            .map(|replicas| replicas[0])
+            .collect::<Vec<_>>();
+        assert!(
+            leaders
+                == vec![
+                    NodeId(1),
+                    NodeId(2),
+                    NodeId(1),
+                    NodeId(2),
+                    NodeId(1),
+                    NodeId(2),
+                ]
+        );
+    }
+
+    #[test]
+    fn a_cluster_without_racks_places_like_round_robin() {
+        let image = stretch_image(&[(1, None), (2, None), (3, None)], &[], None);
+        let views = site_broker_views(&image, NodeId(1));
+        let node_ids = vec![NodeId(1), NodeId(2), NodeId(3)];
+
+        for (partitions, rf) in [(1, 1), (3, 1), (3, 2), (4, 3), (5, 2)] {
+            let assignments = resolve_assignments(&auto_topic(partitions, rf), &views, None)
+                .expect("automatic placement");
+
+            assert!(
+                assignments == round_robin_replicas(&node_ids, partitions, rf),
+                "partitions {partitions}, rf {rf}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manual_assignment_overrides_the_site_placement() {
+        let image = stretch_image(&THREE_SITES, &[], Some("c"));
+        let views = site_broker_views(&image, NodeId(1));
+        let preferred_site = resolve_preferred_leader_site(&image);
+        let manual = CreatableTopic {
+            name: "orders".into(),
+            num_partitions: -1,
+            replication_factor: -1,
+            assignments: vec![
+                CreatableReplicaAssignment {
+                    partition_index: 0,
+                    broker_ids: vec![2, 1],
+                    ..Default::default()
+                },
+                CreatableReplicaAssignment {
+                    partition_index: 1,
+                    broker_ids: vec![1, 3],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let assignments =
+            resolve_assignments(&manual, &views, preferred_site).expect("manual assignments");
+
+        assert!(assignments == vec![vec![NodeId(2), NodeId(1)], vec![NodeId(1), NodeId(3)]]);
+        // The automatic placement of the same cluster leads in site `c`, so
+        // the manual lists really did override it.
+        let automatic = resolve_assignments(&auto_topic(2, 2), &views, preferred_site)
+            .expect("automatic placement");
+        assert!(automatic == vec![vec![NodeId(3), NodeId(1)], vec![NodeId(3), NodeId(2)]]);
+    }
+
+    #[test]
+    fn an_impossible_request_gives_no_assignment() {
+        // The empty outer vec is what makes the handler report
+        // INVALID_REPLICATION_FACTOR.
+        let image = stretch_image(&THREE_SITES, &[], None);
+        let views = site_broker_views(&image, NodeId(1));
+
+        let too_many = resolve_assignments(&auto_topic(1, 4), &views, None).expect("no error code");
+
+        assert!(too_many.is_empty());
+
+        // A cluster of witnesses can lead no partition at all.
+        let witnesses_only = stretch_image(&THREE_SITES, &[1, 2, 3], None);
+        let views = site_broker_views(&witnesses_only, NodeId(1));
+
+        let unleadable =
+            resolve_assignments(&auto_topic(1, 3), &views, None).expect("no error code");
+
+        assert!(unleadable.is_empty());
     }
 
     #[test]

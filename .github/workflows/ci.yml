@@ -110,6 +110,83 @@ jobs:
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
 
+  # Re-discharge the Creusot proof sessions under `verif/`.
+  #
+  # The sessions are checked in, and nothing re-ran them before this job, so a
+  # contract change could invalidate a proof and leave the stale session in the
+  # tree with no signal. This proves them again on every change.
+  #
+  # It gates on the proof RESULT and never on the artifacts. A `.coma` file
+  # embeds the absolute source path of the machine that wrote it, so a checkout
+  # at any other path always differs and a `git diff --exit-code` over `verif/`
+  # would fail every run for a reason that says nothing about the proofs.
+  #
+  # `cargo creusot` runs per crate. Run bare it builds the whole workspace, and
+  # `crabka-broker` does not compile under `--cfg creusot`, because
+  # `crabka-throttle` gates out `ThrottleState` and `TokenBucket` there.
+  proofs:
+    name: creusot proofs
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      # `why3-ide` is a hard dependency of the `creusot-deps` opam package and
+      # needs GTK. opam syncs its local pin with `rsync`, and fails the whole
+      # install without it.
+      - name: system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            opam ocaml-nox build-essential pkg-config libgmp-dev libmpfr-dev \
+            m4 unzip autoconf rsync libgtk-3-dev libgtksourceview-3.0-dev
+
+      - name: read the pinned Creusot version
+        id: creusot
+        run: echo "version=$(cat .creusot-version)" >>"${GITHUB_OUTPUT}"
+
+      # The opam switch builds why3 from source, which is the slow part of a
+      # cold run. Key the cache on the Creusot pin and the prover profile, so a
+      # bump of either rebuilds and nothing else does.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.opam
+            ~/.local/share/creusot
+          key: creusot-${{ runner.os }}-${{ hashFiles('.creusot-version', 'why3find.json') }}
+
+      - name: opam
+        run: opam init --disable-sandboxing --bare -y --no-setup
+
+      # `creusot-rustc` links against the compiler internals of one exact
+      # nightly, which Creusot pins in its own repository, so the toolchain
+      # comes from there rather than from this repository's pin. Its installer
+      # places every component, including the Why3 prelude package and the four
+      # provers `why3find.json` names.
+      - name: creusot toolchain
+        env:
+          OPAMYES: "1"
+          OPAMCONFIRMLEVEL: unsafe-yes
+        run: |
+          git clone --depth 1 --branch "${{ steps.creusot.outputs.version }}" \
+            https://github.com/creusot-rs/creusot /tmp/creusot
+          rustup toolchain install \
+            "$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/creusot/rust-toolchain)" \
+            --component rustfmt --component rustc-dev --component llvm-tools \
+            --profile minimal
+          cd /tmp/creusot
+          cargo run --bin creusot-install -- \
+            prelude why3 provers why3-conf cargo-creusot creusot-rustc \
+            cargo-creusot-config
+
+      # A non-zero exit or any unproved goal fails the job.
+      - name: prove
+        run: |
+          export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
+          cargo creusot --package crabka-verified
+          cargo creusot --package crabka-throttle
+
   # Container suites, one runner each.
   #
   # These saturate a runner: the suites are container-heavy, so Bazel got only
@@ -167,7 +244,14 @@ jobs:
               if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
                 targets="$(all)"
               else
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" | while read -r f; do
+                # `rdeps` takes a target set, so every path here must be a
+                # target Bazel knows. A crate README is not one: no rule globs
+                # it and no crate pulls one in with `include_str!`. Feeding it
+                # to `set(...)` fails the whole query, so a documentation-only
+                # change would kill the suite selection rather than select
+                # nothing.
+                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
+                  grep -vE '\.md$' | while read -r f; do
                   [ -e "${f}" ] && printf '%s\n' "${f}"
                 done)
                 if [ "${#files[@]}" -eq 0 ]; then

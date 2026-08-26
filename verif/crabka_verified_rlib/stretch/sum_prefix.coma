@@ -1,0 +1,39 @@
+(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 20 10 20 15
+
+use creusot.int.Int64
+use seq.Seq
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant s : Seq.seq Int64.t
+
+constant limit : int
+
+function sum_prefix [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49] (s: Seq.seq Int64.t) (limit: int) : int
+
+goal vc_sum_prefix: if limit <= 0 then
+    true
+  else
+    [@expl:variant decreases] well_founded_relation_Int ([%#sstretch] limit) ([%#sstretch] limit - 1)
+  

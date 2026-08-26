@@ -12,6 +12,9 @@ pub(crate) struct ReplicaView {
     pub rack: Option<String>,
     /// Whether this replica is currently in the ISR.
     pub in_isr: bool,
+    /// Whether this replica is a data-bearing witness. A witness replicates
+    /// the partition and stays in the ISR, but it serves no client traffic.
+    pub is_witness: bool,
 }
 
 /// Which built-in selector the broker uses. Maps to Kafka's
@@ -41,6 +44,12 @@ impl ReplicaSelectorKind {
 
     /// Choose the preferred read replica. Returns a node id, or `-1` for
     /// "no preference, use the leader".
+    ///
+    /// A witness is never a candidate. It replicates the partition and counts
+    /// toward the ISR, but it serves no client traffic. The rule matters most
+    /// where the witness looks most attractive: a consumer whose `client.rack`
+    /// names the witness site sees an in-ISR same-rack replica there, and a
+    /// redirect would send every read to a broker that answers none.
     pub(crate) fn select(
         self,
         client_rack: Option<&str>,
@@ -55,7 +64,7 @@ impl ReplicaSelectorKind {
                 };
                 let winner = replicas
                     .iter()
-                    .filter(|r| r.in_isr && r.rack.as_deref() == Some(rack))
+                    .filter(|r| r.in_isr && !r.is_witness && r.rack.as_deref() == Some(rack))
                     .min_by_key(|r| r.node_id);
                 match winner {
                     Some(r) if r.node_id != leader_id => r.node_id,
@@ -77,6 +86,14 @@ mod tests {
             node_id,
             rack: Some(rack.to_string()),
             in_isr,
+            is_witness: false,
+        }
+    }
+
+    fn witness(node_id: i32, rack: &str, in_isr: bool) -> ReplicaView {
+        ReplicaView {
+            is_witness: true,
+            ..view(node_id, rack, in_isr)
         }
     }
 
@@ -126,6 +143,37 @@ mod tests {
         let replicas = [view(1, "a", true), view(2, "b", false)];
         // Node 2 is same-rack but out of ISR -> no redirect.
         assert!(ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas) == -1);
+    }
+
+    #[test]
+    fn rack_aware_never_redirects_a_consumer_to_a_witness() {
+        // Node 1 leads in rack "a". The client rack is "b", the witness site,
+        // so the witness there is an in-ISR same-rack replica and looks like
+        // the best pick.
+        for (name, replicas, want) in [
+            (
+                "witness is the only same-rack ISR member",
+                vec![view(1, "a", true), witness(2, "b", true)],
+                -1,
+            ),
+            (
+                "a same-rack non-witness wins over a lower-id witness",
+                vec![
+                    view(1, "a", true),
+                    witness(2, "b", true),
+                    view(3, "b", true),
+                ],
+                3,
+            ),
+            (
+                "no witness anywhere keeps the lowest-id same-rack ISR member",
+                vec![view(1, "a", true), view(2, "b", true), view(3, "b", true)],
+                2,
+            ),
+        ] {
+            let got = ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas);
+            assert!(got == want, "{name}: got {got}, want {want}");
+        }
     }
 
     #[test]

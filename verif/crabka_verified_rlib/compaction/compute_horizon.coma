@@ -1,50 +1,59 @@
-(* #"/work/crates/verified/src/compaction.rs" 83 0 83 74 *)
+(* #"/home/user/krabka-broker/crates/verified/src/compaction.rs" 88 0 88 74 *)
 
-let%span scompaction = "/work/crates/verified/src/compaction.rs" 84 4 84 46
-let%span scompaction'0 = "/work/crates/verified/src/compaction.rs" 74 10 74 71
-let%span scompaction'1 = "/work/crates/verified/src/compaction.rs" 75 10 81 1
-let%span scompaction'2 = "/work/crates/verified/src/compaction.rs" 64 8 70 9
-let%span snum = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 325 20 326 51
-let%span snum'0 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 329 26 329 83
-let%span snum'1 = "/opt/creusot/home/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.12.0/src/std/num.rs" 330 26 330 83
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span scompaction = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 89 4 89 46
+let%span scompaction'0 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 79 10 79 71
+let%span scompaction'1 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 80 10 86 1
+let%span scompaction'2 = "/home/user/krabka-broker/crates/verified/src/compaction.rs" 69 8 75 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
 let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
   [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] Int64.to_int self_
-            + Int64.to_int rhs
-          >= Int64.to_int const_MIN
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
+          + Int64.to_int rhs) (Int64.to_int const_MIN)
         /\ Int64.to_int self_ + Int64.to_int rhs <= Int64.to_int const_MAX
       -> Int64.to_int result = Int64.to_int self_ + Int64.to_int rhs)
     /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] Int64.to_int self_ + Int64.to_int rhs
         < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
-    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] Int64.to_int self_ + Int64.to_int rhs
-      > Int64.to_int const_MAX -> Int64.to_int result = Int64.to_int const_MAX)}
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
+      + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
     (! return {result}) ]
 
-function compute_horizon_model [#"/work/crates/verified/src/compaction.rs" 62 0 62 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
- = [%#scompaction'2] if Int64.to_int now_ms + Int64.to_int delete_retention_ms > 9223372036854775807 then
+function compute_horizon_model [#"/home/user/krabka-broker/crates/verified/src/compaction.rs" 67 0 67 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
+ = [%#scompaction'2] if gt_log_Int (Int64.to_int now_ms + Int64.to_int delete_retention_ms) 9223372036854775807 then
     9223372036854775807
   else
     if Int64.to_int now_ms + Int64.to_int delete_retention_ms < - 9223372036854775807 - 1 then
       - 9223372036854775807 - 1
     else
       Int64.to_int now_ms + Int64.to_int delete_retention_ms
-
+  
 
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let compute_horizon [#"/work/crates/verified/src/compaction.rs" 83 0 83 74] (now_ms: Int64.t)
+let compute_horizon [#"/home/user/krabka-broker/crates/verified/src/compaction.rs" 88 0 88 74] (now_ms: Int64.t)
   (delete_retention_ms: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = saturating_add [%#scompaction] {now_ms} {delete_retention_ms} (fun (_x: Int64.t) -> [ &_ret <- _x ] s1)
@@ -56,13 +65,13 @@ let compute_horizon [#"/work/crates/verified/src/compaction.rs" 83 0 83 74] (now
   {[@stop_split] [@expl:compute_horizon ensures] ([@stop_split] [@expl:compute_horizon ensures #0] [%#scompaction'0] Int64.to_int result
       = compute_horizon_model now_ms delete_retention_ms)
     /\ ([@stop_split] [@expl:compute_horizon ensures #1] [%#scompaction'1] Int64.to_int result
-    = (if Int64.to_int now_ms + Int64.to_int delete_retention_ms > 9223372036854775807 then
+    = (if gt_log_Int (Int64.to_int now_ms + Int64.to_int delete_retention_ms) 9223372036854775807 then
       9223372036854775807
     else
       if Int64.to_int now_ms + Int64.to_int delete_retention_ms < - 9223372036854775807 - 1 then
         - 9223372036854775807 - 1
       else
         Int64.to_int now_ms + Int64.to_int delete_retention_ms
-
+    
     ))}
     (! return {result}) ]

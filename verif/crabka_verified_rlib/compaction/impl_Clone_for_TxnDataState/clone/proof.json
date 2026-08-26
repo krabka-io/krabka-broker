@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_TxnDataState": { "prover": "alt-ergo", "time": 0.009 }
+      "vc_clone_TxnDataState": { "prover": "alt-ergo", "time": 0.021 }
     }
   }
 }
