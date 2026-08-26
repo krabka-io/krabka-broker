@@ -227,6 +227,11 @@ mod replicator_supervisor;
 pub mod share_coordinator;
 pub mod share_partition;
 pub(crate) mod site_placement;
+/// Three-site stretch-cluster model: site failure and network partition
+/// composed with the real site placement, controller failover, preferred
+/// election, and `acks=all` durability under a data-bearing witness.
+#[cfg(test)]
+mod stretch_cluster_model;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,
