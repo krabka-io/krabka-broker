@@ -4,7 +4,7 @@
     "Coma": {
       "vc_lemma_count_ge_prefix_nonnegative": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.029
       }
     }
   }

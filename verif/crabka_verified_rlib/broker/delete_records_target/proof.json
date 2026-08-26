@@ -2,10 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_delete_records_target": {
-        "prover": "alt-ergo",
-        "time": 0.01
-      }
+      "vc_delete_records_target": { "prover": "alt-ergo", "time": 0.01 }
     }
   }
 }

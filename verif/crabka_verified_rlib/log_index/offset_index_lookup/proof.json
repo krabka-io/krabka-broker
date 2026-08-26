@@ -3,7 +3,7 @@
   "proofs": {
     "Coma": {
       "vc_len_tup2_u32_u32": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_offset_index_lookup": { "prover": "z3", "time": 0.009 }
+      "vc_offset_index_lookup": { "prover": "z3", "time": 0.029 }
     }
   }
 }

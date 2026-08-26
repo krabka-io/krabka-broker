@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_lemma_count_ge_prefix_monotone": {
+      "vc_lemma_two_sites_never_survive": {
         "prover": "alt-ergo",
-        "time": 0.036
+        "time": 0.077
       }
     }
   }

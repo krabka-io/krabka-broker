@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_RetainDecision": { "prover": "alt-ergo", "time": 0.004 }
+      "vc_clone_RetainDecision": { "prover": "alt-ergo", "time": 0.023 }
     }
   }
 }

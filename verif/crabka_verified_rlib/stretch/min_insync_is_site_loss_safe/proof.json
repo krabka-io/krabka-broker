@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_min_insync_is_site_loss_safe": {
+        "prover": "alt-ergo",
+        "time": 0.031
+      },
+      "vc_site_loss_survivors": { "prover": "alt-ergo", "time": 0.034 }
+    }
+  }
+}
