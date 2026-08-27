@@ -32,13 +32,13 @@ The broker has no clock abstraction that could report confidence. A grep for a `
 
 `crates/broker/src/delivery/` and `crates/broker/tests/deliver_at_time.rs` use the external `qubit_clock::Clock` trait. `crates/broker/src/fetch_session.rs` and `crates/throttle/src/runtime.rs` use `qubit_clock::NanoMonotonicClock`. `crates/broker/src/heartbeat/controller_state.rs` declares a private `enum Clock` with a `Real` variant and a test variant, for liveness tracking alone. Each of them returns an instant. None of them returns how good that instant is.
 
-There is also no path for such a value to leave the process. `crabka-telemetry` builds an OTLP pipeline for spans and logs, and its `opentelemetry-otlp` dependency names the `trace` and `logs` features and not `metrics`. Broker metrics go out through `prometheus_client` in `crates/broker/src/metrics.rs`, and no series there carries the declared bound or anything measured against it.
+Until this KFC the broker also published nothing an alert could compare against. `crabka-telemetry` builds an OTLP pipeline for spans and logs, and its `opentelemetry-otlp` dependency names the `trace` and `logs` features and not `metrics`. Broker metrics go out through `prometheus_client` in `crates/broker/src/metrics.rs`, and no series there carried the declared bound. This KFC adds one, so a rule reads the bound the broker relies on instead of a copy of it.
 
 So two shipped designs rest on a number that an operator typed into a config file, and no code in the project ever compares that number against a clock. This KFC measures it.
 
 ## Public Interfaces
 
-The feature adds one ingest endpoint, one metric block kind, sixteen metric names, five recording rules, nine alerting rules, and one record header. It adds no Kafka api key, no error code, and no field to any Kafka request or response.
+The feature adds one ingest endpoint, one metric block kind, sixteen metric names, one broker gauge, five recording rules, nine alerting rules, and one record header. It adds no Kafka api key, no error code, and no field to any Kafka request or response.
 
 ### The Ingest Endpoint
 
@@ -106,6 +106,18 @@ The projection is deliberately lossy. `gmClockAccuracy` and the reference identi
 
 `krabka_clock_uncertainty_seconds` is the one an operator watches, because it is the measured version of the number that KFC-1 and KFC-6 declare. `krabka_clock_sync_state` is the second, because a clock that left `synchronized` invalidates the first one.
 
+### The Broker Gauge
+
+The broker gains one series, on the registry it already runs in `crates/broker/src/metrics.rs`.
+
+| Metric | Kind | Meaning |
+| :--- | :--- | :--- |
+| `delivery_clock_uncertainty_seconds` | gauge | The bound this broker declares, in seconds. It is `delivery_clock_uncertainty`, the extent KFC-1 adds to a batch's timestamp before the batch activates. |
+
+The registry prefixes every broker series, so the exported name is `crabka_broker_delivery_clock_uncertainty_seconds`.
+
+The value is a constant of a running broker, and no topic config overrides it. The broker publishes it once at startup, beside the delivery scheduler that reads the same config. It is the declared half of the comparison this KFC exists to make, and the measured half is `krabka_clock_uncertainty_seconds`.
+
 ### The Shipped Recording Rules
 
 ```yaml
@@ -114,7 +126,7 @@ groups:
     interval: 15s
     rules:
       - record: krabka_clock:declared_bound_seconds
-        expr: vector(0.25)
+        expr: max(crabka_broker_delivery_clock_uncertainty_seconds)
       - record: krabka_clock:uncertainty_seconds:max
         expr: max(krabka_clock_uncertainty_seconds)
       - record: krabka_clock:fleet_skew_bound_seconds
@@ -129,7 +141,7 @@ groups:
 
 `krabka_clock:fleet_skew_bound_seconds` is the number the whole signal exists to produce. Each clock claims an interval from its offset minus its uncertainty to its offset plus its uncertainty. The largest upper end minus the smallest lower end is the largest difference between any two clocks in the cluster that the fleet's own uncertainty admits. That is the number an operator compares `delivery_clock_uncertainty` and `coordination.clock.uncertainty.ms` against. Two clocks each inside a bound `e` differ by at most `2e`, so a fleet bound above twice the declared bound says the declaration is false.
 
-`krabka_clock:declared_bound_seconds` ships as `vector(0.25)`, which is the literal KFC-1 and KFC-6 default in seconds. A recording rule reads series, and the broker exports no series that carries its configured bound. The literal is the only way to bring the declared number into a query. An operator who changes either config edits this one rule to match.
+`krabka_clock:declared_bound_seconds` reads `crabka_broker_delivery_clock_uncertainty_seconds`, the gauge this KFC adds to the broker. The bound is a constant of a running broker and no topic config overrides it, so the broker publishes it once at startup. The rule takes the maximum across brokers, because a rolling config change leaves the cluster with two values for a short time and the larger one is the weaker promise. An operator who retunes `delivery_clock_uncertainty` changes nothing in the rule file, and the alert follows the broker.
 
 ### The Shipped Alerting Rules
 

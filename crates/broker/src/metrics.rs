@@ -14,7 +14,7 @@
 //! per-second gauges to monotonic counters per Prometheus best practice
 //! — operators compute rates with `rate()` at scrape time.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 
 use prometheus_client::{
     encoding::EncodeLabelSet,
@@ -464,6 +464,17 @@ pub struct BrokerMetrics {
     /// with the lateness histogram it separates "the scheduler never ran" from
     /// "the scheduler ran late". One series per broker.
     pub delivery_scheduler_wakeups_total: Counter,
+    /// KFC-8 the clock bound this broker declares, in seconds.
+    ///
+    /// It is `delivery_clock_uncertainty`, the bound KFC-1 adds to a batch's
+    /// timestamp before the batch activates. The value is a constant of the
+    /// running process, and it is broker-wide: no topic config overrides it.
+    ///
+    /// The broker exports it so an alert can compare measured clock
+    /// uncertainty against the bound the broker actually relies on. Without
+    /// this series a rule has to carry a copy of the threshold, and the copy
+    /// goes stale the moment an operator retunes the broker.
+    pub delivery_clock_uncertainty_seconds: Gauge<f64, AtomicU64>,
 }
 
 impl BrokerMetrics {
@@ -542,6 +553,7 @@ impl BrokerMetrics {
                 DELIVERY_ACTIVATION_LATENESS_BUCKETS,
             ),
             delivery_scheduler_wakeups_total: Counter::default(),
+            delivery_clock_uncertainty_seconds: Gauge::default(),
         }
     }
 
@@ -1099,6 +1111,15 @@ impl BrokerMetrics {
              bound elapsed.",
             self.delivery_scheduler_wakeups_total.clone(),
         );
+
+        registry.register(
+            "delivery_clock_uncertainty_seconds",
+            "KFC-8 the clock bound this broker declares: the seconds KFC-1 \
+             adds to a batch's timestamp before the batch activates. Compare \
+             measured clock uncertainty against this series, so an alert \
+             tracks the bound the broker relies on instead of a copy of it.",
+            self.delivery_clock_uncertainty_seconds.clone(),
+        );
     }
 
     /// Build and register every broker metric.
@@ -1442,8 +1463,37 @@ fn krabka_private_api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use crabka_units::{convert::TimeExt as _, millis, secs};
 
     use super::*;
+
+    /// The gauge exists so an alert can read the bound the broker relies on
+    /// instead of carrying a copy of it, so what matters is that the exported
+    /// value is the configured extent in seconds.
+    #[tokio::test]
+    async fn declared_clock_bound_is_exported_in_seconds() {
+        for bound in [millis(250), millis(750), secs(2), millis(1)] {
+            let m = BrokerMetrics::new();
+            m.delivery_clock_uncertainty_seconds.set(bound.secs_f64());
+
+            let mut buf = String::new();
+            let r = m.registry.lock().await;
+            prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+            drop(r);
+
+            let name = "crabka_broker_delivery_clock_uncertainty_seconds ";
+            let line = buf
+                .lines()
+                .find(|line| line.starts_with(name))
+                .expect("the declared bound is registered and exported");
+            let exported: f64 = line[name.len()..]
+                .trim()
+                .parse()
+                .expect("the gauge encodes a number");
+
+            assert!(exported == bound.secs_f64());
+        }
+    }
 
     #[tokio::test]
     async fn registry_has_broker_prefix_and_all_metrics() {
