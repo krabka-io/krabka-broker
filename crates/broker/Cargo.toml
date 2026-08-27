@@ -55,6 +55,9 @@ crabka-client-core = { version = "0.4.0" }
 crabka-throttle = { version = "0.4.0", path = "../throttle" }
 crabka-units = { workspace = true }
 crabka-security.workspace = true
+# KFC-7 broker-side schema validation: the Confluent wire framing, the
+# registry REST client, and the untyped body validators.
+crabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
 qubit-clock = { workspace = true, features = ["tokio"] }
 arc-swap.workspace = true
 async-trait.workspace = true

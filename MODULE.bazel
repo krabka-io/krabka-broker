@@ -212,10 +212,11 @@ crate.from_cargo(
     platform_triples = PLATFORM_TRIPLES,
 )
 
-# The wire-layer and client crates come from two sibling repositories, each a
-# Cargo workspace whose `members` is the glob `crates/*`. rules_rs resolves a git
-# crate's directory by matching the crate name against the members list, and it
-# skips glob entries, so each member's path is named here instead.
+# The wire-layer, client and schema-registry crates come from three sibling
+# repositories, each a Cargo workspace whose `members` is the glob `crates/*`.
+# rules_rs resolves a git crate's directory by matching the crate name against
+# the members list, and it skips glob entries, so each member's path is named
+# here instead.
 SIBLING_MEMBERS = {
     "crabka-compression": "crates/compression",
     "crabka-ids": "crates/ids",
@@ -228,6 +229,7 @@ SIBLING_MEMBERS = {
     "crabka-client-consumer": "crates/client-consumer",
     "crabka-client-core": "crates/client-core",
     "crabka-client-producer": "crates/client-producer",
+    "crabka-schema-serde": "crates/schema-serde",
 }
 
 [

@@ -262,6 +262,8 @@ pub struct BrokerConfig {
     pub connection_creation_throttle_max: Time,
     /// OPA authorization request timeout.
     pub opa_http_timeout: Time,
+    /// Schema registry request timeout.
+    pub schema_registry_http_timeout: Time,
     /// OAuth JWKS HTTP request timeout.
     pub oauth_jwks_http_timeout: Time,
     /// Dynamic-quorum auto-join retry delay.
@@ -589,6 +591,13 @@ pub struct BrokerConfig {
     /// default is [`crate::authorizer::AllowAllAuthorizer`], an explicit
     /// "allow everything" policy.
     pub authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+
+    /// KFC-7 schema validator: the registry client and its cache, shared by
+    /// every produce on this broker. Configured through `[schema_registry]` in
+    /// `broker.toml`. `None` is the default and means no `[schema_registry]`
+    /// section was configured, so a topic that turns `schema.validation.*` on
+    /// has nothing to validate against.
+    pub schema_validator: Option<std::sync::Arc<crate::schema_validation::SchemaValidator>>,
 
     /// TLS configuration. `None` means no TLS, and is the default.
     pub tls_config: Option<TlsConfig>,
@@ -1162,6 +1171,7 @@ impl BrokerConfig {
             rlmm_bootstrap_backoff_max: secs(10),
             connection_creation_throttle_max: secs(1),
             opa_http_timeout: secs(5),
+            schema_registry_http_timeout: secs(5),
             oauth_jwks_http_timeout: secs(10),
             auto_join_retry_backoff: millis(500),
             auto_join_voter_request_timeout: secs(30),
@@ -1274,6 +1284,7 @@ impl BrokerConfig {
             plain_credentials: HashMap::new(),
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            schema_validator: None,
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
@@ -1896,6 +1907,10 @@ impl BrokerConfig {
                 self.connection_creation_throttle_max,
             ),
             ("opa_http_timeout", self.opa_http_timeout),
+            (
+                "schema_registry_http_timeout",
+                self.schema_registry_http_timeout,
+            ),
             ("oauth_jwks_http_timeout", self.oauth_jwks_http_timeout),
             ("auto_join_retry_backoff", self.auto_join_retry_backoff),
             (
@@ -2314,6 +2329,7 @@ impl Default for BrokerConfig {
             rlmm_bootstrap_backoff_max: secs(10),
             connection_creation_throttle_max: secs(1),
             opa_http_timeout: secs(5),
+            schema_registry_http_timeout: secs(5),
             oauth_jwks_http_timeout: secs(10),
             auto_join_retry_backoff: millis(500),
             auto_join_voter_request_timeout: secs(30),
@@ -2419,6 +2435,7 @@ impl Default for BrokerConfig {
             plain_credentials: HashMap::new(),
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            schema_validator: None,
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
@@ -3347,6 +3364,26 @@ mod tests {
         let c = BrokerConfig::default();
         assert!(c.controller_election_timeout == DEFAULT_CONTROLLER_ELECTION_TIMEOUT);
         assert!(c.controller_heartbeat_interval == DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL);
+    }
+
+    #[test]
+    fn defaults_carry_no_schema_validator_and_a_five_second_registry_timeout() {
+        let c = BrokerConfig::default();
+        assert!(c.schema_validator.is_none());
+        assert!(c.schema_registry_http_timeout == secs(5));
+
+        let t = BrokerConfig::for_tests(PathBuf::from("/tmp/schema-registry-defaults"));
+        assert!(t.schema_validator.is_none());
+        assert!(t.schema_registry_http_timeout == secs(5));
+    }
+
+    #[test]
+    fn validate_rejects_a_non_positive_schema_registry_http_timeout() {
+        let c = BrokerConfig {
+            schema_registry_http_timeout: Time::ZERO,
+            ..base()
+        };
+        assert!(c.validate().is_err());
     }
 
     #[test]
