@@ -1674,7 +1674,22 @@ async fn validate_batch_schemas(
                 }]);
             };
             for (index, record) in batch.iter().enumerate() {
-                let Ok(record) = record else { break };
+                // `prepare_batch`'s `validate_records` walk already parsed
+                // every record, so this is not reachable through it. It fails
+                // closed anyway: this is a different walk from that one, and if
+                // the two ever disagree, a validated topic must not admit a
+                // record the broker could not read. Breaking without a row
+                // would leave `errors` empty and admit the batch.
+                let Ok(record) = record else {
+                    let reason = RejectReason::Unframed("record did not decode".to_owned());
+                    metrics.record_schema_validation_rejection(topic_name, reason.label());
+                    errors.push(BatchIndexAndErrorMessage {
+                        batch_index: i32::try_from(index).unwrap_or(i32::MAX),
+                        batch_index_error_message: Some(reason.to_string()),
+                        ..Default::default()
+                    });
+                    break;
+                };
                 check
                     .record(index, record.key, record.value, &mut errors)
                     .await;
@@ -1728,7 +1743,7 @@ impl SchemaCheck<'_> {
             let Some(field) = field else { continue };
             if let Err(reason) = self
                 .validator
-                .check(self.topic_name, role, self.gate.mode, field)
+                .check(self.topic_name, role, self.gate.mode, field, self.metrics)
                 .await
             {
                 self.metrics
@@ -1947,11 +1962,11 @@ mod tests {
 
     use super::{
         BrokerProducePolicy, DeliveryGate, FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS,
-        PartitionInput, PartitionPayload, PartitionServices, PreparedSource,
+        PartitionInput, PartitionPayload, PartitionServices, PreparedBatch, PreparedSource,
         build_topic_error_response, decode_owned_batch, diskless_role_ready, prepare_batch,
         process_partition, produce_bytes_by_qos_tier, replica_state_matches_image,
         replication_target_matches_image, resolve_delivery_gate, resolve_topic_compression,
-        topic_min_insync_replicas, validate_partition_gate,
+        topic_min_insync_replicas, validate_batch_schemas, validate_partition_gate,
     };
     use crate::config_keys::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED,
@@ -3744,5 +3759,98 @@ mod tests {
             check!(owned.base_sequence == prepared.base_sequence);
             check!(owned.last_offset_delta == prepared.last_offset_delta);
         }
+    }
+
+    /// A record the broker cannot decode must not be admitted by a validated
+    /// topic.
+    ///
+    /// This is defence in depth, not a live hole: `prepare_batch` runs
+    /// `validate_records` over every record before this function is reached,
+    /// so a batch that gets here has already had each record parsed. The two
+    /// walks are different code, though, and the batch-level decode a few
+    /// lines above this one already fails closed for exactly that reason.
+    /// Before the fix, the per-record arm broke out of the loop without
+    /// recording anything, so `errors` stayed empty and the batch was
+    /// *admitted* — the one outcome a validation feature must never produce.
+    #[tokio::test]
+    async fn a_record_that_does_not_decode_is_rejected_not_admitted() {
+        let mut batch = RecordBatch {
+            last_offset_delta: 0,
+            producer_id: -1,
+            ..RecordBatch::default()
+        };
+        // A null value is a tombstone, which the checker skips, so this record
+        // passes without a registry call. That matters: if it recorded an
+        // error of its own, `errors` would be non-empty and the test would
+        // pass whether or not the decode failure was handled.
+        batch.records.push(Record {
+            value: None,
+            ..Default::default()
+        });
+        let whole = encode_batch(&batch);
+        // Claim one more record than the bytes carry. The v2 header is intact
+        // and self-consistent, so the batch-level decode succeeds; the walk
+        // then yields the real record and fails on the phantom one. The record
+        // count is the i32 at offset 57 of the 61-byte header.
+        let mut bytes = whole.to_vec();
+        bytes[57..61].copy_from_slice(&2i32.to_be_bytes());
+        // The batch-level decode verifies the CRC, so it has to be restored
+        // over the edited count or this never reaches the per-record walk.
+        // The CRC covers the header from offset 21 and then the record bytes.
+        let crc = crc32c::crc32c_append(crc32c::crc32c(&bytes[21..61]), &bytes[61..]);
+        bytes[17..21].copy_from_slice(&crc.to_be_bytes());
+        let bytes = Bytes::from(bytes);
+
+        let prepared = PreparedBatch {
+            attributes: batch.attributes,
+            last_offset_delta: 0,
+            max_timestamp: 0,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            source: PreparedSource::Verbatim(bytes),
+        };
+        // No request reaches the registry: the record fails to decode before
+        // any field is checked, so the address is never dialled.
+        let validator = Arc::new(
+            crate::schema_validation::SchemaValidator::new(
+                "http://127.0.0.1:1".to_owned(),
+                false,
+                100,
+                secs(60),
+                secs(5),
+            )
+            .expect("validator"),
+        );
+        let gate = crate::schema_validation::SchemaGate {
+            key: false,
+            value: true,
+            mode: crate::schema_validation::ValidationMode::Id,
+        };
+        let metrics = crate::metrics::BrokerMetrics::new();
+
+        let got = validate_batch_schemas(
+            &prepared,
+            gate,
+            Some(&validator),
+            "orders",
+            RecordDecompressionPolicy::default(),
+            &metrics,
+        )
+        .await;
+
+        assert!(let Err(errors) = &got);
+        check!(errors.len() == 1);
+        // Index 1, the record that did not decode — not 0, which would mean the
+        // batch-level arm above had fired instead and this test proved nothing.
+        check!(errors[0].batch_index == 1);
+        check!(
+            errors[0]
+                .batch_index_error_message
+                .as_deref()
+                .is_some_and(|m| m.contains("record did not decode")),
+            "{:?}",
+            errors[0].batch_index_error_message
+        );
     }
 }

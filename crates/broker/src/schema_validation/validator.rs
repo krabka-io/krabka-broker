@@ -6,6 +6,11 @@
 //! as well as successes so that a produce storm against one bad id costs one
 //! registry call rather than one per record.
 //!
+//! Not every failure is cached for the same length of time. "This id is not
+//! registered" is an answer and keeps the full TTL; "the registry did not
+//! answer" keeps [`UNAVAILABLE_TTL_MS`], because holding that one for minutes
+//! would keep rejecting valid records after the registry recovered.
+//!
 //! It differs from the authorizer in one way that matters. `Authorizer` is a
 //! synchronous trait, so `OpaAuthorizer` bridges to async with
 //! `block_in_place`. This runs from `process_partition`, which is already
@@ -29,6 +34,19 @@ use crabka_units::{Time, convert::TimeExt as _};
 use lru::LruCache;
 
 use super::ValidationMode;
+use crate::metrics::BrokerMetrics;
+
+/// How long a "the registry could not answer" result stays cached.
+///
+/// Much shorter than `expire_after`, and deliberately so. A 404 is the
+/// registry *answering*, so it earns the full TTL: it turns a produce storm
+/// against one bad id into a single registry call. A timeout or a 5xx is the
+/// registry *failing* to answer, and remembering that for minutes would keep
+/// rejecting valid records long after the registry came back — the opposite of
+/// what `fail_open = false` is for, which is to reject only while no answer is
+/// available. Caching it briefly rather than not at all is what keeps an
+/// outage from becoming one registry call per record.
+const UNAVAILABLE_TTL_MS: i64 = 2_000;
 
 /// Why a record failed validation.
 ///
@@ -230,6 +248,7 @@ impl SchemaValidator {
         role: Role,
         mode: ValidationMode,
         field: &[u8],
+        metrics: &BrokerMetrics,
     ) -> Result<(), RejectReason> {
         // A zero-length field is distinct from null on the wire, and some
         // clients write it for an absent value. It cannot carry a frame, and
@@ -242,7 +261,7 @@ impl SchemaValidator {
         let (id, _) = wire::decode(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
         let subject = TopicNameStrategy.subject(topic, role);
 
-        let entry = match self.entry(id, mode).await {
+        let entry = match self.entry(id, mode, metrics).await {
             Ok(entry) => entry,
             // A registry that could not answer is what `fail_open` governs. An
             // answer of "not registered" is an answer, and it rejects either
@@ -288,7 +307,12 @@ impl SchemaValidator {
     ///
     /// `mode` decides how much is fetched: `Full` also needs the schema text,
     /// and an entry cached by an earlier `Id` check does not carry it.
-    async fn entry(&self, id: u32, mode: ValidationMode) -> Result<SchemaEntry, RejectReason> {
+    async fn entry(
+        &self,
+        id: u32,
+        mode: ValidationMode,
+        metrics: &BrokerMetrics,
+    ) -> Result<SchemaEntry, RejectReason> {
         let now = self.clock.millis();
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
@@ -305,15 +329,31 @@ impl SchemaValidator {
                 // A `Full` check needs the text; an entry without one was
                 // cached by an `Id` check and has to be completed.
                 Ok(entry) if mode == ValidationMode::Id || entry.body.is_some() => {
+                    metrics.record_schema_cache_hit();
                     return Ok(entry);
                 }
+                // Cached by an `Id` check while this is `Full`: the text is
+                // missing, so this costs a registry round trip like any other
+                // miss and is counted as one.
                 Ok(_) => {}
-                Err(reason) => return Err(reason),
+                Err(reason) => {
+                    metrics.record_schema_cache_hit();
+                    return Err(reason);
+                }
             }
         }
 
+        metrics.record_schema_cache_miss();
         let fetched = self.fetch(id, mode).await;
-        let expires_at_ms = now.saturating_add(self.expire_after.millis_i64());
+        // A registry that could not answer is remembered only briefly, so the
+        // next produce re-asks instead of inheriting a stale outage. Bounded by
+        // `expire_after` so a shorter configured TTL still wins.
+        let ttl_ms = if matches!(fetched, Err(RejectReason::RegistryUnavailable(_))) {
+            UNAVAILABLE_TTL_MS.min(self.expire_after.millis_i64())
+        } else {
+            self.expire_after.millis_i64()
+        };
+        let expires_at_ms = now.saturating_add(ttl_ms);
         {
             let mut cache = self.cache.lock().expect("schema cache mutex poisoned");
             cache.put(
@@ -427,6 +467,19 @@ mod tests {
         SchemaValidator::new(url, false, 100, minutes(1), secs(5)).expect("validator")
     }
 
+    /// Metrics for a check whose counters the test does not assert on. The
+    /// cache-accounting test binds one instance instead, so its hits and
+    /// misses accumulate across calls.
+    fn no_metrics() -> BrokerMetrics {
+        BrokerMetrics::new()
+    }
+
+    /// [`UNAVAILABLE_TTL_MS`] as a `u64`, so a test advances the clock by the
+    /// real constant rather than a copy of it that could drift.
+    fn unavailable_ttl_ms() -> u64 {
+        u64::try_from(UNAVAILABLE_TTL_MS).expect("the unavailable TTL is positive")
+    }
+
     #[tokio::test]
     async fn a_field_that_carries_no_frame_is_rejected() {
         let server = registry(0).await;
@@ -438,7 +491,13 @@ mod tests {
         ];
         for (name, field) in cases {
             let got = v
-                .check("orders", Role::Value, ValidationMode::Id, &field)
+                .check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &field,
+                    &no_metrics(),
+                )
                 .await;
             assert!(let Err(reason) = got, "case {name}");
             check!(reason.label() == "unframed", "case {name}: {reason}");
@@ -453,9 +512,15 @@ mod tests {
         // absent value. It cannot carry a frame, so rejecting it would reject
         // those clients for a reason unrelated to schemas.
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &[])
-                .await
-                .is_ok()
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &[],
+                &no_metrics()
+            )
+            .await
+            .is_ok()
         );
     }
 
@@ -468,15 +533,27 @@ mod tests {
         let field = framed(KNOWN_ID, b"anything");
 
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok()
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok()
         );
 
         // Same id, different topic: the subject is `other-value`, which this
         // id is not registered under.
         let got = v
-            .check("other", Role::Value, ValidationMode::Id, &field)
+            .check(
+                "other",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics(),
+            )
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "wrong_subject", "{reason}");
@@ -492,12 +569,24 @@ mod tests {
 
         // `orders-value` is bound; `orders-key` is not.
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok()
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok()
         );
         let got = v
-            .check("orders", Role::Key, ValidationMode::Id, &field)
+            .check(
+                "orders",
+                Role::Key,
+                ValidationMode::Id,
+                &field,
+                &no_metrics(),
+            )
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "wrong_subject", "{reason}");
@@ -519,7 +608,13 @@ mod tests {
         let field = framed(99, b"anything");
         for _ in 0..2 {
             let got = v
-                .check("orders", Role::Value, ValidationMode::Id, &field)
+                .check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &field,
+                    &no_metrics(),
+                )
                 .await;
             assert!(let Err(reason) = got);
             check!(reason.label() == "unknown_id", "{reason}");
@@ -534,9 +629,15 @@ mod tests {
         let field = framed(KNOWN_ID, b"anything");
         for _ in 0..3 {
             check!(
-                v.check("orders", Role::Value, ValidationMode::Id, &field)
-                    .await
-                    .is_ok()
+                v.check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &field,
+                    &no_metrics()
+                )
+                .await
+                .is_ok()
             );
         }
     }
@@ -558,17 +659,29 @@ mod tests {
         let field = framed(KNOWN_ID, b"anything");
 
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok()
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok()
         );
         // Past the TTL on a controlled timeline, so the expiry is an assertion
         // and not a race against a real sleep.
         clock.advance(Duration::from_millis(50));
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok()
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok()
         );
     }
 
@@ -585,13 +698,25 @@ mod tests {
         let field = framed(KNOWN_ID, &[0xFF; 6]);
 
         check!(
-            v.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok(),
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok(),
             "id mode decides from the header alone"
         );
         let got = v
-            .check("orders", Role::Value, ValidationMode::Full, &field)
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &field,
+                &no_metrics(),
+            )
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "body_mismatch", "{reason}");
@@ -605,10 +730,144 @@ mod tests {
         // length then the bytes, and 1 zig-zag encodes to 0x02.
         let field = framed(KNOWN_ID, &[0x02, b'a']);
         check!(
-            v.check("orders", Role::Value, ValidationMode::Full, &field)
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Full,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cache_counters_move_on_a_miss_then_a_hit() {
+        // `registry(1)` allows exactly one call to `/versions`, so the second
+        // check is served from the cache. Without a counter on each path these
+        // two gauges stay at zero for the life of the broker, which is what
+        // this asserts against.
+        let server = registry(1).await;
+        let v = validator(server.uri());
+        let field = framed(KNOWN_ID, b"anything");
+        let metrics = BrokerMetrics::new();
+
+        check!(
+            v.check("orders", Role::Value, ValidationMode::Id, &field, &metrics)
                 .await
                 .is_ok()
         );
+        check!(metrics.schema_validation_cache_misses.get() == 1);
+        check!(metrics.schema_validation_cache_hits.get() == 0);
+
+        check!(
+            v.check("orders", Role::Value, ValidationMode::Id, &field, &metrics)
+                .await
+                .is_ok()
+        );
+        check!(metrics.schema_validation_cache_misses.get() == 1);
+        check!(metrics.schema_validation_cache_hits.get() == 1);
+    }
+
+    #[tokio::test]
+    async fn a_registry_that_could_not_answer_is_re_asked_after_the_short_ttl() {
+        // The registry fails once and then recovers. A five-minute
+        // `expire_after` must not keep rejecting for five minutes: a negative
+        // entry for an unreachable registry carries its own short TTL, so the
+        // next produce re-asks instead of inheriting the outage.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"subject": "orders-value", "version": 1}
+            ])))
+            .mount(&server)
+            .await;
+
+        let clock = Arc::new(qubit_clock::MockClock::new());
+        let v = SchemaValidator::with_clock(
+            server.uri(),
+            false,
+            100,
+            minutes(5),
+            secs(5),
+            clock.clone(),
+        )
+        .expect("validator");
+        let field = framed(KNOWN_ID, b"anything");
+
+        let got = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = got);
+        check!(reason.label() == "registry_unavailable", "{reason}");
+
+        clock.advance(Duration::from_millis(unavailable_ttl_ms() + 1));
+        check!(
+            v.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok(),
+            "the registry recovered, and the short negative TTL let the broker re-ask"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_id_stays_cached_past_the_unavailable_ttl() {
+        // The short TTL is only for a registry that could not answer. A 404 is
+        // the registry answering, so it keeps the full `expire_after` —
+        // otherwise a produce storm against one bad id would re-ask every two
+        // seconds. `expect(1)` is the assertion: the second check never asked.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let clock = Arc::new(qubit_clock::MockClock::new());
+        let v = SchemaValidator::with_clock(
+            server.uri(),
+            false,
+            100,
+            minutes(5),
+            secs(5),
+            clock.clone(),
+        )
+        .expect("validator");
+        let field = framed(KNOWN_ID, b"anything");
+
+        for _ in 0..2 {
+            let got = v
+                .check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &field,
+                    &no_metrics(),
+                )
+                .await;
+            assert!(let Err(reason) = got);
+            check!(reason.label() == "unknown_id", "{reason}");
+            clock.advance(Duration::from_millis(unavailable_ttl_ms() + 1));
+        }
     }
 
     #[tokio::test]
@@ -622,16 +881,28 @@ mod tests {
 
         let closed = SchemaValidator::new(server.uri(), false, 100, minutes(1), secs(5)).unwrap();
         let got = closed
-            .check("orders", Role::Value, ValidationMode::Id, &field)
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics(),
+            )
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "registry_unavailable", "{reason}");
 
         let open = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
         check!(
-            open.check("orders", Role::Value, ValidationMode::Id, &field)
-                .await
-                .is_ok(),
+            open.check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &field,
+                &no_metrics()
+            )
+            .await
+            .is_ok(),
             "fail_open admits what the registry could not answer for"
         );
     }
@@ -653,6 +924,7 @@ mod tests {
                 Role::Value,
                 ValidationMode::Id,
                 &framed(KNOWN_ID, b"x"),
+                &no_metrics(),
             )
             .await;
         assert!(let Err(reason) = got);

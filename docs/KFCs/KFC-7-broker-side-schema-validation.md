@@ -78,7 +78,6 @@ The fields are encoded only for Produce v8 and later. A v7 client sees the bare 
 
 - `schema_validation_rejections`, a counter per topic and reason. The reasons are `unframed`, `unknown_id`, `wrong_subject`, `body_mismatch`, and `registry_unavailable`.
 - `schema_validation_cache_hits` and `schema_validation_cache_misses`, two counters. A miss is a registry round trip on the produce path, so the ratio is what says whether this feature costs anything at steady state.
-- `schema_registry_errors`, a counter per reason. A rising value means the produce path is now failing for a reason outside the cluster.
 
 `schema_validation_rejections` split by reason is the one an operator watches during a rollout. A run of `unframed` is a producer that never used a serializer. A run of `wrong_subject` is a producer writing the right format to the wrong topic.
 
