@@ -65,6 +65,8 @@ The Rejected Alternatives section is not decoration. Most readers arrive with an
 | KFC | Title | Status |
 | :--- | :--- | :--- |
 | [KFC-1](KFC-1-deliver-at-time-visibility.md) | Deliver-at-time visibility | Adopted |
+| [KFC-2](KFC-2-witness-broker-stretch-cluster.md) | Witness broker role and stretch cluster | Adopted |
+| [KFC-3](KFC-3-point-in-time-restore.md) | Point-in-time restore from a tiered-storage archive | Adopted |
 
 ## Style
 
