@@ -4532,6 +4532,15 @@ impl Broker {
         // wakes a consumer parked at the delivery watermark when the next batch
         // comes due. A fetch recomputes that watermark under the log mutex, so
         // this task can die without making a single fetch wrong.
+        // The bound is a constant of this process, so it is published once
+        // here rather than re-set on every scheduler pass. An alert reads it to
+        // compare measured clock uncertainty against the bound the broker
+        // actually relies on.
+        runtime
+            .metrics
+            .delivery_clock_uncertainty_seconds
+            .set(config.log_config.delivery_clock_uncertainty.secs_f64());
+
         tokio::spawn(crate::delivery::scheduler::run(
             Arc::clone(&partitions),
             config.node_id,
