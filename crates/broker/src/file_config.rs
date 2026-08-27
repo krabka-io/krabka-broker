@@ -35,6 +35,13 @@ pub enum FileConfigError {
     /// log a single string.
     #[error("OPA authorizer configuration error: {0}")]
     OpaConfig(String),
+    /// [`crate::schema_validation::SchemaValidator::new`] failed. The payload
+    /// is the underlying
+    /// [`SchemaValidatorError`][crate::schema_validation::SchemaValidatorError]'s
+    /// `Debug` form — formatted here rather than at the call site so the
+    /// binary entry point can log a single string.
+    #[error("schema registry configuration error: {0}")]
+    SchemaRegistryConfig(String),
     /// A TOML section's contents conflict in a way only the apply step
     /// can diagnose — e.g. `[remote_storage]` carrying both `storage_dir`
     /// (local backend) and `[remote_storage.s3]` (object-store backend).
@@ -201,6 +208,11 @@ pub struct FileConfig {
     /// `FedRAMP` 20x MLA audit subsystem configuration.
     /// Absent → secure default (enabled, standard internal topic name).
     pub audit: Option<FileAuditConfig>,
+
+    /// `[schema_registry]` section — the Confluent-compatible registry that
+    /// supplies the schemas for KFC-7 broker-side validation. `None` means no
+    /// topic can turn schema validation on.
+    pub schema_registry: Option<FileSchemaRegistryConfig>,
 }
 
 /// Validated operational policy loaded from `[runtime]`.
@@ -273,6 +285,9 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub opa_http_timeout: Option<Time>,
+    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub schema_registry_http_timeout: Option<Time>,
     #[serde(default, with = "crabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub oauth_jwks_http_timeout: Option<Time>,
@@ -892,6 +907,59 @@ fn default_opa_maximum_cache_size() -> usize {
 
 fn default_opa_expire_after_ms() -> i64 {
     DEFAULT_OPA_EXPIRE_AFTER_MS
+}
+
+/// TOML shape of `[schema_registry]`. Mirrors the constructor arguments of
+/// [`crate::schema_validation::SchemaValidator::new`], the one registry client
+/// each broker holds.
+///
+/// `deny_unknown_fields` so a misspelled key is rejected at parse time. A
+/// silently ignored `fail_open` would leave the operator with the opposite of
+/// the policy they wrote.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FileSchemaRegistryConfig {
+    /// Base URL of the Confluent-compatible schema registry, e.g.
+    /// `http://schema-registry:8081`. The registry API path is appended to it.
+    pub url: String,
+    /// **Security-sensitive.** Admit a record that the broker could not
+    /// validate because the registry was unreachable. When `true`, a validated
+    /// topic accepts whatever it is sent for the length of a registry outage.
+    /// That is fail-open. Default `false`, which fails the produce instead.
+    ///
+    /// An unknown schema id, or a body that does not match its schema, is a
+    /// rejection under either setting. This field governs only the case where
+    /// the broker could not get an answer at all.
+    #[serde(default)]
+    pub fail_open: bool,
+    /// Schema-cache capacity, in entries. Default `50_000`.
+    #[serde(default = "default_schema_registry_maximum_cache_size")]
+    pub maximum_cache_size: usize,
+    /// Schema-cache entry TTL, in milliseconds. Default `300_000`, which is
+    /// 5 minutes.
+    #[serde(default = "default_schema_registry_expire_after_ms")]
+    pub expire_after_ms: i64,
+}
+
+/// Default schema-cache capacity, in entries. The same as the OPA decision
+/// cache: both hold one small entry for each distinct key a producer sends.
+const DEFAULT_SCHEMA_REGISTRY_MAXIMUM_CACHE_SIZE: usize = 50_000;
+
+/// Default schema-cache TTL: 5 minutes, in milliseconds.
+///
+/// The OPA decision cache uses an hour. This TTL is much shorter because a
+/// newly registered schema has to become usable without an operator restart of
+/// a broker. A producer that registers a schema and then produces with it at
+/// once is the ordinary case. A negative cache entry for that id holds until
+/// the TTL expires.
+const DEFAULT_SCHEMA_REGISTRY_EXPIRE_AFTER_MS: i64 = 5 * 60 * 1_000;
+
+fn default_schema_registry_maximum_cache_size() -> usize {
+    DEFAULT_SCHEMA_REGISTRY_MAXIMUM_CACHE_SIZE
+}
+
+fn default_schema_registry_expire_after_ms() -> i64 {
+    DEFAULT_SCHEMA_REGISTRY_EXPIRE_AFTER_MS
 }
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
@@ -1662,6 +1730,7 @@ fn apply_remote_storage(
 
 struct FileConfigTail {
     authorization: Option<FileAuthorizationConfig>,
+    schema_registry: Option<FileSchemaRegistryConfig>,
     process: Option<FileProcessConfig>,
     gssapi: Option<FileGssapiConfig>,
     inter_broker_credentials: Option<FileInterBrokerCredentials>,
@@ -1811,6 +1880,18 @@ fn apply_config_tail(
                 )
             }
         };
+    }
+    if let Some(sr) = tail.schema_registry.as_ref() {
+        cfg.schema_validator = Some(std::sync::Arc::new(
+            crate::schema_validation::SchemaValidator::new(
+                sr.url.clone(),
+                sr.fail_open,
+                sr.maximum_cache_size,
+                Time::from_millis(sr.expire_after_ms),
+                cfg.schema_registry_http_timeout,
+            )
+            .map_err(|error| FileConfigError::SchemaRegistryConfig(format!("{error:?}")))?,
+        ));
     }
     if let Some(process) = tail.process
         && !process.roles.is_empty()
@@ -2295,6 +2376,11 @@ impl RuntimeFileConfig {
             cfg.connection_creation_throttle_max
         );
         set_runtime_time_millis!(runtime, opa_http_timeout, cfg.opa_http_timeout);
+        set_runtime_time_millis!(
+            runtime,
+            schema_registry_http_timeout,
+            cfg.schema_registry_http_timeout
+        );
         set_runtime_time_millis!(
             runtime,
             oauth_jwks_http_timeout,
@@ -3047,6 +3133,9 @@ impl FileConfig {
     //   is set without the required `[authorization.opa]` subtable.
     // * [`FileConfigError::OpaConfig`] when [`crate::authorizer::opa::OpaAuthorizer::new`]
     //   rejects the resolved knobs (zero cache size, no tokio runtime, etc.).
+    // * [`FileConfigError::SchemaRegistryConfig`] when
+    //   [`crate::schema_validation::SchemaValidator::new`] rejects the resolved
+    //   `[schema_registry]` knobs (zero cache size).
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn apply_to(self, cfg: &mut crate::config::BrokerConfig) -> Result<(), FileConfigError> {
@@ -3187,6 +3276,7 @@ impl FileConfig {
                 auto_join: self.auto_join,
                 controller_server_name: self.controller_server_name,
                 audit: self.audit,
+                schema_registry: self.schema_registry,
             },
             cfg,
         )?;
@@ -3440,6 +3530,7 @@ protocol = "Plaintext"
 "#;
         let cfg: FileConfig = toml::from_str(src).unwrap();
         let expected = FileConfig {
+            schema_registry: None,
             runtime: None,
             broker_id: Some(0),
             log_dir: Some("/var/lib/crabka/data".to_string()),
@@ -4891,6 +4982,122 @@ url = "http://opa.invalid:8181/v1/data/k/a"
 
         assert!(opa.maximum_cache_size == 50_000);
         assert!(opa.expire_after_ms == 3_600_000);
+    }
+
+    #[test]
+    fn schema_registry_section_round_trips_every_key() {
+        let toml = r#"
+[schema_registry]
+url = "http://schema-registry:8081"
+fail_open = true
+maximum_cache_size = 128
+expire_after_ms = 60000
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse schema_registry section");
+
+        let expected = FileSchemaRegistryConfig {
+            url: "http://schema-registry:8081".to_owned(),
+            fail_open: true,
+            maximum_cache_size: 128,
+            expire_after_ms: 60_000,
+        };
+        assert!(file.schema_registry == Some(expected));
+    }
+
+    #[test]
+    fn schema_registry_defaults_are_fail_closed_with_a_five_minute_ttl() {
+        // `url` is the one required key. The other three carry the documented
+        // defaults, and `fail_open` must default to fail-closed.
+        let toml = r#"
+[schema_registry]
+url = "http://schema-registry:8081"
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse schema_registry section");
+
+        let expected = FileSchemaRegistryConfig {
+            url: "http://schema-registry:8081".to_owned(),
+            fail_open: false,
+            maximum_cache_size: 50_000,
+            expire_after_ms: 300_000,
+        };
+        assert!(file.schema_registry == Some(expected));
+    }
+
+    #[test]
+    fn schema_registry_section_rejects_a_misspelled_key() {
+        // `deny_unknown_fields`: a silently ignored `fail_open` typo would
+        // leave the broker on the opposite policy to the one the operator
+        // wrote, so the parse must fail instead.
+        let toml = r#"
+[schema_registry]
+url = "http://schema-registry:8081"
+failopen = true
+"#;
+        assert!(toml::from_str::<FileConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn schema_registry_section_builds_the_validator() {
+        // `schema-registry.invalid` deliberately does not resolve. No HTTP
+        // call is made here; the constructor only builds the client.
+        let toml = r#"
+[schema_registry]
+url = "http://schema-registry.invalid:8081"
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse schema_registry section");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg)
+            .expect("apply schema_registry section");
+
+        assert!(cfg.schema_validator.is_some());
+    }
+
+    #[test]
+    fn schema_registry_section_absent_leaves_no_validator() {
+        let file: FileConfig = toml::from_str("").expect("parse empty config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply empty config");
+
+        assert!(cfg.schema_validator.is_none());
+    }
+
+    #[test]
+    fn schema_registry_zero_cache_size_is_a_config_error() {
+        // A zero-capacity LRU makes every record a cache miss, so
+        // `SchemaValidator::new` rejects it. The rejection must arrive as a
+        // `FileConfigError`, not as a panic out of `NonZeroUsize`.
+        let toml = r#"
+[schema_registry]
+url = "http://schema-registry.invalid:8081"
+maximum_cache_size = 0
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse schema_registry section");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("zero maximum_cache_size must be rejected");
+
+        assert!(matches!(error, FileConfigError::SchemaRegistryConfig(_)));
+        assert!(cfg.schema_validator.is_none());
+    }
+
+    #[test]
+    fn runtime_schema_registry_http_timeout_applies() {
+        let file: FileConfig = toml::from_str(
+            r#"
+[runtime]
+schema_registry_http_timeout = "2500ms"
+"#,
+        )
+        .expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.schema_registry_http_timeout == millis(2_500));
     }
 
     #[test]

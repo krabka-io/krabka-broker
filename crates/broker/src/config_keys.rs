@@ -1,6 +1,6 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes eighteen topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes twenty-one topic keys. Six propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
 //! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
@@ -28,6 +28,12 @@
 //! propagates live to `Log.config`. The produce path reads the other two,
 //! which bound how far ahead of produce time a batch may be scheduled and
 //! whether a partition's schedule may run backwards.
+//!
+//! Three keys carry KFC-7 schema validation: `schema.validation.key`,
+//! `schema.validation.value`, and `schema.validation.mode`. None of them
+//! reaches `Log.config`. The produce path reads all three. The two booleans
+//! turn the check on for record keys and for record values. The mode selects
+//! how much of each record the check reads.
 //!
 //! `cleanup.policy=compact` and `delivery.mode=scheduled` exclude each other.
 //! [`validate_topic_config`] sees one pair at a time and cannot see that, so
@@ -205,6 +211,25 @@ pub(crate) const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
 /// that caused it. Default `false`.
 pub(crate) const DELIVERY_SCHEDULE_MONOTONIC: &str = "delivery.schedule.monotonic";
 
+/// KFC-7: when `true`, the produce path validates the schema of every record
+/// key on this topic. A record that fails the check is rejected with
+/// `INVALID_RECORD` (87). Default `false`. This key does not reach
+/// [`LogConfig`].
+pub(crate) const SCHEMA_VALIDATION_KEY: &str = "schema.validation.key";
+
+/// KFC-7: when `true`, the produce path validates the schema of every record
+/// value on this topic. It is the same check that [`SCHEMA_VALIDATION_KEY`]
+/// asks for, on the other half of the record. Default `false`.
+pub(crate) const SCHEMA_VALIDATION_VALUE: &str = "schema.validation.value";
+
+/// KFC-7: how much of a record the schema check reads. `id`, the default,
+/// reads the five-byte Confluent header alone. `full` also decodes the body
+/// against the schema that the header names. This key alone turns nothing on:
+/// a topic that sets the mode and leaves both booleans `false` runs no check.
+pub(crate) const SCHEMA_VALIDATION_MODE: &str = "schema.validation.mode";
+pub(crate) const SCHEMA_VALIDATION_MODE_ID: &str = "id";
+pub(crate) const SCHEMA_VALIDATION_MODE_FULL: &str = "full";
+
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker
 /// config and defaults it to 30 seconds.
@@ -278,6 +303,25 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
             "true" | "false" => Ok(()),
             _ => Err(format!(
                 "delivery.schedule.monotonic={value} not supported; expected `true` or `false`"
+            )),
+        },
+        SCHEMA_VALIDATION_KEY => match value {
+            "true" | "false" => Ok(()),
+            _ => Err(format!(
+                "schema.validation.key={value} not supported; expected `true` or `false`"
+            )),
+        },
+        SCHEMA_VALIDATION_VALUE => match value {
+            "true" | "false" => Ok(()),
+            _ => Err(format!(
+                "schema.validation.value={value} not supported; expected `true` or `false`"
+            )),
+        },
+        SCHEMA_VALIDATION_MODE => match value {
+            SCHEMA_VALIDATION_MODE_ID | SCHEMA_VALIDATION_MODE_FULL => Ok(()),
+            _ => Err(format!(
+                "schema.validation.mode={value} not supported; expected \
+                 `{SCHEMA_VALIDATION_MODE_ID}` or `{SCHEMA_VALIDATION_MODE_FULL}`"
             )),
         },
         crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
@@ -412,6 +456,9 @@ pub(crate) fn is_recognized(key: &str) -> bool {
             | DELIVERY_MODE
             | DELIVERY_MAX_DELAY_MS
             | DELIVERY_SCHEDULE_MONOTONIC
+            | SCHEMA_VALIDATION_KEY
+            | SCHEMA_VALIDATION_VALUE
+            | SCHEMA_VALIDATION_MODE
             | crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
             | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY
     )
@@ -465,6 +512,38 @@ pub(crate) fn resolve_delivery_schedule_monotonic(
         .and_then(|configs| configs.get(DELIVERY_SCHEDULE_MONOTONIC))
         .map(String::as_str)
         == Some("true")
+}
+
+/// Resolve the KFC-7 schema-validation gate for `topic`. `None` means the
+/// topic asks for no check, and no schema-validation code then runs on its
+/// produce path. A missing or unparseable value resolves to its default:
+/// `false` for the two booleans and `id` for the mode. This matches the
+/// permissive runtime behavior of the other Produce-side topic config reads.
+///
+/// `schema.validation.mode` alone does not turn the check on, so a topic that
+/// sets only the mode still resolves to `None`.
+#[must_use]
+pub(crate) fn resolve_schema_validation(
+    image: &crabka_metadata::MetadataImage,
+    topic: &str,
+) -> Option<crate::schema_validation::SchemaGate> {
+    use crate::schema_validation::{SchemaGate, ValidationMode};
+
+    let configs = image.topic_config(topic);
+    let read = |key: &str| {
+        configs
+            .and_then(|configs| configs.get(key))
+            .map(String::as_str)
+    };
+    let gate = SchemaGate {
+        key: read(SCHEMA_VALIDATION_KEY) == Some("true"),
+        value: read(SCHEMA_VALIDATION_VALUE) == Some("true"),
+        mode: match read(SCHEMA_VALIDATION_MODE) {
+            Some(SCHEMA_VALIDATION_MODE_FULL) => ValidationMode::Full,
+            _ => ValidationMode::Id,
+        },
+    };
+    gate.is_active().then_some(gate)
 }
 
 fn topic_or_cluster_default<'a>(
@@ -737,6 +816,27 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         description: "Reject a batch whose delivery time precedes the largest delivery time already in the partition.",
     },
     TopicConfigDoc {
+        key: SCHEMA_VALIDATION_KEY,
+        value_type: "boolean",
+        default: Some("false"),
+        kip: Some("KFC-7"),
+        description: "Validate the schema of every record key produced to this topic.",
+    },
+    TopicConfigDoc {
+        key: SCHEMA_VALIDATION_VALUE,
+        value_type: "boolean",
+        default: Some("false"),
+        kip: Some("KFC-7"),
+        description: "Validate the schema of every record value produced to this topic.",
+    },
+    TopicConfigDoc {
+        key: SCHEMA_VALIDATION_MODE,
+        value_type: "string",
+        default: Some(SCHEMA_VALIDATION_MODE_ID),
+        kip: Some("KFC-7"),
+        description: "`id` checks the Confluent header alone; `full` also decodes the record body against the schema the header names.",
+    },
+    TopicConfigDoc {
         key: crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
         value_type: "string",
         default: None,
@@ -799,6 +899,9 @@ mod doc_tests {
             DELIVERY_MODE,
             DELIVERY_MAX_DELAY_MS,
             DELIVERY_SCHEDULE_MONOTONIC,
+            SCHEMA_VALIDATION_KEY,
+            SCHEMA_VALIDATION_VALUE,
+            SCHEMA_VALIDATION_MODE,
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
             crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
         ] {
@@ -813,7 +916,7 @@ mod doc_tests {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use crabka_units::{bytes, mebibytes, millis, minutes};
 
     use super::*;
@@ -1576,6 +1679,216 @@ mod tests {
             assert!(
                 !resolve_delivery_schedule_monotonic(&image, "t"),
                 "delivery.schedule.monotonic={value}"
+            );
+        }
+    }
+
+    /// A metadata image whose topic `t` carries exactly `overrides`.
+    fn image_with_topic_config(overrides: &[(&str, &str)]) -> crabka_metadata::MetadataImage {
+        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+        use uuid::Uuid;
+
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "t".into(),
+            overrides: overrides
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }));
+        image
+    }
+
+    #[test]
+    fn validate_schema_validation_booleans_accept_bools_only() {
+        let cases = [
+            (SCHEMA_VALIDATION_KEY, "true", true),
+            (SCHEMA_VALIDATION_KEY, "false", true),
+            (SCHEMA_VALIDATION_KEY, "yes", false),
+            (SCHEMA_VALIDATION_KEY, "True", false),
+            (SCHEMA_VALIDATION_KEY, "", false),
+            (SCHEMA_VALIDATION_VALUE, "true", true),
+            (SCHEMA_VALIDATION_VALUE, "false", true),
+            (SCHEMA_VALIDATION_VALUE, "1", false),
+            (SCHEMA_VALIDATION_VALUE, "", false),
+        ];
+        for (key, value, want_ok) in cases {
+            check!(
+                validate_topic_config(key, value).is_ok() == want_ok,
+                "{key}={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_schema_validation_mode_accepts_the_two_modes_only() {
+        let cases = [
+            (SCHEMA_VALIDATION_MODE_ID, true),
+            (SCHEMA_VALIDATION_MODE_FULL, true),
+            ("Full", false),
+            ("body", false),
+            ("", false),
+        ];
+        for (value, want_ok) in cases {
+            check!(
+                validate_topic_config(SCHEMA_VALIDATION_MODE, value).is_ok() == want_ok,
+                "schema.validation.mode={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_validation_mode_rejection_names_both_modes() {
+        let error = validate_topic_config(SCHEMA_VALIDATION_MODE, "body").unwrap_err();
+        assert!(error == "schema.validation.mode=body not supported; expected `id` or `full`");
+    }
+
+    #[test]
+    fn is_recognized_includes_schema_validation_keys() {
+        assert!(is_recognized(SCHEMA_VALIDATION_KEY));
+        assert!(is_recognized(SCHEMA_VALIDATION_VALUE));
+        assert!(is_recognized(SCHEMA_VALIDATION_MODE));
+    }
+
+    #[test]
+    fn apply_leaves_log_config_alone_for_the_schema_validation_keys() {
+        // All three keys are enforced on the produce path, so none of them may
+        // reach the log's own config.
+        let overrides = BTreeMap::from([
+            (SCHEMA_VALIDATION_KEY.to_string(), "true".to_string()),
+            (SCHEMA_VALIDATION_VALUE.to_string(), "true".to_string()),
+            (
+                SCHEMA_VALIDATION_MODE.to_string(),
+                SCHEMA_VALIDATION_MODE_FULL.to_string(),
+            ),
+        ]);
+        assert!(apply_to_log_config(&overrides, &LogConfig::default()) == LogConfig::default());
+    }
+
+    #[test]
+    fn resolve_schema_validation_reads_the_three_keys() {
+        use crate::schema_validation::{SchemaGate, ValidationMode};
+
+        let cases = [
+            // Neither boolean is set, so the topic has no gate.
+            (Vec::new(), None),
+            (
+                vec![
+                    (SCHEMA_VALIDATION_KEY, "false"),
+                    (SCHEMA_VALIDATION_VALUE, "false"),
+                ],
+                None,
+            ),
+            // The mode alone does not turn the check on.
+            (
+                vec![(SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL)],
+                None,
+            ),
+            (
+                vec![
+                    (SCHEMA_VALIDATION_KEY, "false"),
+                    (SCHEMA_VALIDATION_VALUE, "false"),
+                    (SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL),
+                ],
+                None,
+            ),
+            // Either boolean alone gives a gate, and the mode defaults to `id`.
+            (
+                vec![(SCHEMA_VALIDATION_KEY, "true")],
+                Some(SchemaGate {
+                    key: true,
+                    value: false,
+                    mode: ValidationMode::Id,
+                }),
+            ),
+            (
+                vec![(SCHEMA_VALIDATION_VALUE, "true")],
+                Some(SchemaGate {
+                    key: false,
+                    value: true,
+                    mode: ValidationMode::Id,
+                }),
+            ),
+            (
+                vec![
+                    (SCHEMA_VALIDATION_VALUE, "true"),
+                    (SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_ID),
+                ],
+                Some(SchemaGate {
+                    key: false,
+                    value: true,
+                    mode: ValidationMode::Id,
+                }),
+            ),
+            (
+                vec![
+                    (SCHEMA_VALIDATION_KEY, "true"),
+                    (SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL),
+                ],
+                Some(SchemaGate {
+                    key: true,
+                    value: false,
+                    mode: ValidationMode::Full,
+                }),
+            ),
+            (
+                vec![
+                    (SCHEMA_VALIDATION_KEY, "true"),
+                    (SCHEMA_VALIDATION_VALUE, "true"),
+                    (SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL),
+                ],
+                Some(SchemaGate {
+                    key: true,
+                    value: true,
+                    mode: ValidationMode::Full,
+                }),
+            ),
+        ];
+        for (overrides, want) in cases {
+            let image = image_with_topic_config(&overrides);
+            check!(
+                resolve_schema_validation(&image, "t") == want,
+                "{overrides:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_topic_with_no_config_at_all_has_no_schema_validation_gate() {
+        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        assert!(resolve_schema_validation(&image, "t").is_none());
+    }
+
+    #[test]
+    fn corrupt_schema_validation_settings_resolve_to_their_defaults() {
+        use crate::schema_validation::{SchemaGate, ValidationMode};
+
+        // A corrupt boolean resolves to `false`, which leaves no gate.
+        for value in ["yes", "TRUE", "1", ""] {
+            let image = image_with_topic_config(&[
+                (SCHEMA_VALIDATION_KEY, value),
+                (SCHEMA_VALIDATION_VALUE, value),
+            ]);
+            check!(
+                resolve_schema_validation(&image, "t").is_none(),
+                "schema.validation.key=schema.validation.value={value}"
+            );
+        }
+
+        // A corrupt mode resolves to `id`, and the gate stays on.
+        for value in ["Full", "body", ""] {
+            let image = image_with_topic_config(&[
+                (SCHEMA_VALIDATION_VALUE, "true"),
+                (SCHEMA_VALIDATION_MODE, value),
+            ]);
+            check!(
+                resolve_schema_validation(&image, "t")
+                    == Some(SchemaGate {
+                        key: false,
+                        value: true,
+                        mode: ValidationMode::Id,
+                    }),
+                "schema.validation.mode={value}"
             );
         }
     }

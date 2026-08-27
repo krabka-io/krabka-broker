@@ -24,15 +24,17 @@ use crabka_protocol::{
     owned::{
         produce_request::ProduceRequest,
         produce_response::{
-            LeaderIdAndEpoch, PartitionProduceResponse, ProduceResponse, TopicProduceResponse,
+            BatchIndexAndErrorMessage, LeaderIdAndEpoch, PartitionProduceResponse, ProduceResponse,
+            TopicProduceResponse,
         },
     },
     primitives::uuid::Uuid as WireUuid,
     records::{
-        Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch,
-        count_records_in_v2_batches, produce_framing, validate_one_v2_batch,
+        Attributes, RecordBatch, RecordBatchBorrowed, RecordsPayload, TimestampType,
+        ValidatedBatch, count_records_in_v2_batches, produce_framing, validate_one_v2_batch,
     },
 };
+use crabka_schema_serde::subject::Role;
 use crabka_units::{Time, convert::TimeExt};
 use tokio::sync::oneshot;
 
@@ -43,10 +45,12 @@ use crate::{
     config_keys::{
         COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, MIN_INSYNC_REPLICAS,
         parse_compression_type, resolve_delivery_max_delay, resolve_delivery_schedule_monotonic,
+        resolve_schema_validation,
     },
     error::BrokerError,
     partition::{Partition, ProduceData, ProduceJob, WriterMessage},
     partition_registry::PartitionRegistry,
+    schema_validation::{RejectReason, SchemaGate, SchemaValidator},
 };
 
 /// Kafka `acks` sentinel `-1`, which is producer `acks=all`. The leader must
@@ -231,6 +235,11 @@ pub(crate) async fn handle(
         // timestamp, or the log.
         let delivery = resolve_delivery_gate(&image, &topic_name);
 
+        // KFC-7, resolved here for the same reason: schema validation is a
+        // property of the topic. `None` is the default, and every partition of
+        // such a topic then skips the check without reading a record body.
+        let schema = resolve_schema_validation(&image, &topic_name);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the
@@ -245,6 +254,7 @@ pub(crate) async fn handle(
                         part_data,
                         topic_compression,
                         delivery,
+                        schema,
                         topic_name: topic_name.clone(),
                         topic_denied,
                         txn_id_denied,
@@ -260,6 +270,7 @@ pub(crate) async fn handle(
                         broker_policy,
                         record_decompression_policy,
                         metrics: &broker.metrics,
+                        schema_validator: broker.config.schema_validator.as_ref(),
                     },
                 ))
                 .await?;
@@ -468,6 +479,10 @@ struct PartitionInput {
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
     /// `delivery.mode=immediate`, and skips the delivery gate entirely.
     delivery: Option<DeliveryGate>,
+    /// The topic's KFC-7 schema-validation settings, resolved once per topic.
+    /// `None` is "neither `schema.validation.key` nor
+    /// `schema.validation.value` is set", and skips the check entirely.
+    schema: Option<SchemaGate>,
     topic_name: String,
     topic_denied: bool,
     txn_id_denied: bool,
@@ -485,6 +500,10 @@ struct PartitionServices<'a> {
     broker_policy: BrokerProducePolicy,
     record_decompression_policy: RecordDecompressionPolicy,
     metrics: &'a crate::metrics::BrokerMetrics,
+    /// The broker's KFC-7 validator. `None` is "no `[schema_registry]`
+    /// section", and a topic that asks for validation on such a broker is
+    /// rejected rather than admitted unchecked.
+    schema_validator: Option<&'a Arc<SchemaValidator>>,
 }
 
 async fn process_partition(
@@ -495,6 +514,7 @@ async fn process_partition(
         part_data,
         topic_compression,
         delivery,
+        schema,
         topic_name,
         topic_denied,
         txn_id_denied,
@@ -511,6 +531,7 @@ async fn process_partition(
         broker_policy,
         record_decompression_policy,
         metrics,
+        schema_validator,
     } = services;
     let idx = part_data.index;
     let mut out = PartitionProduceResponse {
@@ -550,6 +571,28 @@ async fn process_partition(
             return Ok(out);
         }
     };
+
+    // ── KFC-7 schema validation ──────────────────────────────────────
+    // Before the leadership gate, so that record-shape rejections keep coming
+    // ahead of leadership ones, which is the order every gate above this line
+    // already follows. `gate` is `None` on a topic that did not ask, and this
+    // whole block is then one `if let` that does not match.
+    if let Some(gate) = schema
+        && let Err(rejection) = validate_batch_schemas(
+            &prepared,
+            gate,
+            schema_validator,
+            topic_name,
+            record_decompression_policy,
+            metrics,
+        )
+        .await
+    {
+        out.error_code = codes::INVALID_RECORD;
+        out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
+        out.record_errors = rejection;
+        return Ok(out);
+    }
 
     // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
     // Only the partition leader may accept a Produce. A Produce misrouted
@@ -1534,6 +1577,170 @@ fn prepare_batch(
         .map_err(|_| codes::INVALID_RECORD)?;
 
     Ok(PreparedBatch::from_header(header, bytes))
+}
+
+/// The KIP-467 `error_message` a schema rejection carries.
+///
+/// The per-record `record_errors` say which records failed and why; this is
+/// the partition-level line a client shows when it does not read them, and it
+/// is what a pre-v8 client would have seen had the field existed for it.
+const SCHEMA_REJECTION_MESSAGE: &str = "one or more records failed schema validation";
+
+/// The largest number of per-record errors one rejected batch reports.
+///
+/// A batch can hold thousands of records and a producer that framed none of
+/// them would otherwise make the broker build a response larger than the
+/// request. The first few name the problem; the producer does not need the
+/// rest to act.
+const MAX_RECORD_ERRORS: usize = 8;
+
+/// Check every validated field of every record in `prepared` against the
+/// registry.
+///
+/// `Ok(())` admits the batch. `Err(record_errors)` rejects it whole, which is
+/// what the batch's own CRC requires: the broker appends the producer's exact
+/// bytes, so it cannot drop one record without re-encoding the batch. The
+/// returned rows name the offending records.
+///
+/// # The second decode
+///
+/// The verbatim path materializes no records — it walks them to check their
+/// structure and throws each one away — so there is no key or value here to
+/// look at. This decodes the batch again, for inspection only, and then
+/// discards the decoded view and leaves `prepared` untouched. The log still
+/// holds exactly what the producer wrote. The cost is a second CRC pass and,
+/// on a compressed batch, a second decompression, paid only on a topic that
+/// asked for validation.
+async fn validate_batch_schemas(
+    prepared: &PreparedBatch,
+    gate: SchemaGate,
+    validator: Option<&Arc<SchemaValidator>>,
+    topic_name: &str,
+    policy: RecordDecompressionPolicy,
+    metrics: &crate::metrics::BrokerMetrics,
+) -> Result<(), Vec<BatchIndexAndErrorMessage>> {
+    let Some(validator) = validator else {
+        // The topic asked for validation and this broker has no registry to
+        // ask. Admitting the record would make the topic's setting a lie, so
+        // this fails closed, and it fails the same way for every record in the
+        // batch rather than naming one.
+        let reason = RejectReason::RegistryUnavailable(
+            "no [schema_registry] section is configured on this broker".to_owned(),
+        );
+        metrics.record_schema_validation_rejection(topic_name, reason.label());
+        return Err(vec![BatchIndexAndErrorMessage {
+            batch_index: 0,
+            batch_index_error_message: Some(reason.to_string()),
+            ..Default::default()
+        }]);
+    };
+
+    let check = SchemaCheck {
+        validator,
+        gate,
+        topic_name,
+        metrics,
+    };
+    let mut errors = Vec::new();
+    match &prepared.source {
+        PreparedSource::Owned(batch) => {
+            for (index, record) in batch.records.iter().enumerate() {
+                check
+                    .record(
+                        index,
+                        record.key.as_deref(),
+                        record.value.as_deref(),
+                        &mut errors,
+                    )
+                    .await;
+                if errors.len() >= MAX_RECORD_ERRORS {
+                    break;
+                }
+            }
+        }
+        PreparedSource::Verbatim(bytes) => {
+            let mut cursor: &[u8] = bytes;
+            // `prepare_batch` already proved this decodes; a failure here is
+            // not reachable through it, and treating it as "cannot validate"
+            // is the safe reading if it ever became reachable.
+            let Ok(batch) = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, policy)
+            else {
+                let reason = RejectReason::Unframed("batch did not decode".to_owned());
+                metrics.record_schema_validation_rejection(topic_name, reason.label());
+                return Err(vec![BatchIndexAndErrorMessage {
+                    batch_index: 0,
+                    batch_index_error_message: Some(reason.to_string()),
+                    ..Default::default()
+                }]);
+            };
+            for (index, record) in batch.iter().enumerate() {
+                let Ok(record) = record else { break };
+                check
+                    .record(index, record.key, record.value, &mut errors)
+                    .await;
+                if errors.len() >= MAX_RECORD_ERRORS {
+                    break;
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Everything the per-record check needs that does not change between
+/// records, held together so that the check takes one argument for its
+/// context and one for the record.
+#[derive(Clone, Copy)]
+struct SchemaCheck<'a> {
+    validator: &'a Arc<SchemaValidator>,
+    gate: SchemaGate,
+    topic_name: &'a str,
+    metrics: &'a crate::metrics::BrokerMetrics,
+}
+
+impl SchemaCheck<'_> {
+    /// Check one record's key and value, appending a row for each that failed.
+    ///
+    /// A null field is skipped rather than rejected. A null key is ordinary,
+    /// and a null value is a tombstone, which a compacted topic needs —
+    /// rejecting one would make schema validation and compaction mutually
+    /// exclusive.
+    async fn record(
+        self,
+        index: usize,
+        key: Option<&[u8]>,
+        value: Option<&[u8]>,
+        errors: &mut Vec<BatchIndexAndErrorMessage>,
+    ) {
+        let batch_index = i32::try_from(index).unwrap_or(i32::MAX);
+        for (wanted, role, field) in [
+            (self.gate.key, Role::Key, key),
+            (self.gate.value, Role::Value, value),
+        ] {
+            if !wanted {
+                continue;
+            }
+            let Some(field) = field else { continue };
+            if let Err(reason) = self
+                .validator
+                .check(self.topic_name, role, self.gate.mode, field)
+                .await
+            {
+                self.metrics
+                    .record_schema_validation_rejection(self.topic_name, reason.label());
+                errors.push(BatchIndexAndErrorMessage {
+                    batch_index,
+                    batch_index_error_message: Some(reason.to_string()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
 }
 
 /// The v2 batch header fields that the gates need, copied out of a borrowed
@@ -2531,6 +2738,7 @@ mod tests {
         for (delivery_ms, want, label) in cases {
             let resp = process_partition(
                 PartitionInput {
+                    schema: None,
                     part_data: FramedPartition {
                         index: 0,
                         payload: PartitionPayload::Slice(encode_batch(&batch_delivered_at(
@@ -2546,6 +2754,7 @@ mod tests {
                     timeout: Duration::from_secs(5),
                 },
                 PartitionServices {
+                    schema_validator: None,
                     partitions: &partitions,
                     txn_coordinator: &txn_coordinator,
                     producer_state: &producer_state,
@@ -2783,6 +2992,7 @@ mod tests {
 
         let resp = process_partition(
             PartitionInput {
+                schema: None,
                 part_data: FramedPartition {
                     index: 0,
                     payload: PartitionPayload::Slice(payload),
@@ -2796,6 +3006,7 @@ mod tests {
                 timeout: Duration::from_millis(1),
             },
             PartitionServices {
+                schema_validator: None,
                 partitions: &partitions,
                 txn_coordinator: &txn_coordinator,
                 producer_state: &producer_state,
@@ -2874,6 +3085,7 @@ mod tests {
 
         let resp = process_partition(
             PartitionInput {
+                schema: None,
                 part_data: FramedPartition {
                     index: 0,
                     payload: PartitionPayload::Slice(payload),
@@ -2887,6 +3099,7 @@ mod tests {
                 timeout: Duration::from_millis(1),
             },
             PartitionServices {
+                schema_validator: None,
                 partitions: &partitions,
                 txn_coordinator: &txn_coordinator,
                 producer_state: &producer_state,
@@ -3023,6 +3236,7 @@ mod tests {
 
         let resp: PartitionProduceResponse = process_partition(
             PartitionInput {
+                schema: None,
                 part_data: FramedPartition {
                     index: 0,
                     payload: PartitionPayload::Slice(payload),
@@ -3036,6 +3250,7 @@ mod tests {
                 timeout: Duration::from_millis(50),
             },
             PartitionServices {
+                schema_validator: None,
                 partitions: &partitions,
                 txn_coordinator: &txn_coordinator,
                 producer_state: &producer_state,

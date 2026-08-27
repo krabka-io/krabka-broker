@@ -139,6 +139,18 @@ pub struct SaslMechanismLabel {
     pub mechanism: String,
 }
 
+/// KFC-7 rejection fingerprint, paired with the
+/// `schema_validation_rejections` counter family. `reason` is one of the five
+/// fixed values `unframed`, `unknown_id`, `wrong_subject`, `body_mismatch`,
+/// and `registry_unavailable`, so a topic with schema validation on adds at
+/// most five series. No schema id, subject, or client string reaches this
+/// label set.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct SchemaRejectionLabel {
+    pub topic: String,
+    pub reason: String,
+}
+
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
 /// in `Broker::start`; hand out clones (each clone is a single
 /// `Arc::clone`) to every subsystem that emits.
@@ -464,6 +476,25 @@ pub struct BrokerMetrics {
     /// with the lateness histogram it separates "the scheduler never ran" from
     /// "the scheduler ran late". One series per broker.
     pub delivery_scheduler_wakeups_total: Counter,
+    /// KFC-7 cumulative count of records the broker rejected because they
+    /// failed schema validation, per topic and reason.
+    ///
+    /// The broker bumps it once per rejected record, so a Produce request with
+    /// three bad records adds 3. An operator reads the split by reason during
+    /// a rollout: a run of `unframed` is a producer that never used a
+    /// serializer, and a run of `wrong_subject` is a producer that writes the
+    /// right format to the wrong topic.
+    pub schema_validation_rejections: Family<SchemaRejectionLabel, Counter>,
+    /// KFC-7 cumulative count of schema lookups the broker answered from its
+    /// local cache. It carries no labels, so it is one series per broker.
+    pub schema_validation_cache_hits: Counter,
+    /// KFC-7 cumulative count of schema lookups that cost a registry round
+    /// trip on the produce path.
+    ///
+    /// Paired with `schema_validation_cache_hits` it gives the hit rate, and
+    /// the hit rate is what says whether this feature costs anything at steady
+    /// state. It carries no labels, so it is one series per broker.
+    pub schema_validation_cache_misses: Counter,
 }
 
 impl BrokerMetrics {
@@ -542,6 +573,9 @@ impl BrokerMetrics {
                 DELIVERY_ACTIVATION_LATENESS_BUCKETS,
             ),
             delivery_scheduler_wakeups_total: Counter::default(),
+            schema_validation_rejections: Family::default(),
+            schema_validation_cache_hits: Counter::default(),
+            schema_validation_cache_misses: Counter::default(),
         }
     }
 
@@ -1099,6 +1133,33 @@ impl BrokerMetrics {
              bound elapsed.",
             self.delivery_scheduler_wakeups_total.clone(),
         );
+
+        registry.register(
+            "schema_validation_rejections",
+            "KFC-7 cumulative count of records rejected by schema \
+             validation, per topic and reason. The reason is one of \
+             unframed, unknown_id, wrong_subject, body_mismatch, and \
+             registry_unavailable. The broker bumps it once per rejected \
+             record. Read the split by reason during a rollout to see which \
+             producer is at fault.",
+            self.schema_validation_rejections.clone(),
+        );
+
+        registry.register(
+            "schema_validation_cache_hits",
+            "KFC-7 cumulative count of schema lookups the broker answered \
+             from its local cache, with no call to the registry.",
+            self.schema_validation_cache_hits.clone(),
+        );
+
+        registry.register(
+            "schema_validation_cache_misses",
+            "KFC-7 cumulative count of schema lookups that cost a registry \
+             round trip on the produce path. The ratio against \
+             schema_validation_cache_hits is what says whether this feature \
+             costs anything at steady state.",
+            self.schema_validation_cache_misses.clone(),
+        );
     }
 
     /// Build and register every broker metric.
@@ -1398,6 +1459,32 @@ impl BrokerMetrics {
             .get_or_create(&lbl)
             .set(pending);
     }
+
+    /// KFC-7: account one record that failed schema validation on `topic`.
+    ///
+    /// Callers bump once per rejected record, so a Produce request with three
+    /// bad records makes three calls. `reason` should be one of the five fixed
+    /// label values the schema validator returns, because the label set stays
+    /// bounded only while it is.
+    pub fn record_schema_validation_rejection(&self, topic: &str, reason: &str) {
+        let lbl = SchemaRejectionLabel {
+            topic: topic.to_string(),
+            reason: reason.to_string(),
+        };
+        self.schema_validation_rejections.get_or_create(&lbl).inc();
+    }
+
+    /// KFC-7: account one schema lookup the broker answered from its local
+    /// cache.
+    pub fn record_schema_cache_hit(&self) {
+        self.schema_validation_cache_hits.inc();
+    }
+
+    /// KFC-7: account one schema lookup that cost a registry round trip on the
+    /// produce path.
+    pub fn record_schema_cache_miss(&self) {
+        self.schema_validation_cache_misses.inc();
+    }
 }
 
 impl Default for BrokerMetrics {
@@ -1484,6 +1571,9 @@ mod tests {
         m.record_fetch_message_conversion("topic-a");
         m.record_failed_produce("topic-a");
         m.record_failed_fetch("topic-a");
+        m.record_schema_validation_rejection("topic-a", "unknown_id");
+        m.record_schema_cache_hit();
+        m.record_schema_cache_miss();
         m.record_authentication("PLAIN", true);
         m.record_authentication("SCRAM-SHA-512", false);
         m.record_authentication("Unknown", false);
@@ -1587,6 +1677,9 @@ mod tests {
             "crabka_broker_barrier_latest_epoch",
             "crabka_broker_barrier_markers_written_total",
             "crabka_broker_barrier_groups_coordinated",
+            "crabka_broker_schema_validation_rejections_total",
+            "crabka_broker_schema_validation_cache_hits_total",
+            "crabka_broker_schema_validation_cache_misses_total",
         ] {
             assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
         }
@@ -1931,6 +2024,49 @@ mod tests {
             let got = family.get_or_create(label).get();
             assert!(got == want, "{family_name} for {:?}", label.topic);
         }
+    }
+
+    #[test]
+    fn schema_validation_helpers_accumulate_per_topic_and_reason() {
+        // KFC-7: rejections are keyed by (topic, reason), so a run of
+        // `unframed` on one topic must not move any other pair. The two cache
+        // counters carry no labels and must stay independent of each other.
+        let m = BrokerMetrics::new();
+        m.record_schema_validation_rejection("orders", "unframed");
+        m.record_schema_validation_rejection("orders", "unframed");
+        m.record_schema_validation_rejection("orders", "wrong_subject");
+        m.record_schema_validation_rejection("payments", "unframed");
+        m.record_schema_validation_rejection("payments", "registry_unavailable");
+        m.record_schema_cache_hit();
+        m.record_schema_cache_hit();
+        m.record_schema_cache_hit();
+        m.record_schema_cache_miss();
+
+        // A pair that saw no rejection reads 0: `get_or_create` materializes
+        // the series at read time, which is what
+        // `rate(schema_validation_rejections_total{...}[1m])` computes over.
+        let cases = [
+            ("orders", "unframed", 2),
+            ("orders", "wrong_subject", 1),
+            ("orders", "registry_unavailable", 0),
+            ("orders", "body_mismatch", 0),
+            ("payments", "unframed", 1),
+            ("payments", "wrong_subject", 0),
+            ("payments", "registry_unavailable", 1),
+        ];
+        for (topic, reason, want) in cases {
+            let lbl = SchemaRejectionLabel {
+                topic: topic.to_string(),
+                reason: reason.to_string(),
+            };
+            // One `get_or_create` guard per statement (first
+            // materialization takes the family write lock).
+            let got = m.schema_validation_rejections.get_or_create(&lbl).get();
+            assert!(got == want, "rejections for {topic} / {reason}");
+        }
+
+        assert!(m.schema_validation_cache_hits.get() == 3);
+        assert!(m.schema_validation_cache_misses.get() == 1);
     }
 
     #[test]
