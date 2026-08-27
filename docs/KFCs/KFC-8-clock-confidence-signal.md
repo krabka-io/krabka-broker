@@ -105,7 +105,7 @@ The projection is deliberately lossy. `gmClockAccuracy` and the reference identi
 
 `krabka_clock_uncertainty_seconds` is the one an operator watches, because it is the measured version of the number that KFC-1 and KFC-6 declare. `krabka_clock_sync_state` is the second, because a clock that left `synchronized` invalidates the first one.
 
-There is deliberately no series that carries the age of a reading. An age computed when the reading arrives is zero at that moment and never grows, so the series would go stale instead of reporting staleness. Age is a question about the present, and `time() - timestamp(krabka_clock_uncertainty_seconds)` answers it against the moment the query runs.
+There is deliberately no series that carries the age of a reading. An age computed when the reading arrives is zero at that moment and never grows, so the series would go stale instead of reporting staleness. Age is a question about the present, and a query answers it against the moment it runs. `time() - timestamp(krabka_clock_uncertainty_seconds)` gives the age of a clock that still reports. The staleness alert below uses a range selector instead, because a clock that stopped reporting leaves the instant vector altogether.
 
 ### The Broker Gauge
 
@@ -124,7 +124,7 @@ The value is a constant of a running broker, and no topic config overrides it. T
 ```yaml
 groups:
   - name: krabka-clock
-    interval: 15s
+    interval: 1m
     rules:
       - record: krabka_clock:declared_bound_seconds
         expr: max(crabka_broker_delivery_clock_uncertainty_seconds)
@@ -148,17 +148,32 @@ groups:
 
 | Alert | Fires on | Severity |
 | :--- | :--- | :--- |
-| `ClockUnsynchronized` | `krabka_clock_sync_state{state="unsynchronized"} == 1` for 1m | critical |
+| `ClockUnsynchronized` | `krabka_clock_sync_state{state=~"unsynchronized\|free_running"} == 1` for 5m | critical |
 | `ClockUncertaintyExceedsDeclaredBound` | `krabka_clock_uncertainty_seconds > on() group_left() krabka_clock:declared_bound_seconds` for 2m | critical |
-| `ClockFleetSkewExceedsDeclaredBound` | `krabka_clock:fleet_skew_bound_seconds > 2 * krabka_clock:declared_bound_seconds` for 2m | critical |
-| `ClockUncertaintyBudgetHigh` | `krabka_clock:uncertainty_budget_ratio > 0.5` for 10m | warning |
-| `ClockStepped` | `increase(krabka_clock_step_seconds_total[5m]) > 0` | warning |
-| `ClockInHoldover` | `krabka_clock_sync_state{state="holdover"} == 1` for 5m | warning |
-| `PtpGrandmasterFlapping` | `changes(krabka_clock_class[15m]) > 2` | warning |
-| `GnssFixLost` | `krabka_gnss_fix == 0` for 5m | warning |
-| `ClockTelemetryStale` | `time() - timestamp(krabka_clock_uncertainty_seconds) > 120 or absent(krabka_clock_uncertainty_seconds)` for 5m | critical |
+| `ClockFleetSkewExceedsDeclaredBound` | `krabka_clock:fleet_skew_bound_seconds > 2 * krabka_clock:declared_bound_seconds` for 5m | critical |
+| `ClockUncertaintyBudgetHigh` | `krabka_clock:uncertainty_budget_ratio > 0.5` for 15m | warning |
+| `ClockStepped` | `increase(krabka_clock_step_seconds_total[5m]) > 0` for 1m | critical |
+| `ClockInHoldover` | `krabka_clock_sync_state{state="holdover"} == 1` for 10m | warning |
+| `PtpGrandmasterFlapping` | `changes(krabka_clock_class[15m]) > 2` for 5m | warning |
+| `GnssFixLost` | `krabka_gnss_fix{fix="none"} == 1` for 10m | warning |
+| `ClockTelemetryStale` | `absent(krabka_clock_uncertainty_seconds) or (count_over_time(krabka_clock_uncertainty_seconds[1h]) unless krabka_clock_uncertainty_seconds)` for 5m | critical |
 
-`ClockTelemetryStale` is not optional, and it is the reason the signal carries a reading age at all. A clock agent that stopped sending looks exactly like a clock that is healthy and unchanging. Every other alert in this table goes quiet at the same moment, so the absence of readings has to be the loud condition.
+`ClockUnsynchronized` covers two of the five sync states. A clock is `unsynchronized` when it lost the reference it had, and `free_running` when it never had one. Neither holds a rate estimate, so both are the same safety condition and both belong to one alert. A clock in `holdover` keeps the rate it learned, so it gets the warning instead.
+
+`ClockTelemetryStale` is not optional. A clock agent that stopped sending looks exactly like a clock that is healthy and unchanging. Every other alert in this table goes quiet at the same moment, so the absence of readings has to be the loud condition. The rule measures no age. A clock that stops reporting drops out of the instant vector once the lookback window passes, so an age expression stops producing a value at the moment the fault becomes certain. The range selector still sees that clock for an hour after its last reading, and `unless` against the instant vector names the one clock that stopped. `absent` covers the fleet that went quiet as a whole.
+
+### How the Bundle Is Loaded
+
+| Interface | Value |
+| :--- | :--- |
+| Flag | `--ruler-bundled-rules <PATH>` |
+| Environment variable | `CRABKA_METRICS_RULER_BUNDLED_RULES` |
+| Read by | The ruler role, and no other role |
+| Default | Unset. The ruler then installs no bundled group. |
+
+The bundle ships at `crates/metrics-service/rules/krabka-clock.yaml`. The loader posts each group of the file to the ruler-config API on the service's own router, which is the path a group from an operator takes. A bundled group and a posted group reach the config store the same way, and `/api/v1/rules` renders them alike. The file stem names the namespace.
+
+A bundle that does not install stops the start. An unreadable file, YAML that is not a rule file, a file that holds no group, and a group the ruler rejects are each an error the ruler reports before it reaches Kafka. A silent skip would leave an operator with a ruler that runs and a safety alert that does not exist.
 
 ### The Record Header
 
