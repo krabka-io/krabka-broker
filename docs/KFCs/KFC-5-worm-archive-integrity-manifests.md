@@ -8,8 +8,6 @@ A tiered-storage mode that never rewrites and never deletes what it wrote, seals
 
 [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) defines the archive that this mode writes into, and the copy path stays the KIP-405 copy path. No KIP defines write-once retention, archive attestation, or a refused remote read, so this document is the specification for those.
 
-There is no KFC-4 in the tree. This document takes the number the work was filed under, and the gap is a reserved number and not a lost document.
-
 ## Motivation
 
 A backup that a compromised cluster can delete is not a backup.
