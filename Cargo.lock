@@ -1575,7 +1575,7 @@ dependencies = [
 [[package]]
 name = "crabka-schema-serde"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=408c4dffc45106a84225ff6d3af2e7495fc20612#408c4dffc45106a84225ff6d3af2e7495fc20612"
+source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=27e640ab387f1e06bebbdb12b7db1cc4592460c2#27e640ab387f1e06bebbdb12b7db1cc4592460c2"
 dependencies = [
  "apache-avro",
  "assert2",
