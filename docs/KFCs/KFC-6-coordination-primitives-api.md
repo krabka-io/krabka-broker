@@ -57,7 +57,7 @@ The feature adds three krabka-private api keys, five krabka-private error codes,
 
 ### Api Keys
 
-Three keys sit in the krabka-private range at 1000 and above, beside the barrier keys at 1010 to 1014. Each one speaks version 0 only, with flexible framing. The broker registers them for dispatch and never advertises them, so `kafka-broker-api-versions.sh` prints no row for them and a JVM `AdminClient` cannot send them.
+Three keys sit in the krabka-private range at 1000 and above, beside the barrier keys at 1010 to 1014 that [KFC-4](KFC-4-cross-topic-snapshots.md) defines. Each one speaks version 0 only, with flexible framing. The broker registers them for dispatch and never advertises them, so `kafka-broker-api-versions.sh` prints no row for them and a JVM `AdminClient` cannot send them.
 
 | Api key | Name | Purpose |
 | :--- | :--- | :--- |
@@ -117,7 +117,7 @@ The topic is a projection and not the source of truth. The metadata log is the s
 
 ### Authorization
 
-Role administration needs `Alter` on `Cluster:kafka-cluster`, which is the resource barrier group administration already authorizes against.
+Role administration needs `Alter` on `Cluster:kafka-cluster`, which is the resource and the operation that [KFC-4](KFC-4-cross-topic-snapshots.md) gives barrier group administration.
 
 A role's own operations map onto the `Group` resource type, with the resource name `krabka-role.<role>`. `CoordinationHeartbeat` needs `Read`, and `DescribeCoordination` needs `Describe`. Joining a succession line is joining a named set of members, so the `Group` type is the closest fit that Kafka has.
 
