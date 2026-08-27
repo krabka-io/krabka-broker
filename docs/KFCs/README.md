@@ -69,6 +69,7 @@ The Rejected Alternatives section is not decoration. Most readers arrive with an
 | [KFC-3](KFC-3-point-in-time-restore.md) | Point-in-time restore from a tiered-storage archive | Adopted |
 | [KFC-4](KFC-4-cross-topic-snapshots.md) | Consistent cross-topic snapshots | Adopted |
 | [KFC-5](KFC-5-worm-archive-integrity-manifests.md) | WORM archive mode with integrity manifests | Adopted |
+| [KFC-6](KFC-6-coordination-primitives-api.md) | Coordination primitives as a client API | Under discussion |
 
 ## Style
 
