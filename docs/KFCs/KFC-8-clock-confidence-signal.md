@@ -38,7 +38,7 @@ So two shipped designs rest on a number that an operator typed into a config fil
 
 ## Public Interfaces
 
-The feature adds one ingest endpoint, one metric block kind, sixteen metric names, one broker gauge, five recording rules, nine alerting rules, and one record header. It adds no Kafka api key, no error code, and no field to any Kafka request or response.
+The feature adds one ingest endpoint, one metric block kind, fifteen metric names, one broker gauge, five recording rules, nine alerting rules, and one record header. It adds no Kafka api key, no error code, and no field to any Kafka request or response.
 
 ### The Ingest Endpoint
 
@@ -96,7 +96,6 @@ The receive instant is the field that makes the reading self-checking. [Clock Te
 | `krabka_clock_frequency_ppb` | gauge, per clock | Frequency correction in parts per billion. |
 | `krabka_clock_step_seconds_total` | counter, per clock | Cumulative size of the steps that the daemon applied. |
 | `krabka_clock_ingest_skew_seconds` | gauge, per clock | Receive instant minus host reading. |
-| `krabka_clock_reading_age_seconds` | gauge, per clock | Age of the newest reading for this clock. |
 | `krabka_gnss_satellites_used` | gauge, per receiver | Satellites used in the current fix solution. |
 | `krabka_gnss_fix` | gauge, per receiver | Fix kind: `0` none, `2` two-dimensional, `3` three-dimensional. |
 
@@ -105,6 +104,8 @@ The sync state rides as `krabka_clock_sync_state{state="holdover"} == 1`, which 
 The projection is deliberately lossy. `gmClockAccuracy` and the reference identity stay in the block and get no series, because they are categorical values that would fork a series on every grandmaster failover.
 
 `krabka_clock_uncertainty_seconds` is the one an operator watches, because it is the measured version of the number that KFC-1 and KFC-6 declare. `krabka_clock_sync_state` is the second, because a clock that left `synchronized` invalidates the first one.
+
+There is deliberately no series that carries the age of a reading. An age computed when the reading arrives is zero at that moment and never grows, so the series would go stale instead of reporting staleness. Age is a question about the present, and `time() - timestamp(krabka_clock_uncertainty_seconds)` answers it against the moment the query runs.
 
 ### The Broker Gauge
 
@@ -155,7 +156,7 @@ groups:
 | `ClockInHoldover` | `krabka_clock_sync_state{state="holdover"} == 1` for 5m | warning |
 | `PtpGrandmasterFlapping` | `changes(krabka_clock_class[15m]) > 2` | warning |
 | `GnssFixLost` | `krabka_gnss_fix == 0` for 5m | warning |
-| `ClockTelemetryStale` | `krabka_clock_reading_age_seconds > 120 or absent(krabka_clock_reading_age_seconds)` for 5m | critical |
+| `ClockTelemetryStale` | `time() - timestamp(krabka_clock_uncertainty_seconds) > 120 or absent(krabka_clock_uncertainty_seconds)` for 5m | critical |
 
 `ClockTelemetryStale` is not optional, and it is the reason the signal carries a reading age at all. A clock agent that stopped sending looks exactly like a clock that is healthy and unchanging. Every other alert in this table goes quiet at the same moment, so the absence of readings has to be the loud condition.
 
