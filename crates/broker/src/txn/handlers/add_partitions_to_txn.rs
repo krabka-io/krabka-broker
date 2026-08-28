@@ -827,32 +827,34 @@ mod tests {
             ("tenant-a.", PatternType::Prefixed),
         ]);
 
-        for (label, names, want) in [
+        // (label, the topics the request names, the names the gate keeps)
+        let cases: [(&str, &[&str], &[&str]); 5] = [
             (
                 "a literal freeze covers the one topic it names",
-                vec!["orders"],
-                vec!["orders"],
+                &["orders"],
+                &["orders"],
             ),
             (
                 "a prefix freeze covers every topic under it",
-                vec!["tenant-a.billing"],
-                vec!["tenant-a.billing"],
+                &["tenant-a.billing"],
+                &["tenant-a.billing"],
             ),
-            ("an unfrozen topic is left out", vec!["events"], vec![]),
+            ("an unfrozen topic is left out", &["events"], &[]),
             (
                 "an internal topic is never frozen",
-                vec!["__consumer_offsets"],
-                vec![],
+                &["__consumer_offsets"],
+                &[],
             ),
             (
                 "one request mixing all of them keeps only the covered names",
-                vec!["orders", "tenant-a.billing", "events"],
-                vec!["orders", "tenant-a.billing"],
+                &["orders", "tenant-a.billing", "events"],
+                &["orders", "tenant-a.billing"],
             ),
-        ] {
+        ];
+
+        for (label, names, want) in cases {
             let topics: Vec<_> = names.iter().map(|name| topic(name, &[0])).collect();
-            let expected: HashSet<String> =
-                want.iter().map(|name| (*name).to_string()).collect();
+            let expected: HashSet<String> = want.iter().map(|name| (*name).to_owned()).collect();
             check!(frozen_topics(&image, &topics) == expected, "{label}");
         }
     }
@@ -860,7 +862,7 @@ mod tests {
     #[test]
     fn frozen_topics_is_empty_on_a_cluster_with_no_freeze() {
         let image = image_with_freezes(&[]);
-        let topics = vec![topic("orders", &[0]), topic("tenant-a.billing", &[1])];
+        let topics = [topic("orders", &[0]), topic("tenant-a.billing", &[1])];
 
         check!(frozen_topics(&image, &topics) == HashSet::new());
     }
@@ -966,8 +968,7 @@ mod tests {
                 .is_some()
         })
         .await;
-        let txnv =
-            crate::txn::version::resolve_txn_version(&broker.controller.current_image());
+        let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
         broker
             .txn_coordinator
             .put(
@@ -1028,9 +1029,19 @@ mod tests {
         // covering the topic has to refuse exactly what a literal one does,
         // on both the v0-3 and the v4+ path.
         for (label, version, scope, pattern_type) in [
-            ("v3, a literal freeze", 3, FROZEN_TOPIC, PatternType::Literal),
+            (
+                "v3, a literal freeze",
+                3,
+                FROZEN_TOPIC,
+                PatternType::Literal,
+            ),
             ("v3, a prefix freeze", 3, "tenant-a.", PatternType::Prefixed),
-            ("v4, a literal freeze", 4, FROZEN_TOPIC, PatternType::Literal),
+            (
+                "v4, a literal freeze",
+                4,
+                FROZEN_TOPIC,
+                PatternType::Literal,
+            ),
             ("v4, a prefix freeze", 4, "tenant-a.", PatternType::Prefixed),
         ] {
             let (broker_handle, _dir) = start_frozen_coordinator(

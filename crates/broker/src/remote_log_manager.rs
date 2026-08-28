@@ -3072,7 +3072,8 @@ mod tests {
     async fn tick_all_evicts_no_local_segment_for_a_frozen_partition() {
         for (label, freeze) in FREEZE_CASES {
             let frozen = freeze.is_some();
-            let outcome = tick_once(image_with_orders_freeze(freeze), tiered_local_eviction()).await;
+            let outcome =
+                tick_once(image_with_orders_freeze(freeze), tiered_local_eviction()).await;
 
             check!(
                 outcome.sealed_before >= 2,

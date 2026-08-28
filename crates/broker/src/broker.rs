@@ -1407,10 +1407,7 @@ fn start_liveness_services(
     // The two places this subsystem reports to, paired the way `log_dirs`
     // pairs the two log-dir registries: the metric families, and the audit log
     // that a bypassed background unclean recovery writes its evidence to.
-    observability: (
-        &crate::metrics::BrokerMetrics,
-        &Arc<krabka_audit::AuditLog>,
-    ),
+    observability: (&crate::metrics::BrokerMetrics, &Arc<krabka_audit::AuditLog>),
     shutdown: &CancellationToken,
     log_dirs: (
         &crate::log_dir_status::LogDirRegistry,
@@ -1687,10 +1684,17 @@ fn spawn_cluster_data_maintenance(
         config.producer_id_expiration,
         shutdown.child_token(),
     );
+    // The sweep reads the KFC-9 write-freeze registry from this authority, so
+    // compaction stops on a frozen topic. Without it the cleaner resolves no
+    // freeze and compacts every eligible partition, which would remove records
+    // from a log that a disaster-recovery promotion needs byte-identical
+    // between sites.
+    let mut cleaner = cleaner_config(config);
+    cleaner.metadata = Some(Arc::clone(controller));
     tokio::spawn(crate::cleaner::run(
         Arc::clone(partitions),
         config.node_id,
-        cleaner_config(config),
+        cleaner,
         shutdown.child_token(),
         metrics.clone(),
     ));

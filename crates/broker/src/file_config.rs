@@ -5704,12 +5704,13 @@ required_approval = 2
             ("the wire spelling", "DeleteTopic"),
             ("an invented action", "reformat_cluster"),
         ] {
-            let file: FileConfig = toml::from_str(&format!(
-                "[[operator_keys]]\nkey_id = \"k\"\nprincipal = \"User:alice\"\n\
-                 public_key_path = \"/dev/null\"\n\
-                 [break_glass]\nsigned_actions = [{spelling:?}]\n"
-            ))
-            .expect("parse break_glass section");
+            // No `[[operator_keys]]`. The name check runs inside the
+            // `[break_glass]` block, ahead of the rule that a demanded
+            // signature needs a key to verify it, so the refusal here is the
+            // name one and the assertions below can say so.
+            let file: FileConfig =
+                toml::from_str(&format!("[break_glass]\nsigned_actions = [{spelling:?}]\n"))
+                    .expect("parse break_glass section");
             let mut cfg = crate::config::BrokerConfig::default();
 
             let result = file.apply_to(&mut cfg);
@@ -5738,18 +5739,16 @@ required_approval = 2
                 .map(|one| format!("{one:?}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let file: FileConfig = toml::from_str(&format!(
-                "[[operator_keys]]\nkey_id = \"k\"\nprincipal = \"User:alice\"\n\
-                 public_key_path = \"/dev/null\"\n\
-                 [break_glass]\nsigned_actions = [{list}]\n"
-            ))
-            .expect("parse break_glass section");
+            let file: FileConfig =
+                toml::from_str(&format!("[break_glass]\nsigned_actions = [{list}]\n"))
+                    .expect("parse break_glass section");
             let mut cfg = crate::config::BrokerConfig::default();
 
             let result = file.apply_to(&mut cfg);
 
-            // A `/dev/null` key file fails to load, so the only refusal that
-            // may appear here is the operator-key one, never the name one.
+            // With no operator key configured, a correct spelling still
+            // refuses, because a demanded signature needs a key to verify it.
+            // That refusal is fine here; the name refusal is not.
             if let Err(error) = result {
                 check!(
                     !error.to_string().contains("names no break-glass action"),

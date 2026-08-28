@@ -145,7 +145,7 @@ pub(crate) async fn handle(
             for r in rows.iter_mut() {
                 if r.error_code == 0 {
                     r.error_code = codes::COORDINATOR_NOT_AVAILABLE;
-                    r.error_message = submit_failure.clone();
+                    r.error_message.clone_from(&submit_failure);
                 }
             }
         }
@@ -403,6 +403,13 @@ fn audit_unclean(
     proposal_id: Option<Uuid>,
     reason: &str,
 ) {
+    // A broker that gates nothing has no two-person evidence to record, and
+    // this event exists to carry that evidence. The ordinary administrative
+    // event already reports the transition itself, so a stock cluster's audit
+    // stream is unchanged.
+    if !gate::is_gated(&broker.config.break_glass) {
+        return;
+    }
     audit_privileged(
         &broker.audit_log,
         ctx,
@@ -656,12 +663,8 @@ fn encode_response<R: Encode>(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_metadata::{
-        BreakGlassProposalRecord, LeaderEpoch, PartitionRecord, TopicRecord,
-    };
-    use krabka_protocol::owned::{
-        elect_leaders_request::TopicPartitions, elect_leaders_response,
-    };
+    use krabka_metadata::{BreakGlassProposalRecord, LeaderEpoch, PartitionRecord, TopicRecord};
+    use krabka_protocol::owned::{elect_leaders_request::TopicPartitions, elect_leaders_response};
 
     use super::*;
     use crate::{
@@ -864,7 +867,11 @@ mod tests {
             .iter()
             .filter(|record| matches!(record, MetadataRecord::V1BreakGlassProposal(_)))
             .count();
-        check!(consumes == 1, "one approval is spent once: {:?}", batch.records);
+        check!(
+            consumes == 1,
+            "one approval is spent once: {:?}",
+            batch.records
+        );
         handle.shutdown().await;
     }
 

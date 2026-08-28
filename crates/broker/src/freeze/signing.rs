@@ -473,6 +473,28 @@ mod tests {
         check!(verify_freeze_signature(&check_against(&trust, ALICE), &thaw) == Ok(()));
     }
 
+    /// Every other positive case here signs as one operator. If
+    /// [`OperatorKeys::load`] kept only the first entry, or matched a key by
+    /// position rather than by `key_id`, each of them would still pass and the
+    /// trust set would hold one operator instead of the configured set. A
+    /// second operator signing a record of their own is what rules that out,
+    /// and a two-person rule is worth nothing if only one person can sign.
+    #[test]
+    fn a_second_operator_signs_a_valid_freeze() {
+        let trust = trust();
+        let record = signed(
+            &trust.bob,
+            CLUSTER_ID,
+            &TopicFreezeRecord {
+                key_id: BOB_KEY.to_owned(),
+                set_by: BOB.to_owned(),
+                ..record()
+            },
+        );
+
+        check!(verify_freeze_signature(&check_against(&trust, BOB), &record) == Ok(()));
+    }
+
     /// The attack table. Every row is refused, every row answers 1009, and no
     /// row's code says which check it failed.
     #[test]

@@ -122,6 +122,15 @@ impl RecoveryPolicy {
 /// already spent an approved proposal. None of this applies to it.
 #[derive(Debug, Clone)]
 pub(crate) struct BackgroundRecovery {
+    /// Whether this broker runs the two-person rule at all.
+    ///
+    /// An empty `break_glass.approvers` turns the workflow off, and nobody can
+    /// approve anything. Every recovery would then be unapproved, so `require`
+    /// would make unclean recovery impossible and `audit-only` would count
+    /// every failover as a bypass of a rule that does not exist. A cluster with
+    /// no `[break_glass]` section behaves exactly as it does today, which is
+    /// the rule the whole feature follows.
+    enabled: bool,
     /// The configured `break_glass.background_unclean_recovery`.
     mode: BackgroundUncleanRecovery,
     /// Where the bypass and the refusal events go.
@@ -136,6 +145,7 @@ impl BackgroundRecovery {
     /// Read the rule out of `[break_glass]`.
     pub(crate) fn new(config: &BreakGlassConfig, audit_log: Arc<AuditLog>) -> Self {
         Self {
+            enabled: crate::break_glass::gate::is_gated(config),
             mode: config.background_unclean_recovery,
             audit_log,
             approver_set_fingerprint: approver_set_fingerprint(&config.approvers),
@@ -145,9 +155,9 @@ impl BackgroundRecovery {
     /// Whether this job must not run at all.
     ///
     /// Only [`BackgroundUncleanRecovery::Require`] refuses, and only a job that
-    /// no operator approved.
+    /// no operator approved on a broker that runs the two-person rule.
     fn refuses(&self, job: &RecoveryJob) -> bool {
-        job.proposal.is_none() && self.mode == BackgroundUncleanRecovery::Require
+        self.enabled && job.proposal.is_none() && self.mode == BackgroundUncleanRecovery::Require
     }
 
     /// Audit a recovery this rule refused. The partition stays leaderless and
@@ -179,7 +189,10 @@ impl BackgroundRecovery {
         winner: NodeId,
         metrics: &crate::metrics::BrokerMetrics,
     ) {
-        if job.proposal.is_some() || self.mode != BackgroundUncleanRecovery::AuditOnly {
+        if !self.enabled
+            || job.proposal.is_some()
+            || self.mode != BackgroundUncleanRecovery::AuditOnly
+        {
             return;
         }
         break_glass_metrics::record_bypass(metrics, BreakGlassAction::UncleanRecovery);
@@ -896,24 +909,28 @@ mod run_recovery_tests {
         manager_with(
             source,
             liveness,
-            BackgroundUncleanRecovery::Off,
+            gated(BackgroundUncleanRecovery::Off),
             AuditLog::disabled(),
         )
     }
 
-    /// A manager whose background break-glass rule and audit log the caller
+    /// A broker that runs the two-person rule, with this background rule.
+    fn gated(mode: BackgroundUncleanRecovery) -> BreakGlassConfig {
+        BreakGlassConfig {
+            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
+            background_unclean_recovery: mode,
+            ..BreakGlassConfig::default()
+        }
+    }
+
+    /// A manager whose break-glass configuration and audit log the caller
     /// picks.
     fn manager_with(
         source: MockSource,
         liveness: Arc<ControllerLivenessState>,
-        mode: BackgroundUncleanRecovery,
+        break_glass: BreakGlassConfig,
         audit_log: Arc<AuditLog>,
     ) -> UncleanRecoveryManager {
-        let break_glass = BreakGlassConfig {
-            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-            background_unclean_recovery: mode,
-            ..BreakGlassConfig::default()
-        };
         UncleanRecoveryManager {
             controller: Arc::new(source),
             liveness,
@@ -947,7 +964,7 @@ mod run_recovery_tests {
     /// proposal that the handler already spent.
     fn approved_job() -> RecoveryJob {
         RecoveryJob {
-            proposal: Some(Uuid::from_u128(0x0BAD_C0FF_EE)),
+            proposal: Some(Uuid::from_u128(0x000B_ADC0_FFEE)),
             ..job()
         }
     }
@@ -1013,14 +1030,26 @@ mod run_recovery_tests {
         img
     }
 
-    async fn outcome_under(mode: BackgroundUncleanRecovery, job: &RecoveryJob) -> RecoveryOutcome {
+    async fn outcome_under(break_glass: BreakGlassConfig, job: &RecoveryJob) -> RecoveryOutcome {
         let mgr = manager_with(
             MockSource::new(Some(NODE), dead_leader_with_a_survivor()),
             liveness_with_alive(&[2]).await,
-            mode,
+            break_glass,
             AuditLog::disabled(),
         );
         mgr.run_recovery(job).await
+    }
+
+    #[tokio::test]
+    async fn a_broker_with_no_approver_set_runs_every_recovery() {
+        // Nobody can approve on such a broker, so `require` would make unclean
+        // recovery impossible rather than fail closed on the unapproved ones.
+        let ungated = BreakGlassConfig {
+            background_unclean_recovery: BackgroundUncleanRecovery::Require,
+            ..BreakGlassConfig::default()
+        };
+
+        assert!(outcome_under(ungated, &job()).await == RecoveryOutcome::NoEligibleReplica);
     }
 
     #[tokio::test]
@@ -1044,7 +1073,7 @@ mod run_recovery_tests {
         ];
         for (label, mode, expected) in cases {
             assert!(
-                outcome_under(mode, &job()).await == expected,
+                outcome_under(gated(mode), &job()).await == expected,
                 "case {label}"
             );
         }
@@ -1055,7 +1084,7 @@ mod run_recovery_tests {
         // The `ElectLeaders` handler spent an approval before it enqueued this
         // job, so the rule for the path with no caller does not reach it.
         assert!(
-            outcome_under(BackgroundUncleanRecovery::Require, &approved_job()).await
+            outcome_under(gated(BackgroundUncleanRecovery::Require), &approved_job()).await
                 == RecoveryOutcome::NoEligibleReplica
         );
     }
@@ -1068,7 +1097,7 @@ mod run_recovery_tests {
         let mgr = manager_with(
             source,
             liveness_with_alive(&[2]).await,
-            BackgroundUncleanRecovery::Require,
+            gated(BackgroundUncleanRecovery::Require),
             audit_log,
         );
 
@@ -1097,7 +1126,7 @@ mod run_recovery_tests {
         let mgr = manager_with(
             source,
             liveness_with_alive(&[2]).await,
-            BackgroundUncleanRecovery::AuditOnly,
+            gated(BackgroundUncleanRecovery::AuditOnly),
             audit_log,
         );
         let pr = image
@@ -1140,7 +1169,12 @@ mod run_recovery_tests {
             let (audit_log, mut events) = AuditLog::new(8);
             let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
             let image = source.current_image();
-            let mgr = manager_with(source, liveness_with_alive(&[2]).await, mode, audit_log);
+            let mgr = manager_with(
+                source,
+                liveness_with_alive(&[2]).await,
+                gated(mode),
+                audit_log,
+            );
             let pr = image
                 .partition("t", 0)
                 .expect("the partition is in the image");

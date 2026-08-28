@@ -2,9 +2,27 @@
 //! `Controller::submit_change`, so the metadata quorum records every topic
 //! deletion before the broker tears down the partition dirs and the in-memory
 //! state.
+//!
+//! # KFC-9: deleting a topic needs two people
+//!
+//! A topic deletion destroys every record the topic holds, so it is one of the
+//! transitions the break-glass two-person rule gates. The request gains no
+//! field for it: an operator gets an approval out of band through
+//! `krabka-guard`, targeted at the topic name, and then runs
+//! `kafka-topics --delete`.
+//!
+//! A refused topic answers `POLICY_VIOLATION (44)` on its own row, which is the
+//! code Apache Kafka already returns from `CreateTopicPolicy` and
+//! `AlterConfigPolicy`, so `AdminClient` surfaces a `PolicyViolationException`
+//! per topic. The consumed proposal rides the same `submit_change` call as the
+//! delete record, so the approval and the deletion commit together. The gate is
+//! active only when `[break_glass]` names an approver set.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, DeleteTopicRecord, MetadataRecord};
+use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_metadata::{
+    AclOperation, BreakGlassAction, DeleteTopicRecord, MetadataImage, MetadataRecord,
+};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -15,13 +33,24 @@ use krabka_protocol::{
 };
 use krabka_raft::RaftError;
 use krabka_units::{Time, convert::TimeExt};
+use uuid::Uuid;
 
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
+    break_glass::{
+        action_name,
+        gate::{self, BreakGlassDenial},
+        handlers::{PrivilegedAudit, audit_privileged},
+        metrics as break_glass_metrics,
+    },
     broker::Broker,
     codes,
+    config::BreakGlassConfig,
     error::BrokerError,
+    handlers::RequestContext,
     log_dir,
+    operator_keys::approver_set_fingerprint,
+    time_util::now_ms,
 };
 
 fn requested_by_topic_id(name: Option<&String>, id: WireUuid) -> bool {
@@ -37,6 +66,21 @@ fn delete_topic_result(
         name,
         topic_id,
         error_code,
+        ..Default::default()
+    }
+}
+
+/// A refused row that also carries the text of the refusal.
+///
+/// `DeleteTopics` v5 and later carry `error_message`, and a break-glass refusal
+/// is exactly the case an operator needs it for: the code says the policy
+/// refused, and the message says which proposal nearly authorized the deletion.
+fn refused_topic_result(name: String, error_code: i16, message: String) -> DeletableTopicResult {
+    DeletableTopicResult {
+        name: Some(name),
+        topic_id: WireUuid::ZERO,
+        error_code,
+        error_message: Some(message),
         ..Default::default()
     }
 }
@@ -97,7 +141,7 @@ pub(crate) async fn handle(
     version: i16,
     _correlation_id: i32,
     req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let controller = &broker.controller;
     let partitions = broker.partitions.clone();
@@ -186,6 +230,30 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // KFC-9: the two-person rule, and the records this append carries. It
+        // runs before the broker snapshots any partition state, because a
+        // deletion the broker will refuse has no reason to walk the topic's
+        // logs.
+        let records =
+            match delete_topic_records(&image, &broker.config.break_glass, &name, now_ms()) {
+                Ok(records) => records,
+                Err(denial) => {
+                    let message = denial.to_string();
+                    break_glass_metrics::record_refusal(&broker.metrics, denial.action);
+                    audit_delete_topic(
+                        broker,
+                        ctx,
+                        &name,
+                        PrivilegedPhase::Refused,
+                        denial.proposal_id(),
+                        &message,
+                    );
+                    results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+                    continue;
+                }
+            };
+        let proposal_id = records.first().and_then(consumed_proposal_id);
+
         // Snapshot every local partition before committing the metadata
         // deletion. The metadata image watcher can remove registry entries as
         // soon as the commit becomes visible; enumerating afterward races that
@@ -204,11 +272,7 @@ pub(crate) async fn handle(
         let tiered_to_cascade =
             tiered_partitions(broker, &partitions, &image, &name, &local_partitions);
 
-        let res = controller
-            .submit_change(vec![MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
-                name: name.clone(),
-            })])
-            .await;
+        let res = controller.submit_change(records).await;
 
         let error_code = match res {
             Ok(_) => {
@@ -259,6 +323,14 @@ pub(crate) async fn handle(
                         ));
                     }
                 }
+                audit_delete_topic(
+                    broker,
+                    ctx,
+                    &name,
+                    PrivilegedPhase::Applied,
+                    proposal_id,
+                    "topic deleted",
+                );
                 codes::NONE
             }
             Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(_))) => {
@@ -290,6 +362,90 @@ pub(crate) async fn handle(
 
     let resp = delete_topics_response(results, throttle_time_ms);
     crate::handlers::encode_response(&resp, version)
+}
+
+/// The records one topic deletion appends.
+///
+/// The consumed break-glass proposal goes first, and the delete record follows
+/// it, so one raft append carries both. That single append is what stops an
+/// approval from being spent twice across a crash: a broker that committed the
+/// deletion has committed the consume with it.
+///
+/// A broker whose `[break_glass]` names no approver gates nothing, and the
+/// answer is then the delete record alone.
+///
+/// # Errors
+///
+/// Returns the [`BreakGlassDenial`] when no approved proposal covers this
+/// topic. The caller answers `POLICY_VIOLATION (44)` on that topic's row.
+fn delete_topic_records(
+    image: &MetadataImage,
+    config: &BreakGlassConfig,
+    name: &str,
+    now_ms: i64,
+) -> Result<Vec<MetadataRecord>, BreakGlassDenial> {
+    let record = MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+        name: name.to_owned(),
+    });
+    if !gate::is_gated(config) {
+        return Ok(vec![record]);
+    }
+    let consumed = gate::authorize(image, config, BreakGlassAction::DeleteTopic, name, now_ms)?;
+    Ok(vec![consumed, record])
+}
+
+/// The proposal that a consumed record names.
+///
+/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
+/// arm costs one match rather than a panic.
+fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
+    match record {
+        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
+        _ => None,
+    }
+}
+
+/// Emit one `PrivilegedAction` event for a topic deletion.
+///
+/// `counterparties` stays empty for the reason the freeze events give: the
+/// approvers are named on the proposal's own approve events, and the proposal
+/// id joins those rows to this one.
+fn audit_delete_topic(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    topic: &str,
+    phase: PrivilegedPhase,
+    proposal_id: Option<Uuid>,
+    reason: &str,
+) {
+    // A broker that gates nothing has no two-person evidence to record, and
+    // this event exists to carry that evidence. The ordinary administrative
+    // event already reports the transition itself, so a stock cluster's audit
+    // stream is unchanged.
+    if !gate::is_gated(&broker.config.break_glass) {
+        return;
+    }
+    audit_privileged(
+        &broker.audit_log,
+        ctx,
+        approver_set_fingerprint(&broker.config.break_glass.approvers),
+        &PrivilegedAudit {
+            outcome: if matches!(phase, PrivilegedPhase::Refused) {
+                AuditOutcome::Failure
+            } else {
+                AuditOutcome::Success
+            },
+            phase,
+            action: action_name(BreakGlassAction::DeleteTopic),
+            target: topic,
+            proposal_id,
+            counterparties: &[],
+            key_id: "",
+            signature: &[],
+            signature_verified: false,
+            reason,
+        },
+    );
 }
 
 type TopicNameRequest = (Option<String>, bool, WireUuid);
@@ -615,5 +771,158 @@ mod tests {
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
+    }
+
+    // ── KFC-9: the break-glass gate over a topic deletion ───────────────
+
+    const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    const NOW_MS: i64 = 60_000;
+    const DOOMED: &str = "doomed";
+
+    fn gated_config() -> BreakGlassConfig {
+        BreakGlassConfig {
+            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
+            ..BreakGlassConfig::default()
+        }
+    }
+
+    /// A proposal that two people approved, and that has not expired.
+    fn approved_proposal(target: &str) -> krabka_metadata::BreakGlassProposalRecord {
+        krabka_metadata::BreakGlassProposalRecord {
+            proposal_id: PROPOSAL,
+            action: BreakGlassAction::DeleteTopic,
+            target: target.to_owned(),
+            proposer: "User:carol".to_owned(),
+            reason: "the tenant offboarded".to_owned(),
+            created_at_ms: 1_000,
+            expires_at_ms: 600_000,
+            approvals: vec![
+                crate::break_glass::gate::tests::approval("User:alice"),
+                crate::break_glass::gate::tests::approval("User:bob"),
+            ],
+            consumed_at_ms: 0,
+            withdrawn: false,
+        }
+    }
+
+    fn image_of(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::nil());
+        for proposal in proposals {
+            image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
+        }
+        image
+    }
+
+    fn deleted() -> MetadataRecord {
+        MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+            name: DOOMED.to_owned(),
+        })
+    }
+
+    #[test]
+    fn a_deletion_with_no_proposal_appends_nothing() {
+        let denial = delete_topic_records(&image_of(&[]), &gated_config(), DOOMED, NOW_MS)
+            .expect_err("no proposal covers the topic");
+
+        check!(denial.action == BreakGlassAction::DeleteTopic);
+        check!(
+            denial.to_string()
+                == "break-glass refused delete_topic on doomed: no approved proposal covers the request"
+        );
+    }
+
+    #[test]
+    fn an_approved_deletion_appends_the_consume_beside_the_delete() {
+        let proposal = approved_proposal(DOOMED);
+        let image = image_of(std::slice::from_ref(&proposal));
+
+        let records = delete_topic_records(&image, &gated_config(), DOOMED, NOW_MS)
+            .expect("the proposal authorizes the deletion");
+
+        let expected = vec![
+            MetadataRecord::V1BreakGlassProposal(krabka_metadata::BreakGlassProposalRecord {
+                consumed_at_ms: NOW_MS,
+                ..proposal
+            }),
+            deleted(),
+        ];
+        assert!(records == expected);
+    }
+
+    #[test]
+    fn a_topic_scoped_proposal_covers_no_other_topic() {
+        // `delete_topic` names no partition, so `doomed` never covers
+        // `doomed-2024`, which reads as partition 2024 of topic `doomed`.
+        let image = image_of(&[approved_proposal(DOOMED)]);
+
+        let denial = delete_topic_records(&image, &gated_config(), "doomed-2024", NOW_MS)
+            .expect_err("a proposal for one topic authorizes nothing about another");
+
+        check!(denial.proposal_id() == None);
+    }
+
+    #[test]
+    fn a_broker_with_no_approver_set_gates_nothing() {
+        let records =
+            delete_topic_records(&image_of(&[]), &BreakGlassConfig::default(), DOOMED, NOW_MS)
+                .expect("an ungated broker deletes with no proposal");
+
+        assert!(records == vec![deleted()]);
+    }
+
+    /// Run one `DeleteTopics` request for [`DOOMED`] against a broker with this
+    /// break-glass configuration, and answer the topic row.
+    async fn delete_doomed(break_glass: BreakGlassConfig) -> DeletableTopicResult {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.break_glass = break_glass;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&principal, &peer);
+        let req = DeleteTopicsRequest {
+            topics: vec![named_state(DOOMED)],
+            timeout_ms: 5_000,
+            ..Default::default()
+        };
+
+        let bytes = handle(&broker, VERSION, 1, &encode_request(&req), &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+        broker_handle.shutdown().await;
+        resp.responses.into_iter().next().expect("one topic row")
+    }
+
+    #[tokio::test]
+    async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
+        let refused = delete_doomed(gated_config()).await;
+
+        let expected = DeletableTopicResult {
+            name: Some(DOOMED.to_owned()),
+            topic_id: WireUuid::ZERO,
+            error_code: codes::POLICY_VIOLATION,
+            error_message: Some(
+                "break-glass refused delete_topic on doomed: no approved proposal covers the request"
+                    .to_owned(),
+            ),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        assert!(refused == expected, "{refused:?}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_deletion_never_reaches_the_metadata_quorum() {
+        // The topic does not exist, so a broker that submits the delete record
+        // hears `UNKNOWN_TOPIC_OR_PARTITION` back from the quorum. A broker
+        // that answers `POLICY_VIOLATION` instead never submitted anything.
+        let ungated = delete_doomed(BreakGlassConfig::default()).await;
+        let gated = delete_doomed(gated_config()).await;
+
+        check!(ungated.error_code == codes::UNKNOWN_TOPIC_OR_PARTITION);
+        check!(gated.error_code == codes::POLICY_VIOLATION);
     }
 }

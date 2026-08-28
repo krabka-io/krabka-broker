@@ -106,7 +106,13 @@ The krabka-private error-code range and the krabka-private API key range are sep
 
 ### `write.freeze` Is a Read-Only Topic Config
 
-`DescribeConfigs` reports a synthesised `write.freeze` key for every topic, with the read-only flag set. Its value is `true` on a frozen topic and `false` on any other. An operator who holds only the JVM tools sees the freeze through `kafka-configs --describe`.
+`DescribeConfigs` reports a synthesised `write.freeze` key for every topic, with the read-only flag set. An operator who holds only the JVM tools sees the freeze through `kafka-configs --describe`.
+
+The value on a frozen topic names the scope that freezes it, in the form `frozen:<pattern>:<scope>`. A topic frozen by its own name reads `frozen:literal:orders`, and a topic frozen by a namespace reads `frozen:prefixed:tenant-a.`. The value on every other topic is `false`.
+
+The value names the scope because a `true` does not tell an operator what to do next. A topic can be frozen by its own name or by a prefix that covers a thousand other topics, and the thaw is a different command in each case. The scope in the value is the one piece of information that a reader of `kafka-configs --describe` cannot get any other way, because the JVM tools cannot call `DescribeTopicFreezes`.
+
+The key is reported for an unfrozen topic as well, rather than left out. An absent key cannot be told apart from a broker that does not have the feature, and an operator who checks a freeze during an incident needs that difference. An internal topic is never freezable, so it reads `false`.
 
 `AlterConfigs` and `IncrementalAlterConfigs` refuse the key by name with `INVALID_CONFIG` (40), and the message names `crabka-guard` as the tool that sets it. The key is never stored as a topic config, and it never reaches the topic-config record in the metadata log. This reuses the pattern that the controller-managed broker configs already follow.
 
