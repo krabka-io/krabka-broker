@@ -6,7 +6,10 @@ use krabka_ids::NodeId;
 use serde_json::json;
 
 use crate::{
-    event::{AuditEvent, AuditOutcome, LifecycleKind},
+    chain::to_hex,
+    event::{
+        AuditEndpoint, AuditEvent, AuditOutcome, AuditPrincipal, LifecycleKind, PrivilegedPhase,
+    },
     ids::EpochMs,
 };
 
@@ -125,6 +128,71 @@ fn ocsf_admin_operation(
     })
 }
 
+/// One principal in the `{ "name": …, "type": … }` shape the OCSF bodies use
+/// for `actor.user`. The privileged-action body needs it for the actor and for
+/// every counterparty, so the shape lives in one place.
+fn user(principal: &AuditPrincipal) -> serde_json::Value {
+    json!({ "name": principal.name, "type": principal.auth_method })
+}
+
+/// Borrowed view of the [`AuditEvent::PrivilegedAction`] fields.
+///
+/// The variant carries more fields than an argument list reads well with, so
+/// the dispatch arm groups them here.
+struct PrivilegedFields<'a> {
+    outcome: AuditOutcome,
+    phase: PrivilegedPhase,
+    action: &'a str,
+    target: &'a str,
+    proposal_id: &'a str,
+    principal: &'a AuditPrincipal,
+    counterparties: &'a [AuditPrincipal],
+    approver_set_fingerprint: &'a str,
+    key_id: &'a str,
+    signature: &'a [u8],
+    signature_verified: bool,
+    source: &'a AuditEndpoint,
+    reason: &'a str,
+    time_ms: i64,
+}
+
+fn ocsf_privileged_action(f: &PrivilegedFields<'_>, product: &ProductInfo) -> serde_json::Value {
+    // class 6003 API Activity, activity 0 = Unknown/Other (operation in `api`).
+    let class_uid = 6003_i64;
+    let activity_id = 0_i64;
+    let counterparties: Vec<serde_json::Value> = f.counterparties.iter().map(user).collect();
+    json!({
+        "class_uid": class_uid,
+        "category_uid": 6,
+        "type_uid": class_uid * 100 + activity_id,
+        "activity_id": activity_id,
+        "time": f.time_ms,
+        "status_id": status_id(f.outcome),
+        "status_detail": f.reason,
+        "api": {
+            "operation": format!("{}.{}", f.action, f.phase.as_name()),
+            "service": { "name": "kafka" },
+        },
+        "actor": { "user": user(f.principal) },
+        "src_endpoint": { "ip": f.source.ip, "port": f.source.port },
+        "privileged_action": {
+            "phase": f.phase.as_name(),
+            "action": f.action,
+            "target": f.target,
+            "proposal_id": f.proposal_id,
+            "counterparties": counterparties,
+            "approver_set_fingerprint": f.approver_set_fingerprint,
+            "key_id": f.key_id,
+            // Lowercase hex, as `Checkpoint::to_record` encodes its signature
+            // and public key. An auditor re-verifies the signature from this
+            // field alone, so the encoding must stay the crate's one encoding.
+            "signature": to_hex(f.signature),
+            "signature_verified": f.signature_verified,
+        },
+        "metadata": metadata(product),
+    })
+}
+
 fn ocsf_lifecycle(
     kind: LifecycleKind,
     node_id: NodeId,
@@ -197,6 +265,40 @@ pub fn to_ocsf(event: &AuditEvent, product: &ProductInfo) -> serde_json::Value {
             time_ms,
         } => ocsf_admin_operation(
             *outcome, principal, source, operation, resources, *time_ms, product,
+        ),
+        AuditEvent::PrivilegedAction {
+            outcome,
+            phase,
+            action,
+            target,
+            proposal_id,
+            principal,
+            counterparties,
+            approver_set_fingerprint,
+            key_id,
+            signature,
+            signature_verified,
+            source,
+            reason,
+            time_ms,
+        } => ocsf_privileged_action(
+            &PrivilegedFields {
+                outcome: *outcome,
+                phase: *phase,
+                action,
+                target,
+                proposal_id,
+                principal,
+                counterparties,
+                approver_set_fingerprint,
+                key_id,
+                signature,
+                signature_verified: *signature_verified,
+                source,
+                reason,
+                time_ms: *time_ms,
+            },
+            product,
         ),
         AuditEvent::Lifecycle {
             kind,
@@ -344,6 +446,186 @@ mod tests {
                 serde_json::json!("orders"),
             )
         );
+    }
+
+    fn expected_metadata() -> serde_json::Value {
+        serde_json::json!({
+            "version": "1.3.0",
+            "product": {
+                "vendor_name": "Crabka",
+                "name": "crabka-broker",
+                "version": "0.3.7",
+            }
+        })
+    }
+
+    #[test]
+    fn privileged_action_maps_to_6003_with_the_whole_body() {
+        let alice = AuditPrincipal {
+            name: "User:alice".into(),
+            auth_method: "MTls".into(),
+        };
+        let bob = AuditPrincipal {
+            name: "User:bob".into(),
+            auth_method: "SaslScram".into(),
+        };
+        let carol = AuditPrincipal {
+            name: "User:carol".into(),
+            auth_method: "MTls".into(),
+        };
+        let source = AuditEndpoint {
+            ip: "10.0.0.4".into(),
+            port: 9092,
+        };
+        let cases = [
+            (
+                "signed freeze, verified, no proposal",
+                AuditEvent::PrivilegedAction {
+                    outcome: AuditOutcome::Success,
+                    phase: PrivilegedPhase::Applied,
+                    action: "topic_freeze".into(),
+                    target: "orders".into(),
+                    proposal_id: String::new(),
+                    principal: alice.clone(),
+                    counterparties: vec![],
+                    approver_set_fingerprint: String::new(),
+                    key_id: "op-1".into(),
+                    signature: vec![0xde, 0xad, 0xbe, 0xef],
+                    signature_verified: true,
+                    source: source.clone(),
+                    reason: "incident 42".into(),
+                    time_ms: 10,
+                },
+                serde_json::json!({
+                    "class_uid": 6003,
+                    "category_uid": 6,
+                    "type_uid": 600_300,
+                    "activity_id": 0,
+                    "time": 10,
+                    "status_id": 1,
+                    "status_detail": "incident 42",
+                    "api": {
+                        "operation": "topic_freeze.applied",
+                        "service": { "name": "kafka" },
+                    },
+                    "actor": { "user": { "name": "User:alice", "type": "MTls" } },
+                    "src_endpoint": { "ip": "10.0.0.4", "port": 9092 },
+                    "privileged_action": {
+                        "phase": "applied",
+                        "action": "topic_freeze",
+                        "target": "orders",
+                        "proposal_id": "",
+                        "counterparties": [],
+                        "approver_set_fingerprint": "",
+                        "key_id": "op-1",
+                        "signature": "deadbeef",
+                        "signature_verified": true,
+                    },
+                    "metadata": expected_metadata(),
+                }),
+            ),
+            (
+                "unsigned two-person consumption",
+                AuditEvent::PrivilegedAction {
+                    outcome: AuditOutcome::Success,
+                    phase: PrivilegedPhase::Consumed,
+                    action: "unclean_elect_leaders".into(),
+                    target: "orders-3".into(),
+                    proposal_id: "bg-7".into(),
+                    principal: carol.clone(),
+                    counterparties: vec![alice.clone(), bob.clone()],
+                    approver_set_fingerprint: "f00dcafe".into(),
+                    key_id: String::new(),
+                    signature: vec![],
+                    signature_verified: false,
+                    source: source.clone(),
+                    reason: String::new(),
+                    time_ms: 11,
+                },
+                serde_json::json!({
+                    "class_uid": 6003,
+                    "category_uid": 6,
+                    "type_uid": 600_300,
+                    "activity_id": 0,
+                    "time": 11,
+                    "status_id": 1,
+                    "status_detail": "",
+                    "api": {
+                        "operation": "unclean_elect_leaders.consumed",
+                        "service": { "name": "kafka" },
+                    },
+                    "actor": { "user": { "name": "User:carol", "type": "MTls" } },
+                    "src_endpoint": { "ip": "10.0.0.4", "port": 9092 },
+                    "privileged_action": {
+                        "phase": "consumed",
+                        "action": "unclean_elect_leaders",
+                        "target": "orders-3",
+                        "proposal_id": "bg-7",
+                        "counterparties": [
+                            { "name": "User:alice", "type": "MTls" },
+                            { "name": "User:bob", "type": "SaslScram" },
+                        ],
+                        "approver_set_fingerprint": "f00dcafe",
+                        "key_id": "",
+                        "signature": "",
+                        "signature_verified": false,
+                    },
+                    "metadata": expected_metadata(),
+                }),
+            ),
+            (
+                "bypassed gate reports failure",
+                AuditEvent::PrivilegedAction {
+                    outcome: AuditOutcome::Failure,
+                    phase: PrivilegedPhase::Bypassed,
+                    action: "unclean_recovery".into(),
+                    target: "orders-9".into(),
+                    proposal_id: String::new(),
+                    principal: AuditPrincipal {
+                        name: "broker".into(),
+                        auth_method: "Internal".into(),
+                    },
+                    counterparties: vec![],
+                    approver_set_fingerprint: "f00dcafe".into(),
+                    key_id: String::new(),
+                    signature: vec![],
+                    signature_verified: false,
+                    source: source.clone(),
+                    reason: "background recovery ran without an approval".into(),
+                    time_ms: 12,
+                },
+                serde_json::json!({
+                    "class_uid": 6003,
+                    "category_uid": 6,
+                    "type_uid": 600_300,
+                    "activity_id": 0,
+                    "time": 12,
+                    "status_id": 2,
+                    "status_detail": "background recovery ran without an approval",
+                    "api": {
+                        "operation": "unclean_recovery.bypassed",
+                        "service": { "name": "kafka" },
+                    },
+                    "actor": { "user": { "name": "broker", "type": "Internal" } },
+                    "src_endpoint": { "ip": "10.0.0.4", "port": 9092 },
+                    "privileged_action": {
+                        "phase": "bypassed",
+                        "action": "unclean_recovery",
+                        "target": "orders-9",
+                        "proposal_id": "",
+                        "counterparties": [],
+                        "approver_set_fingerprint": "f00dcafe",
+                        "key_id": "",
+                        "signature": "",
+                        "signature_verified": false,
+                    },
+                    "metadata": expected_metadata(),
+                }),
+            ),
+        ];
+        for (label, event, expected) in cases {
+            check!(to_ocsf(&event, &product()) == expected, "case {label}");
+        }
     }
 
     #[test]

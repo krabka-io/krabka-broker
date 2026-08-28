@@ -53,6 +53,21 @@ pub(crate) const LIST_BARRIER_CUTS_API_KEY: ApiKeyCode = 1013;
 /// partitions that the receiving broker leads.
 pub(crate) const WRITE_BARRIER_MARKERS_API_KEY: ApiKeyCode = 1014;
 
+/// `SetTopicFreeze` (1015): sets or clears one topic write-freeze entry.
+pub(crate) const SET_TOPIC_FREEZE_API_KEY: ApiKeyCode = 1015;
+
+/// `DescribeTopicFreezes` (1016): reads back the topic write-freeze registry.
+pub(crate) const DESCRIBE_TOPIC_FREEZES_API_KEY: ApiKeyCode = 1016;
+
+/// `ProposeBreakGlass` (1017): opens one break-glass proposal.
+pub(crate) const PROPOSE_BREAK_GLASS_API_KEY: ApiKeyCode = 1017;
+
+/// `ApproveBreakGlass` (1018): adds one approval to a break-glass proposal.
+pub(crate) const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
+
+/// `DescribeBreakGlass` (1019): lists break-glass proposals and their approvals.
+pub(crate) const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
+
 /// Kafka topics owned by the broker rather than an application.
 pub(crate) fn is_internal_topic(name: &str) -> bool {
     matches!(
@@ -450,5 +465,40 @@ mod tests {
             "orders",
             AclOperation::Describe,
         ));
+    }
+
+    /// Every krabka-private api key, with the name a failure reports.
+    const KRABKA_PRIVATE_API_KEYS: [(&str, ApiKeyCode, ApiKeyCode); 10] = [
+        ("AlterBarrierGroups", ALTER_BARRIER_GROUPS_API_KEY, 1010),
+        (
+            "DescribeBarrierGroups",
+            DESCRIBE_BARRIER_GROUPS_API_KEY,
+            1011,
+        ),
+        ("TriggerBarrier", TRIGGER_BARRIER_API_KEY, 1012),
+        ("ListBarrierCuts", LIST_BARRIER_CUTS_API_KEY, 1013),
+        ("WriteBarrierMarkers", WRITE_BARRIER_MARKERS_API_KEY, 1014),
+        ("SetTopicFreeze", SET_TOPIC_FREEZE_API_KEY, 1015),
+        ("DescribeTopicFreezes", DESCRIBE_TOPIC_FREEZES_API_KEY, 1016),
+        ("ProposeBreakGlass", PROPOSE_BREAK_GLASS_API_KEY, 1017),
+        ("ApproveBreakGlass", APPROVE_BREAK_GLASS_API_KEY, 1018),
+        ("DescribeBreakGlass", DESCRIBE_BREAK_GLASS_API_KEY, 1019),
+    ];
+
+    #[test]
+    fn krabka_private_api_keys_sit_in_the_private_range() {
+        for (name, api_key, want) in KRABKA_PRIVATE_API_KEYS {
+            assert!(api_key == want, "{name}");
+            assert!(api_key >= KRABKA_PRIVATE_API_KEY_FLOOR, "{name}");
+        }
+    }
+
+    #[test]
+    fn krabka_private_api_keys_are_pairwise_distinct() {
+        for (index, (left_name, left, _)) in KRABKA_PRIVATE_API_KEYS.iter().enumerate() {
+            for (right_name, right, _) in &KRABKA_PRIVATE_API_KEYS[index + 1..] {
+                assert!(left != right, "{left_name} and {right_name}");
+            }
+        }
     }
 }

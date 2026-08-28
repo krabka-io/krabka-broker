@@ -70,6 +70,9 @@ fn principal_and_status(event: &AuditEvent) -> Option<(String, &'static str)> {
         }
         | AuditEvent::AdminOperation {
             principal, outcome, ..
+        }
+        | AuditEvent::PrivilegedAction {
+            principal, outcome, ..
         } => Some((principal.name.clone(), status_str(*outcome))),
         AuditEvent::AuthorizationDenied { principal, .. } => {
             Some((principal.name.clone(), "denied"))

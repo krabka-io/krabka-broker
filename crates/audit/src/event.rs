@@ -41,6 +41,51 @@ pub enum LifecycleKind {
     TlsReloaded,
 }
 
+/// Stage of a privileged action that the audit record captures.
+///
+/// A freeze reaches `Applied` directly. A two-person action walks
+/// `Proposed` -> `Approved` -> `Consumed` -> `Applied`. `Refused` records a
+/// gate that fell closed, and `Bypassed` records a gated action that ran
+/// without an approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PrivilegedPhase {
+    Proposed,
+    Approved,
+    Consumed,
+    Applied,
+    Refused,
+    Bypassed,
+}
+
+impl PrivilegedPhase {
+    /// Stable lowercase name for the OCSF body.
+    #[must_use]
+    pub fn as_name(self) -> &'static str {
+        match self {
+            PrivilegedPhase::Proposed => "proposed",
+            PrivilegedPhase::Approved => "approved",
+            PrivilegedPhase::Consumed => "consumed",
+            PrivilegedPhase::Applied => "applied",
+            PrivilegedPhase::Refused => "refused",
+            PrivilegedPhase::Bypassed => "bypassed",
+        }
+    }
+
+    /// Inverse of [`Self::as_name`].
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "proposed" => Some(PrivilegedPhase::Proposed),
+            "approved" => Some(PrivilegedPhase::Approved),
+            "consumed" => Some(PrivilegedPhase::Consumed),
+            "applied" => Some(PrivilegedPhase::Applied),
+            "refused" => Some(PrivilegedPhase::Refused),
+            "bypassed" => Some(PrivilegedPhase::Bypassed),
+            _ => None,
+        }
+    }
+}
+
 /// OCSF class group for record headers and routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEventClass {
@@ -134,6 +179,42 @@ pub enum AuditEvent {
         resources: Vec<AuditResource>,
         time_ms: i64,
     },
+    /// A privileged action, with the evidence that authorised it.
+    ///
+    /// A topic freeze, a thaw, an unclean leader election, and every other
+    /// action behind the two-person rule write this variant. It is not named
+    /// for break-glass, because a freeze is not a break-glass act and still
+    /// carries the same evidence.
+    ///
+    /// The record keeps the detached `signature` itself, not only
+    /// `signature_verified`. The audit log is hash-chained and its checkpoints
+    /// are Ed25519-signed, so an auditor who trusts the audit chain and holds
+    /// the operator public keys can re-verify who set every freeze from the
+    /// audit topic alone, with no broker and no raft log. That is a second,
+    /// independent copy of the proof.
+    ///
+    /// `proposal_id` is empty when the action needed no proposal, such as a
+    /// freeze. `counterparties` holds the approvers and is empty for the same
+    /// case. `key_id` and `signature` are empty when the action was unsigned.
+    /// `approver_set_fingerprint` is the SHA-256 hex of the sorted configured
+    /// approver list, evaluated at approval time, so a later divergence of
+    /// that list is visible after the fact.
+    PrivilegedAction {
+        outcome: AuditOutcome,
+        phase: PrivilegedPhase,
+        action: String,
+        target: String,
+        proposal_id: String,
+        principal: AuditPrincipal,
+        counterparties: Vec<AuditPrincipal>,
+        approver_set_fingerprint: String,
+        key_id: String,
+        signature: Vec<u8>,
+        signature_verified: bool,
+        source: AuditEndpoint,
+        reason: String,
+        time_ms: i64,
+    },
     Lifecycle {
         kind: LifecycleKind,
         node_id: i64,
@@ -148,7 +229,9 @@ impl AuditEvent {
         match self {
             AuditEvent::Authentication { .. } => AuditEventClass::Authentication,
             AuditEvent::AuthorizationDenied { .. } => AuditEventClass::Authorization,
-            AuditEvent::AdminOperation { .. } => AuditEventClass::ApiActivity,
+            AuditEvent::AdminOperation { .. } | AuditEvent::PrivilegedAction { .. } => {
+                AuditEventClass::ApiActivity
+            }
             AuditEvent::Lifecycle { .. } => AuditEventClass::ApplicationLifecycle,
         }
     }
@@ -223,19 +306,66 @@ mod tests {
             }],
             time_ms: 2,
         };
+        let privileged = AuditEvent::PrivilegedAction {
+            outcome: AuditOutcome::Success,
+            phase: PrivilegedPhase::Applied,
+            action: "topic_freeze".into(),
+            target: "orders".into(),
+            proposal_id: String::new(),
+            principal: AuditPrincipal {
+                name: "User:alice".into(),
+                auth_method: "MTls".into(),
+            },
+            counterparties: vec![],
+            approver_set_fingerprint: String::new(),
+            key_id: "op-1".into(),
+            signature: vec![0xde, 0xad],
+            signature_verified: true,
+            source: AuditEndpoint {
+                ip: "10.0.0.4".into(),
+                port: 9092,
+            },
+            reason: "incident 42".into(),
+            time_ms: 4,
+        };
         let life = AuditEvent::Lifecycle {
             kind: LifecycleKind::BrokerStarted,
             node_id: 1,
             time_ms: 3,
         };
         check!(
-            (authn.class(), denied.class(), admin.class(), life.class())
-                == (
-                    AuditEventClass::Authentication,
-                    AuditEventClass::Authorization,
-                    AuditEventClass::ApiActivity,
-                    AuditEventClass::ApplicationLifecycle,
-                )
+            (
+                authn.class(),
+                denied.class(),
+                admin.class(),
+                privileged.class(),
+                life.class()
+            ) == (
+                AuditEventClass::Authentication,
+                AuditEventClass::Authorization,
+                AuditEventClass::ApiActivity,
+                AuditEventClass::ApiActivity,
+                AuditEventClass::ApplicationLifecycle,
+            )
         );
+    }
+
+    #[test]
+    fn privileged_phase_name_round_trips() {
+        for (label, phase, name) in [
+            ("proposed", PrivilegedPhase::Proposed, "proposed"),
+            ("approved", PrivilegedPhase::Approved, "approved"),
+            ("consumed", PrivilegedPhase::Consumed, "consumed"),
+            ("applied", PrivilegedPhase::Applied, "applied"),
+            ("refused", PrivilegedPhase::Refused, "refused"),
+            ("bypassed", PrivilegedPhase::Bypassed, "bypassed"),
+        ] {
+            check!(phase.as_name() == name, "case {label}");
+            check!(
+                PrivilegedPhase::from_name(phase.as_name()) == Some(phase),
+                "case {label}"
+            );
+        }
+        check!(PrivilegedPhase::from_name("nope") == None);
     }
 }

@@ -211,6 +211,7 @@ pub(crate) mod metrics_server;
 pub mod network;
 pub(crate) mod oauth_introspection;
 pub(crate) mod oauth_jwks;
+pub mod operator_keys;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;
@@ -228,6 +229,7 @@ mod replicator_supervisor;
 pub mod schema_validation;
 pub mod share_coordinator;
 pub mod share_partition;
+pub(crate) mod signing_domains;
 pub(crate) mod site_placement;
 /// Three-site stretch-cluster model: site failure and network partition
 /// composed with the real site placement, controller failover, preferred

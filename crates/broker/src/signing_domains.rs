@@ -1,0 +1,73 @@
+//! Domain separators for the operator signatures that KFC-9 defines.
+//!
+//! A signature over one kind of message must never verify as another kind. So
+//! every signing scheme in this workspace puts a distinct constant in front of
+//! its canonical bytes, and the verifier rebuilds those bytes with the same
+//! constant. Two schemes that share a separator let an attacker present a
+//! captured signature for a purpose the signer never agreed to.
+//!
+//! `crates/remote-storage/src/worm/manifest.rs` states the same rule. It gives
+//! the segment manifest [`crabka_remote_storage::MANIFEST_DOMAIN`] and the
+//! chain preimage [`crabka_remote_storage::MANIFEST_BODY_DOMAIN`], and it
+//! deliberately does not share [`crabka_audit::signing::CHECKPOINT_DOMAIN`],
+//! even though both schemes sign with the same Ed25519 keys and the same
+//! verifier.
+//!
+//! The two constants sit in one module of their own, and not beside the code
+//! that builds each canonical layout, because the freeze path and the
+//! break-glass path are separate modules. The tests below compare every domain
+//! separator in the workspace against every other one. A test inside either
+//! path would have to reach into the other path for its constant.
+
+/// Domain separator for a `TopicFreezeRecord` signature (KFC-9).
+pub(crate) const FREEZE_DOMAIN: &[u8] = b"crabka-topic-freeze-v1\0";
+
+/// Domain separator for a break-glass approval signature (KFC-9).
+pub(crate) const BREAK_GLASS_DOMAIN: &[u8] = b"crabka-break-glass-v1\0";
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use crabka_audit::signing::CHECKPOINT_DOMAIN;
+    use crabka_remote_storage::{MANIFEST_BODY_DOMAIN, MANIFEST_DOMAIN};
+
+    use super::{BREAK_GLASS_DOMAIN, FREEZE_DOMAIN};
+
+    /// Every domain separator in the workspace, with the name a failure
+    /// reports. Add a row here whenever a new signing scheme lands.
+    const WORKSPACE_DOMAINS: [(&str, &[u8]); 5] = [
+        ("FREEZE_DOMAIN", FREEZE_DOMAIN),
+        ("BREAK_GLASS_DOMAIN", BREAK_GLASS_DOMAIN),
+        ("CHECKPOINT_DOMAIN", CHECKPOINT_DOMAIN),
+        ("MANIFEST_DOMAIN", MANIFEST_DOMAIN),
+        ("MANIFEST_BODY_DOMAIN", MANIFEST_BODY_DOMAIN),
+    ];
+
+    #[test]
+    fn every_workspace_domain_separator_differs_pairwise() {
+        for (index, (left_name, left)) in WORKSPACE_DOMAINS.iter().enumerate() {
+            for (right_name, right) in &WORKSPACE_DOMAINS[index + 1..] {
+                check!(left != right, "{left_name} and {right_name}");
+            }
+        }
+    }
+
+    /// Two separators that differ are still unsafe when one starts the other,
+    /// because the longer scheme can then reproduce the shorter scheme's
+    /// prefix. The trailing `\0` on every constant is what rules that out, and
+    /// this test is what keeps the `\0` from being dropped.
+    #[test]
+    fn no_workspace_domain_separator_starts_another_one() {
+        for (left_index, (left_name, left)) in WORKSPACE_DOMAINS.iter().enumerate() {
+            for (right_index, (right_name, right)) in WORKSPACE_DOMAINS.iter().enumerate() {
+                if left_index == right_index {
+                    continue;
+                }
+                check!(
+                    !left.starts_with(right),
+                    "{left_name} starts with {right_name}"
+                );
+            }
+        }
+    }
+}

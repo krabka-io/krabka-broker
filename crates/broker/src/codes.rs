@@ -286,6 +286,17 @@ pub const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
 /// `telemetry.max.bytes`.
 pub const TELEMETRY_TOO_LARGE: i16 = 118;
 
+/// `POLICY_VIOLATION` (44): the request parameters do not satisfy the
+/// configured policy. Apache Kafka returns it from `CreateTopicPolicy` and
+/// `AlterConfigPolicy`.
+///
+/// The JVM maps 44 to `PolicyViolationException`, which extends `ApiException`
+/// and not `RetriableException`, so no client retries it.
+///
+/// KFC-9 returns this code for a produce to a frozen topic, and for a
+/// privileged transition that carries no break-glass approval.
+pub const POLICY_VIOLATION: i16 = 44;
+
 // ---------------------------------------------------------------------------
 // krabka-private error codes.
 //
@@ -294,6 +305,13 @@ pub const TELEMETRY_TOO_LARGE: i16 = 118;
 // this range only on a krabka-private api key, which sits at or above
 // `crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR`. A JVM client cannot
 // negotiate such an api key, so it never receives one of these codes.
+//
+// The private error-code range and the private api-key range are separate
+// namespaces that share the floor 1000 and nothing else. One number can be a
+// legal error code and a legal api key at the same time. 1010 is
+// `OPERATOR_SIGNATURE_REQUIRED` here and `AlterBarrierGroups` in
+// `crate::handlers`. That is not a collision, because an error code and an api
+// key are different fields on the wire.
 // ---------------------------------------------------------------------------
 
 /// `BARRIER_INJECTION_IN_PROGRESS` (1000): an injection for this barrier group
@@ -309,6 +327,78 @@ pub const TELEMETRY_TOO_LARGE: i16 = 118;
 /// so neither one carries this meaning. The broker returns this code only on a
 /// krabka-private api key, and it never reaches a JVM client.
 pub const BARRIER_INJECTION_IN_PROGRESS: i16 = 1000;
+
+// 1001 to 1005 stay free. KFC-6, the coordination-primitives api, proposes
+// them and is still under discussion.
+
+/// `BREAK_GLASS_APPROVAL_REQUIRED` (1006): the request names a privileged
+/// transition that needs an approved break-glass proposal, and no such
+/// proposal exists.
+///
+/// KFC-9 gates these transitions on an approved proposal: a thaw of a topic
+/// write-freeze, a forced leader epoch bump, a broker unregistration, a
+/// reassignment cancel, and a delete of a topic or of records. The operator
+/// should collect the approvals first, then send the request again.
+pub const BREAK_GLASS_APPROVAL_REQUIRED: i16 = 1006;
+
+/// `BREAK_GLASS_DUPLICATE_APPROVER` (1007): the principal on the connection
+/// already approved this break-glass proposal.
+///
+/// A two-person rule counts distinct principals. A second approval from one
+/// principal does not move the proposal closer to its threshold, so the broker
+/// refuses it instead of storing it.
+pub const BREAK_GLASS_DUPLICATE_APPROVER: i16 = 1007;
+
+/// `BREAK_GLASS_NOT_AN_APPROVER` (1008): the principal on the connection is
+/// not in the configured break-glass approver set.
+///
+/// The approver set comes from `broker.toml` and not from the metadata log, so
+/// a principal who can write the metadata log cannot add an approver. The ACL
+/// store keeps `super_users` out for the same reason.
+pub const BREAK_GLASS_NOT_AN_APPROVER: i16 = 1008;
+
+/// `OPERATOR_SIGNATURE_INVALID` (1009): the broker refused the detached
+/// operator signature on the request.
+///
+/// One code covers five distinct failures:
+///
+/// - The signature does not verify against the named key.
+/// - The `key_id` names no configured operator key.
+/// - The `set_by` principal is not the principal bound to that key.
+/// - The timestamp sits outside the configured skew window.
+/// - The timestamp repeats one the broker already accepted.
+///
+/// The response message names which check failed. The code does not, because
+/// an error code that separates the five tells an attacker which check they
+/// failed.
+///
+/// The freeze path and the break-glass path share this code, because both
+/// verify against one operator key set with one set of rules.
+pub const OPERATOR_SIGNATURE_INVALID: i16 = 1009;
+
+/// `OPERATOR_SIGNATURE_REQUIRED` (1010): the request needs a detached operator
+/// signature and carries none.
+///
+/// A thaw of a topic write-freeze always needs one. A freeze needs one when
+/// `freeze.require_signature` is `true`. The freeze path and the break-glass
+/// path share this code.
+pub const OPERATOR_SIGNATURE_REQUIRED: i16 = 1010;
+
+/// `FREEZE_SCOPE_INVALID` (1011): the freeze scope in the request is not one
+/// the broker accepts.
+///
+/// The scope is empty, it is not a legal topic name, or it names an internal
+/// topic. The broker never freezes a `__` name, because a prefix scope of `""`
+/// would otherwise freeze `__consumer_offsets` and stop the cluster.
+pub const FREEZE_SCOPE_INVALID: i16 = 1011;
+
+/// `FREEZE_LIMIT_EXCEEDED` (1012): the freeze registry already holds
+/// `freeze.max_entries` entries.
+///
+/// The produce path resolves a prefix scope with a reverse walk over the
+/// prefixed entries, so a bounded registry bounds that walk. The operator
+/// should remove an entry before they add another one.
+pub const FREEZE_LIMIT_EXCEEDED: i16 = 1012;
 
 /// Maps an internal [`crate::error::BrokerError`] to a wire-level code. Most
 /// internal errors map to `UNKNOWN_SERVER_ERROR`. Specific variants map to
@@ -526,15 +616,45 @@ mod tests {
         assert!(INELIGIBLE_REPLICA == 107);
     }
 
-    #[test]
-    fn krabka_private_error_codes_sit_above_every_kafka_code() {
-        let cases = [(
+    /// Every krabka-private error code, with the name a failure reports.
+    const KRABKA_PRIVATE_CODES: [(&str, i16, i16); 8] = [
+        (
             "BARRIER_INJECTION_IN_PROGRESS",
             BARRIER_INJECTION_IN_PROGRESS,
             1000,
-        )];
+        ),
+        (
+            "BREAK_GLASS_APPROVAL_REQUIRED",
+            BREAK_GLASS_APPROVAL_REQUIRED,
+            1006,
+        ),
+        (
+            "BREAK_GLASS_DUPLICATE_APPROVER",
+            BREAK_GLASS_DUPLICATE_APPROVER,
+            1007,
+        ),
+        (
+            "BREAK_GLASS_NOT_AN_APPROVER",
+            BREAK_GLASS_NOT_AN_APPROVER,
+            1008,
+        ),
+        (
+            "OPERATOR_SIGNATURE_INVALID",
+            OPERATOR_SIGNATURE_INVALID,
+            1009,
+        ),
+        (
+            "OPERATOR_SIGNATURE_REQUIRED",
+            OPERATOR_SIGNATURE_REQUIRED,
+            1010,
+        ),
+        ("FREEZE_SCOPE_INVALID", FREEZE_SCOPE_INVALID, 1011),
+        ("FREEZE_LIMIT_EXCEEDED", FREEZE_LIMIT_EXCEEDED, 1012),
+    ];
 
-        for (name, code, want) in cases {
+    #[test]
+    fn krabka_private_error_codes_sit_above_every_kafka_code() {
+        for (name, code, want) in KRABKA_PRIVATE_CODES {
             assert!(code == want, "{name}");
             // Above every code the Apache Kafka table assigns, and clear of
             // the two codes whose meaning a JVM client would act on.
@@ -542,6 +662,34 @@ mod tests {
             assert!(code != CONCURRENT_TRANSACTIONS, "{name}");
             assert!(code != REBALANCE_IN_PROGRESS, "{name}");
         }
+    }
+
+    #[test]
+    fn krabka_private_error_codes_are_pairwise_distinct() {
+        for (index, (left_name, left, _)) in KRABKA_PRIVATE_CODES.iter().enumerate() {
+            for (right_name, right, _) in &KRABKA_PRIVATE_CODES[index + 1..] {
+                assert!(left != right, "{left_name} and {right_name}");
+            }
+        }
+    }
+
+    #[test]
+    fn krabka_private_error_codes_leave_the_kfc6_range_free() {
+        // KFC-6 proposes 1001 to 1005 for the coordination-primitives api, so
+        // no code here takes one of them.
+        for (name, code, _) in KRABKA_PRIVATE_CODES {
+            assert!(!(1001..=1005).contains(&code), "{name}");
+        }
+    }
+
+    #[test]
+    fn policy_violation_matches_the_kafka_error_table() {
+        assert!(POLICY_VIOLATION == 44);
+        // KFC-9 chose 44 and rejected both of these, because each one also
+        // changes the JVM client's metadata cache. 29 marks the topic
+        // unauthorized, and 17 marks the name permanently invalid.
+        assert!(POLICY_VIOLATION != TOPIC_AUTHORIZATION_FAILED);
+        assert!(POLICY_VIOLATION != INVALID_TOPIC_EXCEPTION);
     }
 
     #[test]
