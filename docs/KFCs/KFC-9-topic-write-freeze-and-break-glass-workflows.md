@@ -184,17 +184,22 @@ crabka-guard break-glass list [--pending]
 
 `--sign-with` takes a PKCS#8 key file and never sends it. The command builds the canonical bytes on the operator's own machine, signs them there, and puts only the `key_id` and the signature on the wire. The private key never reaches a broker.
 
-`freeze list --verify-signatures` re-verifies each returned entry against the local public keys and exits 4 if any entry fails. That makes the operator's own machine the thing that says the registry is authentic, rather than the broker that served it.
+`freeze list --verify-signatures` re-verifies each returned entry against the local public keys and exits 5 if any entry fails. That makes the operator's own machine the thing that says the registry is authentic, rather than the broker that served it.
 
 | Exit code | Meaning |
 | :--- | :--- |
 | 0 | The broker accepted the request. |
 | 1 | The broker refused the request. |
 | 2 | A transport failure. Nothing is known about the outcome. |
-| 3 | The action needs an approval that does not exist. |
-| 4 | A signature did not verify. |
+| 3 | The tool looked, and what it found does not match what it was told. |
+| 4 | The action needs an approval that does not exist. |
+| 5 | A signature did not verify. |
 
-Codes 0, 1 and 2 keep the meanings that `crabka-barrier` gives them. Code 3 is the one a runbook branches on. Code 4 keeps "the tool could not check" apart from "the tool checked and the answer is wrong". KFC-5's verifier draws the same distinction.
+Codes 0 to 3 keep the meanings that `crabka-barrier` gives them, code 3 included.
+
+Code 3 is reserved rather than reused. `crabka-barrier` already exits 3 for a cut that does not match the log, and an operator runbook branches on `$?` without knowing which krabka tool answered it. One number has to mean one thing across both tools, so the two codes this feature adds take 4 and 5 rather than displacing it.
+
+Code 4 is the one a runbook branches on: it says the cluster is healthy and the caller is authorized, and the operation still needs a second person. Code 5 keeps "the tool could not check" apart from "the tool checked and the answer is wrong". KFC-5's verifier draws the same distinction.
 
 ### The Audit Event
 
