@@ -33,16 +33,15 @@ pub(crate) mod propose;
 use crabka_audit::{
     AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal, PrivilegedPhase,
 };
-use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use crabka_protocol::primitives::uuid::Uuid as WireUuid;
 use crabka_raft::RaftError;
 use uuid::Uuid;
 
-use crate::{
-    authorizer::Authorizer,
-    codes,
-    handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
-};
+// The `Describe` gate that `describe` applies. It lives in `crate::handlers`
+// beside its `Alter` twin, so the break-glass control plane does not reach into
+// another subsystem for an ACL gate.
+pub(crate) use crate::handlers::cluster_describe_denied;
+use crate::{codes, handlers::RequestContext};
 
 /// The audited action name of a request whose wire action names no transition.
 pub(crate) const UNKNOWN_ACTION: &str = "unknown";
@@ -65,27 +64,6 @@ impl Refusal {
             message: message.into(),
         }
     }
-}
-
-/// The `Describe` gate on `Cluster("kafka-cluster")`.
-///
-/// It returns `true` when the authorizer denies the principal.
-// TODO(KFC-9): `barrier::handlers` holds the same helper, and `handlers::mod`
-// holds the `Alter` twin. The three belong in `handlers::mod` together. The
-// batch that owns that file should move this one.
-pub(crate) fn cluster_describe_denied(
-    authorizer: &dyn Authorizer,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        ResourceType::Cluster,
-        CLUSTER_RESOURCE_NAME,
-        AclOperation::Describe,
-    )
 }
 
 /// The `KafkaPrincipal` string of the connection, such as `"User:alice"`.

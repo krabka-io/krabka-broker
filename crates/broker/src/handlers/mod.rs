@@ -177,6 +177,28 @@ pub(crate) fn cluster_alter_denied(
     )
 }
 
+/// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of
+/// [`cluster_alter_denied`].
+///
+/// It returns `true` when the authorizer denies the principal. The barrier,
+/// write-freeze, and break-glass control planes each read the cluster through
+/// this one gate, so a denial answers `CLUSTER_AUTHORIZATION_FAILED` (31)
+/// whichever private api key the caller reached.
+pub(crate) fn cluster_describe_denied(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+) -> bool {
+    acl_denied(
+        authorizer,
+        image,
+        ctx,
+        krabka_metadata::ResourceType::Cluster,
+        acl_wire::CLUSTER_RESOURCE_NAME,
+        krabka_metadata::AclOperation::Describe,
+    )
+}
+
 pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
     if let Some(host_port) = crate::host_port::parse_host_port(addr) {
         return host_port;
@@ -333,7 +355,7 @@ pub(crate) fn audit_admin(
 mod tests {
     use std::{collections::HashSet, net::SocketAddr};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
     use krabka_protocol::{
         Decode,
@@ -465,6 +487,51 @@ mod tests {
             "orders",
             AclOperation::Describe,
         ));
+    }
+
+    /// The barrier, write-freeze, and break-glass read APIs all gate on
+    /// [`cluster_describe_denied`], and every one of them answers
+    /// `CLUSTER_AUTHORIZATION_FAILED` (31) when it returns `true`.
+    #[test]
+    fn cluster_describe_denied_refuses_a_principal_with_no_cluster_describe() {
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let principal = principal();
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = RequestContext {
+            principal: &principal,
+            peer: &peer,
+            client_id: "krabka-guard",
+            connection_id: "connection-a",
+            sendfile_capable: false,
+            connection_listener_name: "PLAINTEXT",
+        };
+
+        for (label, super_users, denied) in [
+            ("an empty acl store denies by default", Vec::new(), true),
+            (
+                "a super user reads the cluster",
+                vec![principal.name.clone()],
+                false,
+            ),
+            (
+                "another super user does not lend its grant",
+                vec!["bob".to_string()],
+                true,
+            ),
+        ] {
+            let authorizer = crate::authorizer::SimpleAclAuthorizer::new(
+                super_users.into_iter().collect::<HashSet<String>>(),
+            );
+
+            check!(
+                cluster_describe_denied(&authorizer, &image, &ctx) == denied,
+                "case {label}"
+            );
+        }
+
+        // The code every caller answers on a denial, and the number Kafka
+        // assigns it.
+        check!(crate::codes::CLUSTER_AUTHORIZATION_FAILED == 31);
     }
 
     /// Every krabka-private api key, with the name a failure reports.

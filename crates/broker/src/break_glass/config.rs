@@ -2,7 +2,8 @@
 //!
 //! [`crate::config::BreakGlassConfig`] holds the parsed and validated values.
 //! The file-config layer already refused a `required_approvals` below two, a
-//! `signed_actions` entry with no operator key, and a malformed duration. This
+//! `signed_actions` entry that names no action, a `signed_actions` entry with
+//! no operator key, and a malformed duration. This
 //! module answers only the three questions the workflow asks of that
 //! configuration at run time: is the workflow on, is this principal an
 //! approver, and does this action need a signature.
@@ -63,7 +64,9 @@ impl<'a> BreakGlassPolicy<'a> {
     /// signature.
     ///
     /// The `signed_actions` entries name an action with the string that
-    /// [`action_name`] returns.
+    /// [`action_name`] returns. The configuration layer already refused an
+    /// entry that names no action, so a `false` here means the operator did
+    /// not ask for a signature, and never that they misspelled the request.
     pub(crate) fn needs_signature(self, action: BreakGlassAction) -> bool {
         let name = action_name(action);
         self.config

@@ -10,6 +10,12 @@
 //! - APPEND (2) and SUBTRACT (3) are list-valued operations. No whitelisted
 //!   key is list-valued, so the handler rejects these two with
 //!   `INVALID_CONFIG`.
+//!
+//! A controller-managed key is refused whatever the operation is. KFC-9's
+//! [`crate::config_keys::WRITE_FREEZE`] is synthesised for `DescribeConfigs`
+//! and is never stored, so a DELETE of it is an attempt to lift the freeze and
+//! gets the same refusal a SET gets. See
+//! [`crate::config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 
 use bytes::Bytes;
 use krabka_metadata::{
@@ -342,6 +348,15 @@ fn topic_config_record(
         .cloned()
         .unwrap_or_default();
     for config in &resource.configs {
+        // A controller-managed key is refused before the operation is read.
+        // A DELETE of it is an attempt to clear the freeze, so every
+        // operation gets the same refusal.
+        if config_keys::is_controller_managed_topic_config(&config.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                config_keys::controller_managed_topic_config_message(&config.name),
+            ));
+        }
         match config.config_operation {
             OP_SET => {
                 let value = config.value.clone().unwrap_or_default();
@@ -850,6 +865,75 @@ mod tests {
                 .collect(),
         }));
         img
+    }
+
+    #[test]
+    fn controller_managed_topic_configs_are_rejected_whatever_the_operation() {
+        let img = image_with_topic_config("orders", &[(config_keys::RETENTION_MS, "60000")]);
+
+        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
+            for (label, config) in [
+                ("a SET of the key", make_set_cfg(key, "true")),
+                (
+                    "a DELETE of the key, which asks to clear the freeze",
+                    make_del_cfg(key),
+                ),
+                (
+                    "an APPEND of the key",
+                    AlterableConfig {
+                        name: key.into(),
+                        config_operation: 2,
+                        value: Some("true".into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "a SUBTRACT of the key",
+                    AlterableConfig {
+                        name: key.into(),
+                        config_operation: 3,
+                        value: Some("true".into()),
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let error = topic_config_record(&make_topic_resource("orders", vec![config]), &img)
+                    .expect_err("controller-managed key must be rejected");
+
+                check!(error.0 == codes::INVALID_CONFIG, "{label}, key {key}");
+                check!(
+                    error.1 == config_keys::controller_managed_topic_config_message(key),
+                    "{label}, key {key}"
+                );
+                check!(!error.1.is_empty(), "{label}, key {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_ordinary_topic_config_still_merges_onto_the_existing_map() {
+        let img = image_with_topic_config("orders", &[(config_keys::RETENTION_MS, "60000")]);
+
+        let record = topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg(config_keys::SEGMENT_BYTES, "1048576")],
+            ),
+            &img,
+        )
+        .expect("an ordinary topic config is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: std::collections::BTreeMap::from([
+                (config_keys::RETENTION_MS.to_string(), "60000".to_string()),
+                (
+                    config_keys::SEGMENT_BYTES.to_string(),
+                    "1048576".to_string(),
+                ),
+            ]),
+        });
+        assert!(record == expected);
     }
 
     #[test]

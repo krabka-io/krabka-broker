@@ -478,7 +478,7 @@ fn admin_resources(target: &str, frozen: bool, proposal_id: Uuid) -> Vec<AuditRe
 mod tests {
     use std::{net::SocketAddr, path::PathBuf};
 
-    use assert2::{check, let_assert};
+    use assert2::{assert, check};
     use crabka_metadata::{BreakGlassApproval, BreakGlassProposalRecord};
     use crabka_protocol::{
         krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
@@ -1034,10 +1034,10 @@ mod tests {
             )
         };
 
-        let_assert!(Ok(Some(consumed)) = check_approval(&env, &thaw));
+        assert!(let Ok(Some(consumed)) = check_approval(&env, &thaw));
 
         check!(consumed_proposal_id(&consumed) == Some(PROPOSAL));
-        let_assert!(MetadataRecord::V1BreakGlassProposal(proposal) = &consumed);
+        assert!(let MetadataRecord::V1BreakGlassProposal(proposal) = &consumed);
         check!(proposal.consumed_at_ms > 0);
     }
 

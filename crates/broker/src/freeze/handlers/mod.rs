@@ -28,17 +28,16 @@ pub(crate) mod describe_freezes;
 pub(crate) mod set_freeze;
 
 use crabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal};
-use crabka_metadata::{AclOperation, MetadataImage, PatternType, ResourceType};
+use crabka_metadata::PatternType;
 use crabka_protocol::krabka::freeze::{
     PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
 };
 
-use crate::{
-    authorizer::Authorizer,
-    handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
-    operator_keys::approver_set_fingerprint,
-    time_util::now_ms,
-};
+// The `Describe` gate that `describe_freezes` applies. It lives in
+// `crate::handlers` beside its `Alter` twin, so the freeze control plane does
+// not reach into another subsystem for an ACL gate.
+pub(crate) use crate::handlers::cluster_describe_denied;
+use crate::{handlers::RequestContext, operator_keys::approver_set_fingerprint, time_util::now_ms};
 
 // The dispatch constant and the codec must name one api key. The registry
 // reads the broker's constant and the framing reads the codec's, so a drift
@@ -52,24 +51,6 @@ const _: () = assert!(
     crate::handlers::DESCRIBE_TOPIC_FREEZES_API_KEY
         == crabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY
 );
-
-/// The `Describe` gate on `Cluster("kafka-cluster")`.
-///
-/// It returns `true` when the authorizer denies the principal.
-pub(crate) fn cluster_describe_denied(
-    authorizer: &dyn Authorizer,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        ResourceType::Cluster,
-        CLUSTER_RESOURCE_NAME,
-        AclOperation::Describe,
-    )
-}
 
 /// The pattern type that a request's `pattern_type` byte names, or `None` when
 /// the byte is not one this build knows.

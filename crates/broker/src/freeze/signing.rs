@@ -269,7 +269,7 @@ fn signing_bytes_capacity(cluster_id: &str, record: &TopicFreezeRecord) -> usize
 mod tests {
     use std::path::PathBuf;
 
-    use assert2::{check, let_assert};
+    use assert2::{assert, check};
     use crabka_units::{minutes, secs};
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
     use tempfile::TempDir;
@@ -600,8 +600,8 @@ mod tests {
         ];
 
         for (label, record, check) in cases {
-            let_assert!(
-                Err(refusal) = verify_freeze_signature(&check, &record),
+            assert!(
+                let Err(refusal) = verify_freeze_signature(&check, &record),
                 "case {label}"
             );
             let (code, message) = refusal.wire();

@@ -41,6 +41,10 @@ use krabka_protocol::krabka::barrier::{
 };
 use krabka_units::{Time, convert::TimeExt as _};
 
+// The `Describe` gate that `describe_groups` and `list_cuts` apply. It lives in
+// `crate::handlers` beside its `Alter` twin, because the write-freeze and
+// break-glass control planes read the cluster through the same gate.
+pub(crate) use crate::handlers::cluster_describe_denied;
 use crate::{
     authorizer::Authorizer,
     barrier::{error::BarrierError, persistence::CutValue},
@@ -138,25 +142,6 @@ pub(crate) fn interval_from_wire(interval_ms: i64) -> Option<Time> {
     } else {
         Some(Time::from_millis(interval_ms))
     }
-}
-
-/// The `Describe` gate on `Cluster("kafka-cluster")`.
-///
-/// It returns `true` when the authorizer denies the principal. `describe_log_dirs`
-/// applies the same gate to the read side of the log-dir surface.
-pub(crate) fn cluster_describe_denied(
-    authorizer: &dyn Authorizer,
-    image: &MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        ResourceType::Cluster,
-        CLUSTER_RESOURCE_NAME,
-        AclOperation::Describe,
-    )
 }
 
 /// The `ClusterAction` gate on `Cluster("kafka-cluster")`.

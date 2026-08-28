@@ -9,13 +9,13 @@ use std::{
     },
 };
 
-use dashmap::DashMap;
-use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt},
 };
+use dashmap::DashMap;
+use futures_util::future::BoxFuture;
 use tokio::{
     net::TcpListener,
     task::{JoinHandle, JoinSet},
@@ -1404,13 +1404,20 @@ fn start_liveness_services(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
     listener_protocol: krabka_security::ListenerProtocol,
-    metrics: &crate::metrics::BrokerMetrics,
+    // The two places this subsystem reports to, paired the way `log_dirs`
+    // pairs the two log-dir registries: the metric families, and the audit log
+    // that a bypassed background unclean recovery writes its evidence to.
+    observability: (
+        &crate::metrics::BrokerMetrics,
+        &Arc<krabka_audit::AuditLog>,
+    ),
     shutdown: &CancellationToken,
     log_dirs: (
         &crate::log_dir_status::LogDirRegistry,
         &crate::log_dir_id::LogDirIds,
     ),
 ) -> LivenessStartup {
+    let (metrics, audit_log) = observability;
     let liveness = Arc::new(
         crate::heartbeat::controller_state::ControllerLivenessState::new(config.heartbeat_timeout),
     );
@@ -1447,6 +1454,10 @@ fn start_liveness_services(
             queue_capacity: config.unclean_recovery_queue_capacity,
             listener_protocol,
             inter_broker_server_name: config.inter_broker_server_name.clone(),
+            background: crate::unclean_recovery::BackgroundRecovery::new(
+                &config.break_glass,
+                Arc::clone(audit_log),
+            ),
         },
         shutdown.child_token(),
     );
@@ -1891,12 +1902,47 @@ struct RuntimeCaches {
     quota_buckets: Arc<crate::quota::QuotaBuckets>,
 }
 
+/// Publish the KFC-9 gauges that only the metadata image knows.
+///
+/// One image watch feeds both families, because both read the same image and
+/// both must fall as well as rise: the freeze gauge drops when a thaw removes
+/// an entry, and a proposal that moves from `Pending` to `Consumed` lowers one
+/// series and raises another. A tick loop would hold a stale value between
+/// ticks, and two loops would read two different images.
+fn spawn_break_glass_gauges(
+    config: &BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    metrics: &crate::metrics::BrokerMetrics,
+    shutdown: CancellationToken,
+) {
+    let images = controller.watch_image();
+    let metrics = metrics.clone();
+    let break_glass = config.break_glass.clone();
+    tokio::spawn(crate::metadata_source::watch_image_loop(
+        images,
+        "break-glass and freeze gauges",
+        shutdown,
+        move |image| {
+            metrics.record_topic_freezes_active(
+                i64::try_from(image.topic_freezes().count()).unwrap_or(i64::MAX),
+            );
+            crate::break_glass::metrics::record_proposal_states(
+                &metrics,
+                image,
+                &break_glass,
+                crate::time_util::now_ms(),
+            );
+        },
+    ));
+}
+
 fn start_runtime_watchers(
     config: &BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
     txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
+    metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> RuntimeCaches {
     if let (Some(dynamic), Some(tls_config)) = (tls_dynamic.cloned(), config.tls_config.clone()) {
@@ -1935,6 +1981,19 @@ fn start_runtime_watchers(
             shutdown.child_token(),
         ));
     }
+    // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
+    // that never sweeps is still safe, so the sweep needs no config gate.
+    let break_glass_controller: Arc<dyn crate::break_glass::sweep::BreakGlassController> =
+        Arc::new(BreakGlassSweepControllerAdapter {
+            handle: Arc::clone(controller),
+        });
+    tokio::spawn(crate::break_glass::sweep::run(
+        break_glass_controller,
+        crate::break_glass::sweep::SWEEP_INTERVAL,
+        crate::break_glass::sweep::PROPOSAL_RETENTION,
+        shutdown.child_token(),
+    ));
+    spawn_break_glass_gauges(config, controller, metrics, shutdown.child_token());
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
         tokio::spawn(crate::txn::expiration::run(
             Arc::clone(txn_coordinator),
@@ -2427,7 +2486,7 @@ async fn start_broker_runtime(
         controller,
         inter_broker_client,
         inter_listener_protocol,
-        &metrics,
+        (&metrics, &audit_log),
         &supervisor_shutdown,
         (storage.2, storage.3),
     );
@@ -2468,6 +2527,7 @@ async fn start_broker_runtime(
         tls_dynamic,
         &throttle_state,
         coordinators.0,
+        &metrics,
         &supervisor_shutdown,
     );
     Ok(BrokerRuntimeStartup {
@@ -4315,6 +4375,33 @@ impl crate::delegation_token_cleanup::DelegationTokenController
     }
 }
 
+/// KFC-9: wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
+/// [`crate::break_glass::sweep::BreakGlassController`] trait that the
+/// break-glass expiry sweep needs. Every broker runs the sweep, the way every
+/// broker runs the delegation-token sweep. Raft serializes duplicate
+/// tombstones, so each one after the first is a no-op on the apply path.
+struct BreakGlassSweepControllerAdapter {
+    handle: Arc<dyn crate::metadata_source::MetadataSource>,
+}
+
+#[async_trait::async_trait]
+impl crate::break_glass::sweep::BreakGlassController for BreakGlassSweepControllerAdapter {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
+        self.handle.current_image()
+    }
+
+    async fn submit_change(
+        &self,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<(), String> {
+        self.handle
+            .submit_change(records)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl Broker {
     /// Build a `Broker`, scan the log dir, spawn partition writers for
     /// every existing `<topic>-<partition>/`, bind the TCP listener, and
@@ -5524,8 +5611,8 @@ fn tune_accepted_socket(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use futures_util::future::BoxFuture;
     use krabka_units::{kibibytes, mebibytes, millis, minutes, secs};
+    use futures_util::future::BoxFuture;
     use tempfile::tempdir;
 
     use super::*;

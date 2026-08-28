@@ -2142,6 +2142,18 @@ fn invalid_runtime_value(name: &str, error: impl std::fmt::Display) -> FileConfi
     FileConfigError::InvalidConfig(format!("{name}: {error}"))
 }
 
+/// Every break-glass action name, comma separated, for an error message.
+///
+/// An operator who misspells one needs the list in front of them, because the
+/// names are not the wire spellings and not the CLI subcommands.
+fn known_break_glass_action_names() -> String {
+    crate::break_glass::ALL_ACTIONS
+        .into_iter()
+        .map(crate::break_glass::action_name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Apply `[[operator_keys]]`, `[freeze]` and `[break_glass]`, then check the
 /// two rules that cross those sections.
 ///
@@ -2201,6 +2213,19 @@ fn apply_privileged_action_policy(
                 .map(|action| (*action).to_owned())
                 .collect()
         });
+        for action in &cfg.break_glass.signed_actions {
+            if crate::break_glass::action_from_name(action).is_none() {
+                return Err(invalid_runtime_value(
+                    "break_glass.signed_actions",
+                    format!(
+                        "{action:?} names no break-glass action. A name that matches no action \
+                         demands a signature for nothing, so the action the name was meant to \
+                         protect would be approved unsigned. The names are: {}",
+                        known_break_glass_action_names()
+                    ),
+                ));
+            }
+        }
         if let Some(mode) = break_glass.background_unclean_recovery {
             cfg.break_glass.background_unclean_recovery = mode;
         }
@@ -5665,6 +5690,73 @@ required_approval = 2
 
         check!(cfg.break_glass.signed_actions.is_empty());
         check!(cfg.operator_keys.is_empty());
+    }
+
+    #[test]
+    fn a_signed_action_that_names_no_action_is_a_startup_error() {
+        // A name that matches no action demands a signature for nothing. The
+        // operator believes the action is protected and it is not, so the
+        // broker refuses to boot rather than run the downgrade silently.
+        for (label, spelling) in [
+            ("a plural misspelling", "delete_topics"),
+            ("a hyphenated spelling", "delete-topic"),
+            ("a capitalised spelling", "Delete_Topic"),
+            ("the wire spelling", "DeleteTopic"),
+            ("an invented action", "reformat_cluster"),
+        ] {
+            let file: FileConfig = toml::from_str(&format!(
+                "[[operator_keys]]\nkey_id = \"k\"\nprincipal = \"User:alice\"\n\
+                 public_key_path = \"/dev/null\"\n\
+                 [break_glass]\nsigned_actions = [{spelling:?}]\n"
+            ))
+            .expect("parse break_glass section");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            let result = file.apply_to(&mut cfg);
+
+            assert!(let Err(_) = &result, "case {label}");
+            let message = result.expect_err("refusal").to_string();
+            check!(message.contains("signed_actions"), "case {label}");
+            check!(message.contains(spelling), "case {label}");
+            check!(message.contains("delete_topic"), "case {label}");
+        }
+    }
+
+    #[test]
+    fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
+        // The default set and each name in turn. This is the positive half of
+        // the check above: the validation must not refuse a correct spelling.
+        let mut names = vec![crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS.join(",")];
+        names.extend(
+            crate::break_glass::ALL_ACTIONS
+                .into_iter()
+                .map(|action| crate::break_glass::action_name(action).to_owned()),
+        );
+        for name in names {
+            let list = name
+                .split(',')
+                .map(|one| format!("{one:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let file: FileConfig = toml::from_str(&format!(
+                "[[operator_keys]]\nkey_id = \"k\"\nprincipal = \"User:alice\"\n\
+                 public_key_path = \"/dev/null\"\n\
+                 [break_glass]\nsigned_actions = [{list}]\n"
+            ))
+            .expect("parse break_glass section");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            let result = file.apply_to(&mut cfg);
+
+            // A `/dev/null` key file fails to load, so the only refusal that
+            // may appear here is the operator-key one, never the name one.
+            if let Err(error) = result {
+                check!(
+                    !error.to_string().contains("names no break-glass action"),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

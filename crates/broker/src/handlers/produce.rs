@@ -18,7 +18,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_log::{Log, Offset, VerbatimBatch};
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::{AclOperation, ResourceType, TopicFreezeRecord};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -48,6 +48,7 @@ use crate::{
         resolve_schema_validation,
     },
     error::BrokerError,
+    freeze::resolve::{FreezeVerdict, resolve_topic_freeze},
     partition::{Partition, ProduceData, ProduceJob, WriterMessage},
     partition_registry::PartitionRegistry,
     schema_validation::{RejectReason, SchemaGate, SchemaValidator},
@@ -240,6 +241,14 @@ pub(crate) async fn handle(
         // such a topic then skips the check without reading a record body.
         let schema = resolve_schema_validation(&image, &topic_name);
 
+        // KFC-9, resolved here for the same reason once more: a write freeze
+        // is a property of the topic. `None` is a topic that accepts writes, and
+        // the image answers an empty registry in two emptiness tests, so every
+        // partition of an unfrozen topic then pays one test of an `Option` and
+        // nothing else. The borrow allocates nothing, and only a refused row
+        // turns the entry into a `FreezeVerdict` and a message.
+        let freeze = resolve_topic_freeze(&image, &topic_name);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the
@@ -257,6 +266,7 @@ pub(crate) async fn handle(
                         schema,
                         topic_name: topic_name.clone(),
                         topic_denied,
+                        freeze,
                         txn_id_denied,
                         acks: req.acks,
                         timeout,
@@ -473,7 +483,7 @@ async fn finish_produce_response(
 /// the txn coordinator does not count toward CPU usage. The work returns the
 /// per-partition response on every path. Only `txn_coordinator.put` errors
 /// propagate with `?`.
-struct PartitionInput {
+struct PartitionInput<'a> {
     part_data: FramedPartition,
     topic_compression: Option<krabka_compression::CompressionType>,
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
@@ -485,6 +495,11 @@ struct PartitionInput {
     schema: Option<SchemaGate>,
     topic_name: String,
     topic_denied: bool,
+    /// The topic's KFC-9 write-freeze entry, resolved once per topic. `None`
+    /// is a topic that accepts writes, and skips the freeze gate entirely.
+    /// It sits beside `topic_denied` because it refuses for the same kind of
+    /// reason: nothing about this batch can earn the write.
+    freeze: Option<&'a TopicFreezeRecord>,
     txn_id_denied: bool,
     acks: i16,
     timeout: Duration,
@@ -507,7 +522,7 @@ struct PartitionServices<'a> {
 }
 
 async fn process_partition(
-    input: PartitionInput,
+    input: PartitionInput<'_>,
     services: PartitionServices<'_>,
 ) -> Result<PartitionProduceResponse, BrokerError> {
     let PartitionInput {
@@ -517,6 +532,7 @@ async fn process_partition(
         schema,
         topic_name,
         topic_denied,
+        freeze,
         txn_id_denied,
         acks,
         timeout,
@@ -546,6 +562,25 @@ async fn process_partition(
 
     if topic_denied {
         out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+        return Ok(out);
+    }
+
+    // ── KFC-9 write freeze ───────────────────────────────────────────
+    // Beside the topic ACL denial, and ahead of `prepare_batch`, because a
+    // freeze is an authority gate and not a content gate. It ranks with the
+    // denial above rather than with the KFC-1 and KFC-7 gates below, so a
+    // frozen topic never pays CRC verification or decompression for a batch
+    // the broker will never accept.
+    //
+    // The position has a second consequence, which the tests assert: the gate
+    // returns ahead of the idempotent-sequence gate, so a refused batch leaves
+    // the producer state untouched and the log end offset unmoved. A refusal
+    // that still appended would be the worst failure this feature can have,
+    // and the error code alone does not rule it out.
+    if let Some(entry) = freeze {
+        metrics.record_topic_freeze_rejection(topic_name);
+        out.error_code = codes::POLICY_VIOLATION;
+        out.error_message = Some(FreezeVerdict::from(entry).error_message());
         return Ok(out);
     }
 
@@ -1950,8 +1985,8 @@ mod tests {
     use krabka_compression::{CompressionType, RecordDecompressionPolicy};
     use krabka_ids::Offset;
     use krabka_metadata::{
-        BrokerConfigRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord,
-        TopicRecord,
+        BrokerConfigRecord, MetadataImage, MetadataRecord, PartitionRecord, PatternType,
+        TopicConfigRecord, TopicFreezeRecord, TopicRecord,
     };
     use krabka_protocol::{
         owned::produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
@@ -1961,12 +1996,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        BrokerProducePolicy, DeliveryGate, FramedPartition, FramedTopic, MIN_INSYNC_REPLICAS,
-        PartitionInput, PartitionPayload, PartitionServices, PreparedBatch, PreparedSource,
-        build_topic_error_response, decode_owned_batch, diskless_role_ready, prepare_batch,
-        process_partition, produce_bytes_by_qos_tier, replica_state_matches_image,
+        BrokerProducePolicy, DeliveryGate, FramedPartition, FramedTopic, FreezeVerdict,
+        MIN_INSYNC_REPLICAS, PartitionInput, PartitionPayload, PartitionServices, PreparedBatch,
+        PreparedSource, build_topic_error_response, decode_owned_batch, diskless_role_ready,
+        prepare_batch, process_partition, produce_bytes_by_qos_tier, replica_state_matches_image,
         replication_target_matches_image, resolve_delivery_gate, resolve_topic_compression,
-        topic_min_insync_replicas, validate_batch_schemas, validate_partition_gate,
+        resolve_topic_freeze, topic_min_insync_replicas, validate_batch_schemas,
+        validate_partition_gate,
     };
     use crate::config_keys::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED,
@@ -2764,6 +2800,7 @@ mod tests {
                     delivery,
                     topic_name: "sched".into(),
                     topic_denied: false,
+                    freeze: None,
                     txn_id_denied: false,
                     acks: 1,
                     timeout: Duration::from_secs(5),
@@ -2808,6 +2845,272 @@ mod tests {
             .read_raw(Offset(1), Offset(2), bytes(4096))
             .expect("read the appended batch back");
         check!(stored.bytes == Bytes::from(want_bytes));
+    }
+
+    // ── KFC-9 topic write freeze ─────────────────────────────────────
+    //
+    // A freeze is an authority gate rather than a content gate, so the produce
+    // path resolves it once per topic beside the compression, delivery and
+    // schema resolves, and refuses each partition row of a frozen topic with
+    // `POLICY_VIOLATION` (44) before it parses the batch.
+
+    // Put one live entry in the registry for the resolve below to find.
+    fn frozen(image: &mut MetadataImage, scope: &str, pattern_type: PatternType, reason: &str) {
+        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: scope.to_owned(),
+            pattern_type,
+            frozen: true,
+            reason: reason.to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms: 1_770_000_000_000,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }));
+    }
+
+    fn verdict(scope: &str, pattern_type: PatternType, reason: &str) -> FreezeVerdict {
+        FreezeVerdict {
+            scope: scope.to_owned(),
+            pattern_type,
+            reason: reason.to_owned(),
+        }
+    }
+
+    // A second single-partition topic led by node 1, so one request can carry
+    // a frozen topic and an unfrozen control topic at once.
+    fn add_topic(image: &mut MetadataImage, topic: &str, topic_id: Uuid) {
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: topic.into(),
+            topic_id,
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: topic.into(),
+            partition: 0,
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1)],
+            isr: vec![krabka_audit::NodeId(1)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        }));
+    }
+
+    #[test]
+    fn the_produce_path_resolves_one_freeze_per_topic() {
+        let mut image = image_with_topic("orders", &[1]);
+        frozen(&mut image, "orders", PatternType::Literal, "DR cutover");
+        frozen(
+            &mut image,
+            "tenant-a.",
+            PatternType::Prefixed,
+            "offboarding",
+        );
+
+        let cases = [
+            (
+                "a literal freeze covers the one topic it names",
+                "orders",
+                Some(verdict("orders", PatternType::Literal, "DR cutover")),
+            ),
+            (
+                "a prefix freeze covers every topic under it",
+                "tenant-a.events",
+                Some(verdict("tenant-a.", PatternType::Prefixed, "offboarding")),
+            ),
+            (
+                "an unfrozen topic resolves no freeze at all",
+                "payments",
+                None,
+            ),
+        ];
+
+        for (label, topic, want) in cases {
+            check!(
+                resolve_topic_freeze(&image, topic).map(FreezeVerdict::from) == want,
+                "case: {label}"
+            );
+        }
+    }
+
+    /// A frozen topic's partition row comes back with `POLICY_VIOLATION` (44)
+    /// and a message that names the scope, and an unfrozen control topic in
+    /// the same request is untouched by it.
+    ///
+    /// The log-end-offset assertions are the load-bearing ones. The gate sits
+    /// ahead of `prepare_batch` and ahead of the dedup gate, so a refused row
+    /// must leave the partition exactly as it found it. A refusal that still
+    /// appended is the worst failure this feature can have, and the error code
+    /// alone does not rule it out. Both partitions are seeded with one batch
+    /// first, so "the offset did not move" is a claim about a log that holds
+    /// data rather than about an empty log that reads as unmoved either way.
+    ///
+    /// The payload that is not a record batch at all pins the position rather
+    /// than only the outcome. `prepare_batch` refuses those bytes with a
+    /// record-shape code, so a freeze that answers 44 over them is a freeze
+    /// the broker resolved before it parsed the batch. Every later gate,
+    /// including the idempotent-sequence one, sits behind that parse.
+    #[tokio::test]
+    async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
+        let dir = tempfile::tempdir().expect("log root");
+        let mut image = image_with_topic("frozen", &[1]);
+        add_topic(&mut image, "control", Uuid::from_u128(2));
+        frozen(&mut image, "frozen", PatternType::Literal, "DR cutover");
+        let image = Arc::new(image);
+
+        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::clone(&partitions),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            50,
+            krabka_units::mebibytes(1),
+        ));
+        let producer_state = Arc::new(crate::producer_state::ProducerState::new());
+        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+        let metrics = crate::metrics::BrokerMetrics::new();
+
+        for topic in ["frozen", "control"] {
+            let part_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
+            std::fs::create_dir_all(&part_dir).expect("partition directory");
+            let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
+                .expect("open the log");
+            let part = crate::broker::spawn_partition(
+                topic.to_string(),
+                krabka_ids::PartitionIndex(0),
+                dir.path().to_path_buf(),
+                log,
+                log_dir_status.clone(),
+                Arc::clone(&producer_state),
+                false,
+            );
+            let topic_id = image.topic(topic).expect("topic").topic_id;
+            let record = image.partition(topic, 0).expect("partition");
+            part.install_replication_target(Some(topic_id), record.leader.0, record.leader_epoch.0)
+                .await;
+            part.install_isr(&record.isr, &record.replicas, record.leader)
+                .await;
+            part.log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .append(&mut seed_batch())
+                .expect("seed the partition");
+            partitions.insert(topic.to_string(), krabka_ids::PartitionIndex(0), part);
+        }
+
+        let refused = |scope: &str| PartitionProduceResponse {
+            index: 0,
+            error_code: crate::codes::POLICY_VIOLATION,
+            error_message: Some(verdict(scope, PatternType::Literal, "DR cutover").error_message()),
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "the frozen topic is refused, and the message names the scope",
+                "frozen",
+                PartitionPayload::Slice(encode_batch(&seed_batch())),
+                refused("frozen"),
+            ),
+            (
+                "a payload that is not a batch is refused before it is parsed",
+                "frozen",
+                PartitionPayload::Slice(Bytes::from_static(b"not-a-batch")),
+                refused("frozen"),
+            ),
+            (
+                "an unfrozen control topic in the same request still appends",
+                "control",
+                PartitionPayload::Slice(encode_batch(&seed_batch())),
+                PartitionProduceResponse {
+                    index: 0,
+                    error_code: crate::codes::NONE,
+                    base_offset: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (label, topic, payload, want) in cases {
+            // The handler resolves the freeze inside its per-topic loop, which
+            // is what keeps one topic's verdict off another topic's rows.
+            let freeze = resolve_topic_freeze(&image, topic);
+            let resp = process_partition(
+                PartitionInput {
+                    part_data: FramedPartition { index: 0, payload },
+                    topic_compression: None,
+                    delivery: None,
+                    schema: None,
+                    topic_name: topic.into(),
+                    topic_denied: false,
+                    freeze,
+                    txn_id_denied: false,
+                    acks: 1,
+                    timeout: Duration::from_secs(5),
+                },
+                PartitionServices {
+                    partitions: &partitions,
+                    txn_coordinator: &txn_coordinator,
+                    producer_state: &producer_state,
+                    log_dir_status: &log_dir_status,
+                    image: &image,
+                    broker_policy: BrokerProducePolicy {
+                        node_id: krabka_audit::NodeId(1),
+                        default_min_insync_replicas: 1,
+                        is_witness: false,
+                    },
+                    record_decompression_policy: RecordDecompressionPolicy::default(),
+                    metrics: &metrics,
+                    schema_validator: None,
+                },
+            )
+            .await
+            .expect("process partition");
+            check!(resp == want, "case: {label}");
+        }
+
+        let log_end_offset = |topic: &str| {
+            partitions
+                .get(topic, krabka_ids::PartitionIndex(0))
+                .expect("the partition is registered")
+                .log_end_offset()
+        };
+        check!(
+            log_end_offset("frozen") == krabka_log::Offset(1),
+            "a refused row must not append: the seed batch is all the log holds"
+        );
+        check!(
+            log_end_offset("control") == krabka_log::Offset(2),
+            "the control topic took the append the frozen topic was refused"
+        );
+
+        let rejections = |topic: &str| {
+            metrics
+                .topic_freeze_rejections
+                .get_or_create(&crate::metrics::TopicLabel {
+                    topic: topic.to_string(),
+                })
+                .get()
+        };
+        check!(
+            rejections("frozen") == 2,
+            "the gate counts once per refused partition row"
+        );
+        check!(rejections("control") == 0);
+    }
+
+    // One record, enough to seed a partition or to be refused.
+    fn seed_batch() -> RecordBatch {
+        RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"v")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -3016,6 +3319,7 @@ mod tests {
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
+                freeze: None,
                 txn_id_denied: false,
                 acks: 1,
                 timeout: Duration::from_millis(1),
@@ -3109,6 +3413,7 @@ mod tests {
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
+                freeze: None,
                 txn_id_denied: false,
                 acks: 1,
                 timeout: Duration::from_millis(1),
@@ -3260,6 +3565,7 @@ mod tests {
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
+                freeze: None,
                 txn_id_denied: false,
                 acks: -1,
                 timeout: Duration::from_millis(50),

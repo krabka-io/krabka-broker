@@ -136,6 +136,14 @@ pub(crate) async fn handle(
                         partition,
                         strategy,
                         reply: None,
+                        // KFC-9: a heartbeat that reports an offline log dir
+                        // is not a request for an unclean recovery, and the
+                        // broker that sent it is not a person who can be asked
+                        // for a second signature. The recovery carries no
+                        // proposal, and
+                        // `break_glass.background_unclean_recovery` decides
+                        // what the URM does with it.
+                        proposal: None,
                     })
                     .await;
             }

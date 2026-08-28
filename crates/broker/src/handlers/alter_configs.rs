@@ -10,6 +10,11 @@
 //! Controller-managed broker keys stand outside the replacement. The handler
 //! rejects a request that names one, and the tombstone sweep leaves them in
 //! place. See [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
+//!
+//! A topic resource has the same rule. KFC-9's
+//! [`crate::config_keys::WRITE_FREEZE`] is synthesised for `DescribeConfigs`
+//! and is never stored, so the handler rejects a request that names it. See
+//! [`crate::config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 
 use bytes::Bytes;
 use krabka_metadata::{
@@ -181,6 +186,16 @@ fn topic_config_record(
     }
     let mut overrides = std::collections::BTreeMap::new();
     for cfg in &resource.configs {
+        // A controller-managed key is never stored, so it cannot take part
+        // in the replacement. The check comes before the whitelist, so the
+        // operator reads the refusal that names `crabka-guard` and not
+        // `unrecognized config key`.
+        if config_keys::is_controller_managed_topic_config(&cfg.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                config_keys::controller_managed_topic_config_message(&cfg.name),
+            ));
+        }
         let value = cfg.value.clone().unwrap_or_default();
         config_keys::validate_topic_config(&cfg.name, &value)
             .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
@@ -537,6 +552,50 @@ mod tests {
                     "scheduled".to_string(),
                 ),
             ]),
+        });
+        assert!(record == expected);
+    }
+
+    #[test]
+    fn topic_replacement_rejects_controller_managed_configs() {
+        let image = image_with_topic("orders");
+
+        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
+            // A full replacement carries a value for every key it names, so
+            // both a `true` and an empty value are a write of the key.
+            for value in ["true", "false", ""] {
+                let error = topic_config_record(&topic_resource("orders", &[(key, value)]), &image)
+                    .expect_err("controller-managed key must be rejected");
+
+                check!(
+                    error.0 == codes::INVALID_CONFIG,
+                    "key {key} value {value:?}"
+                );
+                check!(
+                    error.1 == config_keys::controller_managed_topic_config_message(key),
+                    "key {key} value {value:?}"
+                );
+                check!(!error.1.is_empty(), "key {key} value {value:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn topic_replacement_leaves_an_ordinary_config_unaffected() {
+        let image = image_with_topic("orders");
+
+        let record = topic_config_record(
+            &topic_resource("orders", &[(crate::config_keys::RETENTION_MS, "60000")]),
+            &image,
+        )
+        .expect("an ordinary topic config is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: std::collections::BTreeMap::from([(
+                crate::config_keys::RETENTION_MS.to_string(),
+                "60000".to_string(),
+            )]),
         });
         assert!(record == expected);
     }

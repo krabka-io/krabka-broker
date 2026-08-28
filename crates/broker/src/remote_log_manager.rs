@@ -12,6 +12,11 @@
 //! of copied segments and the remote read path on `Fetch`. The
 //! remote-storage SPIs are blocking, so each copy and each delete
 //! runs on the `tokio` blocking pool.
+//!
+//! A KFC-9 write freeze splits the sweep in two. The copy runs on a frozen
+//! topic, because it adds a replica and takes nothing away, and tiering a
+//! frozen topic is what a migration wants. Both retention passes stop, because
+//! each one removes data from the topic's log.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -37,7 +42,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::{partition::Partition, partition_registry::PartitionRegistry};
+use crate::{
+    freeze::resolve::resolve_topic_freeze, partition::Partition,
+    partition_registry::PartitionRegistry,
+};
 
 /// Default cadence of the tiered-storage sweep (copy and retention passes).
 const DEFAULT_TIERING_INTERVAL: Time = secs(30);
@@ -233,6 +241,23 @@ async fn tick_all(
             rlmm,
         )
         .await;
+        // KFC-9: the copy above stays allowed on a frozen topic, and both
+        // retention passes below stop. A freeze refuses every operation that
+        // removes data from the topic's log, and a copy removes none: it adds
+        // a replica, which is exactly what a migration out of a frozen topic
+        // needs.
+        //
+        // This is a different question from `archive`, and it does not
+        // contradict the reason that gate gives below. `archive` says the
+        // remote tier cannot accept a delete, which leaves the local eviction
+        // free precisely because it deletes nothing remote. A freeze says this
+        // topic's log must not lose bytes anywhere, so it stops the local
+        // eviction too.
+        if resolve_topic_freeze(&image, &partition.topic).is_some() {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: a write freeze holds both retention passes");
+            continue;
+        }
         // Local retention is deliberately not gated on `archive`: evicting a
         // local segment that the archive already holds is the whole point of
         // tiering, and it deletes nothing from the remote tier.
@@ -977,7 +1002,9 @@ mod tests {
     use assert2::{assert, check};
     use krabka_ids::{LeaderEpoch, PartitionIndex};
     use krabka_log::{Log, LogConfig};
-    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::{
+        MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord, TopicRecord,
+    };
     use krabka_protocol::records::{Record, RecordBatch};
     use krabka_remote_storage::{
         ChainHead, CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
@@ -2887,5 +2914,205 @@ mod tests {
 
         assert!(observed >= before);
         assert!(observed <= after);
+    }
+
+    // ── KFC-9 topic write freeze ─────────────────────────────────────
+
+    /// The `orders` topic, plus the one live freeze entry `freeze` names.
+    /// `None` is the unfrozen control every freeze case runs against.
+    fn image_with_orders_freeze(freeze: Option<(&str, PatternType)>) -> MetadataImage {
+        let mut image = image_with_orders_topic();
+        if let Some((scope, pattern_type)) = freeze {
+            image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+                scope: scope.to_owned(),
+                pattern_type,
+                frozen: true,
+                reason: "DR cutover".to_owned(),
+                set_by: "User:alice".to_owned(),
+                set_at_ms: 1_770_000_000_000,
+                proposal_id: Uuid::nil(),
+                key_id: String::new(),
+                signature: Vec::new(),
+            }));
+        }
+        image
+    }
+
+    /// A tiered topic whose retention settings evict nothing on their own, so
+    /// what a tick does is decided by the freeze alone.
+    fn tiered_no_eviction() -> LogConfig {
+        LogConfig {
+            segment_size: bytes(256),
+            remote_storage_enable: true,
+            retention: None,
+            retention_size: None,
+            ..LogConfig::default()
+        }
+    }
+
+    /// A tiered topic whose local budget is zero, so every copied segment is
+    /// past the local-retention window the moment the copy finishes.
+    fn tiered_local_eviction() -> LogConfig {
+        LogConfig {
+            local_retention_size: Some(NO_BYTES),
+            ..tiered_no_eviction()
+        }
+    }
+
+    /// A tiered topic whose *remote* budget is zero while its local budget is
+    /// generous, so a tick evicts from the archive and never from disk.
+    fn tiered_remote_eviction() -> LogConfig {
+        LogConfig {
+            retention_size: Some(NO_BYTES),
+            local_retention_size: Some(bytes(1_048_576)),
+            ..tiered_no_eviction()
+        }
+    }
+
+    /// What one full [`tick_all`] left behind for the single `orders`
+    /// partition it swept.
+    struct TickOutcome {
+        /// Sealed segments on local disk before the tick.
+        sealed_before: usize,
+        /// Segments the remote tier holds at `CopySegmentFinished` after it.
+        remote_finished: usize,
+        /// Sealed segments still on local disk after it.
+        local_sealed_after: usize,
+    }
+
+    /// Drive exactly one sweep over one locally-led, tiered `orders`
+    /// partition against `image`, and report what it did.
+    async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let partitions = PartitionRegistry::new();
+        let partition = rolled_tiered_partition_with_config(log_dir.path(), config);
+        let sealed_before = partition
+            .log
+            .lock()
+            .expect("partition log mutex poisoned")
+            .tierable_segments()
+            .len();
+        partitions.insert(
+            "orders".to_string(),
+            PartitionIndex(0),
+            Arc::clone(&partition),
+        );
+
+        let controller = FixedMetadataSource::new(image);
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+        tick_all(
+            &partitions,
+            &controller,
+            ArchiveMode::Mutable,
+            &rsm,
+            &rlmm,
+            NodeId(1),
+            1,
+        )
+        .await;
+
+        let remote_finished = rlmm
+            .list_remote_log_segments(&tp())
+            .unwrap()
+            .iter()
+            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+            .count();
+        let local_sealed_after = partition
+            .log
+            .lock()
+            .expect("partition log mutex poisoned")
+            .tierable_segments()
+            .len();
+        TickOutcome {
+            sealed_before,
+            remote_finished,
+            local_sealed_after,
+        }
+    }
+
+    /// The freeze cases every retention test runs, each beside the unfrozen
+    /// control that proves the tick would otherwise have done the work.
+    const FREEZE_CASES: [(&str, Option<(&str, PatternType)>); 3] = [
+        ("an unfrozen control", None),
+        (
+            "a literal freeze on the topic",
+            Some(("orders", PatternType::Literal)),
+        ),
+        (
+            "a prefix freeze covering the topic",
+            Some(("ord", PatternType::Prefixed)),
+        ),
+    ];
+
+    #[tokio::test]
+    async fn tick_all_still_copies_to_remote_storage_for_a_frozen_partition() {
+        // The invariant this file most needs held: a copy adds a replica and
+        // removes nothing, so a freeze never refuses it. Tiering a frozen
+        // topic is exactly what a disaster-recovery migration wants.
+        for (label, freeze) in FREEZE_CASES {
+            let outcome = tick_once(image_with_orders_freeze(freeze), tiered_no_eviction()).await;
+
+            check!(
+                outcome.sealed_before >= 2,
+                "{label}: the fixture needs multiple sealed segments"
+            );
+            check!(
+                outcome.remote_finished == outcome.sealed_before,
+                "{label}: every sealed segment reaches the remote tier"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tick_all_evicts_no_local_segment_for_a_frozen_partition() {
+        for (label, freeze) in FREEZE_CASES {
+            let frozen = freeze.is_some();
+            let outcome = tick_once(image_with_orders_freeze(freeze), tiered_local_eviction()).await;
+
+            check!(
+                outcome.sealed_before >= 2,
+                "{label}: the fixture needs multiple sealed segments"
+            );
+            check!(
+                outcome.remote_finished == outcome.sealed_before,
+                "{label}: the copy runs whatever the freeze says"
+            );
+            let want_local = if frozen { outcome.sealed_before } else { 0 };
+            check!(
+                outcome.local_sealed_after == want_local,
+                "{label}: local sealed segments after the sweep"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tick_all_evicts_no_remote_segment_for_a_frozen_partition() {
+        for (label, freeze) in FREEZE_CASES {
+            let frozen = freeze.is_some();
+            let outcome =
+                tick_once(image_with_orders_freeze(freeze), tiered_remote_eviction()).await;
+
+            check!(
+                outcome.sealed_before >= 2,
+                "{label}: the fixture needs multiple sealed segments"
+            );
+            // `DeleteSegmentFinished` drops the entry from the RLMM, so the
+            // control ends the sweep with nothing archived and a frozen topic
+            // ends it with everything it copied.
+            let want_remote = if frozen { outcome.sealed_before } else { 0 };
+            check!(
+                outcome.remote_finished == want_remote,
+                "{label}: archived segments after the sweep"
+            );
+            check!(
+                outcome.local_sealed_after == outcome.sealed_before,
+                "{label}: the generous local budget evicts nothing on disk"
+            );
+        }
     }
 }

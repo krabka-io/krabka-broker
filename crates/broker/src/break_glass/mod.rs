@@ -96,6 +96,20 @@ pub(crate) fn action_name(action: BreakGlassAction) -> &'static str {
     }
 }
 
+/// The action that `name` spells, if it spells one.
+///
+/// This is the inverse of [`action_name`], and it reads the same table, so a
+/// new action cannot be spelled one way here and another way there. The
+/// configuration layer uses it to refuse a `break_glass.signed_actions` entry
+/// that names no action. A misspelled entry would otherwise match no action,
+/// and the broker would demand no signature for the action the operator meant
+/// to protect.
+pub(crate) fn action_from_name(name: &str) -> Option<BreakGlassAction> {
+    ALL_ACTIONS
+        .into_iter()
+        .find(|action| action_name(*action) == name)
+}
+
 /// Every gated action, in the order of the wire values.
 pub(crate) const ALL_ACTIONS: [BreakGlassAction; 7] = [
     BreakGlassAction::ThawTopicFreeze,
@@ -196,6 +210,28 @@ mod tests {
         ];
         for (label, action, expected) in cases {
             check!(action_targets_partition(action) == expected, "case {label}");
+        }
+    }
+
+    #[test]
+    fn every_action_name_reads_back_as_its_action() {
+        for action in ALL_ACTIONS {
+            let name = action_name(action);
+            check!(action_from_name(name) == Some(action), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_spells_no_action_reads_back_as_none() {
+        for (label, name) in [
+            ("a plural misspelling", "delete_topics"),
+            ("a hyphenated spelling", "delete-topic"),
+            ("a capitalised spelling", "Delete_Topic"),
+            ("an empty name", ""),
+            ("a name with trailing space", "delete_topic "),
+            ("an invented action", "reformat_cluster"),
+        ] {
+            check!(action_from_name(name).is_none(), "case {label}");
         }
     }
 }
