@@ -220,7 +220,7 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Option<PartitionRecord> {
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, MetadataRecord, ResourceType};
 use krabka_protocol::{
     Encode,
@@ -239,16 +239,14 @@ use uuid::Uuid;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     break_glass::{
-        action_name,
         gate::{self, BreakGlassDenial},
-        handlers::{PrivilegedAudit, audit_privileged},
+        handlers::audit::{GatedTransition, audit_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE},
     config::BreakGlassConfig,
     handlers::RequestContext,
-    operator_keys::approver_set_fingerprint,
     time_util::now_ms,
 };
 
@@ -380,7 +378,18 @@ impl ReassignBatch {
                 None => (PrivilegedPhase::Applied, "reassignment cancel committed"),
                 Some(error) => (PrivilegedPhase::Refused, error),
             };
-            audit_cancel(broker, ctx, target, phase, *proposal_id, reason);
+            audit_transition(
+                &broker.audit_log,
+                &broker.config.break_glass,
+                ctx,
+                &GatedTransition {
+                    action: BreakGlassAction::CancelReassignment,
+                    target,
+                    phase,
+                    proposal_id: *proposal_id,
+                    reason,
+                },
+            );
         }
     }
 }
@@ -433,13 +442,17 @@ fn alter_one(
             };
             let message = denial.to_string();
             break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-            audit_cancel(
-                env.broker,
+            audit_transition(
+                &env.broker.audit_log,
+                &env.broker.config.break_glass,
                 env.ctx,
-                &cancel_target(topic, index),
-                PrivilegedPhase::Refused,
-                denial.proposal_id(),
-                &message,
+                &GatedTransition {
+                    action: BreakGlassAction::CancelReassignment,
+                    target: &cancel_target(topic, index),
+                    phase: PrivilegedPhase::Refused,
+                    proposal_id: denial.proposal_id(),
+                    reason: &message,
+                },
             );
             err_row(index, code, message)
         }
@@ -488,49 +501,6 @@ fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
         MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
         _ => None,
     }
-}
-
-/// Emit one `PrivilegedAction` event for a reassignment cancel.
-///
-/// `counterparties` stays empty for the reason the freeze events give: the
-/// approvers are named on the proposal's own approve events, and the proposal
-/// id joins those rows to this one.
-fn audit_cancel(
-    broker: &Broker,
-    ctx: &RequestContext<'_>,
-    target: &str,
-    phase: PrivilegedPhase,
-    proposal_id: Option<Uuid>,
-    reason: &str,
-) {
-    // A broker that gates nothing has no two-person evidence to record, and
-    // this event exists to carry that evidence. The ordinary administrative
-    // event already reports the transition itself, so a stock cluster's audit
-    // stream is unchanged.
-    if !gate::is_gated(&broker.config.break_glass) {
-        return;
-    }
-    audit_privileged(
-        &broker.audit_log,
-        ctx,
-        approver_set_fingerprint(&broker.config.break_glass.approvers),
-        &PrivilegedAudit {
-            outcome: if matches!(phase, PrivilegedPhase::Refused) {
-                AuditOutcome::Failure
-            } else {
-                AuditOutcome::Success
-            },
-            phase,
-            action: action_name(BreakGlassAction::CancelReassignment),
-            target,
-            proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason,
-        },
-    );
 }
 
 fn ok_row(partition_index: i32) -> ReassignablePartitionResponse {

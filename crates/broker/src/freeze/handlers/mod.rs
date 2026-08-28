@@ -37,7 +37,10 @@ use crabka_protocol::krabka::freeze::{
 // `crate::handlers` beside its `Alter` twin, so the freeze control plane does
 // not reach into another subsystem for an ACL gate.
 pub(crate) use crate::handlers::cluster_describe_denied;
-use crate::{handlers::RequestContext, operator_keys::approver_set_fingerprint, time_util::now_ms};
+use crate::{
+    break_glass::handlers::principal_name, handlers::RequestContext,
+    operator_keys::approver_set_fingerprint, time_util::now_ms,
+};
 
 // The dispatch constant and the codec must name one api key. The registry
 // reads the broker's constant and the framing reads the codec's, so a drift
@@ -152,7 +155,10 @@ pub(crate) fn audit_freeze(
         target: audit.target.clone(),
         proposal_id: audit.proposal_id.to_string(),
         principal: AuditPrincipal {
-            name: ctx.principal.name.clone(),
+            // The Kafka form, which is what the break-glass events carry. An
+            // auditor joins a freeze to the approval that authorized it by
+            // principal, and two spellings of one person break that join.
+            name: principal_name(ctx),
             auth_method: format!("{:?}", ctx.principal.auth_method),
         },
         counterparties: Vec::new(),

@@ -25,8 +25,14 @@
 //! acting principal, the other people who approved, the key id, the raw
 //! signature, and a fingerprint of this broker's approver set. A two-person
 //! rule whose record names one person is not a two-person rule.
+//!
+//! The gated transitions themselves live in other modules — `elect_leaders`,
+//! `unregister_broker`, `alter_partition_reassignments`, `delete_topics` and
+//! `delete_records` — and all five emit their event through [`audit`], so the
+//! shape of a transition event is written once.
 
 pub(crate) mod approve;
+pub(crate) mod audit;
 pub(crate) mod describe;
 pub(crate) mod propose;
 

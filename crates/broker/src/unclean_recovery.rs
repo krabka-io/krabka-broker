@@ -1194,7 +1194,7 @@ mod run_recovery_tests {
         metrics
             .break_glass_bypassed
             .get_or_create(&crate::metrics::BreakGlassActionLabel {
-                action: crate::metrics::BreakGlassAction::UncleanRecovery,
+                action: crate::metrics::BreakGlassAction(BreakGlassAction::UncleanRecovery),
             })
             .get()
     }

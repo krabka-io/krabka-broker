@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord, NodeId};
 use krabka_protocol::{
     Encode,
@@ -44,9 +44,8 @@ use uuid::Uuid;
 
 use crate::{
     break_glass::{
-        action_name,
         gate::{self, BreakGlassDenial},
-        handlers::{PrivilegedAudit, audit_privileged},
+        handlers::audit::{GatedTransition, audit_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -56,7 +55,6 @@ use crate::{
     handlers::{RequestContext, cluster_alter_denied},
     heartbeat::controller_state::ControllerLivenessState,
     leader_election::{ElectError, ElectionType, select_new_leader_for_partition},
-    operator_keys::approver_set_fingerprint,
     time_util::now_ms,
     unclean_recovery::{RecoveryJob, RecoveryOutcome},
 };
@@ -228,26 +226,25 @@ impl ElectionBatch {
     /// that never happened.
     fn audit_applied(&self, broker: &Broker, ctx: &RequestContext<'_>, failure: Option<&str>) {
         for (target, proposal_id) in &self.applied {
-            match failure {
-                None => audit_unclean(
-                    broker,
-                    ctx,
-                    target,
+            let (phase, reason) = match failure {
+                None => (
                     PrivilegedPhase::Applied,
-                    *proposal_id,
                     "unclean leader election committed",
                 ),
-                Some(error) => {
-                    audit_unclean(
-                        broker,
-                        ctx,
-                        target,
-                        PrivilegedPhase::Refused,
-                        *proposal_id,
-                        error,
-                    );
-                }
-            }
+                Some(error) => (PrivilegedPhase::Refused, error),
+            };
+            audit_transition(
+                &broker.audit_log,
+                &broker.config.break_glass,
+                ctx,
+                &GatedTransition {
+                    action: BreakGlassAction::UncleanElectLeaders,
+                    target,
+                    phase,
+                    proposal_id: *proposal_id,
+                    reason,
+                },
+            );
         }
     }
 }
@@ -374,13 +371,17 @@ fn refuse_unclean(
 ) -> PartitionResult {
     let message = denial.to_string();
     break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-    audit_unclean(
-        env.broker,
+    audit_transition(
+        &env.broker.audit_log,
+        &env.broker.config.break_glass,
         env.ctx,
-        &unclean_target(topic, partition),
-        PrivilegedPhase::Refused,
-        denial.proposal_id(),
-        &message,
+        &GatedTransition {
+            action: BreakGlassAction::UncleanElectLeaders,
+            target: &unclean_target(topic, partition),
+            phase: PrivilegedPhase::Refused,
+            proposal_id: denial.proposal_id(),
+            reason: &message,
+        },
     );
     PartitionResult {
         partition_id: partition,
@@ -388,49 +389,6 @@ fn refuse_unclean(
         error_message: Some(message),
         ..Default::default()
     }
-}
-
-/// Emit one `PrivilegedAction` event for an unclean election.
-///
-/// `counterparties` stays empty for the reason the freeze events give: the
-/// approvers are named on the proposal's own approve events, and the proposal
-/// id joins those rows to this one.
-fn audit_unclean(
-    broker: &Broker,
-    ctx: &RequestContext<'_>,
-    target: &str,
-    phase: PrivilegedPhase,
-    proposal_id: Option<Uuid>,
-    reason: &str,
-) {
-    // A broker that gates nothing has no two-person evidence to record, and
-    // this event exists to carry that evidence. The ordinary administrative
-    // event already reports the transition itself, so a stock cluster's audit
-    // stream is unchanged.
-    if !gate::is_gated(&broker.config.break_glass) {
-        return;
-    }
-    audit_privileged(
-        &broker.audit_log,
-        ctx,
-        approver_set_fingerprint(&broker.config.break_glass.approvers),
-        &PrivilegedAudit {
-            outcome: if matches!(phase, PrivilegedPhase::Refused) {
-                AuditOutcome::Failure
-            } else {
-                AuditOutcome::Success
-            },
-            phase,
-            action: action_name(BreakGlassAction::UncleanElectLeaders),
-            target,
-            proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason,
-        },
-    );
 }
 
 fn resolve_targets(
@@ -504,13 +462,17 @@ async fn run_offset_aware_recovery(
         }
     };
     if let Some(proposal_id) = proposal {
-        audit_unclean(
-            broker,
+        audit_transition(
+            &broker.audit_log,
+            &broker.config.break_glass,
             env.ctx,
-            &unclean_target(topic, partition),
-            PrivilegedPhase::Consumed,
-            Some(proposal_id),
-            "approval spent on an offset-aware unclean recovery",
+            &GatedTransition {
+                action: BreakGlassAction::UncleanElectLeaders,
+                target: &unclean_target(topic, partition),
+                phase: PrivilegedPhase::Consumed,
+                proposal_id: Some(proposal_id),
+                reason: "approval spent on an offset-aware unclean recovery",
+            },
         );
     }
     let (tx, rx) = oneshot::channel();

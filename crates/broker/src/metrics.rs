@@ -16,9 +16,11 @@
 
 use std::{
     fmt,
+    hash::{Hash, Hasher},
     sync::{Arc, atomic::AtomicU64},
 };
 
+use crabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::{
     encoding::{EncodeLabelSet, EncodeLabelValue, LabelValueEncoder},
     metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
@@ -192,54 +194,39 @@ impl EncodeLabelValue for BreakGlassState {
     }
 }
 
-/// KFC-9 privileged transition that a break-glass proposal authorizes.
+/// KFC-9 privileged transition that a break-glass proposal authorizes, as a
+/// metric label.
 ///
-/// Each variant is one gated operation that can lose committed data, so a
-/// closed enum bounds the `break_glass_refusals` and `break_glass_bypassed`
-/// label sets at one series per operation.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum BreakGlassAction {
-    /// Lift a topic write-freeze.
-    ThawTopicFreeze,
-    /// Elect a leader that is not in the ISR.
-    UncleanElectLeaders,
-    /// Recover a partition from a replica that does not hold every committed
-    /// record.
-    UncleanRecovery,
-    /// Remove a broker registration from the cluster.
-    UnregisterBroker,
-    /// Cancel a partition reassignment that is in progress.
-    CancelReassignment,
-    /// Delete a topic and every log it holds.
-    DeleteTopic,
-    /// Delete the records of a partition below an offset.
-    DeleteRecords,
-}
+/// [`crabka_metadata::BreakGlassAction`] is the one definition of the gated
+/// set. This newtype is only what lets that definition *be* a label value:
+/// both the enum and `EncodeLabelValue` are foreign to this crate, so the
+/// orphan rule forbids implementing the trait on the enum directly.
+///
+/// The label set stays as closed as a broker-local enum made it. The wrapped
+/// enum is itself closed, so the `break_glass_refusals` and
+/// `break_glass_bypassed` families still carry one series per gated operation
+/// and no caller can name an eighth action. What the newtype adds is that
+/// there is now one enum rather than two: an action added to the metadata
+/// definition cannot be forgotten here, and `break_glass::action_name` is the
+/// one spelling that the configuration, the audit event and the metric label
+/// all share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BreakGlassAction(pub GatedAction);
 
 impl BreakGlassAction {
-    /// Every gated transition.
-    pub const ALL: [Self; 7] = [
-        Self::ThawTopicFreeze,
-        Self::UncleanElectLeaders,
-        Self::UncleanRecovery,
-        Self::UnregisterBroker,
-        Self::CancelReassignment,
-        Self::DeleteTopic,
-        Self::DeleteRecords,
-    ];
-
-    /// The `action` label value this variant renders as.
+    /// The `action` label value this transition renders as.
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ThawTopicFreeze => "thaw_topic_freeze",
-            Self::UncleanElectLeaders => "unclean_elect_leaders",
-            Self::UncleanRecovery => "unclean_recovery",
-            Self::UnregisterBroker => "unregister_broker",
-            Self::CancelReassignment => "cancel_reassignment",
-            Self::DeleteTopic => "delete_topic",
-            Self::DeleteRecords => "delete_records",
-        }
+        crate::break_glass::action_name(self.0)
+    }
+}
+
+/// Hashing the label text rather than the wrapped enum, which carries no
+/// `Hash` of its own. Two actions are equal exactly when their names are, so
+/// the hash agrees with `Eq`.
+impl Hash for BreakGlassAction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
     }
 }
 
@@ -259,8 +246,9 @@ pub struct BreakGlassStateLabel {
 
 /// KFC-9 privileged-transition label set, paired with the
 /// `break_glass_refusals` and `break_glass_bypassed` counter families.
-/// Cardinality is bounded at seven, because the field is the closed
-/// [`BreakGlassAction`] enum and no caller can name an eighth action.
+/// Cardinality is bounded at seven, because the field wraps the closed
+/// [`crabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
+/// action.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
@@ -1899,8 +1887,8 @@ mod tests {
         m.record_topic_freeze_rejection("topic-a");
         m.record_topic_freezes_active(1);
         m.record_break_glass_proposals(BreakGlassState::Pending, 1);
-        m.record_break_glass_refusal(BreakGlassAction::DeleteTopic);
-        m.record_break_glass_bypass(BreakGlassAction::UncleanRecovery);
+        m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+        m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
         m.record_authentication("PLAIN", true);
         m.record_authentication("SCRAM-SHA-512", false);
         m.record_authentication("Unknown", false);
@@ -2570,8 +2558,8 @@ mod tests {
         m.record_topic_freeze_rejection("orders");
         m.record_topic_freezes_active(2);
         m.record_break_glass_proposals(BreakGlassState::Pending, 3);
-        m.record_break_glass_refusal(BreakGlassAction::DeleteTopic);
-        m.record_break_glass_bypass(BreakGlassAction::UncleanRecovery);
+        m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+        m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
 
         let mut buf = String::new();
         let r = m.registry.lock().await;
@@ -2632,21 +2620,27 @@ mod tests {
 
     #[tokio::test]
     async fn break_glass_action_label_covers_every_gated_transition() {
+        // The expected label text is spelled out here rather than read back
+        // from `action_name`, so renaming an action fails this test instead of
+        // silently renaming the series an alert rule groups by.
         let cases = [
-            ("thaw_topic_freeze", BreakGlassAction::ThawTopicFreeze),
-            (
-                "unclean_elect_leaders",
-                BreakGlassAction::UncleanElectLeaders,
-            ),
-            ("unclean_recovery", BreakGlassAction::UncleanRecovery),
-            ("unregister_broker", BreakGlassAction::UnregisterBroker),
-            ("cancel_reassignment", BreakGlassAction::CancelReassignment),
-            ("delete_topic", BreakGlassAction::DeleteTopic),
-            ("delete_records", BreakGlassAction::DeleteRecords),
+            ("thaw_topic_freeze", GatedAction::ThawTopicFreeze),
+            ("unclean_elect_leaders", GatedAction::UncleanElectLeaders),
+            ("unclean_recovery", GatedAction::UncleanRecovery),
+            ("unregister_broker", GatedAction::UnregisterBroker),
+            ("cancel_reassignment", GatedAction::CancelReassignment),
+            ("delete_topic", GatedAction::DeleteTopic),
+            ("delete_records", GatedAction::DeleteRecords),
         ];
-        // A new gated transition needs a row here, so the closed label set
-        // stays covered.
-        assert!(cases.len() == BreakGlassAction::ALL.len());
+        // An action added to the metadata enum needs a row here, so the closed
+        // label set stays covered.
+        assert!(cases.len() == crate::break_glass::ALL_ACTIONS.len());
+        for action in crate::break_glass::ALL_ACTIONS {
+            assert!(
+                cases.iter().any(|(_, cased)| *cased == action),
+                "no expected label for {action:?}"
+            );
+        }
 
         // Each action gets a distinct refusal count, so a label that resolves
         // to the wrong series shows up as the wrong number rather than as a
@@ -2654,9 +2648,9 @@ mod tests {
         let m = BrokerMetrics::new();
         for (i, (_, action)) in cases.into_iter().enumerate() {
             for _ in 0..=i {
-                m.record_break_glass_refusal(action);
+                m.record_break_glass_refusal(BreakGlassAction(action));
             }
-            m.record_break_glass_bypass(action);
+            m.record_break_glass_bypass(BreakGlassAction(action));
         }
 
         let mut buf = String::new();

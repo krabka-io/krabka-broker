@@ -30,7 +30,7 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_audit::PrivilegedPhase;
 use krabka_log::Offset;
 use krabka_metadata::{AclOperation, BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::{
@@ -47,9 +47,8 @@ use uuid::Uuid;
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     break_glass::{
-        action_name,
         gate::{self, BreakGlassDenial},
-        handlers::{PrivilegedAudit, audit_privileged},
+        handlers::audit::{GatedTransition, audit_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -57,7 +56,6 @@ use crate::{
     config::BreakGlassConfig,
     error::BrokerError,
     handlers::RequestContext,
-    operator_keys::approver_set_fingerprint,
     time_util::now_ms,
 };
 
@@ -293,13 +291,17 @@ async fn trim_one(
 
     match part.trim_to_offset(target).await {
         Ok(new_start) => {
-            audit_trim(
-                env.broker,
+            audit_transition(
+                &env.broker.audit_log,
+                &env.broker.config.break_glass,
                 env.ctx,
-                &trim_target(topic, index),
-                PrivilegedPhase::Applied,
-                proposal_id,
-                "records deleted below the trim point",
+                &GatedTransition {
+                    action: BreakGlassAction::DeleteRecords,
+                    target: &trim_target(topic, index),
+                    phase: PrivilegedPhase::Applied,
+                    proposal_id,
+                    reason: "records deleted below the trim point",
+                },
             );
             // Unwrap the `Offset` into the wire `i64` `low_watermark`.
             partition_result(index, new_start.0, codes::NONE)
@@ -392,13 +394,17 @@ fn refuse_trim(
     let message = denial.to_string();
     tracing::warn!(%topic, partition, refusal = %message, "DeleteRecords refused");
     break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-    audit_trim(
-        env.broker,
+    audit_transition(
+        &env.broker.audit_log,
+        &env.broker.config.break_glass,
         env.ctx,
-        &trim_target(topic, partition),
-        PrivilegedPhase::Refused,
-        denial.proposal_id(),
-        &message,
+        &GatedTransition {
+            action: BreakGlassAction::DeleteRecords,
+            target: &trim_target(topic, partition),
+            phase: PrivilegedPhase::Refused,
+            proposal_id: denial.proposal_id(),
+            reason: &message,
+        },
     );
     error_partition_result(partition, codes::POLICY_VIOLATION)
 }
@@ -420,49 +426,6 @@ fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
         MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
         _ => None,
     }
-}
-
-/// Emit one `PrivilegedAction` event for a trim.
-///
-/// `counterparties` stays empty for the reason the freeze events give: the
-/// approvers are named on the proposal's own approve events, and the proposal
-/// id joins those rows to this one.
-fn audit_trim(
-    broker: &Broker,
-    ctx: &RequestContext<'_>,
-    target: &str,
-    phase: PrivilegedPhase,
-    proposal_id: Option<Uuid>,
-    reason: &str,
-) {
-    // A broker that gates nothing has no two-person evidence to record, and
-    // this event exists to carry that evidence. The ordinary administrative
-    // event already reports the transition itself, so a stock cluster's audit
-    // stream is unchanged.
-    if !gate::is_gated(&broker.config.break_glass) {
-        return;
-    }
-    audit_privileged(
-        &broker.audit_log,
-        ctx,
-        approver_set_fingerprint(&broker.config.break_glass.approvers),
-        &PrivilegedAudit {
-            outcome: if matches!(phase, PrivilegedPhase::Refused) {
-                AuditOutcome::Failure
-            } else {
-                AuditOutcome::Success
-            },
-            phase,
-            action: action_name(BreakGlassAction::DeleteRecords),
-            target,
-            proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason,
-        },
-    );
 }
 
 #[cfg(test)]

@@ -25,9 +25,12 @@
 //! # The action vocabulary
 //!
 //! [`crabka_metadata::BreakGlassAction`] is the one definition of the gated
-//! set. This module maps it to the three forms the rest of the code needs: the
-//! wire value that the private APIs carry, the name that `signed_actions`, the
-//! audit event, and the metric label use, and the metrics enum.
+//! set. This module maps it to the two forms the rest of the code needs: the
+//! wire value that the private APIs carry, and the name that `signed_actions`,
+//! the audit event, and the metric label all use. There is no second action
+//! enum. [`crate::metrics::BreakGlassAction`] is a newtype over this one,
+//! because the orphan rule keeps the metric-label trait off a foreign enum,
+//! and it renders through [`action_name`].
 //!
 //! # Consumption is atomic with the transition
 //!

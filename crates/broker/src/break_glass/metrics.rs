@@ -16,13 +16,13 @@ use crabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage}
 use crate::{
     break_glass::{config::BreakGlassPolicy, gate::distinct_approvers},
     config::BreakGlassConfig,
-    metrics::{BreakGlassState, BrokerMetrics},
+    metrics::{BreakGlassAction as ActionLabel, BreakGlassState, BrokerMetrics},
 };
 
 /// Account one gated transition that the broker refused for want of an approved
 /// proposal.
 pub(crate) fn record_refusal(metrics: &BrokerMetrics, action: BreakGlassAction) {
-    metrics.record_break_glass_refusal(metrics_action(action));
+    metrics.record_break_glass_refusal(ActionLabel(action));
 }
 
 /// Account one privileged transition that ran with no approved proposal.
@@ -31,7 +31,7 @@ pub(crate) fn record_refusal(metrics: &BrokerMetrics, action: BreakGlassAction) 
 /// ask for an approval, so under the `audit-only` policy it runs and counts the
 /// bypass here.
 pub(crate) fn record_bypass(metrics: &BrokerMetrics, action: BreakGlassAction) {
-    metrics.record_break_glass_bypass(metrics_action(action));
+    metrics.record_break_glass_bypass(ActionLabel(action));
 }
 
 /// Refresh the `break_glass_proposals` gauge from `image`.
@@ -92,27 +92,6 @@ fn state_index(state: BreakGlassState) -> usize {
     }
 }
 
-/// The metrics label for a break-glass action.
-// TODO(KFC-9): `crate::metrics` declares its own break-glass action enum,
-// because the protocol revision that added `crabka_metadata::BreakGlassAction`
-// had not landed when the metric families were written. This mapping goes away
-// when the two enums become one.
-fn metrics_action(action: BreakGlassAction) -> crate::metrics::BreakGlassAction {
-    match action {
-        BreakGlassAction::ThawTopicFreeze => crate::metrics::BreakGlassAction::ThawTopicFreeze,
-        BreakGlassAction::UncleanElectLeaders => {
-            crate::metrics::BreakGlassAction::UncleanElectLeaders
-        }
-        BreakGlassAction::UncleanRecovery => crate::metrics::BreakGlassAction::UncleanRecovery,
-        BreakGlassAction::UnregisterBroker => crate::metrics::BreakGlassAction::UnregisterBroker,
-        BreakGlassAction::CancelReassignment => {
-            crate::metrics::BreakGlassAction::CancelReassignment
-        }
-        BreakGlassAction::DeleteTopic => crate::metrics::BreakGlassAction::DeleteTopic,
-        BreakGlassAction::DeleteRecords => crate::metrics::BreakGlassAction::DeleteRecords,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::check;
@@ -140,6 +119,26 @@ mod tests {
         metrics
             .break_glass_proposals
             .get_or_create(&BreakGlassStateLabel { state })
+            .get()
+    }
+
+    /// The `break_glass_refusals` count that `action` labels.
+    fn refusals(metrics: &BrokerMetrics, action: BreakGlassAction) -> u64 {
+        metrics
+            .break_glass_refusals
+            .get_or_create(&BreakGlassActionLabel {
+                action: ActionLabel(action),
+            })
+            .get()
+    }
+
+    /// The `break_glass_bypassed` count that `action` labels.
+    fn bypasses(metrics: &BrokerMetrics, action: BreakGlassAction) -> u64 {
+        metrics
+            .break_glass_bypassed
+            .get_or_create(&BreakGlassActionLabel {
+                action: ActionLabel(action),
+            })
             .get()
     }
 
@@ -250,35 +249,33 @@ mod tests {
         record_refusal(&metrics, BreakGlassAction::DeleteTopic);
         record_bypass(&metrics, BreakGlassAction::UncleanRecovery);
 
-        let refusals = |action| {
-            metrics
-                .break_glass_refusals
-                .get_or_create(&BreakGlassActionLabel {
-                    action: metrics_action(action),
-                })
-                .get()
-        };
-        let bypasses = |action| {
-            metrics
-                .break_glass_bypassed
-                .get_or_create(&BreakGlassActionLabel {
-                    action: metrics_action(action),
-                })
-                .get()
-        };
-        check!(refusals(BreakGlassAction::DeleteTopic) == 2);
-        check!(refusals(BreakGlassAction::UncleanRecovery) == 0);
-        check!(bypasses(BreakGlassAction::UncleanRecovery) == 1);
-        check!(bypasses(BreakGlassAction::DeleteTopic) == 0);
+        check!(refusals(&metrics, BreakGlassAction::DeleteTopic) == 2);
+        check!(refusals(&metrics, BreakGlassAction::UncleanRecovery) == 0);
+        check!(bypasses(&metrics, BreakGlassAction::UncleanRecovery) == 1);
+        check!(bypasses(&metrics, BreakGlassAction::DeleteTopic) == 0);
     }
 
+    /// Every action counts in its own pair of series.
+    ///
+    /// Each action takes a different number of refusals, so an action whose
+    /// label collided with another's reads back the wrong count rather than
+    /// passing. The loop runs over [`ALL_ACTIONS`], so an action added to the
+    /// metadata enum is counted here the day it exists.
     #[test]
-    fn every_action_maps_to_its_own_metrics_label() {
-        for (index, action) in ALL_ACTIONS.iter().enumerate() {
-            check!(metrics_action(*action).as_str() == action_name(*action));
-            for other in &ALL_ACTIONS[index + 1..] {
-                check!(metrics_action(*action) != metrics_action(*other));
+    fn every_action_counts_in_its_own_pair_of_series() {
+        let metrics = BrokerMetrics::new();
+        for (index, action) in ALL_ACTIONS.into_iter().enumerate() {
+            for _ in 0..=index {
+                record_refusal(&metrics, action);
             }
+            record_bypass(&metrics, action);
+        }
+
+        for (index, action) in ALL_ACTIONS.into_iter().enumerate() {
+            let expected = u64::try_from(index).expect("a seven-element index") + 1;
+            let name = action_name(action);
+            check!(refusals(&metrics, action) == expected, "{name}");
+            check!(bypasses(&metrics, action) == 1, "{name}");
         }
     }
 

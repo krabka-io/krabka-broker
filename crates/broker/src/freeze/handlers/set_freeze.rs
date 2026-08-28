@@ -46,7 +46,7 @@ use crabka_protocol::{
 use uuid::Uuid;
 
 use crate::{
-    break_glass::gate,
+    break_glass::{gate, handlers::principal_name},
     broker::Broker,
     codes,
     config::BrokerConfig,
@@ -169,7 +169,12 @@ fn prepare(env: &FreezeEnv<'_>, req: &SetTopicFreezeRequest) -> Result<Accepted,
         check_limit(env.image, env.config.freeze.max_entries)?;
     }
 
-    let record = record_of(req, pattern_type, &env.ctx.principal.name);
+    // The Kafka form, not the bare session name. `[[operator_keys]]` is one
+    // trust set for both features, and the break-glass path spells the same
+    // person `User:alice`. A bare `alice` here would make one entry verify a
+    // break-glass approval and refuse every freeze signature by that person.
+    let author = principal_name(env.ctx);
+    let record = record_of(req, pattern_type, &author);
     let signature_verified = check_signature(env, &record, replaces.as_ref())?;
     let consumed_proposal = check_approval(env, &record)?;
 
@@ -244,7 +249,7 @@ fn check_signature(
     let check = FreezeSignatureCheck {
         keys: &env.config.operator_keys,
         cluster_id: &cluster_id,
-        connection_principal: &env.ctx.principal.name,
+        connection_principal: &principal_name(env.ctx),
         max_skew: env.config.freeze.signature_max_skew,
         now_ms: now_ms(),
         replaces,
@@ -497,7 +502,14 @@ mod tests {
 
     const CLUSTER: Uuid = Uuid::from_u128(0x5150);
     const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    /// Alice as an `[[operator_keys]]` entry and a record's `set_by` name her:
+    /// the Kafka form, which is also how `break_glass.approvers` spells her.
     const ALICE: &str = "User:alice";
+    /// Alice as a listener authenticates her, which is the bare session name.
+    /// A `Principal` carries this, and the handler is what adds the `User:`.
+    /// Putting [`ALICE`] here instead would hide the bug this pair exists to
+    /// catch: the test would pass while a real connection produced `alice`.
+    const ALICE_NAME: &str = "alice";
     const ALICE_KEY: &str = "alice-yubi";
 
     fn image(entries: &[(&str, PatternType)]) -> MetadataImage {
@@ -520,7 +532,7 @@ mod tests {
 
     fn principal() -> Principal {
         Principal {
-            name: ALICE.to_owned(),
+            name: ALICE_NAME.to_owned(),
             auth_method: AuthMethod::Anonymous,
             groups: Vec::new(),
         }
@@ -791,6 +803,54 @@ mod tests {
         ] {
             check!(is_signed(key_id, &signature) == expected, "{label}");
         }
+    }
+
+    /// KFC-9 hoists `[[operator_keys]]` to the top level so one entry serves
+    /// both the freeze path and the break-glass path. That only holds if both
+    /// spell the same person the same way, because `OperatorKeys::verify`
+    /// compares the bound principal by equality.
+    ///
+    /// A listener authenticates Alice as the bare `alice`. The break-glass path
+    /// has always named her `User:alice`, so the freeze path must too: one
+    /// entry bound to `User:alice` has to verify a signed freeze *and* a signed
+    /// approval. When the freeze path used the bare name, an operator needed
+    /// two key ids for one human, which is the thing the shared trust set
+    /// exists to avoid.
+    #[test]
+    fn the_freeze_path_names_the_author_the_way_the_break_glass_path_does() {
+        let dir = TempDir::new().expect("tempdir");
+        let (config, _) = config_with_alice(&dir);
+        let image = image(&[]);
+        let principal = principal();
+        let peer = peer();
+        let ctx = context(&principal, &peer);
+        let env = FreezeEnv {
+            config: &config,
+            image: &image,
+            ctx: &ctx,
+        };
+
+        // What the listener actually authenticated, and what each path makes of it.
+        check!(principal.name == ALICE_NAME);
+        check!(principal_name(&ctx) == ALICE);
+
+        let accepted = prepare(&env, &freeze_request("orders", PATTERN_TYPE_LITERAL))
+            .expect("an unsigned freeze is accepted by default");
+
+        // The record carries the Kafka form, so the one configured entry --
+        // bound to `User:alice` -- is the entry that verifies it.
+        check!(accepted.record.set_by == ALICE);
+        // The audit event names her the same way, so an auditor can join a
+        // freeze to the break-glass approval that authorized it by principal.
+        check!(crate::break_glass::handlers::principal_name(&ctx) == accepted.record.set_by);
+        check!(config.operator_keys.get(ALICE_KEY).is_some());
+        check!(
+            config
+                .operator_keys
+                .get(ALICE_KEY)
+                .map(|key| key.principal())
+                == Some(accepted.record.set_by.as_str())
+        );
     }
 
     #[test]

@@ -1,0 +1,55 @@
+[package]
+name = "crabka-guard"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Administers krabka topic write freezes and break-glass proposals: freeze a scope, thaw one, and run the two-person rule"
+
+[lints]
+workspace = true
+
+# A library as well as a binary, for the same reason `crabka-barrier` and
+# `crabka-format` are: a test that spawns the binary needs a Cargo working tree
+# to build it from, and a Bazel test sandbox has none. Tests call
+# `run_from_args` in process instead.
+[lib]
+name = "crabka_guard"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crabka-guard"
+path = "src/main.rs"
+
+[dependencies]
+# `codes` names the krabka-private error codes that the exit-code map reads,
+# and `operator_keys` is the trust set that `freeze list --verify-signatures`
+# checks against, so the tool and the broker agree on one key file shape.
+crabka-broker = { version = "0.4.0", path = "../broker" }
+# `FileEd25519Signer` is the signer the audit checkpoints already use. The
+# operator key material has the same shape, so there is one signer here.
+crabka-audit = { workspace = true }
+crabka-client-core = { version = "0.4.0" }
+crabka-protocol = { version = "0.4.0" }
+crabka-units = { workspace = true }
+
+clap = { workspace = true, features = ["env"] }
+hex = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+# BrokerConfig::for_tests lives behind the broker's own test-helpers feature
+# now that the facade crate is gone.
+crabka-broker = { version = "0.4.0", path = "../broker", features = ["test-helpers"] }
+# Signing goes through `FileEd25519Signer`, so `ring` is here only to mint the
+# PKCS#8 key pair that a signature case hands to `--sign-with`.
+ring = { workspace = true }
+tempfile = { workspace = true }

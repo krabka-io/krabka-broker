@@ -31,7 +31,7 @@
 //! The gate is active only when `[break_glass]` names an approver set.
 
 use bytes::Bytes;
-use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{
     BreakGlassAction, MetadataImage, MetadataRecord, NodeId, UnregisterBrokerRecord,
 };
@@ -46,9 +46,8 @@ use uuid::Uuid;
 
 use crate::{
     break_glass::{
-        action_name,
         gate::{self, BreakGlassDenial},
-        handlers::{PrivilegedAudit, audit_privileged},
+        handlers::audit::{GatedTransition, audit_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -56,7 +55,6 @@ use crate::{
     config::BreakGlassConfig,
     error::BrokerError,
     handlers::{RequestContext, cluster_alter_denied},
-    operator_keys::approver_set_fingerprint,
     time_util::now_ms,
 };
 
@@ -122,13 +120,17 @@ pub(crate) async fn handle(
         Err(denial) => {
             let message = denial.to_string();
             break_glass_metrics::record_refusal(&broker.metrics, denial.action);
-            audit_unregister(
-                broker,
+            audit_transition(
+                &broker.audit_log,
+                &broker.config.break_glass,
                 ctx,
-                &target,
-                PrivilegedPhase::Refused,
-                denial.proposal_id(),
-                &message,
+                &GatedTransition {
+                    action: BreakGlassAction::UnregisterBroker,
+                    target: &target,
+                    phase: PrivilegedPhase::Refused,
+                    proposal_id: denial.proposal_id(),
+                    reason: &message,
+                },
             );
             let resp = response(codes::POLICY_VIOLATION, Some(message));
             return encode_resp(version, &resp);
@@ -145,13 +147,17 @@ pub(crate) async fn handle(
         );
         return encode_resp(version, &resp);
     }
-    audit_unregister(
-        broker,
+    audit_transition(
+        &broker.audit_log,
+        &broker.config.break_glass,
         ctx,
-        &target,
-        PrivilegedPhase::Applied,
-        proposal_id,
-        "broker registration removed",
+        &GatedTransition {
+            action: BreakGlassAction::UnregisterBroker,
+            target: &target,
+            phase: PrivilegedPhase::Applied,
+            proposal_id,
+            reason: "broker registration removed",
+        },
     );
 
     let resp = response(codes::NONE, None);
@@ -210,49 +216,6 @@ fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
         MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
         _ => None,
     }
-}
-
-/// Emit one `PrivilegedAction` event for an unregistration.
-///
-/// `counterparties` stays empty for the reason the freeze events give: the
-/// approvers are named on the proposal's own approve events, and the proposal
-/// id joins those rows to this one.
-fn audit_unregister(
-    broker: &Broker,
-    ctx: &RequestContext<'_>,
-    target: &str,
-    phase: PrivilegedPhase,
-    proposal_id: Option<Uuid>,
-    reason: &str,
-) {
-    // A broker that gates nothing has no two-person evidence to record, and
-    // this event exists to carry that evidence. The ordinary administrative
-    // event already reports the transition itself, so a stock cluster's audit
-    // stream is unchanged.
-    if !gate::is_gated(&broker.config.break_glass) {
-        return;
-    }
-    audit_privileged(
-        &broker.audit_log,
-        ctx,
-        approver_set_fingerprint(&broker.config.break_glass.approvers),
-        &PrivilegedAudit {
-            outcome: if matches!(phase, PrivilegedPhase::Refused) {
-                AuditOutcome::Failure
-            } else {
-                AuditOutcome::Success
-            },
-            phase,
-            action: action_name(BreakGlassAction::UnregisterBroker),
-            target,
-            proposal_id,
-            counterparties: &[],
-            key_id: "",
-            signature: &[],
-            signature_verified: false,
-            reason,
-        },
-    );
 }
 
 fn response(error_code: i16, error_message: Option<String>) -> UnregisterBrokerResponse {
@@ -535,7 +498,7 @@ mod tests {
         metrics
             .break_glass_refusals
             .get_or_create(&crate::metrics::BreakGlassActionLabel {
-                action: crate::metrics::BreakGlassAction::UnregisterBroker,
+                action: crate::metrics::BreakGlassAction(BreakGlassAction::UnregisterBroker),
             })
             .get()
     }
