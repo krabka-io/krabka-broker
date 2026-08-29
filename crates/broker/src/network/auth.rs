@@ -11,7 +11,7 @@
 // SCRAM, and admin paths — keep the surface in one place.
 use std::{collections::HashMap, hash::BuildHasher};
 
-use crabka_protocol::{
+use krabka_protocol::{
     ApiKey,
     owned::{
         sasl_authenticate_request::SaslAuthenticateRequest,
@@ -20,8 +20,8 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{Principal, SaslMechanism, ScramServerExchange};
-use crabka_units::{ByteSize, Time, convert::TimeExt as _, kibibytes};
+use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
+use krabka_units::{ByteSize, Time, convert::TimeExt as _, kibibytes};
 
 use crate::{
     codes::{ILLEGAL_SASL_STATE, SASL_AUTHENTICATION_FAILED, UNSUPPORTED_SASL_MECHANISM},
@@ -147,7 +147,7 @@ pub enum SaslExchange {
     /// from GSS context establishment to security-layer negotiation. This
     /// variant is boxed to keep the `sspi`-backed acceptor out of the size of
     /// the whole enum.
-    Gssapi(Box<crabka_security::gssapi::server::GssapiServerExchange>),
+    Gssapi(Box<krabka_security::gssapi::server::GssapiServerExchange>),
 }
 
 impl ConnectionAuth {
@@ -346,7 +346,7 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
         return fail_authenticate("non-utf8 username");
     };
     let password = parts[2];
-    match crabka_security::verify_plain(plain_credentials, user, password) {
+    match krabka_security::verify_plain(plain_credentials, user, password) {
         Ok(p) => {
             *auth = ConnectionAuth::Authenticated {
                 principal: p,
@@ -424,7 +424,7 @@ pub fn handle_authenticate_scram(
                     let synth = synthesize_token_scram_credential(token);
                     let owner = Principal {
                         name: token.owner.name.clone(),
-                        auth_method: crabka_security::AuthMethod::SaslScramSha256,
+                        auth_method: krabka_security::AuthMethod::SaslScramSha256,
                         groups: vec![],
                     };
                     (synth, Some(owner), Some(token.expiry_timestamp_ms))
@@ -442,7 +442,7 @@ pub fn handle_authenticate_scram(
         // Feed the same client-first bytes; on success the exchange emits
         // the server-first message and yields the next phase.
         match server.step(&req.auth_bytes) {
-            crabka_security::StepResult::Continue(bytes, next) => {
+            krabka_security::StepResult::Continue(bytes, next) => {
                 *auth = ConnectionAuth::Negotiating {
                     mechanism: mech,
                     exchange: SaslExchange::Scram(Box::new(next)),
@@ -463,10 +463,10 @@ pub fn handle_authenticate_scram(
             }
             // Done on the first round would be a server bug — SCRAM is
             // always two round trips for SHA-512. Treat as auth failure.
-            crabka_security::StepResult::Done(_, _) => {
+            krabka_security::StepResult::Done(_, _) => {
                 fail_authenticate("SCRAM server completed in one round")
             }
-            crabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM step failed"),
+            krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM step failed"),
         }
     } else if let ConnectionAuth::Negotiating {
         exchange: SaslExchange::Scram(_),
@@ -487,11 +487,11 @@ pub fn handle_authenticate_scram(
             unreachable!("matched Negotiating{{Scram}} above");
         };
         match server.step(&req.auth_bytes) {
-            crabka_security::StepResult::Continue(_, _) => {
+            krabka_security::StepResult::Continue(_, _) => {
                 // Two-round SCRAM-SHA-512: an extra `Continue` here is a bug.
                 fail_authenticate("SCRAM second round expected Done")
             }
-            crabka_security::StepResult::Done(principal, bytes) => {
+            krabka_security::StepResult::Done(principal, bytes) => {
                 // When round-1 fell back to a delegation
                 // token, `pending_token_expiry_ms` is `Some(expiry)`
                 // — its presence is both the marker for
@@ -515,7 +515,7 @@ pub fn handle_authenticate_scram(
                     ..Default::default()
                 }
             }
-            crabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
+            krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
         }
     } else {
         fail_authenticate("not in SCRAM negotiation")
@@ -540,12 +540,12 @@ const TOKEN_SCRAM_ITERS: u32 = 4096;
 /// for those inputs. The broker computes it on every auth attempt instead of
 /// storing it for each token in the metadata image.
 fn synthesize_token_scram_credential(
-    token: &crabka_metadata::DelegationToken,
-) -> crabka_security::ScramCredential {
+    token: &krabka_metadata::DelegationToken,
+) -> krabka_security::ScramCredential {
     use base64::Engine;
     let password = base64::engine::general_purpose::STANDARD.encode(&token.hmac);
     let salt = token.token_id.as_bytes().to_vec();
-    crabka_security::scram::hash_scram_password_with_salt(
+    krabka_security::scram::hash_scram_password_with_salt(
         password.as_bytes(),
         SaslMechanism::ScramSha256,
         TOKEN_SCRAM_ITERS,
@@ -585,9 +585,9 @@ fn synthesize_token_scram_credential(
 pub fn handle_authenticate_gssapi(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
-    config: &crabka_security::gssapi::GssapiConfig,
+    config: &krabka_security::gssapi::GssapiConfig,
 ) -> SaslAuthenticateResponse {
-    use crabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
+    use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
 
     // Round 1: still `GssapiPending` — build the acceptor-backed exchange now
     // that the first client token (AP-REQ) has arrived.
@@ -599,7 +599,7 @@ pub fn handle_authenticate_gssapi(
     {
         let mech = *mechanism;
         let keytab = config.keytab_path.to_string_lossy();
-        let acceptor = match crabka_security::gssapi::provider::SspiAcceptor::new(
+        let acceptor = match krabka_security::gssapi::provider::SspiAcceptor::new(
             &keytab,
             &config.service_name,
             config.max_time_skew,
@@ -681,7 +681,7 @@ fn gssapi_challenge_response(token: Vec<u8>) -> SaslAuthenticateResponse {
 fn finish_gssapi(
     raw_principal: &str,
     mech: SaslMechanism,
-    config: &crabka_security::gssapi::GssapiConfig,
+    config: &krabka_security::gssapi::GssapiConfig,
     auth: &mut ConnectionAuth,
 ) -> SaslAuthenticateResponse {
     let short = match map_gssapi_principal(raw_principal, config) {
@@ -691,7 +691,7 @@ fn finish_gssapi(
     *auth = ConnectionAuth::Authenticated {
         principal: Principal {
             name: short,
-            auth_method: crabka_security::AuthMethod::SaslGssapi,
+            auth_method: krabka_security::AuthMethod::SaslGssapi,
             groups: vec![],
         },
         mechanism: mech,
@@ -714,7 +714,7 @@ fn finish_gssapi(
 /// Applies the configured `auth_to_local` rules to a raw Kerberos principal.
 ///
 /// `sspi` recovers the principal in lower case, for example
-/// `alice@crabka.test`. This function canonicalises the realm back to upper
+/// `alice@krabka.test`. This function canonicalises the realm back to upper
 /// case before it matches, because Kerberos realms are conventionally upper
 /// case, and because both the configured default realm and the
 /// `auth_to_local` rules are written in the upper-case form. When no default
@@ -723,13 +723,13 @@ fn finish_gssapi(
 /// through the implicit `DEFAULT` rule.
 fn map_gssapi_principal(
     raw: &str,
-    config: &crabka_security::gssapi::GssapiConfig,
-) -> Result<String, crabka_security::gssapi::name::NameError> {
+    config: &krabka_security::gssapi::GssapiConfig,
+) -> Result<String, krabka_security::gssapi::name::NameError> {
     let (head, realm_raw) = raw.rsplit_once('@').unwrap_or((raw, ""));
     let realm = realm_raw.to_uppercase();
     let components: Vec<&str> = head.split('/').collect();
     let default_realm = config.realm.as_deref().unwrap_or(&realm);
-    crabka_security::gssapi::name::apply(
+    krabka_security::gssapi::name::apply(
         &config.principal_to_local_rules,
         &realm,
         &components,
@@ -760,7 +760,7 @@ fn map_gssapi_principal(
 pub async fn handle_authenticate_oauthbearer(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
-    validator: &crabka_security::OAuthBearerValidator,
+    validator: &krabka_security::OAuthBearerValidator,
     now_ms: i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
@@ -808,7 +808,7 @@ pub async fn handle_authenticate_oauthbearer(
                         error_code: 0,
                         error_message: None,
                         auth_bytes: bytes::Bytes::from(
-                            crabka_security::invalid_token_json().into_bytes(),
+                            krabka_security::invalid_token_json().into_bytes(),
                         ),
                         session_lifetime_ms: 0,
                         ..Default::default()
@@ -907,10 +907,10 @@ fn successful_authentication(session_lifetime_ms: i64) -> SaslAuthenticateRespon
 /// require.
 async fn validate_bearer(
     auth_bytes: &[u8],
-    validator: &crabka_security::OAuthBearerValidator,
+    validator: &krabka_security::OAuthBearerValidator,
     now_ms: i64,
-) -> Result<crabka_security::AuthOutcome, &'static str> {
-    let parsed = crabka_security::parse_client_initial_response(auth_bytes)
+) -> Result<krabka_security::AuthOutcome, &'static str> {
+    let parsed = krabka_security::parse_client_initial_response(auth_bytes)
         .map_err(|_| "malformed OAUTHBEARER client response")?;
     let outcome = validator
         .validate(&parsed.token, now_ms)
@@ -960,7 +960,7 @@ fn fail_authenticate(reason: &str) -> SaslAuthenticateResponse {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::secs;
+    use krabka_units::secs;
 
     use super::*;
 
@@ -974,7 +974,7 @@ mod tests {
             error_message: None,
             auth_bytes: bytes::Bytes::copy_from_slice(expected_auth_bytes),
             session_lifetime_ms: expected_session_lifetime_ms,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(*resp == expected);
     }
@@ -985,7 +985,7 @@ mod tests {
             error_message: Some("authentication failed".to_string()),
             auth_bytes: bytes::Bytes::new(),
             session_lifetime_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(*resp == expected);
     }
@@ -1072,7 +1072,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauthbearer_valid_token_authenticates() {
-        let validator = crabka_security::OAuthBearerValidator::default();
+        let validator = krabka_security::OAuthBearerValidator::default();
         let now_ms = 1_000_000_000_000;
         let token = unsecured_token("svc-account", 1_000_000_900); // exp seconds → future of now
         let mut auth = ConnectionAuth::Negotiating {
@@ -1091,7 +1091,7 @@ mod tests {
         assert_success_authenticate_response(&resp, b"", 900_000);
         let p = auth.principal().expect("authenticated");
         assert!(p.name == "svc-account");
-        assert!(p.auth_method == crabka_security::AuthMethod::SaslOAuthBearer);
+        assert!(p.auth_method == krabka_security::AuthMethod::SaslOAuthBearer);
         match auth {
             ConnectionAuth::Authenticated {
                 expires_at_ms,
@@ -1107,8 +1107,8 @@ mod tests {
 
     #[tokio::test]
     async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
-        let validator = crabka_security::OAuthBearerValidator::Unsecured(
-            crabka_security::UnsecuredJwsValidator {
+        let validator = krabka_security::OAuthBearerValidator::Unsecured(
+            krabka_security::UnsecuredJwsValidator {
                 allowable_clock_skew: secs(0),
                 ..Default::default()
             },
@@ -1135,7 +1135,7 @@ mod tests {
             error_message: None,
             auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
             session_lifetime_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         assert!(matches!(
@@ -1158,7 +1158,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauthbearer_malformed_response_returns_error_json() {
-        let validator = crabka_security::OAuthBearerValidator::default();
+        let validator = krabka_security::OAuthBearerValidator::default();
         let mut auth = ConnectionAuth::Negotiating {
             mechanism: SaslMechanism::OAuthBearer,
             exchange: SaslExchange::OAuthBearer,
@@ -1176,14 +1176,14 @@ mod tests {
             error_message: None,
             auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
             session_lifetime_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
 
     #[tokio::test]
     async fn oauthbearer_authzid_mismatch_fails() {
-        let validator = crabka_security::OAuthBearerValidator::default();
+        let validator = krabka_security::OAuthBearerValidator::default();
         let now_ms = 1_000_000_000_000;
         let token = unsecured_token("alice", 1_000_000_900);
         let mut auth = ConnectionAuth::Negotiating {
@@ -1204,7 +1204,7 @@ mod tests {
             error_message: None,
             auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
             session_lifetime_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         assert!(!auth.is_authenticated());
@@ -1218,13 +1218,13 @@ mod tests {
 
     #[test]
     fn finish_gssapi_maps_principal_and_returns_empty_success() {
-        let config = crabka_security::gssapi::GssapiConfig {
+        let config = krabka_security::gssapi::GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
-            realm: Some("CRABKA.TEST".to_string()),
+            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
-            max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
         let mut auth = ConnectionAuth::Negotiating {
             mechanism: SaslMechanism::Gssapi,
@@ -1233,7 +1233,7 @@ mod tests {
         };
 
         let resp = finish_gssapi(
-            "alice@crabka.test",
+            "alice@krabka.test",
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
@@ -1248,7 +1248,7 @@ mod tests {
                 authenticated_via_token,
             } => {
                 check!(principal.name.as_str() == "alice");
-                check!(principal.auth_method == crabka_security::AuthMethod::SaslGssapi);
+                check!(principal.auth_method == krabka_security::AuthMethod::SaslGssapi);
                 check!(mechanism == SaslMechanism::Gssapi);
                 check!(expires_at_ms == None);
                 check!(!authenticated_via_token);
@@ -1259,13 +1259,13 @@ mod tests {
 
     #[test]
     fn finish_gssapi_mapping_error_returns_auth_failure() {
-        let config = crabka_security::gssapi::GssapiConfig {
+        let config = krabka_security::gssapi::GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
             realm: Some("OTHER.REALM".to_string()),
             kdc: None,
-            max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
         let mut auth = ConnectionAuth::Negotiating {
             mechanism: SaslMechanism::Gssapi,
@@ -1274,7 +1274,7 @@ mod tests {
         };
 
         let resp = finish_gssapi(
-            "alice@crabka.test",
+            "alice@krabka.test",
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
@@ -1286,13 +1286,13 @@ mod tests {
 
     #[test]
     fn handle_authenticate_gssapi_round1_bad_keytab_fails_and_leaves_state_untouched() {
-        let config = crabka_security::gssapi::GssapiConfig {
+        let config = krabka_security::gssapi::GssapiConfig {
             keytab_path: std::path::PathBuf::from("/nonexistent.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
-            realm: Some("CRABKA.TEST".to_string()),
+            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
-            max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
         let mut auth = ConnectionAuth::Negotiating {
             mechanism: SaslMechanism::Gssapi,
@@ -1318,43 +1318,43 @@ mod tests {
 
     /// Establishes the GSS context on the first token with no trailing
     /// AP-REP, so one `step()` call reaches `AwaitingChoice` directly. This
-    /// mirrors `crabka-security`'s own `gssapi::server` unit tests.
+    /// mirrors `krabka-security`'s own `gssapi::server` unit tests.
     struct FakeAcceptor;
 
-    impl crabka_security::gssapi::GssAcceptor for FakeAcceptor {
+    impl krabka_security::gssapi::GssAcceptor for FakeAcceptor {
         fn accept(
             &mut self,
             _client_token: &[u8],
-        ) -> Result<crabka_security::gssapi::AcceptStep, crabka_security::gssapi::GssError>
+        ) -> Result<krabka_security::gssapi::AcceptStep, krabka_security::gssapi::GssError>
         {
-            Ok(crabka_security::gssapi::AcceptStep::Established(None))
+            Ok(krabka_security::gssapi::AcceptStep::Established(None))
         }
         fn wrap(
             &self,
             plaintext: &[u8],
             _confidential: bool,
-        ) -> Result<Vec<u8>, crabka_security::gssapi::GssError> {
+        ) -> Result<Vec<u8>, krabka_security::gssapi::GssError> {
             Ok(plaintext.to_vec())
         }
-        fn unwrap(&self, token: &[u8]) -> Result<Vec<u8>, crabka_security::gssapi::GssError> {
+        fn unwrap(&self, token: &[u8]) -> Result<Vec<u8>, krabka_security::gssapi::GssError> {
             Ok(token.to_vec())
         }
-        fn src_principal(&self) -> Result<String, crabka_security::gssapi::GssError> {
-            Ok("alice@CRABKA.TEST".to_string())
+        fn src_principal(&self) -> Result<String, krabka_security::gssapi::GssError> {
+            Ok("alice@KRABKA.TEST".to_string())
         }
     }
 
     #[test]
     fn handle_authenticate_gssapi_subsequent_round_completes_and_authenticates() {
-        use crabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
+        use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
 
-        let config = crabka_security::gssapi::GssapiConfig {
+        let config = krabka_security::gssapi::GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
-            realm: Some("CRABKA.TEST".to_string()),
+            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
-            max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
 
         // Drive the exchange to `AwaitingChoice` up front (mirroring round
@@ -1397,16 +1397,16 @@ mod tests {
 
     #[test]
     fn map_gssapi_principal_uppercases_realm_before_default_rule() {
-        let config = crabka_security::gssapi::GssapiConfig {
+        let config = krabka_security::gssapi::GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
-            realm: Some("CRABKA.TEST".to_string()),
+            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
-            max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
 
-        let short = map_gssapi_principal("alice@crabka.test", &config).expect("map principal");
+        let short = map_gssapi_principal("alice@krabka.test", &config).expect("map principal");
 
         assert!(short == "alice");
     }
@@ -1422,7 +1422,7 @@ mod tests {
         let a = ConnectionAuth::Authenticated {
             principal: Principal {
                 name: "alice".into(),
-                auth_method: crabka_security::AuthMethod::SaslScramSha512,
+                auth_method: krabka_security::AuthMethod::SaslScramSha512,
                 groups: vec![],
             },
             mechanism: SaslMechanism::ScramSha512,
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(a.is_authenticated());
         let p = a.principal().expect("principal");
         assert!(p.name == "alice");
-        assert!(p.auth_method == crabka_security::AuthMethod::SaslScramSha512);
+        assert!(p.auth_method == krabka_security::AuthMethod::SaslScramSha512);
     }
 
     // KIP-368: in-band re-auth tests.
@@ -1442,7 +1442,7 @@ mod tests {
         let auth = ConnectionAuth::Authenticated {
             principal: Principal {
                 name: "alice".to_string(),
-                auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                 groups: vec![],
             },
             mechanism: SaslMechanism::OAuthBearer,
@@ -1469,7 +1469,7 @@ mod tests {
         let mut auth = ConnectionAuth::Authenticated {
             principal: Principal {
                 name: "alice".to_string(),
-                auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                 groups: vec![],
             },
             mechanism: SaslMechanism::OAuthBearer,
@@ -1499,7 +1499,7 @@ mod tests {
         let mut auth = ConnectionAuth::Authenticated {
             principal: Principal {
                 name: "alice".to_string(),
-                auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                 groups: vec![],
             },
             mechanism: SaslMechanism::OAuthBearer,
@@ -1523,7 +1523,7 @@ mod tests {
 
     #[tokio::test]
     async fn authenticate_during_reauth_same_principal_transitions_back_to_authenticated() {
-        let validator = crabka_security::OAuthBearerValidator::default();
+        let validator = krabka_security::OAuthBearerValidator::default();
         let now_ms = 1_000_000_000_000;
         // Token's exp is in seconds; the validator computes expires_at_ms = exp * 1000.
         let new_token_exp_seconds: i64 = 1_000_000_900;
@@ -1533,7 +1533,7 @@ mod tests {
             previous: AuthenticatedSnapshot {
                 principal: Principal {
                     name: "alice".to_string(),
-                    auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                     groups: vec![],
                 },
                 mechanism: SaslMechanism::OAuthBearer,
@@ -1573,7 +1573,7 @@ mod tests {
 
     #[tokio::test]
     async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_failed() {
-        let validator = crabka_security::OAuthBearerValidator::default();
+        let validator = krabka_security::OAuthBearerValidator::default();
         let now_ms = 1_000_000_000_000;
         // Token belongs to "bob", but the prior session is "alice".
         let token = unsecured_token("bob", 1_000_000_900);
@@ -1581,7 +1581,7 @@ mod tests {
             previous: AuthenticatedSnapshot {
                 principal: Principal {
                     name: "alice".to_string(),
-                    auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                     groups: vec![],
                 },
                 mechanism: SaslMechanism::OAuthBearer,
@@ -1618,7 +1618,7 @@ mod tests {
             previous: AuthenticatedSnapshot {
                 principal: Principal {
                     name: "alice".to_string(),
-                    auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                     groups: vec![],
                 },
                 mechanism: SaslMechanism::OAuthBearer,
@@ -1651,7 +1651,7 @@ mod tests {
         let auth = ConnectionAuth::Authenticated {
             principal: Principal {
                 name: "alice".into(),
-                auth_method: crabka_security::AuthMethod::SaslScramSha512,
+                auth_method: krabka_security::AuthMethod::SaslScramSha512,
                 groups: vec![],
             },
             mechanism: SaslMechanism::ScramSha512,
@@ -1669,8 +1669,8 @@ mod tests {
 
     #[tokio::test]
     async fn handle_authenticate_oauthbearer_applies_max_session_lifetime_cap() {
-        let validator = crabka_security::OAuthBearerValidator::Unsecured(
-            crabka_security::UnsecuredJwsValidator {
+        let validator = krabka_security::OAuthBearerValidator::Unsecured(
+            krabka_security::UnsecuredJwsValidator {
                 allowable_clock_skew: secs(0),
                 ..Default::default()
             },
@@ -1720,8 +1720,8 @@ mod tests {
         use std::{sync::Arc, time::Duration};
 
         use assert2::{assert, check};
-        use crabka_metadata::{DelegationTokenRecord, MetadataRecord};
-        use crabka_security::{
+        use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+        use krabka_security::{
             KafkaPrincipal, ScramClientExchange, scram::hash_scram_password_with_salt,
         };
         use tempfile::TempDir;
@@ -1730,14 +1730,14 @@ mod tests {
 
         async fn test_controller(
             log_dir: std::path::PathBuf,
-        ) -> Arc<crabka_raft::ControllerHandle> {
-            let cfg = crabka_raft::ControllerConfig {
-                election_timeout: crabka_units::millis(200),
-                heartbeat_interval: Some(crabka_units::millis(50)),
+        ) -> Arc<krabka_raft::ControllerHandle> {
+            let cfg = krabka_raft::ControllerConfig {
+                election_timeout: krabka_units::millis(200),
+                heartbeat_interval: Some(krabka_units::millis(50)),
                 client_id: "test".into(),
-                ..crabka_raft::ControllerConfig::for_tests(crabka_raft::NodeId(1), log_dir)
+                ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
             };
-            let handle = Arc::new(crabka_raft::Controller::start(cfg).await.unwrap());
+            let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
             let mut rx = handle.watch_leader();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while rx.borrow().is_none() {
@@ -1749,7 +1749,7 @@ mod tests {
 
         /// Appends a delegation token to the controller's image.
         async fn append_token(
-            controller: &crabka_raft::ControllerHandle,
+            controller: &krabka_raft::ControllerHandle,
             token_id: &str,
             owner_name: &str,
             hmac: Vec<u8>,
@@ -1775,7 +1775,7 @@ mod tests {
         /// the round-2 server response, so callers can assert on
         /// `error_code`, `session_lifetime_ms`, and other fields.
         fn drive_scram_to_done(
-            controller: &crabka_raft::ControllerHandle,
+            controller: &krabka_raft::ControllerHandle,
             scram_username: &str,
             password: &[u8],
             mechanism: SaslMechanism,
@@ -2019,7 +2019,7 @@ mod tests {
                 salt.clone(),
             );
             let scram_rec =
-                MetadataRecord::V1ScramCredential(crabka_metadata::ScramCredentialRecord {
+                MetadataRecord::V1ScramCredential(krabka_metadata::ScramCredentialRecord {
                     user: "alice".into(),
                     mechanism: SaslMechanism::ScramSha256,
                     salt,

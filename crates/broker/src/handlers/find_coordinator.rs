@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         find_coordinator_request::FindCoordinatorRequest,
@@ -56,8 +56,8 @@ fn denied_coordinator(key: String, error_code: i16) -> Coordinator {
 /// key-types this handler does not gate, such as SHARE and unknown types.
 fn key_authz_failure(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
     key_type: i8,
     key: &str,
@@ -300,7 +300,7 @@ fn resolve_transaction_keys(
 
 fn authorize_keys(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     key_type: i8,
     keys: Vec<String>,
@@ -362,7 +362,7 @@ fn encode_coordinators(
 
 fn resolve_partition_coordinator(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     state_topic: &str,
     partition: i32,
     key: String,
@@ -483,10 +483,10 @@ mod tests {
         crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new())
     }
 
-    fn anon() -> crabka_security::Principal {
-        crabka_security::Principal {
+    fn anon() -> krabka_security::Principal {
+        krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         }
     }
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn group_key_denied_maps_to_group_authorization_failed() {
         let authz = deny_authorizer();
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let code = key_authz_failure(&authz, &image, &anon(), &peer, KEY_TYPE_GROUP, "g");
         assert!(code == Some(codes::GROUP_AUTHORIZATION_FAILED));
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn txn_key_denied_maps_to_transactional_id_authorization_failed() {
         let authz = deny_authorizer();
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let code = key_authz_failure(&authz, &image, &anon(), &peer, KEY_TYPE_TRANSACTION, "t");
         assert!(code == Some(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED));
@@ -521,7 +521,7 @@ mod tests {
             name: name.to_string(),
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             advertised: advertised.to_string(),
-            protocol: crabka_security::ListenerProtocol::Plaintext,
+            protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
         }
@@ -568,7 +568,7 @@ mod tests {
         let principal = principal("admin");
         let peer = peer();
         let context = crate::test_support::request_context(&principal, &peer, "admin-client");
-        let version = crabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+        let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
         let tid = "my-tid"; // hashes to partition 43 with the old fixed count of 50
         let request = FindCoordinatorRequest {
             key_type: KEY_TYPE_TRANSACTION,

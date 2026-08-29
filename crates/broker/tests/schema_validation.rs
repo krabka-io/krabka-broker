@@ -26,9 +26,9 @@ mod support;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle, file_config::FileConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, file_config::FileConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},

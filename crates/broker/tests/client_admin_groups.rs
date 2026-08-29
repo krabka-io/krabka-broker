@@ -1,7 +1,7 @@
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_admin::AdminClient;
-use crabka_client_consumer::{AutoOffsetReset, Consumer};
-use crabka_client_producer::{Producer, ProducerRecord};
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_admin::AdminClient;
+use krabka_client_consumer::{AutoOffsetReset, Consumer};
+use krabka_client_producer::{Producer, ProducerRecord};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lists_groups_and_committed_offsets() {
@@ -16,13 +16,13 @@ async fn lists_groups_and_committed_offsets() {
         .unwrap();
     admin
         .create_topics(
-            &[crabka_client_admin::CreateTopicSpec {
+            &[krabka_client_admin::CreateTopicSpec {
                 name: "t1".into(),
                 partitions: 1,
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            crabka_units::secs(5),
+            krabka_units::secs(5),
         )
         .await
         .unwrap();
@@ -55,7 +55,7 @@ async fn lists_groups_and_committed_offsets() {
         .build()
         .await
         .unwrap();
-    let _ = consumer.poll(crabka_units::secs(2)).await.unwrap();
+    let _ = consumer.poll(krabka_units::secs(2)).await.unwrap();
     consumer.commit_sync().await.unwrap();
 
     let groups = admin.list_groups().await.unwrap();

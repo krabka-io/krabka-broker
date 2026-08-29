@@ -13,7 +13,7 @@ mod unix_only {
 
     #[tokio::test]
     async fn cpu_profile_endpoint_returns_pprof_bytes() {
-        let app = crabka_telemetry::profiling::pprof_router();
+        let app = krabka_telemetry::profiling::pprof_router();
         let resp = app
             .oneshot(
                 Request::builder()
@@ -68,7 +68,7 @@ mod unix_only {
     #[tokio::test]
     async fn serve_admin_binds_and_serves_extra_route() {
         let addr = unused_loopback_addr().await;
-        crabka_telemetry::profiling::serve_admin(
+        krabka_telemetry::profiling::serve_admin(
             addr,
             Router::new().route("/ready", get(|| async { "ready" })),
         )
@@ -82,12 +82,12 @@ mod unix_only {
 
     #[tokio::test]
     async fn serve_admin_from_env_uses_default_addr() {
-        if std::env::var_os("CRABKA_ADMIN_LISTEN_ADDR").is_some() {
+        if std::env::var_os("KRABKA_ADMIN_LISTEN_ADDR").is_some() {
             return;
         }
 
         let addr = unused_loopback_addr().await;
-        crabka_telemetry::profiling::serve_admin_from_env(&addr.to_string())
+        krabka_telemetry::profiling::serve_admin_from_env(&addr.to_string())
             .await
             .unwrap();
 
@@ -97,12 +97,12 @@ mod unix_only {
 
     #[tokio::test]
     async fn serve_admin_from_env_with_uses_default_addr_and_extra_routes() {
-        if std::env::var_os("CRABKA_ADMIN_LISTEN_ADDR").is_some() {
+        if std::env::var_os("KRABKA_ADMIN_LISTEN_ADDR").is_some() {
             return;
         }
 
         let addr = unused_loopback_addr().await;
-        crabka_telemetry::profiling::serve_admin_from_env_with(
+        krabka_telemetry::profiling::serve_admin_from_env_with(
             &addr.to_string(),
             Router::new().route("/ready-env", get(|| async { "ready-env" })),
         )

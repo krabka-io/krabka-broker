@@ -53,8 +53,8 @@ use std::{io, net::SocketAddr};
 use assert2::{assert, check};
 use base64::Engine;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -75,14 +75,14 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
+use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
 
-/// Canonical Kafka error code that mirrors `crabka_broker::codes::
+/// Canonical Kafka error code that mirrors `krabka_broker::codes::
 /// DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. The broker's `codes` module is
 /// private to the crate, so this file keeps a local copy. Keep it in sync
 /// with `crates/broker/src/codes.rs` and the Apache Kafka error table.
 const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
-/// Canonical Kafka error code that mirrors `crabka_broker::codes::
+/// Canonical Kafka error code that mirrors `krabka_broker::codes::
 /// DELEGATION_TOKEN_AUTHORIZATION_FAILED`. The same sync rule applies.
 const DELEGATION_TOKEN_AUTHORIZATION_FAILED: i16 = 65;
 use tempfile::TempDir;
@@ -108,7 +108,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-deltok-test";
+    let client_id = "krabka-deltok-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -251,7 +251,7 @@ async fn sasl_scram_sha256_authenticate(
         )));
     }
 
-    let client = crabka_security::ScramClientExchange::new(
+    let client = krabka_security::ScramClientExchange::new(
         username.to_string(),
         password.as_bytes().to_vec(),
         SaslMechanism::ScramSha256,
@@ -312,14 +312,14 @@ async fn sasl_scram_sha256_authenticate(
 // monotonic `corr_id`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Newest `CreateDelegationToken` that Crabka supports: Apache Kafka v3,
+/// Newest `CreateDelegationToken` that Krabka supports: Apache Kafka v3,
 /// flexible. `MAX_VERSION` here exercises the same wire shape that the JVM
 /// admin client uses against a modern broker.
-const CREATE_DT_VERSION: i16 = crabka_protocol::owned::create_delegation_token_request::MAX_VERSION;
-const RENEW_DT_VERSION: i16 = crabka_protocol::owned::renew_delegation_token_request::MAX_VERSION;
-const EXPIRE_DT_VERSION: i16 = crabka_protocol::owned::expire_delegation_token_request::MAX_VERSION;
+const CREATE_DT_VERSION: i16 = krabka_protocol::owned::create_delegation_token_request::MAX_VERSION;
+const RENEW_DT_VERSION: i16 = krabka_protocol::owned::renew_delegation_token_request::MAX_VERSION;
+const EXPIRE_DT_VERSION: i16 = krabka_protocol::owned::expire_delegation_token_request::MAX_VERSION;
 const DESCRIBE_DT_VERSION: i16 =
-    crabka_protocol::owned::describe_delegation_token_request::MAX_VERSION;
+    krabka_protocol::owned::describe_delegation_token_request::MAX_VERSION;
 
 async fn send_create_delegation_token(
     stream: &mut TcpStream,
@@ -409,7 +409,7 @@ async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     // Inter-broker auth uses PLAIN as alice (the cluster only has one broker
     // so this is not exercised, but `BrokerConfig::validate` requires it
     // when the inter-broker listener is SASL).
-    cfg.inter_broker_credentials = Some(crabka_broker::config::InterBrokerCredentials::Plain {
+    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
         username: "alice".to_string(),
         password: "wonderland".to_string(),
     });
@@ -421,8 +421,8 @@ async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     // and max = issue + 7d as separate values, so Renew can extend the
     // expiry well past its initial value (and the lifecycle test asserts
     // strict-monotonic extension below).
-    cfg.delegation_token_max_lifetime = crabka_units::days(7);
-    cfg.delegation_token_default_renew_period = crabka_units::hours(24);
+    cfg.delegation_token_max_lifetime = krabka_units::days(7);
+    cfg.delegation_token_default_renew_period = krabka_units::hours(24);
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -471,13 +471,13 @@ fn start_broker_with_super_users(
     let (ib_user, ib_pw) = plain_creds
         .first()
         .expect("must supply at least one PLAIN credential for inter-broker auth");
-    cfg.inter_broker_credentials = Some(crabka_broker::config::InterBrokerCredentials::Plain {
+    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
         username: (*ib_user).to_string(),
         password: (*ib_pw).to_string(),
     });
     cfg.delegation_token_secret_key = Some(SecretBytes::new(b"act-as-master-key".to_vec()));
-    cfg.delegation_token_max_lifetime = crabka_units::days(7);
-    cfg.delegation_token_default_renew_period = crabka_units::hours(24);
+    cfg.delegation_token_max_lifetime = krabka_units::days(7);
+    cfg.delegation_token_default_renew_period = krabka_units::hours(24);
 
     Box::pin(async move {
         let handle = Broker::start(cfg).await.expect("broker must start");
@@ -727,7 +727,7 @@ async fn delegation_token_lifecycle_end_to_end() {
 // within a few ms.
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn wait_for_token(handle: &BrokerHandle, token_id: &str) -> crabka_metadata::DelegationToken {
+async fn wait_for_token(handle: &BrokerHandle, token_id: &str) -> krabka_metadata::DelegationToken {
     // Watch the committed metadata image (same controller handle
     // `controller_image_for_test` reads) until the V1DelegationToken record
     // materializes, then re-read it to return the applied token.

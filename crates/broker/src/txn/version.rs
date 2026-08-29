@@ -7,7 +7,7 @@
 //! self-bootstrapped one, finalizes `TV_2`, so the common path is `Verified`.
 //! `TV_3` is an explicit opt-in for KIP-939 two-phase-commit participation.
 
-use crabka_metadata::MetadataImage;
+use krabka_metadata::MetadataImage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TxnVersion {
@@ -43,7 +43,7 @@ impl TxnVersion {
 }
 
 pub(crate) fn resolve_txn_version(image: &MetadataImage) -> TxnVersion {
-    match image.finalized_feature(crabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE)
+    match image.finalized_feature(krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE)
     {
         Some(3) => TxnVersion::TwoPhase,
         Some(2) => TxnVersion::Verified,
@@ -55,7 +55,7 @@ pub(crate) fn resolve_txn_version(image: &MetadataImage) -> TxnVersion {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
     use super::*;
 

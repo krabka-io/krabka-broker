@@ -12,17 +12,17 @@
 //! place. See [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 
 use bytes::Bytes;
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, BrokerConfigRecord, MetadataRecord, ResourceType, TopicConfigRecord,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, UnknownTaggedFields,
     owned::{
         alter_configs_request::{AlterConfigsRequest, AlterConfigsResource},
         alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
     },
 };
-use crabka_raft::RaftError;
+use krabka_raft::RaftError;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -68,7 +68,7 @@ pub(crate) async fn handle(
 
 async fn process_resource(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
     resource: AlterConfigsResource,
     validate_only: bool,
@@ -171,7 +171,7 @@ async fn process_resource(
 /// builds is the whole override map and the cross-key rules apply to it.
 fn topic_config_record(
     resource: &AlterConfigsResource,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Result<MetadataRecord, (i16, String)> {
     if image.topic(&resource.resource_name).is_none() {
         return Err((
@@ -196,7 +196,7 @@ fn topic_config_record(
 
 fn broker_config_records(
     resource: &AlterConfigsResource,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id =
         super::incremental_alter_configs::broker_config_node_id(&resource.resource_name, image)?;
@@ -217,7 +217,7 @@ fn broker_config_records(
                 format!("unknown broker config {}", config.name),
             ));
         }
-        if node_id != crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+        if node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
             && super::incremental_alter_configs::is_cluster_default_topic_config(&config.name)
         {
             return Err((
@@ -274,10 +274,10 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_protocol::owned::alter_configs_request::{
+    use krabka_protocol::owned::alter_configs_request::{
         AlterConfigsRequest, AlterConfigsResource, AlterableConfig,
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
     use crate::{authorizer::Authorizer, test_support::DenyAll};
@@ -304,11 +304,11 @@ mod tests {
     }
 
     /// A metadata image that holds one registered broker and nothing else.
-    fn image_with_broker(node_id: u64) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    fn image_with_broker(node_id: u64) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
-            crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_metadata::NodeId(node_id),
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_metadata::NodeId(node_id),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),
                 host: "127.0.0.1".into(),
@@ -338,9 +338,9 @@ mod tests {
         }
     }
 
-    fn image_with_topic(name: &str) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+    fn image_with_topic(name: &str) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: name.into(),
             topic_id: uuid::Uuid::nil(),
             partitions: 1,
@@ -545,12 +545,12 @@ mod tests {
     fn broker_full_replacement_sets_requested_and_deletes_omitted_configs() {
         let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.into(),
             config_value: Some("1024".into()),
         }));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
             config_value: Some("512".into()),
         }));
@@ -563,12 +563,12 @@ mod tests {
 
         let expected = vec![
             MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                node_id: crabka_metadata::NodeId(1),
+                node_id: krabka_metadata::NodeId(1),
                 config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.into(),
                 config_value: Some("2048".into()),
             }),
             MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                node_id: crabka_metadata::NodeId(1),
+                node_id: krabka_metadata::NodeId(1),
                 config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
                 config_value: None,
             }),
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn broker_full_replacement_accepts_cluster_default_resource() {
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let records = broker_config_records(
             &broker_resource(
                 "",
@@ -595,12 +595,12 @@ mod tests {
             records
                 == vec![
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                         config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
                         config_value: Some("4096".into()),
                     }),
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                         config_name: crate::config_keys::UNCLEAN_RECOVERY_STRATEGY.into(),
                         config_value: Some("Balanced".into()),
                     }),
@@ -632,12 +632,12 @@ mod tests {
     fn broker_full_replacement_leaves_controller_managed_configs_alone() {
         let mut image = image_with_broker(1);
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: crate::config_keys::BROKER_WITNESS.into(),
             config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
         }));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
             config_value: Some("512".into()),
         }));
@@ -652,12 +652,12 @@ mod tests {
             records
                 == vec![
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::NodeId(1),
+                        node_id: krabka_metadata::NodeId(1),
                         config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.into(),
                         config_value: Some("2048".into()),
                     }),
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::NodeId(1),
+                        node_id: krabka_metadata::NodeId(1),
                         config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.into(),
                         config_value: None,
                     }),

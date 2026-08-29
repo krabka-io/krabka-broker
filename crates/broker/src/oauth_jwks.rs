@@ -7,7 +7,7 @@
 //! into the shared handle. The [`SignedJwsValidator`] therefore picks up
 //! rotated keys with no restart and no lock.
 //!
-//! [`SignedJwsValidator`]: crabka_security::SignedJwsValidator
+//! [`SignedJwsValidator`]: krabka_security::SignedJwsValidator
 
 use std::{
     path::PathBuf,
@@ -18,8 +18,8 @@ use std::{
     time::Duration,
 };
 
-use crabka_security::{Jwks, JwksHandle};
-use crabka_units::{Time, convert::TimeExt};
+use krabka_security::{Jwks, JwksHandle};
+use krabka_units::{Time, convert::TimeExt};
 use qubit_clock::sleep::AsyncSleeper;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -127,7 +127,7 @@ impl JwksRefresher {
     pub(crate) async fn run(mut self) {
         let mut builder = reqwest::Client::builder().timeout(self.http_timeout.to_std());
         if let Some(path) = &self.tls_trust {
-            match crabka_security::build_client_config_from_pem(path) {
+            match krabka_security::build_client_config_from_pem(path) {
                 Ok(cfg) => {
                     // reqwest's use_preconfigured_tls takes the rustls
                     // ClientConfig by value; clone the inner config (cheap
@@ -241,7 +241,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use assert2::{assert, check};
-    use crabka_units::{hours, millis, minutes, secs};
+    use krabka_units::{hours, millis, minutes, secs};
     use qubit_clock::{
         MockWaiterKind,
         sleep::{AsyncSleepFuture, MockSleeper, SystemSleeper},

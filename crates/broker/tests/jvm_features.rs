@@ -2,10 +2,10 @@
 //!
 //! Drives the real `mirror.gcr.io/apache/kafka:4.3.1` `kafka-features` and
 //! `kafka-metadata-quorum` admin tools against an
-//! in-process Crabka broker advertised at `host.docker.internal:9092`, proving
+//! in-process Krabka broker advertised at `host.docker.internal:9092`, proving
 //! the `UpdateFeatures` / `ApiVersions` feature surface round-trips end to end:
 //!
-//! 1. `describe` lists Crabka's finalized features (`metadata.version`,
+//! 1. `describe` lists Krabka's finalized features (`metadata.version`,
 //!    `group.version`, `transaction.version`) at the self-bootstrap defaults.
 //! 2. `downgrade --feature transaction.version=1` is accepted and a follow-up
 //!    `describe` reflects the change.
@@ -24,8 +24,8 @@ mod support;
 use std::process::Command;
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_log::LogConfig;
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_log::LogConfig;
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -88,7 +88,7 @@ const DIRECTORY_ID_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAQ";
 const JOINER_DIRECTORY_ID: uuid::Uuid = uuid::Uuid::from_u128(2);
 const JOINER_DIRECTORY_ID_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAg";
 
-/// Boot an in-process Crabka broker listening on `listen_addr()`, advertised as
+/// Boot an in-process Krabka broker listening on `listen_addr()`, advertised as
 /// `host.docker.internal:9092`. A standalone self-bootstrap finalizes the
 /// latest-release feature defaults (metadata.version=25, group.version=1,
 /// transaction.version=2).
@@ -98,7 +98,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info,warn")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,warn")),
         )
         .with_test_writer()
         .try_init();
@@ -112,32 +112,32 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         directory_id: DIRECTORY_ID,
         controller_listen_addr: controller_addr,
         controller_quorum_voters: vec![(
-            crabka_broker::NodeId(1),
+            krabka_broker::NodeId(1),
             controller_bootstrap().to_string(),
         )],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
+    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
 /// Start a caught-up controller observer without auto-join. The official JVM
 /// `add-controller` command promotes this exact live identity.
-async fn start_host_observer() -> (crabka_raft::ControllerHandle, tempfile::TempDir) {
+async fn start_host_observer() -> (krabka_raft::ControllerHandle, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut config = crabka_raft::ControllerConfig::for_tests(
-        crabka_raft::NodeId(2),
+    let mut config = krabka_raft::ControllerConfig::for_tests(
+        krabka_raft::NodeId(2),
         dir.path().join("__cluster_metadata"),
     );
     config.directory_id = JOINER_DIRECTORY_ID;
@@ -145,19 +145,19 @@ async fn start_host_observer() -> (crabka_raft::ControllerHandle, tempfile::Temp
         .replace("host.docker.internal", "0.0.0.0")
         .parse()
         .expect("allocated addr");
-    config.bootstrap_mode = crabka_raft::BootstrapMode::Join;
+    config.bootstrap_mode = krabka_raft::BootstrapMode::Join;
     config.cluster_id = Some(uuid::Uuid::nil());
-    config.initial_voters = crabka_metadata::VoterSet::from_voters([crabka_metadata::Voter {
-        id: crabka_raft::NodeId(1),
+    config.initial_voters = krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
+        id: krabka_raft::NodeId(1),
         directory_id: DIRECTORY_ID,
-        endpoints: vec![crabka_metadata::VoterEndpoint {
+        endpoints: vec![krabka_metadata::VoterEndpoint {
             name: "CONTROLLER".into(),
             host: "127.0.0.1".into(),
             port: controller_port(),
         }],
-        kraft_version: crabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+        kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
     }]);
-    let handle = crabka_raft::Controller::start(config)
+    let handle = krabka_raft::Controller::start(config)
         .await
         .expect("start observer");
     (handle, dir)
@@ -181,7 +181,7 @@ fn kafka_features(args: &[&str]) -> std::process::Output {
         .output()
         .expect("spawn docker run kafka-features");
     eprintln!(
-        "CRABKA[test] kafka-features {args:?} status={}\nstdout:\n{}\nstderr:\n{}",
+        "KRABKA[test] kafka-features {args:?} status={}\nstdout:\n{}\nstderr:\n{}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -206,7 +206,7 @@ fn kafka_metadata_quorum(args: &[&str]) -> std::process::Output {
         .output()
         .expect("spawn docker run kafka-metadata-quorum");
     eprintln!(
-        "CRABKA[test] kafka-metadata-quorum {args:?} status={}\nstdout:\n{}\nstderr:\n{}",
+        "KRABKA[test] kafka-metadata-quorum {args:?} status={}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -265,7 +265,7 @@ fn kafka_add_controller() -> std::process::Output {
         .output()
         .expect("spawn docker run kafka-metadata-quorum add-controller");
     eprintln!(
-        "CRABKA[test] kafka-metadata-quorum add-controller status={}\nstdout:\n{}\nstderr:\n{}",
+        "KRABKA[test] kafka-metadata-quorum add-controller status={}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -291,7 +291,7 @@ fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
 async fn kafka_features_describe_and_round_trip() {
     let (handle, _dir) = start_host_broker().await;
 
-    // 1. describe — Crabka advertises + finalizes the feature surface.
+    // 1. describe — Krabka advertises + finalizes the feature surface.
     let desc = kafka_features(&["describe"]);
     assert!(desc.status.success(), "describe failed");
     let out = String::from_utf8_lossy(&desc.stdout);

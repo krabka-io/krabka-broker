@@ -36,7 +36,7 @@ use dashmap::DashMap;
 /// it. The file is absent in steady state. The probe is similar to
 /// Apache Kafka's `meta.properties` probe, and it does not collide with
 /// that file's role.
-const PROBE_FILENAME: &str = ".crabka-write-probe";
+const PROBE_FILENAME: &str = ".krabka-write-probe";
 
 /// Per-dir health snapshot. `None` means online. `Some(reason)` means
 /// the startup probe failed with that human-readable reason.
@@ -194,7 +194,7 @@ fn probe_one(dir: &Path) -> Result<(), String> {
         .write(true)
         .open(&probe_path)
         .map_err(|e| format!("open probe: {e}"))?;
-    file.write_all(b"crabka")
+    file.write_all(b"krabka")
         .map_err(|e| format!("write probe: {e}"))?;
     // `sync_data` catches a remounted-read-only filesystem that lets
     // the write buffer succeed but rejects the actual flush. Without
@@ -235,7 +235,7 @@ mod tests {
     /// The probe must leave nothing behind. It removes the sentinel
     /// file after a successful round-trip. This test catches the
     /// regression where `log_dir::scan` later misparses a stray
-    /// `.crabka-write-probe` as a partition directory.
+    /// `.krabka-write-probe` as a partition directory.
     #[test]
     fn probe_cleans_up_sentinel_on_success() {
         let tmp = tempdir().unwrap();
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn mark_offline_on_unknown_dir_inserts_entry() {
         let reg = LogDirRegistry::default();
-        let ghost = Path::new("/tmp/crabka-ghost-dir");
+        let ghost = Path::new("/tmp/krabka-ghost-dir");
         assert!(reg.mark_offline(ghost, "synthetic test"));
         assert!(reg.is_offline(ghost));
     }
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn debug_includes_offline_count_and_entries() {
         let reg = LogDirRegistry::default();
-        let ghost = Path::new("/tmp/crabka-debug-offline-dir");
+        let ghost = Path::new("/tmp/krabka-debug-offline-dir");
         assert!(reg.mark_offline(ghost, "debug reason"));
 
         let rendered = format!("{reg:?}");
@@ -357,7 +357,7 @@ mod tests {
             "LogDirRegistry",
             "offline_count",
             "debug reason",
-            "crabka-debug-offline-dir",
+            "krabka-debug-offline-dir",
         ];
         for needle in needles {
             assert!(

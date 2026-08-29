@@ -33,12 +33,12 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_metadata::{MetadataImage, NodeId};
-use crabka_protocol::records::{Record, RecordBatch};
-use crabka_units::{Time, convert::TimeExt as _};
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_metadata::{MetadataImage, NodeId};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
@@ -69,10 +69,10 @@ use crate::{
 /// How long `create_group` waits for the state topic's partition to take a
 /// leader before it gives up. Creation and leader assignment are two separate
 /// metadata rounds, and the caller cannot act until the second one lands.
-const STATE_TOPIC_READY_TIMEOUT: Time = crabka_units::secs(10);
+const STATE_TOPIC_READY_TIMEOUT: Time = krabka_units::secs(10);
 
 /// How often that wait re-reads the metadata image.
-const STATE_TOPIC_READY_POLL: Time = crabka_units::millis(20);
+const STATE_TOPIC_READY_POLL: Time = krabka_units::millis(20);
 
 /// What one published cut says about its group.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -966,7 +966,7 @@ fn decode_state_record(partition: PartitionIndex, record: &Record) -> Option<Sta
 /// caller skips it rather than deleting what the key names.
 fn keep_decoded<T>(
     partition: PartitionIndex,
-    decoded: Result<T, crabka_protocol::ProtocolError>,
+    decoded: Result<T, krabka_protocol::ProtocolError>,
 ) -> Option<T> {
     match decoded {
         Ok(value) => Some(value),
@@ -988,17 +988,17 @@ mod tests {
     /// past what the operator allows.
     #[test]
     fn a_requested_timeout_is_clamped_to_the_configured_ceiling() {
-        let ceiling = crabka_units::secs(30);
+        let ceiling = krabka_units::secs(30);
         let cases = [
             ("no opinion takes the ceiling", None, ceiling),
             (
                 "under the ceiling is honoured",
-                Some(crabka_units::secs(5)),
-                crabka_units::secs(5),
+                Some(krabka_units::secs(5)),
+                krabka_units::secs(5),
             ),
             (
                 "over the ceiling is clamped",
-                Some(crabka_units::secs(600)),
+                Some(krabka_units::secs(600)),
                 ceiling,
             ),
             ("exactly the ceiling", Some(ceiling), ceiling),
@@ -1009,8 +1009,8 @@ mod tests {
     }
 
     use assert2::{assert, check};
-    use crabka_metadata::MetadataRecord;
-    use crabka_units::millis;
+    use krabka_metadata::MetadataRecord;
+    use krabka_units::millis;
     use tempfile::{TempDir, tempdir};
 
     use super::*;
@@ -1119,7 +1119,7 @@ mod tests {
     ) -> Option<BarrierMarker> {
         let part = registry.get(topic, PartitionIndex(partition))?;
         let read = part
-            .read_log(offset, crabka_units::mebibytes(1))
+            .read_log(offset, krabka_units::mebibytes(1))
             .expect("read the log back");
         let batch = read.batches.first()?;
         parse_barrier_marker(&batch.records[0]).ok()
@@ -1653,7 +1653,7 @@ mod tests {
             .get(STATE_TOPIC, index)
             .expect("the state partition is open");
         let read = partition
-            .read_log(Offset(0), crabka_units::mebibytes(1))
+            .read_log(Offset(0), krabka_units::mebibytes(1))
             .expect("read the log back");
         let mut kinds = Vec::new();
         for batch in &read.batches {

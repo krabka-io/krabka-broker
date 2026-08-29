@@ -24,9 +24,9 @@ use std::{
     time::Duration,
 };
 
-use crabka_ids::PartitionIndex;
-use crabka_metadata::NodeId;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_metadata::NodeId;
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 

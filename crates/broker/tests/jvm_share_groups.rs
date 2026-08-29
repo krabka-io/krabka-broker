@@ -3,10 +3,10 @@
 //! This test drives a REAL Apache Kafka 4.x
 //! `kafka-console-share-consumer.sh`, which runs a `KafkaShareConsumer`,
 //! inside a `mirror.gcr.io/apache/kafka:4.1.0` container. It runs against an
-//! in-process Crabka broker on the host. This exercises Crabka's share-group
+//! in-process Krabka broker on the host. This exercises Krabka's share-group
 //! wire protocol end to end against the real JVM client:
 //!
-//! - `ApiVersions` negotiation (key 18; `share.version` advertised by Crabka),
+//! - `ApiVersions` negotiation (key 18; `share.version` advertised by Krabka),
 //! - `FindCoordinator(GROUP/SHARE)` (key 10),
 //! - `ShareGroupHeartbeat` (key 76) membership + assignment,
 //! - `ShareFetch` (key 78) acquire + record bytes,
@@ -33,10 +33,10 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_client_core::Client;
-use crabka_log::LogConfig;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_client_core::Client;
+use krabka_log::LogConfig;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         find_coordinator_request::FindCoordinatorRequest,
@@ -106,7 +106,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
         )
         .with_test_writer()
         .try_init();
@@ -120,26 +120,26 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
+    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
 async fn connect() -> Client {
     Client::builder()
         .bootstrap(client_addr().to_string())
-        .client_id("crabka-share-test")
+        .client_id("krabka-share-test")
         .build()
         .await
         .expect("client build")
@@ -276,7 +276,7 @@ fn docker_run(args: &[&str]) -> std::process::Output {
         .output()
         .expect("docker run");
     eprintln!(
-        "CRABKA[test] docker {args:?} status={} stderr={}",
+        "KRABKA[test] docker {args:?} status={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr),
     );
@@ -284,12 +284,12 @@ fn docker_run(args: &[&str]) -> std::process::Output {
 }
 
 /// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
-/// Crabka share group, reads every produced record, and acknowledges
+/// Krabka share group, reads every produced record, and acknowledges
 /// implicitly on poll. The test asserts that each produced value appears in
 /// its stdout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_share_consumer_reads_crabka() {
+async fn jvm_share_consumer_reads_krabka() {
     let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     let topic = "kip932-jvm";
@@ -320,7 +320,7 @@ async fn jvm_share_consumer_reads_crabka() {
         ),
     ]);
     let stdout = String::from_utf8_lossy(&consumed.stdout);
-    eprintln!("CRABKA[test] share-consumer stdout:\n{stdout}");
+    eprintln!("KRABKA[test] share-consumer stdout:\n{stdout}");
 
     for v in values {
         assert!(
@@ -332,7 +332,7 @@ async fn jvm_share_consumer_reads_crabka() {
 }
 
 /// `kafka-share-groups.sh --describe --state` reports the share group after
-/// the JVM consumer joined. That proves Crabka serves the share-group admin
+/// the JVM consumer joined. That proves Krabka serves the share-group admin
 /// path (`ShareGroupDescribe`, `api_key` 77) to the real JVM tooling. The tool
 /// resolves the share coordinator, sends `ShareGroupDescribe`, and prints the
 /// group's coordinator and state.
@@ -377,7 +377,7 @@ async fn jvm_share_groups_describe_state() {
         ),
     ]);
     let state_out = String::from_utf8_lossy(&state.stdout);
-    eprintln!("CRABKA[test] share-groups --describe --state stdout:\n{state_out}");
+    eprintln!("KRABKA[test] share-groups --describe --state stdout:\n{state_out}");
     assert!(
         state_out.contains(group),
         "share group {group} must appear in --describe --state output; got:\n{state_out}\nstderr:\n{}",
@@ -387,7 +387,7 @@ async fn jvm_share_groups_describe_state() {
 
 /// `kafka-share-groups.sh --list` drives `ListGroups` (`api_key` 16) with
 /// `types_filter = ["share"]`. After a real JVM `KafkaShareConsumer` joins a
-/// share group on the Crabka broker, the share group id must appear in the
+/// share group on the Krabka broker, the share group id must appear in the
 /// tool's `--list` stdout.
 ///
 /// Before the `ListGroups` share pass, the JVM tool's `types_filter=["share"]`
@@ -434,7 +434,7 @@ async fn jvm_share_groups_list() {
         &format!("{SHARE_GROUPS} --bootstrap-server {bootstrap} --list"),
     ]);
     let list_out = String::from_utf8_lossy(&listed.stdout);
-    eprintln!("CRABKA[test] share-groups --list stdout:\n{list_out}");
+    eprintln!("KRABKA[test] share-groups --list stdout:\n{list_out}");
     assert!(
         list_out.contains(group),
         "share group {group} must appear in --list output; got:\n{list_out}\nstderr:\n{}",

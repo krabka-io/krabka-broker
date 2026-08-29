@@ -10,7 +10,7 @@
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
-use crabka_ids::{Offset, ProducerId};
+use krabka_ids::{Offset, ProducerId};
 use tracing::instrument;
 use zerocopy::{
     BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, byteorder::I64,

@@ -4,7 +4,7 @@
 //! `ListClientMetricsResources` (KIP-714) and returned only client-metrics
 //! subscriptions. v1 generalises it with a `resource_types` filter.
 //!
-//! Crabka surfaces `TOPIC` (2), `BROKER` (4), `CLIENT_METRICS` (16), and
+//! Krabka surfaces `TOPIC` (2), `BROKER` (4), `CLIENT_METRICS` (16), and
 //! `GROUP` (32). `BROKER_LOGGER` (8) is intentionally omitted because the
 //! broker reads its logging filter from `RUST_LOG`.
 //!
@@ -12,8 +12,8 @@
 //! metadata image (see `MetadataImage::client_metrics_subscriptions`).
 
 use bytes::Bytes;
-use crabka_metadata::AclOperation;
-use crabka_protocol::{
+use krabka_metadata::AclOperation;
+use krabka_protocol::{
     Decode,
     owned::{
         list_config_resources_request::ListConfigResourcesRequest,
@@ -72,7 +72,7 @@ pub(crate) fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Describe,
         },
@@ -103,7 +103,7 @@ pub(crate) fn handle(
 /// `(resource_type, resource_name)`, so the wire payload is deterministic
 /// whatever the underlying iteration order in `MetadataImage` is.
 fn collect_resources(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     version: i16,
     requested: &[i8],
 ) -> Vec<ConfigResource> {
@@ -173,8 +173,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
-    use crabka_protocol::UnknownTaggedFields;
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_protocol::UnknownTaggedFields;
     use uuid::Uuid;
 
     use super::*;
@@ -198,7 +198,7 @@ mod tests {
         for &id in broker_ids {
             img.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    node_id: crabka_audit::NodeId(id),
+                    node_id: krabka_audit::NodeId(id),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::nil(),
                     host: "127.0.0.1".into(),
@@ -237,7 +237,7 @@ mod tests {
     }
 
     fn image_with_subs(names: &[&str]) -> MetadataImage {
-        use crabka_metadata::ClientMetricsConfigRecord;
+        use krabka_metadata::ClientMetricsConfigRecord;
         let mut img = MetadataImage::new(Uuid::nil());
         for n in names {
             let mut cfgs = std::collections::BTreeMap::new();
@@ -278,7 +278,7 @@ mod tests {
     fn v1_group_filter_returns_configured_groups() {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1GroupConfig(
-            crabka_metadata::GroupConfigRecord {
+            krabka_metadata::GroupConfigRecord {
                 group_id: "streams-b".into(),
                 configs: std::collections::BTreeMap::from([(
                     "streams.num.standby.replicas".into(),
@@ -287,7 +287,7 @@ mod tests {
             },
         ));
         image.apply(&MetadataRecord::V1GroupConfig(
-            crabka_metadata::GroupConfigRecord {
+            krabka_metadata::GroupConfigRecord {
                 group_id: "streams-a".into(),
                 configs: std::collections::BTreeMap::from([(
                     "streams.num.standby.replicas".into(),

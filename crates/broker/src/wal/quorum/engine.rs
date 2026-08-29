@@ -9,11 +9,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_ids::{LeaderEpoch, Offset, ProducerId};
-use crabka_kraft_core::{LogView as _, NodeId};
-use crabka_log::{Log, VerbatimBatch};
-use crabka_protocol::records::RecordBatch;
-use crabka_units::{ByteSize, convert::ByteSizeExt as _};
+use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_kraft_core::{LogView as _, NodeId};
+use krabka_log::{Log, VerbatimBatch};
+use krabka_protocol::records::RecordBatch;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio::sync::Notify;
 
 use crate::{error::BrokerError, wal::quorum::log_view::ShardLog};
@@ -411,7 +411,7 @@ impl WalShardEngine {
             })
             .collect::<Vec<_>>();
         let current = self.durable_watermark();
-        let durable = Offset(crabka_verified::recompute_high_watermark(
+        let durable = Offset(krabka_verified::recompute_high_watermark(
             leader_end.0,
             &follower_ends,
             strict_majority(quorum.voters.len()),
@@ -513,7 +513,7 @@ fn recover_durable_prefix(replicas: &[WalReplica], majority: usize) -> Result<Of
         .enumerate()
         .filter_map(|(index, offset)| (index != donor_index).then_some(offset.0))
         .collect::<Vec<_>>();
-    let durable = Offset(crabka_verified::recompute_high_watermark(
+    let durable = Offset(krabka_verified::recompute_high_watermark(
         donor_end.0,
         &follower_ends,
         majority,

@@ -14,7 +14,7 @@
 //! records under an operator's rule, but both owe the log the same offset
 //! shape.
 
-use crabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::{Record, RecordBatch};
 
 /// What [`filter_batch`] made of a batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +93,7 @@ where
 mod tests {
     use assert2::{assert, check};
     use bytes::{Bytes, BytesMut};
-    use crabka_protocol::records::{Attributes, RecordHeader};
+    use krabka_protocol::records::{Attributes, RecordHeader};
 
     use super::*;
 

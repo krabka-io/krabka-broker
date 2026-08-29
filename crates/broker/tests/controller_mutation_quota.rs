@@ -14,11 +14,11 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -28,7 +28,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -56,7 +56,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-mutation-quota-test";
+    let client_id = "krabka-mutation-quota-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -167,7 +167,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -203,7 +203,7 @@ async fn drive_alter_client_quotas_sasl(
     entries: QuotaEntries,
     validate_only: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
         alter_client_quotas_response::AlterClientQuotasResponse,
     };
@@ -277,7 +277,7 @@ async fn drive_create_topics_sasl(
     topic: &str,
     partitions: i32,
 ) -> (i32, i16) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -319,7 +319,7 @@ async fn drive_delete_topics_sasl(
     pass: &str,
     topic: &str,
 ) -> (i32, i16) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         delete_topics_request::DeleteTopicsRequest, delete_topics_response::DeleteTopicsResponse,
     };
 
@@ -421,7 +421,7 @@ async fn controller_mutation_rate_throttles_create_topics() {
     let (throttle_ms, err_code) =
         drive_create_topics_sasl(addr, "alice", "alice-secret", "rejected-topic", 1).await;
     check!(
-        err_code == crabka_broker::codes::THROTTLING_QUOTA_EXCEEDED,
+        err_code == krabka_broker::codes::THROTTLING_QUOTA_EXCEEDED,
         "expected strict quota rejection, got error {err_code}"
     );
     check!(

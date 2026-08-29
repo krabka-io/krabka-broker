@@ -3,7 +3,7 @@
 //! `GroupCoordinator`.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -102,23 +102,23 @@ mod tests {
     use std::net::SocketAddr;
 
     use assert2::assert;
-    use crabka_protocol::{UnknownTaggedFields, owned::share_group_heartbeat_response};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_protocol::{UnknownTaggedFields, owned::share_group_heartbeat_response};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use crabka_protocol::owned::share_group_heartbeat_response::{
+        use krabka_protocol::owned::share_group_heartbeat_response::{
             self, ShareGroupHeartbeatResponse,
         };
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

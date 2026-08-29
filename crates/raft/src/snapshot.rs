@@ -7,11 +7,11 @@
 //! [`SnapshotReader::read`].
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_metadata::{
+use krabka_metadata::{
     MetadataImage, MetadataRecord, NodeId, Voter, VoterEndpoint, VoterSet, from_kraft_value,
     to_kraft_values, voters::KRaftVersionRange,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         k_raft_version_record::KRaftVersionRecord as WireKRaftVersionRecord,
         snapshot_footer_record::SnapshotFooterRecord,
@@ -194,7 +194,7 @@ fn voter_set_to_wire(voters: &VoterSet) -> Result<WireVotersRecord, RaftError> {
                 voter_id: i32::try_from(voter.id.0).map_err(|_| {
                     RaftError::ChangeRejected("snapshot voter id exceeds int32".into())
                 })?,
-                voter_directory_id: crabka_protocol::primitives::uuid::Uuid(
+                voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
                     *voter.directory_id.as_bytes(),
                 ),
                 endpoints: voter
@@ -400,7 +400,7 @@ fn invalid_snapshot_order() -> RaftError {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::{
+    use krabka_metadata::{
         FeatureLevelRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
         TopicRecord,
     };
@@ -507,7 +507,7 @@ mod tests {
                 == ControlRecord::SnapshotHeader(SnapshotHeaderRecord {
                     version: 0,
                     last_contained_log_timestamp: timestamp,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 })
         );
 
@@ -578,9 +578,9 @@ mod tests {
         ]);
         let mut image = MetadataImage::new(cid);
         image.apply(&MetadataRecord::V1KRaftVersion(
-            crabka_metadata::KRaftVersionRecord { kraft_version: 1 },
+            krabka_metadata::KRaftVersionRecord { kraft_version: 1 },
         ));
-        image.apply(&MetadataRecord::V1Voters(crabka_metadata::VotersRecord {
+        image.apply(&MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
             voters: voters.clone(),
         }));
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
@@ -765,22 +765,22 @@ mod tests {
         assert2::assert!(SnapshotReader::read(&bytes).is_err());
     }
 
-    /// Docker-gated: a Crabka engine-produced KIP-630 snapshot (built by
+    /// Docker-gated: a Krabka engine-produced KIP-630 snapshot (built by
     /// `SnapshotWriter` from a real `MetadataImage` through the KIP-631
     /// translation boundary) is parsed cleanly by the JVM
     /// `kafka-dump-log --cluster-metadata-decoder`, proving the on-checkpoint
     /// bytes are genuine KIP-631 records (`RegisterBroker` / `Topic` /
-    /// `Partition` / `Config`), not Crabka-private wincode.
+    /// `Partition` / `Config`), not Krabka-private wincode.
     ///
     /// ```text
-    /// cargo test -p crabka-raft --lib snapshot -- --ignored --nocapture
+    /// cargo test -p krabka-raft --lib snapshot -- --ignored --nocapture
     /// ```
     #[test]
     #[ignore = "requires Docker"]
     fn jvm_dump_log_parses_engine_snapshot() {
         use std::{io::Write as _, process::Command};
 
-        use crabka_metadata::{BrokerConfigRecord, BrokerRegistrationRecord, TopicConfigRecord};
+        use krabka_metadata::{BrokerConfigRecord, BrokerRegistrationRecord, TopicConfigRecord};
 
         let cid = Uuid::new_v4();
         let mut image = MetadataImage::new(cid);

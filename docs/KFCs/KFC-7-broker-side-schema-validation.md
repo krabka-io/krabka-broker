@@ -6,7 +6,7 @@ The broker refuses a record that does not match the schema its topic is bound to
 
 **Adopted.** The implementation lands on branch `claude/broker-schema-validation-registry-s451bp`.
 
-The registry the broker reads is [`krabka-schema-registry`](https://github.com/krabka-io/krabka-schema-registry), extracted into its own repository on the same branch. The broker depends on one crate from it, `crabka-schema-serde`, for the wire framing and the REST client.
+The registry the broker reads is [`krabka-schema-registry`](https://github.com/krabka-io/krabka-schema-registry), extracted into its own repository on the same branch. The broker depends on one crate from it, `krabka-schema-serde`, for the wire framing and the REST client.
 
 No KIP defines broker-side schema validation. Confluent Server has a proprietary form of it, and this document states where krabka sits next to that as well as next to Apache Kafka.
 
@@ -85,7 +85,7 @@ The fields are encoded only for Produce v8 and later. A v7 client sees the bare 
 
 ### What "Valid" Means
 
-A validated field must carry the Confluent wire framing: a `0x00` magic byte, then a four-byte big-endian schema id, then the body. A Protobuf payload carries a message-index between the id and the body. This is the framing every Confluent-compatible serializer writes and `crabka-schema-serde` already reads.
+A validated field must carry the Confluent wire framing: a `0x00` magic byte, then a four-byte big-endian schema id, then the body. A Protobuf payload carries a message-index between the id and the body. This is the framing every Confluent-compatible serializer writes and `krabka-schema-serde` already reads.
 
 Two shapes are accepted without a schema, because neither can carry one:
 
@@ -106,7 +106,7 @@ This is Confluent Server's behaviour, and it is the default here for the same re
 
 `full` exists because `id` has an honest gap: a producer that frames with a valid id and then writes a body that its own schema does not describe passes `id` mode. That producer is a bug rather than a misconfiguration, and it is rarer, but a system of record is exactly where it matters. The cost is a decode of every validated field on the produce path, so it is a choice rather than the default.
 
-`full` is not equally strict across the three formats, and the difference is in the formats rather than in this design. Avro and JSON Schema both reject a body their schema does not describe. Protobuf rejects a declared field carried with the wrong wire type, and a body that is not a protobuf message at all, but it keeps an *undeclared* field number as an unknown field rather than failing — that is what the wire format says to do, and it is what makes protobuf forward-compatible. An operator running `full` on a Protobuf topic gets less than one running it on an Avro topic. `crabka-schema-serde`'s `validate_protobuf` states the same limit, and a test asserts it so it stays a known property.
+`full` is not equally strict across the three formats, and the difference is in the formats rather than in this design. Avro and JSON Schema both reject a body their schema does not describe. Protobuf rejects a declared field carried with the wrong wire type, and a body that is not a protobuf message at all, but it keeps an *undeclared* field number as an unknown field rather than failing — that is what the wire format says to do, and it is what makes protobuf forward-compatible. An operator running `full` on a Protobuf topic gets less than one running it on an Avro topic. `krabka-schema-serde`'s `validate_protobuf` states the same limit, and a test asserts it so it stays a known property.
 
 ### Where the Check Runs
 
@@ -126,7 +126,7 @@ The broker's produce fast path appends the producer's exact bytes. It validates 
 
 Validation therefore decodes the batch a second time, for inspection only, and then throws the decoded view away and appends the original bytes. The log still holds exactly what the producer wrote, byte for byte, on a validated topic as on any other.
 
-The cost is real and worth stating plainly: on a validated topic, a compressed batch is decompressed twice, once to check its structure and once to read its records. The alternative is to fuse the two walks in `crabka-protocol`, whose record walk already parses each record and discards it — nearly free, and a change in a third repository. That is the right follow-up and it is not this change.
+The cost is real and worth stating plainly: on a validated topic, a compressed batch is decompressed twice, once to check its structure and once to read its records. The alternative is to fuse the two walks in `krabka-protocol`, whose record walk already parses each record and discards it — nearly free, and a change in a third repository. That is the right follow-up and it is not this change.
 
 ### The Schema Cache
 
@@ -198,7 +198,7 @@ It loses on the project's own rule. An alias kept for another product's spelling
 
 ### Validation in the Client Serde Only
 
-`crabka-schema-serde` could refuse to serialize a value its schema does not describe, and every krabka client would then produce only valid records.
+`krabka-schema-serde` could refuse to serialize a value its schema does not describe, and every krabka client would then produce only valid records.
 
 It loses on the producers this is about. A client-side check protects the clients that run it, and those clients were already using a serializer, which is why their records were already valid. It does nothing about `kafka-console-producer`, a connector with the wrong converter, a service in another language, or a test fixture pointed at production. The broker is the only place every write passes through, and that is the whole argument for putting the check there.
 

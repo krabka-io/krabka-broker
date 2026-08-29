@@ -28,11 +28,11 @@ use std::{
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::BrokerHandle;
-use crabka_client_consumer::{AutoOffsetReset, Consumer};
-use crabka_client_core::Client;
-use crabka_client_producer::{Acks, Producer, ProducerRecord};
-use crabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use krabka_broker::BrokerHandle;
+use krabka_client_consumer::{AutoOffsetReset, Consumer};
+use krabka_client_core::Client;
+use krabka_client_producer::{Acks, Producer, ProducerRecord};
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 mod support;
 
@@ -221,9 +221,9 @@ async fn producer_routes_to_non_bootstrap_leaders() {
         .bootstrap(bootstrap.clone())
         .client_id("routing-consumer-rf1")
         .group_id("routing-producer-grp-rf1")
-        .session_timeout(crabka_units::secs(30))
-        .rebalance_timeout(crabka_units::secs(2))
-        .heartbeat_interval(crabka_units::secs(1))
+        .session_timeout(krabka_units::secs(30))
+        .rebalance_timeout(krabka_units::secs(2))
+        .heartbeat_interval(krabka_units::secs(1))
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .subscribe([topic.to_string()])
         .build()
@@ -236,7 +236,7 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     let mut seen_partitions: HashMap<i32, String> = HashMap::new();
     let deadline = Instant::now() + Duration::from_secs(30);
     while seen.len() < expected.len() && Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(300)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(300)).await.unwrap() {
             let v = String::from_utf8_lossy(r.value.as_deref().unwrap_or(&[])).into_owned();
             seen.insert(v.clone());
             seen_partitions.insert(r.partition, v);

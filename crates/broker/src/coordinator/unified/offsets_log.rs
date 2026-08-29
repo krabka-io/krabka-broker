@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_ids::PartitionIndex;
-use crabka_protocol::records::RecordBatch;
+use krabka_ids::PartitionIndex;
+use krabka_protocol::records::RecordBatch;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -89,7 +89,7 @@ impl OffsetsLog for ProductionOffsetsLog {
 }
 
 pub mod fake {
-    use crabka_protocol::records::RecordBatch;
+    use krabka_protocol::records::RecordBatch;
     use tokio::sync::Mutex;
 
     use super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait};

@@ -1,17 +1,17 @@
-# crabka-raft
+# krabka-raft
 
-[![Crates.io](https://img.shields.io/crates/v/crabka-raft.svg)](https://crates.io/crates/crabka-raft)
-[![Docs.rs](https://docs.rs/crabka-raft/badge.svg)](https://docs.rs/crabka-raft)
+[![Crates.io](https://img.shields.io/crates/v/krabka-raft.svg)](https://crates.io/crates/krabka-raft)
+[![Docs.rs](https://docs.rs/krabka-raft/badge.svg)](https://docs.rs/krabka-raft)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
-Metadata KRaft quorum (KIP-595 KraftController) for Crabka.
+Metadata KRaft quorum (KIP-595 KraftController) for Krabka.
 
-This crate is part of [Crabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
+This crate is part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
 
 ## Install
 
 ```sh
-cargo add crabka-raft
+cargo add krabka-raft
 ```
 
 For workspace development, use the path dependency from this repository instead.
@@ -21,8 +21,8 @@ For workspace development, use the path dependency from this repository instead.
 Exercise the KRaft quorum state machine in a deterministic unit test:
 
 ```rust
-use crabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint, VoterSet};
-use crabka_raft::kraft::{QuorumState, QuorumStateMachine};
+use krabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint, VoterSet};
+use krabka_raft::kraft::{QuorumState, QuorumStateMachine};
 use uuid::Uuid;
 
 let voters = VoterSet::new(vec![Voter {
@@ -39,7 +39,7 @@ assert!(machine.is_voter());
 
 ## Documentation
 
-Read the API documentation at [docs.rs/crabka-raft](https://docs.rs/crabka-raft). The repository README contains the project-wide setup, development, and release notes.
+Read the API documentation at [docs.rs/krabka-raft](https://docs.rs/krabka-raft). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

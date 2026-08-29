@@ -1,7 +1,7 @@
 //! Binary wire format for `__remote_log_metadata` events.
 //!
 //! This module encodes records through
-//! [`crabka_protocol::RemoteLogMetadataRecord`], which produces bytes that are
+//! [`krabka_protocol::RemoteLogMetadataRecord`], which produces bytes that are
 //! byte-identical to the JVM `RemoteLogMetadataSerde`. That is the
 //! `AbstractApiMessageSerde` envelope, with all three header fields written as
 //! unsigned varints: `frameVersion(uvarint)=1 | apiKey(uvarint) |
@@ -15,8 +15,8 @@
 use std::collections::BTreeMap;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_ids::LeaderEpoch;
-use crabka_protocol::{
+use krabka_ids::LeaderEpoch;
+use krabka_protocol::{
     RemoteLogMetadataRecord,
     owned::{
         remote_log_segment_metadata_record::{
@@ -33,7 +33,7 @@ use crabka_protocol::{
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
-use crabka_remote_storage::{
+use krabka_remote_storage::{
     CustomMetadata, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
     RemoteLogSegmentState, RemotePartitionDeleteMetadata, RemotePartitionDeleteState,
     TopicIdPartition,
@@ -247,7 +247,7 @@ fn from_proto_add(
         r.max_timestamp_ms,
         r.broker_id,
         r.event_timestamp_ms,
-        crabka_remote_storage::RemoteLogSegmentDetails::new(
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
             r.segment_size_in_bytes,
             state,
             segment_leader_epochs,
@@ -462,7 +462,7 @@ mod tests {
             end + 1,
             42,
             123,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 4096,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([
@@ -563,7 +563,7 @@ mod tests {
     fn unknown_segment_state_is_rejected() {
         // Build a SegmentMetadata record with an out-of-range state byte (7),
         // encode it through the protocol envelope, then assert decode → Err.
-        use crabka_protocol::owned::remote_log_segment_metadata_record::{
+        use krabka_protocol::owned::remote_log_segment_metadata_record::{
             RemoteLogSegmentMetadataRecord, SegmentLeaderEpochEntry,
         };
         // Provide a minimal valid epoch list so domain construction doesn't fail first.
@@ -576,7 +576,7 @@ mod tests {
             remote_log_segment_state: 7,
             ..Default::default()
         };
-        let bytes = crabka_protocol::RemoteLogMetadataRecord::SegmentMetadata(rec)
+        let bytes = krabka_protocol::RemoteLogMetadataRecord::SegmentMetadata(rec)
             .encode_value()
             .unwrap();
         let err = MetadataEvent::decode(&bytes).unwrap_err();
@@ -585,8 +585,8 @@ mod tests {
 
     #[test]
     fn snapshot_apikey_is_rejected_on_topic() {
-        use crabka_protocol::owned::remote_log_segment_metadata_snapshot_record::RemoteLogSegmentMetadataSnapshotRecord;
-        let bytes = crabka_protocol::RemoteLogMetadataRecord::SegmentMetadataSnapshot(
+        use krabka_protocol::owned::remote_log_segment_metadata_snapshot_record::RemoteLogSegmentMetadataSnapshotRecord;
+        let bytes = krabka_protocol::RemoteLogMetadataRecord::SegmentMetadataSnapshot(
             RemoteLogSegmentMetadataSnapshotRecord::default(),
         )
         .encode_value()

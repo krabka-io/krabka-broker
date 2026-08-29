@@ -26,7 +26,7 @@
 //! fails closed. When it cannot satisfy the site guarantee, it returns an
 //! empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
 
-use crabka_raft::NodeId;
+use krabka_raft::NodeId;
 
 use crate::handlers::create_topics::round_robin_replicas;
 

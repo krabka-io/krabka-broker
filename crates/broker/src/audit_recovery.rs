@@ -1,12 +1,12 @@
 //! Recover the audit hash-chain position from this broker's audit partition.
 
-use crabka_audit::{
+use krabka_audit::{
     EVENT_CLASS_CHECKPOINT, HEADER_PREV_HASH, HEADER_SEQ,
     chain::{chain_hash, from_hex32},
 };
-use crabka_units::ByteSize;
+use krabka_units::ByteSize;
 #[cfg(test)]
-use crabka_units::{bytes, kibibytes, mebibytes};
+use krabka_units::{bytes, kibibytes, mebibytes};
 
 use crate::partition::Partition;
 
@@ -22,7 +22,7 @@ pub(crate) fn recover_from_partition_tail(
     tail_read_max: ByteSize,
 ) -> Option<(u64, [u8; 32])> {
     let leo = partition.log_end_offset();
-    if leo <= crabka_log::Offset(0) {
+    if leo <= krabka_log::Offset(0) {
         return None;
     }
     // Read a bounded tail window (audit records are small).
@@ -50,22 +50,22 @@ pub(crate) fn recover_from_partition_tail(
     last
 }
 
-fn header_bytes<'a>(rec: &'a crabka_protocol::records::Record, key: &str) -> Option<&'a [u8]> {
+fn header_bytes<'a>(rec: &'a krabka_protocol::records::Record, key: &str) -> Option<&'a [u8]> {
     rec.headers
         .iter()
         .find(|h| h.key == key)
         .and_then(|h| h.value.as_deref())
 }
 
-fn header_str<'a>(rec: &'a crabka_protocol::records::Record, key: &str) -> Option<&'a str> {
+fn header_str<'a>(rec: &'a krabka_protocol::records::Record, key: &str) -> Option<&'a str> {
     header_bytes(rec, key).and_then(|v| std::str::from_utf8(v).ok())
 }
 
 fn tail_window_start(
-    log_end_offset: crabka_log::Offset,
+    log_end_offset: krabka_log::Offset,
     tail_window_offsets: i64,
-) -> crabka_log::Offset {
-    (log_end_offset - tail_window_offsets).max(crabka_log::Offset(0))
+) -> krabka_log::Offset {
+    (log_end_offset - tail_window_offsets).max(krabka_log::Offset(0))
 }
 
 #[cfg(test)]
@@ -77,10 +77,10 @@ mod tests {
 
     use assert2::assert;
     use bytes::Bytes;
-    use crabka_audit::chain::{GENESIS_HEAD, to_hex};
-    use crabka_ids::PartitionIndex;
-    use crabka_log::{Log, LogConfig, Offset};
-    use crabka_protocol::records::{Record, RecordBatch, RecordHeader};
+    use krabka_audit::chain::{GENESIS_HEAD, to_hex};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig, Offset};
+    use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
     use tokio::sync::{Notify, mpsc};
 
     use super::*;

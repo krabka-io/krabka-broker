@@ -11,7 +11,7 @@
 //! change it is recomputed from the segments, and a recomputation can only
 //! agree with what the records say.
 
-use crabka_ids::Offset;
+use krabka_ids::Offset;
 
 /// Result of
 /// [`Log::advance_delivery_watermark`](crate::Log::advance_delivery_watermark).

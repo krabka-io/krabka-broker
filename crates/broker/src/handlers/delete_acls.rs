@@ -1,8 +1,8 @@
 //! `DeleteAcls` handler (`api_key` 31).
 
 use bytes::Bytes;
-use crabka_metadata::{AclEntry, AclEntryFilter, MetadataRecord};
-use crabka_protocol::{
+use krabka_metadata::{AclEntry, AclEntryFilter, MetadataRecord};
+use krabka_protocol::{
     Encode,
     owned::{
         delete_acls_request::{DeleteAclsFilter, DeleteAclsRequest},
@@ -42,9 +42,9 @@ pub(crate) async fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Alter,
+            operation: krabka_metadata::AclOperation::Alter,
         },
     );
     if allow == AuthorizationResult::Deny {
@@ -151,12 +151,12 @@ fn apply_submit_error<E: std::fmt::Display>(filter_results: &mut [DeleteAclsFilt
 
 fn deleted_acl_resources(
     filter_results: &[DeleteAclsFilterResult],
-) -> Vec<crabka_audit::AuditResource> {
+) -> Vec<krabka_audit::AuditResource> {
     filter_results
         .iter()
         .filter(|r| r.error_code == codes::NONE)
         .flat_map(|r| r.matching_acls.iter())
-        .map(|m| crabka_audit::AuditResource {
+        .map(|m| krabka_audit::AuditResource {
             resource_type: "Acl".to_string(),
             name: m.resource_name.clone(),
         })
@@ -164,16 +164,16 @@ fn deleted_acl_resources(
 }
 
 fn audit_deleted_acls(
-    audit_log: &crabka_audit::AuditLog,
+    audit_log: &krabka_audit::AuditLog,
     ctx: &crate::handlers::RequestContext<'_>,
-    deleted_acls: Vec<crabka_audit::AuditResource>,
+    deleted_acls: Vec<krabka_audit::AuditResource>,
 ) {
     if !deleted_acls.is_empty() {
         crate::handlers::audit_admin(
             audit_log,
             ctx,
             "DeleteAcls",
-            crabka_audit::AuditOutcome::Success,
+            krabka_audit::AuditOutcome::Success,
             deleted_acls,
         );
     }
@@ -206,8 +206,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
-    use crabka_protocol::UnknownTaggedFields;
+    use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
+    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::{
@@ -403,7 +403,7 @@ mod tests {
 
         let resources = deleted_acl_resources(&[ok, failed]);
 
-        let expected = vec![crabka_audit::AuditResource {
+        let expected = vec![krabka_audit::AuditResource {
             resource_type: "Acl".into(),
             name: "orders".into(),
         }];
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn audit_deleted_acls_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
@@ -426,14 +426,14 @@ mod tests {
         audit_deleted_acls(
             log.as_ref(),
             &ctx,
-            vec![crabka_audit::AuditResource {
+            vec![krabka_audit::AuditResource {
                 resource_type: "Acl".into(),
                 name: "orders".into(),
             }],
         );
 
         let event = rx.try_recv().expect("admin audit event");
-        let crabka_audit::AuditEvent::AdminOperation {
+        let krabka_audit::AuditEvent::AdminOperation {
             outcome,
             principal,
             operation,
@@ -450,10 +450,10 @@ mod tests {
                 operation.as_str(),
                 resources
             ) == (
-                crabka_audit::AuditOutcome::Success,
+                krabka_audit::AuditOutcome::Success,
                 "admin",
                 "DeleteAcls",
-                vec![crabka_audit::AuditResource {
+                vec![krabka_audit::AuditResource {
                     resource_type: "Acl".into(),
                     name: "orders".into(),
                 }],

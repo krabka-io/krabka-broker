@@ -1,5 +1,5 @@
 [package]
-name = "crabka-log"
+name = "krabka-log"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,9 +8,9 @@ rust-version.workspace = true
 description = "Byte-compatible reader/writer for Apache Kafka's on-disk log format"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-log"
+documentation = "https://docs.rs/krabka-log"
 readme = "README.md"
-keywords = ["kafka", "log", "storage", "records", "crabka"]
+keywords = ["kafka", "log", "storage", "records", "krabka"]
 categories = ["database-implementations", "encoding"]
 
 [lints]
@@ -26,11 +26,11 @@ test-helpers = []
 
 [dependencies]
 assert2 = { workspace = true }
-crabka-ids = { version = "0.4.0" }
-crabka-protocol = { version = "0.4.0", default-features = false }
-crabka-compression = { version = "0.4.0", default-features = false }
-crabka-verified = { version = "0.4.0", path = "../verified" }
-crabka-units = { workspace = true }
+krabka-ids = { version = "0.4.0" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-compression = { version = "0.4.0", default-features = false }
+krabka-verified = { version = "0.4.0", path = "../verified" }
+krabka-units = { workspace = true }
 bytes = { workspace = true }
 crc32c = { workspace = true }
 thiserror = { workspace = true }

@@ -3,15 +3,15 @@
 //!
 //! The copy path writes a segment's `.index`, `.timeindex`, and `.txnindex`
 //! verbatim, so these decoders mirror the on-disk layouts that
-//! `crabka_log::index::{OffsetIndex, TimeIndex}` and
-//! `crabka_log::txn_index::TxnIndex` wrote locally.
+//! `krabka_log::index::{OffsetIndex, TimeIndex}` and
+//! `krabka_log::txn_index::TxnIndex` wrote locally.
 //!
 //! Every decoder here returns a [`RemoteStorageError`] on malformed input and
 //! never panics. The bytes arrive from an object store, which can return
 //! truncated or corrupt data, so a panic would be a denial-of-service surface
 //! on the read path.
 
-use crabka_protocol::records::RecordBatch;
+use krabka_protocol::records::RecordBatch;
 use zerocopy::{
     BigEndian, FromBytes, Immutable, KnownLayout, Unaligned,
     byteorder::{I64, U32},
@@ -30,7 +30,7 @@ pub type RelativeOffset = u32;
 pub type BytePosition = u32;
 
 /// 8 bytes per entry: rel u32 BE, then pos u32 BE. It mirrors
-/// `crabka_log::index::OffsetEntryRaw`, so the remote-tier copy of an
+/// `krabka_log::index::OffsetEntryRaw`, so the remote-tier copy of an
 /// `OffsetIndex` file decodes through the same byte layout that wrote the
 /// local index.
 #[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
@@ -48,7 +48,7 @@ const OFFSET_INDEX_ENTRY_LEN: usize = std::mem::size_of::<OffsetIndexEntry>();
 const _: () = assert!(OFFSET_INDEX_ENTRY_LEN == 8);
 
 /// 12 bytes per entry: ts i64 BE, then rel u32 BE. It mirrors
-/// `crabka_log::index::TimeEntryRaw`.
+/// `krabka_log::index::TimeEntryRaw`.
 #[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
 #[repr(C)]
 pub struct TimeIndexEntry {
@@ -65,7 +65,7 @@ const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
 const _: () = assert!(TIME_INDEX_ENTRY_LEN == 12);
 
 /// 24 bytes per entry: `start_offset` i64 BE, `last_offset` i64 BE, then
-/// `producer_id` i64 BE. It mirrors `crabka_log::txn_index::AbortedTxnRaw`, so
+/// `producer_id` i64 BE. It mirrors `krabka_log::txn_index::AbortedTxnRaw`, so
 /// the remote-tier copy of a `.txnindex` file decodes through the same byte
 /// layout that wrote the local index.
 #[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
@@ -287,7 +287,7 @@ pub fn first_batch_at_or_after(data: &[u8], floor: LogOffset) -> Option<RecordBa
 mod tests {
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
-    use crabka_protocol::records::Record;
+    use krabka_protocol::records::Record;
 
     use super::*;
 

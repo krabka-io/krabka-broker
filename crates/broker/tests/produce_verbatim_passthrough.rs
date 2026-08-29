@@ -18,8 +18,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use crabka_compression::CompressionType;
-use crabka_protocol::{
+use krabka_compression::CompressionType;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -30,7 +30,7 @@ use crabka_protocol::{
     records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload},
 };
 
-async fn topic_id_for(client: &crabka_client_core::Client, name: &str) -> WireUuid {
+async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
@@ -83,12 +83,12 @@ fn encode_batch(b: &RecordBatch) -> Bytes {
     buf.freeze()
 }
 
-async fn create_topic(broker: &crabka_broker::BrokerHandle, bootstrap: &str, name: &str) {
+async fn create_topic(broker: &krabka_broker::BrokerHandle, bootstrap: &str, name: &str) {
     create_topic_with_configs(broker, bootstrap, name, vec![]).await;
 }
 
 async fn wait_for_compression(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     topic: &str,
     expected: Option<CompressionType>,
 ) {
@@ -108,12 +108,12 @@ async fn wait_for_compression(
 }
 
 async fn create_topic_with_configs(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     bootstrap: &str,
     name: &str,
     configs: Vec<CreatableTopicConfig>,
 ) {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.to_string())
         .build()
         .await
@@ -142,7 +142,7 @@ async fn create_topic_with_configs(
 /// Produce a single batch to `topic` partition 0 with `acks=1`, and return the
 /// assigned base offset.
 async fn produce_one(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     topic: &str,
     topic_id: WireUuid,
     b: RecordBatch,
@@ -151,7 +151,7 @@ async fn produce_one(
 }
 
 async fn produce_batches(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     topic: &str,
     topic_id: WireUuid,
     batches: Vec<RecordBatch>,
@@ -160,7 +160,7 @@ async fn produce_batches(
 }
 
 async fn produce_payload(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     topic: &str,
     topic_id: WireUuid,
     records: RecordsPayload,
@@ -198,8 +198,8 @@ async fn produce_payload(
 /// writer updates it after the append acknowledgement. Wait for the actual
 /// high-watermark so one deterministic fetch cannot race that update.
 async fn fetch_first_batch(
-    broker: &crabka_broker::BrokerHandle,
-    client: &crabka_client_core::Client,
+    broker: &krabka_broker::BrokerHandle,
+    client: &krabka_client_core::Client,
     topic: &str,
     topic_id: WireUuid,
     n: i64,
@@ -233,9 +233,9 @@ async fn fetch_first_batch(
     batches.first().cloned().expect("at least one batch")
 }
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let broker = crabka_broker::Broker::start(crabka_broker::BrokerConfig::for_tests(
+    let broker = krabka_broker::Broker::start(krabka_broker::BrokerConfig::for_tests(
         dir.path().to_path_buf(),
     ))
     .await
@@ -252,7 +252,7 @@ async fn lz4_batch_passes_through_and_roundtrips() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "lz4t").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -304,7 +304,7 @@ async fn uncompressed_batch_roundtrips_byte_identically() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "raw").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -359,7 +359,7 @@ async fn recompression_config_takes_owned_path() {
     .await;
     wait_for_compression(&broker, "recmp", Some(CompressionType::Zstd)).await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -393,7 +393,7 @@ async fn client_control_batch_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "ctrl").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -429,7 +429,7 @@ async fn crc_valid_malformed_record_body_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "malformed-body").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await
@@ -465,7 +465,7 @@ async fn idempotent_dedup_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -515,7 +515,7 @@ async fn idempotent_sequence_rollover_over_verbatim_path() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "idem-rollover").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await

@@ -4,18 +4,18 @@ use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         broker_registration_request::{BrokerRegistrationRequest, Listener},
         broker_registration_response::BrokerRegistrationResponse,
     },
 };
-use crabka_raft::RaftError;
-use crabka_security::ListenerProtocol;
+use krabka_raft::RaftError;
+use krabka_security::ListenerProtocol;
 
 use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
 
@@ -167,7 +167,7 @@ fn protocol_from_wire(protocol: i16) -> Option<ListenerProtocol> {
 
 fn features_support_finalized(
     req: &BrokerRegistrationRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> bool {
     image.finalized_features().iter().all(|(name, level)| {
         req.features.iter().any(|feature| {
@@ -199,7 +199,7 @@ fn response(version: i16, error_code: i16, broker_epoch: i64) -> Result<Bytes, B
 
 #[cfg(test)]
 mod tests {
-    use crabka_protocol::owned::broker_registration_request::Feature;
+    use krabka_protocol::owned::broker_registration_request::Feature;
 
     use super::*;
 
@@ -236,9 +236,9 @@ mod tests {
 
     #[test]
     fn finalized_features_must_fit_request_ranges() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(
-            crabka_metadata::FeatureLevelRecord {
+            krabka_metadata::FeatureLevelRecord {
                 name: "metadata.version".into(),
                 level: 25,
             },

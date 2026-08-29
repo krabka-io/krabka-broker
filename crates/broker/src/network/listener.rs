@@ -1,5 +1,5 @@
 //! Per-listener SASL resolution helper.
-use crabka_security::SaslMechanism;
+use krabka_security::SaslMechanism;
 
 use crate::config::ListenerSpec;
 
@@ -19,7 +19,7 @@ pub(crate) fn resolve_sasl_mechanisms_for_listener<'a>(
 #[cfg(test)]
 mod per_listener_config_tests {
     use assert2::assert;
-    use crabka_security::ListenerProtocol;
+    use krabka_security::ListenerProtocol;
 
     use super::*;
 

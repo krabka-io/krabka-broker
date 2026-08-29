@@ -12,8 +12,8 @@
 //! `Delete` ACL gate, which needs the principal and the peer `SocketAddr`.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
@@ -178,14 +178,14 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             delete_share_group_offsets_request::DeleteShareGroupOffsetsRequestTopic,
             delete_share_group_offsets_response,
         },
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{authorizer::Authorizer, test_support::DenyAll};

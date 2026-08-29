@@ -4,7 +4,7 @@
 //! member's `last_heartbeat` clock inside the group's actor.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse},
 };
@@ -107,14 +107,14 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use crabka_protocol::owned::heartbeat_response::{self, HeartbeatResponse};
+        use krabka_protocol::owned::heartbeat_response::{self, HeartbeatResponse};
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

@@ -20,8 +20,8 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         list_groups_request::ListGroupsRequest,
@@ -260,7 +260,7 @@ mod tests {
     use super::*;
     use crate::test_support::{peer, principal};
 
-    const VERSION: i16 = crabka_protocol::owned::list_groups_response::MAX_VERSION;
+    const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
     crate::test_support::wire_helpers!(
         ListGroupsRequest,
@@ -295,9 +295,9 @@ mod tests {
                 protocol_type: "consumer".into(),
                 group_state: "Empty".into(),
                 group_type: "classic".into(),
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -334,14 +334,14 @@ mod tests {
                 protocol_type: "consumer".into(),
                 group_state: "Stable".into(),
                 group_type: "classic".into(),
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
             ListedGroup {
                 group_id: "share-a".into(),
                 protocol_type: String::new(),
                 group_state: "Stable".into(),
                 group_type: "share".into(),
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
         ];
         assert!(groups == expected_groups, "{groups:?}");
@@ -384,7 +384,7 @@ mod tests {
             protocol_type: "consumer".into(),
             group_state: "Stable".into(),
             group_type: "consumer".into(),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         }];
         assert!(groups == expected, "{groups:?}");
     }

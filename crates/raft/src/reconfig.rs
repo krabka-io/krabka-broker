@@ -1,6 +1,6 @@
 //! KIP-853 requests submitted to the single-owner Raft engine.
 
-use crabka_metadata::Voter;
+use krabka_metadata::Voter;
 
 use crate::NodeId;
 

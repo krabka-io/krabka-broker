@@ -1,7 +1,7 @@
 //! Per-`log.dir` stable UUIDs (KIP-858 directory ids).
 //!
 //! Each configured `log.dir` carries a `directory_id` in its
-//! `meta.properties.json`. `crabka format` creates the id for the primary
+//! `meta.properties.json`. `krabka format` creates the id for the primary
 //! metadata dir. This module creates and persists the id for each extra JBOD
 //! dir on the first boot.
 //!
@@ -75,7 +75,7 @@ fn read_or_mint(dir: &Path) -> Uuid {
     }
     let id = Uuid::new_v4();
     // Persist, merging into any existing object so we don't clobber a
-    // cluster_id/version written by `crabka format`.
+    // cluster_id/version written by `krabka format`.
     let mut obj = std::fs::read(&path)
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())

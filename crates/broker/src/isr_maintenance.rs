@@ -7,10 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_ids::LeaderEpoch;
-use crabka_protocol::owned::alter_partition_request::AlterPartitionRequest;
-use crabka_raft::NodeId;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::LeaderEpoch;
+use krabka_protocol::owned::alter_partition_request::AlterPartitionRequest;
+use krabka_raft::NodeId;
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -22,8 +22,8 @@ use crate::{partition::Partition, partition_registry::PartitionRegistry};
 const UNKNOWN_BROKER_EPOCH: i64 = -1;
 
 pub(crate) struct Config {
-    pub client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    pub client_frame_max: crabka_client_core::ClientFrameMax,
+    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    pub client_frame_max: krabka_client_core::ClientFrameMax,
     pub node_id: NodeId,
     pub scan_interval: Time,
     pub partitions: Arc<PartitionRegistry>,
@@ -165,8 +165,8 @@ async fn send_alter_partition(
     new_isr: Vec<NodeId>,
     leader_epoch: i32,
     client_resource_policy: (
-        crabka_client_core::ConnectionDispatchQueueCapacity,
-        crabka_client_core::ClientFrameMax,
+        krabka_client_core::ConnectionDispatchQueueCapacity,
+        krabka_client_core::ClientFrameMax,
     ),
 ) -> Result<(), String> {
     let image = controller.current_image();
@@ -231,21 +231,21 @@ async fn send_alter_partition(
 }
 
 fn build_alter_partition_request(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     broker_id: i32,
     topic: &str,
     partition: i32,
     new_isr: &[NodeId],
     leader_epoch: i32,
 ) -> AlterPartitionRequest {
-    use crabka_protocol::owned::alter_partition_request::{BrokerState, PartitionData, TopicData};
+    use krabka_protocol::owned::alter_partition_request::{BrokerState, PartitionData, TopicData};
 
     // Look up topic_id from the metadata image and convert to the protocol Uuid type.
     let topic_id = {
         let raw: [u8; 16] = image
             .topic(topic)
             .map_or([0u8; 16], |t| *t.topic_id.as_bytes());
-        crabka_protocol::primitives::uuid::Uuid(raw)
+        krabka_protocol::primitives::uuid::Uuid(raw)
     };
 
     // `new_isr` is the v2 field (versions 2 only on the wire).
@@ -295,7 +295,7 @@ fn build_alter_partition_request(
 }
 
 fn alter_partition_targets(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     leader_id: Option<NodeId>,
 ) -> Vec<(NodeId, String)> {
     let mut out = Vec::new();
@@ -325,12 +325,12 @@ async fn send_alter_partition_to(
     broker_id: i32,
     addr: &str,
     req: AlterPartitionRequest,
-    dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: crabka_client_core::ClientFrameMax,
+    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    frame_max: krabka_client_core::ClientFrameMax,
 ) -> Result<(), AlterPartitionSendError> {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(addr.to_string())
-        .client_id(format!("crabka-broker-{broker_id}-isr"))
+        .client_id(format!("krabka-broker-{broker_id}-isr"))
         .dispatch_queue_capacity(dispatch_queue_capacity.get())
         .frame_max(frame_max.size())
         .build()
@@ -374,10 +374,10 @@ fn is_not_controller_response(global_err: i16, part_err: i16) -> bool {
 mod tests {
     use std::{path::Path, sync::atomic::Ordering};
 
-    use crabka_ids::PartitionIndex;
-    use crabka_log::Offset;
-    use crabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
-    use crabka_units::{millis, secs};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_units::{millis, secs};
     use tempfile::tempdir;
     use tokio::sync::watch;
 
@@ -409,7 +409,7 @@ mod tests {
     fn fixture_partition(log_dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
         let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
         std::fs::create_dir_all(&part_dir).unwrap();
-        let log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default()).unwrap();
+        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         crate::broker::spawn_partition(
             topic.to_string(),
             PartitionIndex(partition),
@@ -479,29 +479,29 @@ mod tests {
             self.leader_tx.subscribe()
         }
 
-        fn quorum_state(&self) -> crabka_raft::QuorumState {
+        fn quorum_state(&self) -> krabka_raft::QuorumState {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, crabka_raft::RaftError> {
+        ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn change_membership(
             &self,
             _new_voters: std::collections::BTreeSet<NodeId>,
-        ) -> Result<(), crabka_raft::RaftError> {
+        ) -> Result<(), krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn add_learner(
             &self,
             _node_id: NodeId,
-            _node: crabka_raft::Node,
-        ) -> Result<(), crabka_raft::RaftError> {
+            _node: krabka_raft::Node,
+        ) -> Result<(), krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
@@ -513,32 +513,32 @@ mod tests {
             &self,
             _position: i64,
             _max_bytes: i32,
-        ) -> crabka_raft::SnapshotRange {
+        ) -> krabka_raft::SnapshotRange {
             unimplemented!("unused in isr_maintenance tests")
         }
 
-        async fn trigger_snapshot(&self) -> Result<(), crabka_raft::RaftError> {
+        async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn add_voter(
             &self,
-            _req: crabka_raft::AddVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::AddVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn remove_voter(
             &self,
-            _req: crabka_raft::RemoveVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::RemoveVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
         async fn update_voter(
             &self,
-            _req: crabka_raft::UpdateVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::UpdateVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             unimplemented!("unused in isr_maintenance tests")
         }
 
@@ -651,8 +651,8 @@ mod tests {
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             node_id: NodeId(1),
             scan_interval: millis(7),
             partitions,
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn build_request_preserves_topic_broker_epochs_and_isr_fields() {
-        use crabka_protocol::{
+        use krabka_protocol::{
             UnknownTaggedFields,
             owned::alter_partition_request::{BrokerState, PartitionData, TopicData},
         };
@@ -696,7 +696,7 @@ mod tests {
             broker_id: 4,
             broker_epoch: -1,
             topics: vec![TopicData {
-                topic_id: crabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+                topic_id: krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
                 partitions: vec![PartitionData {
                     partition_index: 6,
                     leader_epoch: 12,
@@ -753,8 +753,8 @@ mod tests {
             vec![NodeId(1)],
             3,
             (
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+                krabka_client_core::ClientFrameMax::default(),
             ),
         )
         .await
@@ -773,8 +773,8 @@ mod tests {
             1,
             &addr.to_string(),
             AlterPartitionRequest::default(),
-            crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            crabka_client_core::ClientFrameMax::default(),
+            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            krabka_client_core::ClientFrameMax::default(),
         )
         .await
         .expect_err("closed local port should fail as transport");

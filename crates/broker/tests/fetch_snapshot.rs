@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     fetch_snapshot_request::{FetchSnapshotRequest, PartitionSnapshot, SnapshotId, TopicSnapshot},
 };

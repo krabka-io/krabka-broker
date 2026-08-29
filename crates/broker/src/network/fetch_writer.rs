@@ -32,7 +32,7 @@
 //! `Bytes`.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_protocol::{
+use krabka_protocol::{
     Encode, ProtocolError,
     api_key::ApiKey,
     owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
@@ -72,7 +72,7 @@ pub enum WriteOp {
         target_os = "freebsd",
         target_os = "dragonfly",
     ))]
-    File(crabka_protocol::records::FileRegion),
+    File(krabka_protocol::records::FileRegion),
 }
 
 impl WriteOp {
@@ -142,10 +142,10 @@ fn fetch_response_write_plan(
 
     if flex {
         let mut tagged = WriteTaggedFields::new();
-        if !crabka_protocol::codegen_helpers::is_default(&response.node_endpoints) {
+        if !krabka_protocol::codegen_helpers::is_default(&response.node_endpoints) {
             let node_endpoints = &response.node_endpoints;
             let payload = encode_to_bytes(
-                crabka_protocol::primitives::array::array_len_prefix_len(
+                krabka_protocol::primitives::array::array_len_prefix_len(
                     node_endpoints.len(),
                     flex,
                 ) + node_endpoints
@@ -233,7 +233,7 @@ fn encode_fetch_partition(
 
     if flex {
         let mut tagged = WriteTaggedFields::new();
-        if !crabka_protocol::codegen_helpers::is_default(&partition.diverging_epoch) {
+        if !krabka_protocol::codegen_helpers::is_default(&partition.diverging_epoch) {
             tagged.add(
                 0,
                 encode_to_bytes(partition.diverging_epoch.encoded_len(version), |bytes| {
@@ -242,7 +242,7 @@ fn encode_fetch_partition(
                 }),
             );
         }
-        if !crabka_protocol::codegen_helpers::is_default(&partition.current_leader) {
+        if !krabka_protocol::codegen_helpers::is_default(&partition.current_leader) {
             tagged.add(
                 1,
                 encode_to_bytes(partition.current_leader.encoded_len(version), |bytes| {
@@ -251,7 +251,7 @@ fn encode_fetch_partition(
                 }),
             );
         }
-        if !crabka_protocol::codegen_helpers::is_default(&partition.snapshot_id) {
+        if !krabka_protocol::codegen_helpers::is_default(&partition.snapshot_id) {
             tagged.add(
                 2,
                 encode_to_bytes(partition.snapshot_id.encoded_len(version), |bytes| {
@@ -274,7 +274,7 @@ fn encode_records_prefix(
 ) -> Result<(), ProtocolError> {
     let Some(payload) = records else {
         if flex {
-            crabka_protocol::primitives::varint::put_uvarint(buf, 0);
+            krabka_protocol::primitives::varint::put_uvarint(buf, 0);
         } else {
             put_i32(buf, -1);
         }
@@ -285,7 +285,7 @@ fn encode_records_prefix(
     if flex {
         let prefixed_len = u32::try_from(payload_len + 1)
             .map_err(|_| ProtocolError::InvalidValue("records too large for compact len"))?;
-        crabka_protocol::primitives::varint::put_uvarint(buf, prefixed_len);
+        krabka_protocol::primitives::varint::put_uvarint(buf, prefixed_len);
     } else {
         let records_len = i32::try_from(payload_len)
             .map_err(|_| ProtocolError::InvalidValue("records too large for i32 len"))?;
@@ -549,7 +549,7 @@ crate::sendfile_cfg! {
     /// and non-sendfile fallback for `WriteOp::File`. `read_at` (`FileExt`) is
     /// portable across every SENDFILE-alias unix.
     fn read_region_exact(
-        region: &crabka_protocol::records::FileRegion,
+        region: &krabka_protocol::records::FileRegion,
         dst: &mut [u8],
     ) -> Result<(), BrokerError> {
         use std::os::unix::fs::FileExt;
@@ -581,7 +581,7 @@ crate::sendfile_cfg! {
     /// `write_all` that produces identical wire bytes.
     async fn drain_file_region<S>(
         stream: &mut S,
-        region: &crabka_protocol::records::FileRegion,
+        region: &krabka_protocol::records::FileRegion,
     ) -> Result<(), BrokerError>
     where
         S: AsyncWrite + SendfileSink + Unpin,
@@ -622,7 +622,7 @@ crate::sendfile_cfg! {
     /// identical on Linux and on Apple/BSD.
     async fn sendfile_region(
         tcp: &tokio::net::TcpStream,
-        region: &crabka_protocol::records::FileRegion,
+        region: &krabka_protocol::records::FileRegion,
     ) -> Result<(), BrokerError> {
         use std::io::ErrorKind;
         use std::os::fd::{AsFd, BorrowedFd};
@@ -818,7 +818,7 @@ fn bsd_sendfile(
 
 #[cfg(test)]
 mod tests {
-    use crabka_protocol::{
+    use krabka_protocol::{
         Encode,
         owned::fetch_response::{FetchableTopicResponse, PartitionData},
         records::{Record, RecordBatch, RecordsPayload},
@@ -907,9 +907,9 @@ mod tests {
                     String::new()
                 },
                 topic_id: if version >= 13 {
-                    crabka_protocol::primitives::uuid::Uuid([5u8; 16])
+                    krabka_protocol::primitives::uuid::Uuid([5u8; 16])
                 } else {
-                    crabka_protocol::primitives::uuid::Uuid([0u8; 16])
+                    krabka_protocol::primitives::uuid::Uuid([0u8; 16])
                 },
                 partitions: vec![p0, p1],
                 ..FetchableTopicResponse::default()
@@ -1057,7 +1057,7 @@ mod tests {
     mod sendfile_tests {
         use std::{io::Write as _, sync::Arc};
 
-        use crabka_protocol::records::FileRegion;
+        use krabka_protocol::records::FileRegion;
 
         use super::*;
 

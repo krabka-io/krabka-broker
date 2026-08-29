@@ -7,7 +7,7 @@ pub mod uniform;
 
 use std::collections::HashMap;
 
-use crabka_protocol::primitives::uuid::Uuid;
+use krabka_protocol::primitives::uuid::Uuid;
 pub use range::RangeAssignor;
 pub use uniform::UniformAssignor;
 

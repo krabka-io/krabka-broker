@@ -12,8 +12,8 @@
 use std::{fmt, path::PathBuf};
 
 use clap::{ArgGroup, Args};
-use crabka_ids::{Offset, ProducerId};
-use crabka_metadata::NodeId;
+use krabka_ids::{Offset, ProducerId};
+use krabka_metadata::NodeId;
 use regex::Regex;
 use uuid::Uuid;
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// This struct derives the ordinary [`Debug`]. It holds a key *path* and a
 /// public key id, and it never holds secret material: the private key stays in
 /// the file that [`Self::signing_key_path`] names, and only
-/// [`FileEd25519Signer`](crabka_audit::signing::FileEd25519Signer) reads it.
+/// [`FileEd25519Signer`](krabka_audit::signing::FileEd25519Signer) reads it.
 /// Do not redact these fields. An operator who reads a log line must be able to
 /// tell which key signed a chain. A `***` in place of the key id removes the
 /// one field that answers that question.

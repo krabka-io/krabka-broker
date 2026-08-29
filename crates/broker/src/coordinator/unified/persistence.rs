@@ -14,7 +14,7 @@
 //! `__consumer_offsets` records are NOT flexible.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 use crate::error::BrokerError;
 
@@ -40,7 +40,7 @@ pub enum Key {
 pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
     if buf.remaining() < 2 {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("offsets key too short"),
+            krabka_protocol::ProtocolError::InvalidValue("offsets key too short"),
         ));
     }
     let version = buf.get_i16();
@@ -69,7 +69,7 @@ pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
             crate::coordinator::unified::streams::persistence::parse_streams_key(version, buf)?,
         )),
         _ => Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
+            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
         )),
     }
 }
@@ -129,7 +129,7 @@ impl OffsetCommitValue {
         let version = get_i16(&mut buf)?;
         if !(0..=3).contains(&version) {
             return Err(BrokerError::Protocol(
-                crabka_protocol::ProtocolError::InvalidValue("unknown OffsetCommitValue version"),
+                krabka_protocol::ProtocolError::InvalidValue("unknown OffsetCommitValue version"),
             ));
         }
         let offset = Offset(get_i64(&mut buf)?);
@@ -210,7 +210,7 @@ impl GroupMetadataValue {
         let version = get_i16(&mut buf)?;
         if !(0..=3).contains(&version) {
             return Err(BrokerError::Protocol(
-                crabka_protocol::ProtocolError::InvalidValue("unknown GroupMetadataValue version"),
+                krabka_protocol::ProtocolError::InvalidValue("unknown GroupMetadataValue version"),
             ));
         }
         let protocol_type = get_string(&mut buf)?;
@@ -261,7 +261,7 @@ impl GroupMetadataValue {
 pub(crate) fn get_i16(buf: &mut &[u8]) -> Result<i16, BrokerError> {
     if buf.remaining() < 2 {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("offsets buf < i16"),
+            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i16"),
         ));
     }
     Ok(buf.get_i16())
@@ -270,7 +270,7 @@ pub(crate) fn get_i16(buf: &mut &[u8]) -> Result<i16, BrokerError> {
 pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
     if buf.remaining() < 4 {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("offsets buf < i32"),
+            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i32"),
         ));
     }
     Ok(buf.get_i32())
@@ -279,7 +279,7 @@ pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
 pub(crate) fn get_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
     if buf.remaining() < 8 {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("offsets buf < i64"),
+            krabka_protocol::ProtocolError::InvalidValue("offsets buf < i64"),
         ));
     }
     Ok(buf.get_i64())
@@ -289,19 +289,19 @@ pub(crate) fn get_string(buf: &mut &[u8]) -> Result<String, BrokerError> {
     let len = get_i16(buf)?;
     if len < 0 {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("STRING with negative length"),
+            krabka_protocol::ProtocolError::InvalidValue("STRING with negative length"),
         ));
     }
     let n = usize::try_from(len).expect("non-negative i16 fits in usize");
     if buf.remaining() < n {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("STRING shorter than declared"),
+            krabka_protocol::ProtocolError::InvalidValue("STRING shorter than declared"),
         ));
     }
     let mut out = vec![0u8; n];
     buf.copy_to_slice(&mut out);
     String::from_utf8(out).map_err(|_| {
-        BrokerError::Protocol(crabka_protocol::ProtocolError::InvalidValue(
+        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
             "STRING not valid UTF-8",
         ))
     })
@@ -315,13 +315,13 @@ pub(crate) fn get_nullable_string(buf: &mut &[u8]) -> Result<Option<String>, Bro
     let n = usize::try_from(len).expect("non-negative i16 fits in usize");
     if buf.remaining() < n {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("NULLABLE_STRING shorter than declared"),
+            krabka_protocol::ProtocolError::InvalidValue("NULLABLE_STRING shorter than declared"),
         ));
     }
     let mut out = vec![0u8; n];
     buf.copy_to_slice(&mut out);
     String::from_utf8(out).map(Some).map_err(|_| {
-        BrokerError::Protocol(crabka_protocol::ProtocolError::InvalidValue(
+        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
             "NULLABLE_STRING not valid UTF-8",
         ))
     })
@@ -335,7 +335,7 @@ pub(crate) fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
     let n = usize::try_from(len).expect("non-negative i32 fits in usize");
     if buf.remaining() < n {
         return Err(BrokerError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("BYTES shorter than declared"),
+            krabka_protocol::ProtocolError::InvalidValue("BYTES shorter than declared"),
         ));
     }
     let mut out = vec![0u8; n];

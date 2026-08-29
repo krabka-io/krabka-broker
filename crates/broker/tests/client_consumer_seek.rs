@@ -6,11 +6,11 @@
 //! post-assignment prime, that it drops no pre-seek records, and that it skips
 //! none above the sought offset.
 
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_consumer::{AutoOffsetReset, Consumer};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_consumer::{AutoOffsetReset, Consumer};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
     let producer = Producer::builder()
@@ -86,7 +86,7 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
     let mut got = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while got.len() < 3 && std::time::Instant::now() < deadline {
-        let recs = consumer.poll(crabka_units::millis(500)).await.unwrap();
+        let recs = consumer.poll(krabka_units::millis(500)).await.unwrap();
         got.extend(recs);
     }
 

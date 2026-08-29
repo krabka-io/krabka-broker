@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_ids::{Offset, PartitionIndex};
-use crabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+use krabka_ids::{Offset, PartitionIndex};
+use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
 
 use crate::{error::BrokerError, metadata_source::MetadataSource};
 
@@ -71,8 +71,8 @@ impl OffsetSequencer for ControllerSequencer {
 mod tests {
     use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 
-    use crabka_metadata::{MetadataImage, MetadataRecord};
-    use crabka_raft::{
+    use krabka_metadata::{MetadataImage, MetadataRecord};
+    use krabka_raft::{
         AddVoter, Node, NodeId, OffsetReservation, QuorumState, RaftError, ReconfigOutcome,
         RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
     };

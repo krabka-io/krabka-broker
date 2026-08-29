@@ -30,8 +30,8 @@
 //! not.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_topic_partitions_request::DescribeTopicPartitionsRequest,
@@ -194,7 +194,7 @@ pub(crate) fn handle(
 }
 
 fn partition_response(
-    partition: &crabka_metadata::PartitionRecord,
+    partition: &krabka_metadata::PartitionRecord,
 ) -> DescribeTopicPartitionsResponsePartition {
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
@@ -232,7 +232,7 @@ fn error_topic(name: &str, error_code: i16) -> DescribeTopicPartitionsResponseTo
 }
 
 fn resolve_names(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     req: &DescribeTopicPartitionsRequest,
 ) -> (bool, Vec<String>, i32) {
     let named = !req.topics.is_empty();
@@ -255,7 +255,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 
     use super::*;
     use crate::{
@@ -263,7 +263,7 @@ mod tests {
         test_support::{peer, principal},
     };
 
-    const VERSION: i16 = crabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
+    const VERSION: i16 = krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
 
     crate::test_support::wire_helpers!(
         DescribeTopicPartitionsRequest,
@@ -291,7 +291,7 @@ mod tests {
                     leader: NodeId(1),
                     replicas: vec![NodeId(1)],
                     isr: vec![NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(leader_epoch),
+                    leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
@@ -316,7 +316,7 @@ mod tests {
         let ctx = test_context(&p, &peer);
         let req = encode_request(&DescribeTopicPartitionsRequest {
             topics: vec![
-                crabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
+                krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
                     name: "orders".into(),
                     ..Default::default()
                 },

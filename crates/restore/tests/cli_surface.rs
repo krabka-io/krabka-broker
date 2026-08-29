@@ -8,7 +8,7 @@
 use std::{path::Path, process::Command};
 
 use assert2::check;
-use crabka_restore::{
+use krabka_restore::{
     ArchiveArgs, EXIT_ARCHIVE_UNREADABLE, EXIT_BAD_ARGUMENTS, EXIT_DIRTY_LOG_DIR, EXIT_OK,
     ReportFormat, RestoreArgs, TargetArgs,
 };

@@ -3,7 +3,7 @@
 //! When the `AlterReplicaLogDirs` handler accepts a move
 //! `(topic, partition) → target log.dir`, it asks this module to:
 //!
-//! 1. Open a fresh `crabka_log::Log` at
+//! 1. Open a fresh `krabka_log::Log` at
 //!    `<target_log_dir>/<topic>-<partition>-future/`.
 //! 2. Spawn a per-move replicator task that reads batches from the
 //!    partition's current `Log` and appends them to the future log with
@@ -20,13 +20,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, LogConfig, Offset};
-use crabka_units::{
+use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig, Offset};
+use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
-use dashmap::DashMap;
 use tokio::{sync::oneshot, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -78,7 +78,7 @@ pub enum MoveError {
     LogDirNotFound,
     /// The named partition is not hosted on this broker.
     ReplicaNotAvailable,
-    /// `crabka_log::Log::open` or `mkdir` failed while staging the future log.
+    /// `krabka_log::Log::open` or `mkdir` failed while staging the future log.
     /// The handler logs the inner error, then maps every storage failure to
     /// `KAFKA_STORAGE_ERROR` on the wire.
     Storage(BrokerError),
@@ -90,8 +90,8 @@ impl From<BrokerError> for MoveError {
     }
 }
 
-impl From<crabka_log::LogError> for MoveError {
-    fn from(e: crabka_log::LogError) -> Self {
+impl From<krabka_log::LogError> for MoveError {
+    fn from(e: krabka_log::LogError) -> Self {
         MoveError::Storage(BrokerError::from(e))
     }
 }
@@ -570,7 +570,7 @@ mod tests {
     };
 
     use assert2::assert;
-    use crabka_units::{kibibytes, mebibytes, millis};
+    use krabka_units::{kibibytes, mebibytes, millis};
     use tempfile::tempdir;
 
     use super::*;
@@ -578,7 +578,7 @@ mod tests {
     #[derive(Debug)]
     struct TestStampSource(AtomicU64);
 
-    impl crabka_log::StampSource for TestStampSource {
+    impl krabka_log::StampSource for TestStampSource {
         fn next_stamp(&self) -> u64 {
             self.0.fetch_add(1, Ordering::Relaxed)
         }
@@ -602,7 +602,7 @@ mod tests {
 
         assert!(policy.retry_backoff == millis(7));
         assert!(policy.read_chunk == kibibytes(4));
-        assert!(policy.throttle.byte_rate() == crabka_units::bytes_per_sec(0));
+        assert!(policy.throttle.byte_rate() == krabka_units::bytes_per_sec(0));
     }
 
     #[tokio::test]
@@ -785,7 +785,7 @@ mod tests {
 
     fn append_records(part: &Arc<Partition>, count: i32) {
         use bytes::Bytes;
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let mut batch = RecordBatch {
             base_offset: 0,
@@ -817,7 +817,7 @@ mod tests {
 
     fn append_value_batch(part: &Arc<Partition>, value_size: usize) {
         use bytes::Bytes;
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let mut batch = RecordBatch {
             base_offset: 0,
@@ -924,7 +924,7 @@ mod tests {
         ));
         let throttle = crate::throttle::TokenBucket::new();
         throttle
-            .set_byte_rate_with_burst(crabka_units::bytes_per_sec(1024), crabka_units::bytes(0));
+            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), krabka_units::bytes(0));
 
         let progress = catch_up(&part, &future, mebibytes(1), &throttle).expect("catch up");
 
@@ -993,7 +993,7 @@ mod tests {
     async fn resume_move_catches_up_and_swaps_future_log() {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
-        let stamp_source: Arc<dyn crabka_log::StampSource> =
+        let stamp_source: Arc<dyn krabka_log::StampSource> =
             Arc::new(TestStampSource(AtomicU64::new(100)));
         let partitions = Arc::new(PartitionRegistry::with_stamp_source(Some(Arc::clone(
             &stamp_source,

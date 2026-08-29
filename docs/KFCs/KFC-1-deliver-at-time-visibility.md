@@ -228,7 +228,7 @@ The design makes claims about a state space, so the strongest tests enumerate th
 
 **Model checks.** The fetch read path already carries an exhaustive `stateright` model over the visibility window and its watermarks. The model gains the delivery watermark. The checker then enumerates the extended window, and proves that the clamp contract and KIP-227 monotonicity still hold under the new cap. A second `stateright` model covers the share-partition state machine with `Deferred` added. That machine holds the most reachable interleavings in the design.
 
-**Formal verification.** The visibility decision is a pure kernel in `crabka-verified`, called by the fetch handler. The kernel gains a Creusot contract for the new cap. The proof covers every input, and not only the inputs a test picks.
+**Formal verification.** The visibility decision is a pure kernel in `krabka-verified`, called by the fetch handler. The kernel gains a Creusot contract for the new cap. The proof covers every input, and not only the inputs a test picks.
 
 The checked-in proof under `verif/` is stale as of this KFC, and this note is here because nothing in the repository will report it. Creusot is not wired into CI or into Bazel, so no gate fails while the recorded verification conditions describe the contract the kernel had before the cap. A maintainer with the pinned Creusot toolchain named in `.creusot-version` must re-run it and commit the result. Until then the contract is enforced by the exhaustive decision table in the kernel's own tests, which walks the new parameter past both ends of its proved domain against an independent oracle.
 

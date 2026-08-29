@@ -18,11 +18,11 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -32,7 +32,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -72,7 +72,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-scram-desc-test";
+    let client_id = "krabka-scram-desc-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -194,7 +194,7 @@ fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     users: &[(&str, &str)],
 ) -> BrokerStartup {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -248,7 +248,7 @@ async fn seed_scram_credential(
 ) {
     handle
         .submit_metadata_record_for_test(MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+            krabka_metadata::ScramCredentialRecord {
                 user: user.into(),
                 mechanism,
                 iterations,
@@ -280,7 +280,7 @@ async fn drive_describe_user_scram_credentials_sasl(
     pass: &str,
     users_filter: Option<Vec<String>>,
 ) -> (i16, Vec<(String, i16, Vec<(i8, i32)>)>) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         describe_user_scram_credentials_request::{DescribeUserScramCredentialsRequest, UserName},
         describe_user_scram_credentials_response::DescribeUserScramCredentialsResponse,
     };
@@ -346,10 +346,10 @@ async fn describe_all_users_round_trip() {
 
     // Seed alice's SCRAM credential directly via metadata (bypasses the
     // AlterUserScramCredentials wire path — keeps this test focused on Describe).
-    let rec = crabka_metadata::MetadataRecord::V1ScramCredential(
-        crabka_metadata::ScramCredentialRecord {
+    let rec = krabka_metadata::MetadataRecord::V1ScramCredential(
+        krabka_metadata::ScramCredentialRecord {
             user: "alice".into(),
-            mechanism: crabka_security::SaslMechanism::ScramSha512,
+            mechanism: krabka_security::SaslMechanism::ScramSha512,
             iterations: 4096,
             salt: vec![1, 2, 3, 4],
             server_key: vec![5; 64],

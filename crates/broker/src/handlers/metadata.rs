@@ -6,8 +6,8 @@
 //! quorum-replicated snapshot, and not from a local in-memory struct.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         metadata_request::MetadataRequest,
@@ -69,8 +69,8 @@ pub(crate) async fn handle(
     // name-only-miss case), so a topic requested by id is still
     // ACL-checked under its real name.
     let resolved: Vec<(
-        &crabka_protocol::owned::metadata_request::MetadataRequestTopic,
-        Result<&crabka_metadata::TopicRecord, i16>,
+        &krabka_protocol::owned::metadata_request::MetadataRequestTopic,
+        Result<&krabka_metadata::TopicRecord, i16>,
     )> = match &req.topics {
         Some(list) => list
             .iter()
@@ -181,13 +181,13 @@ pub(crate) async fn handle(
 }
 
 type ResolvedTopic<'a> = (
-    &'a crabka_protocol::owned::metadata_request::MetadataRequestTopic,
-    Result<&'a crabka_metadata::TopicRecord, i16>,
+    &'a krabka_protocol::owned::metadata_request::MetadataRequestTopic,
+    Result<&'a krabka_metadata::TopicRecord, i16>,
 );
 
 fn build_topic_rows(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     request: &MetadataRequest,
     resolved: &[ResolvedTopic<'_>],
@@ -249,11 +249,11 @@ fn build_topic_rows(
 
 fn success_topic_row(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     request: &MetadataRequest,
     name: &str,
-    record: &crabka_metadata::TopicRecord,
+    record: &krabka_metadata::TopicRecord,
 ) -> MetadataResponseTopic {
     let partitions = image
         .partitions_of(name)
@@ -298,7 +298,7 @@ fn success_topic_row(
     }
 }
 
-/// Projects a stored [`crabka_metadata::BrokerRegistrationRecord`] into one
+/// Projects a stored [`krabka_metadata::BrokerRegistrationRecord`] into one
 /// wire-format [`MetadataResponseBroker`].
 ///
 /// The Kafka `MetadataResponse` wire format, v0 to v12 at the time of writing,
@@ -320,7 +320,7 @@ fn success_topic_row(
 /// overflows. Broker ids are small in practice, so that clamp is purely
 /// defensive.
 fn project_broker(
-    b: &crabka_metadata::BrokerRegistrationRecord,
+    b: &krabka_metadata::BrokerRegistrationRecord,
     connection_listener_name: &str,
     inter_broker_name: &str,
 ) -> MetadataResponseBroker {
@@ -346,7 +346,7 @@ fn project_broker(
 ///   3. the first recorded endpoint;
 ///   4. the legacy top-level `host` and `port` when `endpoints` is empty.
 pub(crate) fn pick_endpoint_host_port(
-    b: &crabka_metadata::BrokerRegistrationRecord,
+    b: &krabka_metadata::BrokerRegistrationRecord,
     connection_listener_name: &str,
     inter_broker_name: &str,
 ) -> (String, i32) {
@@ -368,20 +368,20 @@ mod tests {
 
     use super::*;
 
-    fn endpoint(name: &str, host: &str, port: u16) -> crabka_metadata::BrokerEndpoint {
-        crabka_metadata::BrokerEndpoint {
+    fn endpoint(name: &str, host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
+        krabka_metadata::BrokerEndpoint {
             name: name.to_string(),
             host: host.to_string(),
             port,
-            protocol: crabka_security::ListenerProtocol::Plaintext,
+            protocol: krabka_security::ListenerProtocol::Plaintext,
         }
     }
 
     fn record(
-        endpoints: Vec<crabka_metadata::BrokerEndpoint>,
-    ) -> crabka_metadata::BrokerRegistrationRecord {
-        crabka_metadata::BrokerRegistrationRecord {
-            node_id: crabka_metadata::NodeId(7),
+        endpoints: Vec<krabka_metadata::BrokerEndpoint>,
+    ) -> krabka_metadata::BrokerRegistrationRecord {
+        krabka_metadata::BrokerRegistrationRecord {
+            node_id: krabka_metadata::NodeId(7),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),
             host: "legacy-host".to_string(),
@@ -408,7 +408,7 @@ mod tests {
             host: "tls-host".to_string(),
             port: 9094,
             rack: Some("rack-a".to_string()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(out == expected);
     }

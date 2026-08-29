@@ -4,8 +4,8 @@
 //! metric registry. A unit test binds [`NoDeliveryMetrics`], so no test needs a
 //! live registry.
 
-use crabka_ids::PartitionIndex;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::delivery::PartitionDelivery;
 

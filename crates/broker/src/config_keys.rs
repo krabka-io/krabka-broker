@@ -43,8 +43,8 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use crabka_log::LogConfig;
-use crabka_units::{
+use krabka_log::LogConfig;
+use krabka_units::{
     ByteSize, Time,
     convert::{
         ByteSizeExt as _, TimeExt as _,
@@ -116,8 +116,8 @@ pub(crate) fn is_controller_managed_broker_config(key: &str) -> bool {
 /// resolves to `false`, so a cluster with no witness behaves as it did
 /// before the role existed.
 pub(crate) fn resolve_broker_witness(
-    image: &crabka_metadata::MetadataImage,
-    node_id: crabka_metadata::NodeId,
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
 ) -> bool {
     image
         .broker_config(node_id)
@@ -132,8 +132,8 @@ pub(crate) fn resolve_broker_witness(
 /// members from leader selection. Building it once keeps the scan a single
 /// walk over the image rather than a lookup for each partition replica.
 pub(crate) fn witness_node_ids(
-    image: &crabka_metadata::MetadataImage,
-) -> std::collections::HashSet<crabka_metadata::NodeId> {
+    image: &krabka_metadata::MetadataImage,
+) -> std::collections::HashSet<krabka_metadata::NodeId> {
     image
         .brokers()
         .filter(|broker| resolve_broker_witness(image, broker.node_id))
@@ -144,7 +144,7 @@ pub(crate) fn witness_node_ids(
 /// Resolve [`STRETCH_PREFERRED_LEADER_SITE`] from the cluster defaults.
 /// `None` means the cluster pins leadership to no site.
 pub(crate) fn resolve_preferred_leader_site(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Option<&str> {
     image
         .default_broker_config()?
@@ -185,7 +185,7 @@ pub(crate) const LOCAL_RETENTION_BYTES: &str = "local.retention.bytes";
 /// after they first become compaction-eligible. This is the delete-horizon
 /// grace window.
 pub(crate) const DELETE_RETENTION_MS: &str = "delete.retention.ms";
-/// Crabka extension: per-topic `QoS` tier used to partition producer quota
+/// Krabka extension: per-topic `QoS` tier used to partition producer quota
 /// buckets. Unset topics resolve to [`DEFAULT_QOS_TIER`].
 pub(crate) const QOS_TIER: &str = "qos.tier";
 pub(crate) const DEFAULT_QOS_TIER: &str = "default";
@@ -382,8 +382,8 @@ pub(crate) fn validate_config_combination(
 /// It returns `Err` for an unknown name.
 pub(crate) fn parse_compression_type(
     value: &str,
-) -> Result<Option<crabka_compression::CompressionType>, String> {
-    use crabka_compression::CompressionType;
+) -> Result<Option<krabka_compression::CompressionType>, String> {
+    use krabka_compression::CompressionType;
     match value {
         "producer" => Ok(None),
         "uncompressed" | "none" => Ok(Some(CompressionType::None)),
@@ -469,7 +469,7 @@ pub(crate) fn is_recognized(key: &str) -> bool {
 /// permissive runtime behavior of other Produce-side topic config reads.
 #[must_use]
 pub(crate) fn resolve_qos_tier<'a>(
-    image: &'a crabka_metadata::MetadataImage,
+    image: &'a krabka_metadata::MetadataImage,
     topic: &str,
 ) -> &'a str {
     image
@@ -486,7 +486,7 @@ pub(crate) fn resolve_qos_tier<'a>(
 /// other Produce-side topic config reads.
 #[must_use]
 pub(crate) fn resolve_delivery_max_delay(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<Time> {
     let millis = image
@@ -504,7 +504,7 @@ pub(crate) fn resolve_delivery_max_delay(
 /// `false`.
 #[must_use]
 pub(crate) fn resolve_delivery_schedule_monotonic(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> bool {
     image
@@ -524,7 +524,7 @@ pub(crate) fn resolve_delivery_schedule_monotonic(
 /// sets only the mode still resolves to `None`.
 #[must_use]
 pub(crate) fn resolve_schema_validation(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<crate::schema_validation::SchemaGate> {
     use crate::schema_validation::{SchemaGate, ValidationMode};
@@ -547,7 +547,7 @@ pub(crate) fn resolve_schema_validation(
 }
 
 fn topic_or_cluster_default<'a>(
-    image: &'a crabka_metadata::MetadataImage,
+    image: &'a krabka_metadata::MetadataImage,
     topic: &str,
     key: &str,
 ) -> Option<&'a str> {
@@ -563,7 +563,7 @@ fn topic_or_cluster_default<'a>(
 /// [`RecoveryStrategy::None`] when neither value exists or the selected value
 /// is unparseable.
 pub(crate) fn resolve_recovery_strategy(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> RecoveryStrategy {
     topic_or_cluster_default(image, topic, UNCLEAN_RECOVERY_STRATEGY)
@@ -575,7 +575,7 @@ pub(crate) fn resolve_recovery_strategy(
 /// takes precedence over the cluster-wide default broker config. Missing or
 /// invalid values resolve to `false`.
 pub(crate) fn resolve_unclean_leader_election_enabled(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> bool {
     topic_or_cluster_default(image, topic, UNCLEAN_LEADER_ELECTION_ENABLE) == Some("true")
@@ -599,8 +599,8 @@ pub(crate) fn parse_remote_list_offsets_timeout(value: &str) -> Result<Duration,
 
 /// Resolve the per-broker KIP-1075 timeout over the cluster default.
 pub(crate) fn resolve_remote_list_offsets_timeout(
-    image: &crabka_metadata::MetadataImage,
-    node_id: crabka_metadata::NodeId,
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
 ) -> Duration {
     image
         .broker_config(node_id)
@@ -657,9 +657,9 @@ pub(crate) fn apply_to_log_config(
             }
             CLEANUP_POLICY => {
                 out.cleanup_policy = if v == "compact" {
-                    crabka_log::CleanupPolicy::Compact
+                    krabka_log::CleanupPolicy::Compact
                 } else {
-                    crabka_log::CleanupPolicy::Delete
+                    krabka_log::CleanupPolicy::Delete
                 };
             }
             COMPRESSION_TYPE => {
@@ -672,9 +672,9 @@ pub(crate) fn apply_to_log_config(
             }
             DELIVERY_MODE => {
                 out.delivery_policy = if v == DELIVERY_MODE_SCHEDULED {
-                    crabka_log::DeliveryPolicy::Scheduled
+                    krabka_log::DeliveryPolicy::Scheduled
                 } else {
-                    crabka_log::DeliveryPolicy::Immediate
+                    krabka_log::DeliveryPolicy::Immediate
                 };
             }
             DELETE_RETENTION_MS => {
@@ -792,7 +792,7 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         value_type: "string",
         default: Some(DEFAULT_QOS_TIER),
         kip: None,
-        description: "Crabka QoS tier used to partition producer quota buckets.",
+        description: "Krabka QoS tier used to partition producer quota buckets.",
     },
     TopicConfigDoc {
         key: DELIVERY_MODE,
@@ -917,7 +917,7 @@ mod doc_tests {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::{bytes, mebibytes, millis, minutes};
+    use krabka_units::{bytes, mebibytes, millis, minutes};
 
     use super::*;
 
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn parse_compression_type_maps_codecs() {
-        use crabka_compression::CompressionType;
+        use krabka_compression::CompressionType;
         let cases = [
             ("gzip", CompressionType::Gzip),
             ("snappy", CompressionType::Snappy),
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[test]
     fn apply_compression_type_zstd_propagates() {
-        use crabka_compression::CompressionType;
+        use krabka_compression::CompressionType;
         let mut o = BTreeMap::new();
         o.insert(COMPRESSION_TYPE.into(), "zstd".into());
         let out = apply_to_log_config(&o, &LogConfig::default());
@@ -1017,7 +1017,7 @@ mod tests {
 
     #[test]
     fn apply_compression_type_producer_resets_to_none() {
-        use crabka_compression::CompressionType;
+        use krabka_compression::CompressionType;
         let base = LogConfig {
             compression_type: Some(CompressionType::Lz4),
             ..LogConfig::default()
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[test]
     fn resolve_qos_tier_defaults_when_unset() {
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         assert!(resolve_qos_tier(&image, "t") == DEFAULT_QOS_TIER);
     }
 
@@ -1198,20 +1198,20 @@ mod tests {
     fn apply_cleanup_policy_compact_propagates() {
         let mut overrides = std::collections::BTreeMap::new();
         overrides.insert(CLEANUP_POLICY.to_string(), "compact".to_string());
-        let out = apply_to_log_config(&overrides, &crabka_log::LogConfig::default());
-        assert!(out.cleanup_policy == crabka_log::CleanupPolicy::Compact);
+        let out = apply_to_log_config(&overrides, &krabka_log::LogConfig::default());
+        assert!(out.cleanup_policy == krabka_log::CleanupPolicy::Compact);
     }
 
     #[test]
     fn apply_cleanup_policy_delete_propagates() {
         let mut overrides = std::collections::BTreeMap::new();
         overrides.insert(CLEANUP_POLICY.to_string(), "delete".to_string());
-        let base = crabka_log::LogConfig {
-            cleanup_policy: crabka_log::CleanupPolicy::Compact,
-            ..crabka_log::LogConfig::default()
+        let base = krabka_log::LogConfig {
+            cleanup_policy: krabka_log::CleanupPolicy::Compact,
+            ..krabka_log::LogConfig::default()
         };
         let out = apply_to_log_config(&overrides, &base);
-        assert!(out.cleanup_policy == crabka_log::CleanupPolicy::Delete);
+        assert!(out.cleanup_policy == krabka_log::CleanupPolicy::Delete);
     }
 
     #[test]
@@ -1349,7 +1349,7 @@ mod tests {
     fn recovery_settings_resolve_topic_over_cluster_default() {
         use std::collections::BTreeMap;
 
-        use crabka_metadata::{
+        use krabka_metadata::{
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
             TopicConfigRecord,
         };
@@ -1386,11 +1386,11 @@ mod tests {
     /// `broker.witness=true` for it. This is the path the broker takes at
     /// registration.
     fn register_node(
-        img: &mut crabka_metadata::MetadataImage,
+        img: &mut krabka_metadata::MetadataImage,
         node_id: u64,
         witness: Option<&str>,
     ) {
-        use crabka_metadata::{
+        use krabka_metadata::{
             BrokerConfigRecord, BrokerRegistrationRecord, MetadataRecord, NodeId,
         };
         img.apply(&MetadataRecord::V1BrokerRegistration(
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn resolve_broker_witness_reads_only_an_exact_true() {
-        use crabka_metadata::NodeId;
+        use krabka_metadata::NodeId;
         // (published value, expected role)
         let cases = [
             (None, false),
@@ -1428,7 +1428,7 @@ mod tests {
             (Some("yes"), false),
         ];
         for (value, want) in cases {
-            let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let mut img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
             register_node(&mut img, 1, value);
             assert!(
                 resolve_broker_witness(&img, NodeId(1)) == want,
@@ -1439,19 +1439,19 @@ mod tests {
 
     #[test]
     fn resolve_broker_witness_is_false_for_an_unregistered_node() {
-        use crabka_metadata::NodeId;
-        let img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        use krabka_metadata::NodeId;
+        let img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         assert!(!resolve_broker_witness(&img, NodeId(7)));
     }
 
     #[test]
     fn resolve_broker_witness_does_not_read_the_cluster_default() {
-        use crabka_metadata::{
+        use krabka_metadata::{
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, NodeId,
         };
         // The role is per node. A cluster default must not turn every broker
         // into a witness.
-        let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let mut img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         register_node(&mut img, 1, None);
         img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
@@ -1465,8 +1465,8 @@ mod tests {
     fn witness_node_ids_collects_every_marked_node() {
         use std::collections::HashSet;
 
-        use crabka_metadata::NodeId;
-        let mut img = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        use krabka_metadata::NodeId;
+        let mut img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         assert!(witness_node_ids(&img) == HashSet::new());
         register_node(&mut img, 1, None);
         register_node(&mut img, 2, Some(WITNESS_TRUE));
@@ -1540,13 +1540,13 @@ mod tests {
         assert!(
             apply_to_log_config(&scheduled, &LogConfig::default())
                 == LogConfig {
-                    delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+                    delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
                     ..LogConfig::default()
                 }
         );
 
         let base = LogConfig {
-            delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+            delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
             ..LogConfig::default()
         };
         let mut immediate = BTreeMap::new();
@@ -1632,7 +1632,7 @@ mod tests {
 
     #[test]
     fn delivery_settings_resolve_topic_overrides_over_defaults() {
-        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+        use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
         use uuid::Uuid;
 
         let mut image = MetadataImage::new(Uuid::nil());
@@ -1659,7 +1659,7 @@ mod tests {
 
     #[test]
     fn corrupt_delivery_settings_resolve_to_their_defaults() {
-        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+        use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
         use uuid::Uuid;
 
         let cases = ["soon", "-5", ""];
@@ -1684,8 +1684,8 @@ mod tests {
     }
 
     /// A metadata image whose topic `t` carries exactly `overrides`.
-    fn image_with_topic_config(overrides: &[(&str, &str)]) -> crabka_metadata::MetadataImage {
-        use crabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
+    fn image_with_topic_config(overrides: &[(&str, &str)]) -> krabka_metadata::MetadataImage {
+        use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
         use uuid::Uuid;
 
         let mut image = MetadataImage::new(Uuid::nil());
@@ -1855,7 +1855,7 @@ mod tests {
 
     #[test]
     fn a_topic_with_no_config_at_all_has_no_schema_validation_gate() {
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         assert!(resolve_schema_validation(&image, "t").is_none());
     }
 
@@ -1897,7 +1897,7 @@ mod tests {
     fn invalid_topic_recovery_setting_does_not_expose_cluster_default() {
         use std::collections::BTreeMap;
 
-        use crabka_metadata::{
+        use krabka_metadata::{
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
             TopicConfigRecord,
         };

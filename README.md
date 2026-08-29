@@ -13,21 +13,21 @@ for the Kafka client the broker and its tests use.
 
 | Crate | What it is |
 | --- | --- |
-| `crabka-broker` | The broker: request handlers, coordinators, replication, quotas, the server binary. |
-| `crabka-raft` | KRaft consensus engine. |
-| `crabka-kraft-core` | Shared KRaft types and the quorum state machine. |
-| `crabka-log` | The on-disk log: segments, indexes, compaction, retention. |
-| `crabka-records-legacy` | v0/v1 message-set codecs for down-conversion. |
-| `crabka-remote-storage` | Tiered-storage backends and the remote log reader. |
-| `crabka-remote-storage-topic` | The `__remote_log_metadata` topic-backed RLMM. |
-| `crabka-object-store` | Object-store abstraction shared by the tiered paths. |
-| `crabka-authz` | Authorizer traits, ACL evaluation, and the OPA client. |
-| `crabka-audit` | Audit event model, OCSF serialization, and the `crabka-audit verify` CLI. |
-| `crabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
-| `crabka-throttle` | Quota token buckets (Creusot-verified). |
-| `crabka-verified` | Formally verified pure kernels shared by consensus and log. |
-| `crabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
-| `crabka-logfmt` | logfmt encoder for structured logs. |
+| `krabka-broker` | The broker: request handlers, coordinators, replication, quotas, the server binary. |
+| `krabka-raft` | KRaft consensus engine. |
+| `krabka-kraft-core` | Shared KRaft types and the quorum state machine. |
+| `krabka-log` | The on-disk log: segments, indexes, compaction, retention. |
+| `krabka-records-legacy` | v0/v1 message-set codecs for down-conversion. |
+| `krabka-remote-storage` | Tiered-storage backends and the remote log reader. |
+| `krabka-remote-storage-topic` | The `__remote_log_metadata` topic-backed RLMM. |
+| `krabka-object-store` | Object-store abstraction shared by the tiered paths. |
+| `krabka-authz` | Authorizer traits, ACL evaluation, and the OPA client. |
+| `krabka-audit` | Audit event model, OCSF serialization, and the `krabka-audit verify` CLI. |
+| `krabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
+| `krabka-throttle` | Quota token buckets (Creusot-verified). |
+| `krabka-verified` | Formally verified pure kernels shared by consensus and log. |
+| `krabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
+| `krabka-logfmt` | logfmt encoder for structured logs. |
 
 ## Build
 
@@ -214,14 +214,14 @@ bazel run //:format_bin -- --log-dir /var/lib/krabka --standalone \
     --node-id 1 --controller-listener 0.0.0.0:9093
 ```
 
-The monorepo spells this `crabka format`, as a subcommand of the operator CLI.
+The operator CLI spells this `krabka format`, as a subcommand.
 That CLI also drives the gres layer, so it could not follow the broker out; the
 command needs only the metadata and security crates, so it lives here as
-`crabka-format` — a library as well as a binary, so `crabka-cli` can call it
+`krabka-format` — a library as well as a binary, so `krabka-cli` can call it
 rather than carry a second copy.
 
 ## Publishing
 
-`crabka-log` and the other published names in this tree are released to crates.io
+`krabka-log` and the other published names in this tree are released to crates.io
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
 has no release automation; consumers pin it by git revision.

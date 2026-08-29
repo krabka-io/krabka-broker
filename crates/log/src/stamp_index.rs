@@ -13,7 +13,7 @@
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
-use crabka_ids::Offset;
+use krabka_ids::Offset;
 use tracing::instrument;
 use zerocopy::{
     BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,

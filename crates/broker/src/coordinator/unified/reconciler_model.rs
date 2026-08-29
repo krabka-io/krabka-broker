@@ -5,7 +5,7 @@
 //! adds and trusts the coordinator. It checks the main KIP-848 safety
 //! property: no two members ever own the same partition at the same time. The
 //! design is in
-//! `docs/superpowers/specs/2026-06-14-crabka-kip848-reconciliation-model-design.md`.
+//! `docs/superpowers/specs/2026-06-14-krabka-kip848-reconciliation-model-design.md`.
 //!
 //! The faithful client adds and revokes partitions strictly by the
 //! **advertised** assignment that the coordinator returned in that member's
@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
     primitives::uuid::Uuid,
 };

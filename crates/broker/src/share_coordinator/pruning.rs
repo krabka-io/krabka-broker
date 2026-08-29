@@ -8,7 +8,7 @@
 //! offset" after a snapshot write. It never trims above the minimum, so no
 //! key loses its latest snapshot.
 
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 /// Smallest latest-snapshot offset across all live keys on a state partition.
 ///

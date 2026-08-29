@@ -11,7 +11,7 @@
 //! Streams migration is COLD only, because Kafka does not support online
 //! streams migration, so there is no hosted-classic-member translation here.
 
-use crabka_protocol::records::RecordBatch;
+use krabka_protocol::records::RecordBatch;
 
 use super::persistence::{
     encode_current_member_assignment_key, encode_group_metadata_key, encode_member_metadata_key,

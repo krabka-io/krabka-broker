@@ -19,9 +19,9 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use crabka_log::Offset;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_log::Offset;
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         share_acknowledge_request::ShareAcknowledgeRequest,
@@ -220,7 +220,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             share_acknowledge_request::{AcknowledgePartition, AcknowledgeTopic},
@@ -228,7 +228,7 @@ mod tests {
         },
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
 

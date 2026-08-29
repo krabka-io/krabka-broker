@@ -22,12 +22,12 @@
 
 use std::{collections::HashSet, hash::BuildHasher};
 
-use crabka_metadata::{DelegationTokenRecord, MetadataRecord};
-use crabka_protocol::owned::{
+use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     create_delegation_token_response::CreateDelegationTokenResponse,
 };
-use crabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_security::{KafkaPrincipal, SecretBytes};
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
@@ -90,7 +90,7 @@ pub(crate) async fn handle<S: BuildHasher>(
     if crate::features::require_feature(
         &image,
         crate::features::METADATA_VERSION,
-        crabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
     {
@@ -142,7 +142,7 @@ pub(crate) async fn handle<S: BuildHasher>(
 
     let now = now_ms();
     let token_id = uuid::Uuid::new_v4().to_string();
-    let hmac = crabka_security::compute_token_hmac(secret_key.as_bytes(), &token_id);
+    let hmac = krabka_security::compute_token_hmac(secret_key.as_bytes(), &token_id);
 
     let renewers: Vec<KafkaPrincipal> = req
         .renewers
@@ -216,8 +216,8 @@ mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use assert2::assert;
-    use crabka_raft::ControllerHandle;
-    use crabka_security::{AuthMethod, Principal, SaslMechanism};
+    use krabka_raft::ControllerHandle;
+    use krabka_security::{AuthMethod, Principal, SaslMechanism};
     use tempfile::TempDir;
 
     use super::*;
@@ -236,13 +236,13 @@ mod tests {
     /// Starts a single-voter `Controller` for tests and waits for the
     /// leader.
     async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = crabka_raft::ControllerConfig {
-            election_timeout: crabka_units::millis(200),
-            heartbeat_interval: Some(crabka_units::millis(50)),
+        let cfg = krabka_raft::ControllerConfig {
+            election_timeout: krabka_units::millis(200),
+            heartbeat_interval: Some(krabka_units::millis(50)),
             client_id: "test".into(),
-            ..crabka_raft::ControllerConfig::for_tests(crabka_raft::NodeId(1), log_dir)
+            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
         };
-        let handle = Arc::new(crabka_raft::Controller::start(cfg).await.unwrap());
+        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
         let mut rx = handle.watch_leader();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while rx.borrow().is_none() {
@@ -333,7 +333,7 @@ mod tests {
             token_id: resp.token_id.clone(),
             hmac: resp.hmac.clone(),
             throttle_time_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         // Persisted in image with the same hmac + owner + timestamps.
@@ -341,7 +341,7 @@ mod tests {
         let stored = img
             .delegation_token_by_id(&resp.token_id)
             .expect("token in image");
-        let expected_stored = crabka_metadata::DelegationToken {
+        let expected_stored = krabka_metadata::DelegationToken {
             token_id: resp.token_id.clone(),
             owner: KafkaPrincipal {
                 principal_type: "User".into(),
@@ -415,7 +415,7 @@ mod tests {
             token_id: resp.token_id.clone(),
             hmac: resp.hmac.clone(),
             throttle_time_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         controller.cancel().await;
@@ -474,7 +474,7 @@ mod tests {
                 token_id: resp.token_id.clone(),
                 hmac: resp.hmac.clone(),
                 throttle_time_ms: 0,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             };
             assert!(resp == expected, "ceiling {ceiling_ms}: {resp:?}");
         }
@@ -547,7 +547,7 @@ mod tests {
             token_id: resp.token_id.clone(),
             hmac: resp.hmac.clone(),
             throttle_time_ms: 0,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         // Persisted owner matches the response owner.
@@ -555,7 +555,7 @@ mod tests {
         let stored = img
             .delegation_token_by_id(&resp.token_id)
             .expect("token in image");
-        let expected_stored = crabka_metadata::DelegationToken {
+        let expected_stored = krabka_metadata::DelegationToken {
             token_id: resp.token_id.clone(),
             owner: KafkaPrincipal {
                 principal_type: "User".into(),
@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn token_gate_uses_delegation_token_level() {
-        use crabka_metadata::{
+        use krabka_metadata::{
             FeatureLevelRecord, MetadataImage, MetadataRecord,
             metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
         };

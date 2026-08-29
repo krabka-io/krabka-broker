@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
-use crabka_raft::NodeId;
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
+use krabka_raft::NodeId;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -184,7 +184,7 @@ mod tests {
     };
 
     use assert2::{assert, check};
-    use crabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
     use uuid::Uuid;
 
     use super::*;
@@ -303,7 +303,7 @@ mod tests {
             leader: NodeId(leader),
             replicas: replicas.iter().copied().map(NodeId).collect(),
             isr: isr.iter().copied().map(NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(5),
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
             adding_replicas: adding.iter().copied().map(NodeId).collect(),
             removing_replicas: removing.iter().copied().map(NodeId).collect(),
             directories: vec![],
@@ -313,7 +313,7 @@ mod tests {
     }
 
     async fn liveness(alive: &[u64]) -> ControllerLivenessState {
-        let l = ControllerLivenessState::new(crabka_units::secs(10));
+        let l = ControllerLivenessState::new(krabka_units::secs(10));
         for n in alive {
             l.record_heartbeat(*n).await;
         }
@@ -389,7 +389,7 @@ mod tests {
             leader: NodeId(leader),
             replicas: replicas.iter().copied().map(NodeId).collect(),
             isr: isr.iter().copied().map(NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(5),
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
             adding_replicas: adding.iter().copied().map(NodeId).collect(),
             removing_replicas: removing.iter().copied().map(NodeId).collect(),
             directories: directories.to_vec(),
@@ -430,7 +430,7 @@ mod tests {
         check!(pr.removing_replicas == Vec::<NodeId>::new());
         check!(pr.isr == vec![NodeId(1), NodeId(3)]);
         check!(pr.leader == 1);
-        check!(pr.leader_epoch == crabka_metadata::LeaderEpoch(5));
+        check!(pr.leader_epoch == krabka_metadata::LeaderEpoch(5));
         check!(pr.partition_epoch == 1);
     }
 
@@ -497,7 +497,7 @@ mod tests {
         );
         // leader_epoch bumped; replica set unchanged — completion happens
         // next tick.
-        check!(pr.leader_epoch == crabka_metadata::LeaderEpoch(6));
+        check!(pr.leader_epoch == krabka_metadata::LeaderEpoch(6));
         check!(pr.partition_epoch == 1);
         check!(pr.adding_replicas == vec![NodeId(3)]);
         check!(pr.removing_replicas == vec![NodeId(2)]);
@@ -580,7 +580,7 @@ mod tests {
                 leader: NodeId(1),
                 replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
                 isr: vec![NodeId(1), NodeId(2), NodeId(3)],
-                leader_epoch: crabka_metadata::LeaderEpoch(5),
+                leader_epoch: krabka_metadata::LeaderEpoch(5),
                 adding_replicas: vec![NodeId(3)],
                 removing_replicas: vec![NodeId(2)],
                 directories: vec![],

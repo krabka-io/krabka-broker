@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
-use crabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
+use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -275,7 +275,7 @@ async fn disk_backed_restart_recovers_idempotent_producer_state() {
         .wait_until_local_partition_leader(
             "restart-dedup",
             0,
-            crabka_broker::NodeId(broker.node_id()),
+            krabka_broker::NodeId(broker.node_id()),
         )
         .await;
 
@@ -433,7 +433,7 @@ async fn read_committed_under_rf1_unchanged() {
     let mut seen: Vec<String> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
     while seen.len() < 3 && Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
             seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }

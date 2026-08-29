@@ -10,7 +10,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 /// Four-state machine for a live consumer group, matching the Apache Kafka
 /// classic protocol (KIP-62 / KIP-394).

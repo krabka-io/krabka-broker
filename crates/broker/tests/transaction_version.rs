@@ -33,11 +33,11 @@ use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
-use crabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::owned::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
+use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::owned::{
     add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
     common::{
@@ -75,7 +75,7 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
 async fn admin_client(bootstrap: &str) -> Client {
     Client::builder()
         .bootstrap(bootstrap)
-        .client_id("crabka-txnv-test")
+        .client_id("krabka-txnv-test")
         .build()
         .await
         .unwrap()
@@ -226,7 +226,7 @@ async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, gro
     let mut seen: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while seen.len() < 3 && std::time::Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
             seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }

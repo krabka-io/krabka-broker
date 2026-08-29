@@ -1,10 +1,10 @@
-//! `crabka-log` adapter for the sans-IO quorum core.
+//! `krabka-log` adapter for the sans-IO quorum core.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crabka_ids::LeaderEpoch;
-use crabka_kraft_core::{Epoch, LogView};
-use crabka_log::Log;
+use krabka_ids::LeaderEpoch;
+use krabka_kraft_core::{Epoch, LogView};
+use krabka_log::Log;
 
 /// A durable WAL-replica log exposed through [`LogView`].
 #[derive(Debug, Clone)]
@@ -63,8 +63,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use assert2::assert;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::records::{Record, RecordBatch};
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
 

@@ -16,9 +16,9 @@
 use std::time::Duration;
 
 use assert2::check;
-use crabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId, TopicRecord};
-use crabka_raft::{BootstrapMode, Controller, ControllerConfig};
-use crabka_units::prelude::{Time, millis};
+use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId, TopicRecord};
+use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
+use krabka_units::prelude::{Time, millis};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ use uuid::Uuid;
 /// inside the 30-second leader deadline.
 const FAST_ELECTION_TIMEOUT: Time = millis(200);
 
-async fn wait_for_leader(controller: &crabka_raft::ControllerHandle) {
+async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
     let mut rx = controller.watch_leader();
     tokio::time::timeout(Duration::from_secs(30), rx.wait_for(Option::is_some))
         .await

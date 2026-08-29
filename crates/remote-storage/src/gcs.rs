@@ -31,8 +31,8 @@
 //! through [`S3RemoteStorage::from_s3_config`]. That shim cannot use Workload
 //! Identity and needs HMAC interoperability keys.
 
-use crabka_object_store::{GcsConfig, ObjectStoreConfig, build_object_store};
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use krabka_object_store::{GcsConfig, ObjectStoreConfig, build_object_store};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 use crate::{
     error::RemoteStorageError,
@@ -75,7 +75,7 @@ mod tests {
 
     use assert2::assert;
     use bytes::Bytes;
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use object_store::memory::InMemory;
     use tempfile::TempDir;
     use uuid::Uuid;

@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crabka_ids::LeaderEpoch;
+use krabka_ids::LeaderEpoch;
 use uuid::Uuid;
 
 use crate::{

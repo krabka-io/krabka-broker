@@ -8,7 +8,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     api_versions_request::ApiVersionsRequest,
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
@@ -47,7 +47,7 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
     let av = p
         .client
         .send(ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })
@@ -68,7 +68,7 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
 /// `UpdateFeatures` v2 the encoder omits the `results` array, so the handler
 /// moves the first non-zero row error to the top-level `error_code`.
 fn assert_feature_error(
-    resp: &crabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
+    resp: &krabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
     feature: &str,
     code: i16,
 ) {
@@ -107,7 +107,7 @@ async fn rejects_level_above_supported_max() {
 }
 
 fn metadata_version(
-    api_versions: &crabka_protocol::owned::api_versions_response::ApiVersionsResponse,
+    api_versions: &krabka_protocol::owned::api_versions_response::ApiVersionsResponse,
 ) -> i16 {
     api_versions
         .finalized_features
@@ -128,7 +128,7 @@ async fn validate_only_does_not_persist() {
     // persisting (no epoch bump, no level change).
     let api_versions = || {
         p.client.send(ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })

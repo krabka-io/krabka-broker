@@ -66,7 +66,7 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
         ],
     );
     eprintln!(
-        "CRABKA[test] alter status={} stdout={} stderr={}",
+        "KRABKA[test] alter status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -134,7 +134,7 @@ async fn jvm_kafka_configs_alter_client_quota_end_to_end() {
 
     // Confirm the quota was cleared from the committed metadata image.
     h1.wait_for_image(|img| {
-        let key: crabka_metadata::EntityKey = vec![("user".to_string(), Some(ALICE.to_string()))];
+        let key: krabka_metadata::EntityKey = vec![("user".to_string(), Some(ALICE.to_string()))];
         img.client_quotas()
             .get(&key)
             .and_then(|m| m.get("producer_byte_rate"))
@@ -194,7 +194,7 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
         ],
     );
     eprintln!(
-        "CRABKA[test] alter status={} stdout={} stderr={}",
+        "KRABKA[test] alter status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -262,7 +262,7 @@ async fn jvm_kafka_configs_alter_ip_quota_end_to_end() {
 
     // Confirm the quota was cleared from the committed metadata image.
     h1.wait_for_image(|img| {
-        let key: crabka_metadata::EntityKey =
+        let key: krabka_metadata::EntityKey =
             vec![("ip".to_string(), Some("127.0.0.1".to_string()))];
         img.client_quotas()
             .get(&key)
@@ -331,7 +331,7 @@ async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
         ],
     );
     eprintln!(
-        "CRABKA[test] alter status={} stdout={} stderr={}",
+        "KRABKA[test] alter status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -399,7 +399,7 @@ async fn jvm_kafka_configs_alter_controller_mutation_rate_end_to_end() {
 
     // Confirm the quota was cleared from the committed metadata image.
     h1.wait_for_image(|img| {
-        let key: crabka_metadata::EntityKey = vec![("user".to_string(), Some(ALICE.to_string()))];
+        let key: krabka_metadata::EntityKey = vec![("user".to_string(), Some(ALICE.to_string()))];
         img.client_quotas()
             .get(&key)
             .and_then(|m| m.get("controller_mutation_rate"))
@@ -584,7 +584,7 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
 async fn jvm_kafka_delegation_tokens_end_to_end() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
-    const TOPIC: &str = "crabka-deleg-token-itest";
+    const TOPIC: &str = "krabka-deleg-token-itest";
     const SECRET: &[u8] = b"jvm-master-key";
 
     let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
@@ -622,7 +622,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
         ],
     );
     let create_stdout = String::from_utf8_lossy(&create_out.stdout).to_string();
-    eprintln!("CRABKA[test] --create stdout:\n{create_stdout}");
+    eprintln!("KRABKA[test] --create stdout:\n{create_stdout}");
 
     let token_id = extract_jvm_kv(&create_stdout, "TOKENID");
     let hmac = extract_jvm_kv(&create_stdout, "HMAC");

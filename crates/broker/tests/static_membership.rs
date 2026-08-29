@@ -15,7 +15,7 @@
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest,
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     leave_group_request::{LeaveGroupRequest, MemberIdentity},
@@ -49,7 +49,7 @@ fn join_request(group_id: &str, member_id: &str, instance_id: Option<&str>) -> J
 /// Boot a group with one static member and sync an assignment for it.
 /// Returns the assigned `(member_id, generation_id, assignment)`.
 async fn bootstrap_static_member(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     group_id: &str,
     instance_id: &str,
     assignment: Bytes,

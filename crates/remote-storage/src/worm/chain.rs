@@ -167,7 +167,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::check;
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use proptest::{collection::vec as prop_vec, num::u8::ANY as ANY_U8, proptest};
     use uuid::Uuid;
 

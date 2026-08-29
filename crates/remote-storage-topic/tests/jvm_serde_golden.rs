@@ -1,4 +1,4 @@
-//! Byte-exactness proof: Crabka's [`MetadataEvent`] codec produces and
+//! Byte-exactness proof: Krabka's [`MetadataEvent`] codec produces and
 //! consumes the *same* bytes as the real JVM `RemoteLogMetadataSerde`.
 //!
 //! `scripts/capture-rlmm-golden.sh` captured the golden vectors in
@@ -10,8 +10,8 @@
 //! reproduce it.
 //!
 //! For every case these tests assert BOTH directions:
-//!   1. `event.encode() == golden`   — Crabka encodes byte-identically to the JVM.
-//!   2. `MetadataEvent::decode(golden) == event` — Crabka decodes JVM bytes.
+//!   1. `event.encode() == golden`   — Krabka encodes byte-identically to the JVM.
+//!   2. `MetadataEvent::decode(golden) == event` — Krabka decodes JVM bytes.
 //!
 //! The FIXED constants below MUST match `Capture.java` exactly:
 //!   topicId   = `Uuid::from_u128(0xCA)`
@@ -27,13 +27,13 @@ use std::{
     fmt::Write as _,
 };
 
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     CustomMetadata, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
     RemoteLogSegmentState, RemotePartitionDeleteMetadata, RemotePartitionDeleteState,
     TopicIdPartition,
 };
-use crabka_remote_storage_topic::MetadataEvent;
+use krabka_remote_storage_topic::MetadataEvent;
 use uuid::Uuid;
 
 /// Load and hex-decode one named golden vector from the committed fixture.
@@ -75,7 +75,7 @@ fn base_add() -> RemoteLogSegmentMetadata {
         100, // max_timestamp_ms
         42,  // broker_id
         123,
-        crabka_remote_storage::RemoteLogSegmentDetails::new(
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
             // event_timestamp_ms
             4096, // segment_size_in_bytes
             RemoteLogSegmentState::CopySegmentStarted,
@@ -85,22 +85,22 @@ fn base_add() -> RemoteLogSegmentMetadata {
     .expect("valid RemoteLogSegmentMetadata")
 }
 
-/// Assert Crabka round-trips byte-identically against a JVM golden vector.
+/// Assert Krabka round-trips byte-identically against a JVM golden vector.
 fn assert_byte_exact(case: &str, event: &MetadataEvent) {
     let want = golden(case);
     let got = event.encode();
     assert_eq!(
         got.as_ref(),
         want.as_slice(),
-        "case `{case}`: Crabka encode != JVM golden\n  got : {}\n  want: {}",
+        "case `{case}`: Krabka encode != JVM golden\n  got : {}\n  want: {}",
         hex(got.as_ref()),
         hex(&want),
     );
     let decoded = MetadataEvent::decode(&want)
-        .unwrap_or_else(|e| panic!("case `{case}`: Crabka failed to decode JVM bytes: {e}"));
+        .unwrap_or_else(|e| panic!("case `{case}`: Krabka failed to decode JVM bytes: {e}"));
     assert_eq!(
         &decoded, event,
-        "case `{case}`: Crabka decode(JVM) != event"
+        "case `{case}`: Krabka decode(JVM) != event"
     );
 }
 

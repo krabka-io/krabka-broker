@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use crabka_client_core::ClientDuplex;
-use crabka_security::ListenerProtocol;
+use krabka_client_core::ClientDuplex;
+use krabka_security::ListenerProtocol;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -17,15 +17,15 @@ use tokio_rustls::TlsConnector;
 use crate::config::InterBrokerCredentials;
 
 /// Map the broker's [`InterBrokerCredentials`] onto the client-core
-/// [`crabka_client_core::SaslCredentials`] understood by the shared
-/// [`crabka_client_core::outbound_sasl`] handshake. The two enums carry
+/// [`krabka_client_core::SaslCredentials`] understood by the shared
+/// [`krabka_client_core::outbound_sasl`] handshake. The two enums carry
 /// the same variants, so this is a field-for-field copy. The RLMM bootstrap
 /// shares it, so the dialer and the metadata client agree on the
 /// mapping.
-pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> crabka_client_core::SaslCredentials {
+pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> krabka_client_core::SaslCredentials {
     match c {
         InterBrokerCredentials::Plain { username, password } => {
-            crabka_client_core::SaslCredentials::Plain {
+            krabka_client_core::SaslCredentials::Plain {
                 username: username.clone(),
                 password: password.clone(),
             }
@@ -34,7 +34,7 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> crabka_client_core:
             mechanism,
             username,
             password,
-        } => crabka_client_core::SaslCredentials::Scram {
+        } => krabka_client_core::SaslCredentials::Scram {
             mechanism: *mechanism,
             username: username.clone(),
             password: password.clone(),
@@ -44,14 +44,14 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> crabka_client_core:
             client_principal,
             service_name,
             kdc_url,
-        } => crabka_client_core::SaslCredentials::Gssapi {
+        } => krabka_client_core::SaslCredentials::Gssapi {
             keytab_path: keytab_path.clone(),
             client_principal: client_principal.clone(),
             service_name: service_name.clone(),
             kdc_url: kdc_url.clone(),
         },
         InterBrokerCredentials::OAuthBearer { token_path } => {
-            crabka_client_core::SaslCredentials::OAuthBearer {
+            krabka_client_core::SaslCredentials::OAuthBearer {
                 token_path: token_path.clone(),
             }
         }
@@ -79,12 +79,12 @@ pub enum InterBrokerError {
 pub struct InterBrokerClient {
     tls_connector: Option<TlsConnector>,
     creds: Option<InterBrokerCredentials>,
-    dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: crabka_client_core::ClientFrameMax,
+    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    frame_max: krabka_client_core::ClientFrameMax,
 }
 
 impl InterBrokerClient {
-    fn apply_resource_policy(&self, options: &mut crabka_client_core::ConnectionOptions) {
+    fn apply_resource_policy(&self, options: &mut krabka_client_core::ConnectionOptions) {
         options.dispatch_queue_capacity = self.dispatch_queue_capacity;
         options.frame_max = self.frame_max;
     }
@@ -94,8 +94,8 @@ impl InterBrokerClient {
         Self::new_with_policy(
             tls_connector,
             creds,
-            crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            crabka_client_core::ClientFrameMax::default(),
+            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            krabka_client_core::ClientFrameMax::default(),
         )
     }
 
@@ -104,8 +104,8 @@ impl InterBrokerClient {
     pub fn new_with_policy(
         tls_connector: Option<TlsConnector>,
         creds: Option<InterBrokerCredentials>,
-        dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-        frame_max: crabka_client_core::ClientFrameMax,
+        dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+        frame_max: krabka_client_core::ClientFrameMax,
     ) -> Self {
         Self {
             tls_connector,
@@ -127,7 +127,7 @@ impl InterBrokerClient {
         port: u16,
         listener_protocol: ListenerProtocol,
         server_name: &str,
-        options: &crabka_client_core::ConnectionOptions,
+        options: &krabka_client_core::ConnectionOptions,
     ) -> Result<Box<dyn ClientDuplex>, InterBrokerError> {
         let tcp = TcpStream::connect((host, port)).await?;
         let mut stream: Box<dyn ClientDuplex> = if listener_protocol.requires_tls() {
@@ -149,7 +149,7 @@ impl InterBrokerClient {
             let creds = self.creds.clone().ok_or_else(|| {
                 InterBrokerError::Config("SASL listener without inter_broker_credentials".into())
             })?;
-            crabka_client_core::outbound_sasl(
+            krabka_client_core::outbound_sasl(
                 &mut *stream,
                 &to_client_creds(&creds),
                 server_name,
@@ -163,7 +163,7 @@ impl InterBrokerClient {
     }
 
     /// Dial `host:port`, run TLS and SASL as needed, and return a
-    /// [`crabka_client_core::Connection`] over the resulting stream. The
+    /// [`krabka_client_core::Connection`] over the resulting stream. The
     /// connection is fully usable for normal typed Kafka requests, such as
     /// `Fetch`, `OffsetForLeaderEpoch`, `BrokerHeartbeat`, and raft RPCs
     /// through `raw_request`.
@@ -175,23 +175,23 @@ impl InterBrokerClient {
         port: u16,
         listener_protocol: ListenerProtocol,
         server_name: &str,
-        mut options: crabka_client_core::ConnectionOptions,
-    ) -> Result<crabka_client_core::Connection, InterBrokerError> {
+        mut options: krabka_client_core::ConnectionOptions,
+    ) -> Result<krabka_client_core::Connection, InterBrokerError> {
         self.apply_resource_policy(&mut options);
         let stream = self
             .connect(host, port, listener_protocol, server_name, &options)
             .await?;
-        crabka_client_core::Connection::from_stream(stream, options)
+        krabka_client_core::Connection::from_stream(stream, options)
             .await
             .map_err(|e| InterBrokerError::Config(format!("Connection::from_stream: {e}")))
     }
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// OutboundDialer adapter for crabka_raft::CrabkaRaftNetworkFactory.
+// OutboundDialer adapter for krabka_raft::KrabkaRaftNetworkFactory.
 // ────────────────────────────────────────────────────────────────────────
 
-/// Adapter that lets `crabka_raft` reach the broker's
+/// Adapter that lets `krabka_raft` reach the broker's
 /// [`InterBrokerClient`] without taking a build dependency on the
 /// broker crate. It wraps an `Arc<InterBrokerClient>` and the protocol and
 /// SNI configuration once, and the raft network factory clones it cheaply.
@@ -217,13 +217,13 @@ impl InterBrokerDialer {
 }
 
 #[async_trait::async_trait]
-impl crabka_raft::OutboundDialer for InterBrokerDialer {
+impl krabka_raft::OutboundDialer for InterBrokerDialer {
     async fn dial(
         &self,
-        _target: crabka_raft::NodeId,
+        _target: krabka_raft::NodeId,
         addr: &str,
-        options: crabka_client_core::ConnectionOptions,
-    ) -> Result<crabka_client_core::Connection, crabka_client_core::ClientError> {
+        options: krabka_client_core::ConnectionOptions,
+    ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
         // The raft transport hands us an address in `host:port` form
         // (the openraft `Node.addr` string). For SocketAddr-style
         // addresses we honour the configured `server_name` for SNI
@@ -231,7 +231,7 @@ impl crabka_raft::OutboundDialer for InterBrokerDialer {
         let (host, port) = match addr.rsplit_once(':') {
             Some((h, p)) => {
                 let port: u16 = p.parse().map_err(|e: std::num::ParseIntError| {
-                    crabka_client_core::ClientError::Io(std::io::Error::new(
+                    krabka_client_core::ClientError::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!("invalid raft peer port in {addr:?}: {e}"),
                     ))
@@ -239,7 +239,7 @@ impl crabka_raft::OutboundDialer for InterBrokerDialer {
                 (h.to_string(), port)
             }
             None => {
-                return Err(crabka_client_core::ClientError::Io(std::io::Error::new(
+                return Err(krabka_client_core::ClientError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("raft peer address missing port: {addr:?}"),
                 )));
@@ -255,8 +255,8 @@ impl crabka_raft::OutboundDialer for InterBrokerDialer {
             )
             .await
             .map_err(|e| match e {
-                InterBrokerError::Io(io) => crabka_client_core::ClientError::Io(io),
-                other => crabka_client_core::ClientError::Io(std::io::Error::other(format!(
+                InterBrokerError::Io(io) => krabka_client_core::ClientError::Io(io),
+                other => krabka_client_core::ClientError::Io(std::io::Error::other(format!(
                     "InterBrokerClient dial: {other}"
                 ))),
             })
@@ -275,22 +275,22 @@ mod tests {
         let client = InterBrokerClient::new_with_policy(
             None,
             None,
-            crabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
-            crabka_client_core::ClientFrameMax::try_from(crabka_units::kibibytes(32)).unwrap(),
+            krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
+            krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
         );
-        let mut options = crabka_client_core::ConnectionOptions::default();
+        let mut options = krabka_client_core::ConnectionOptions::default();
         client.apply_resource_policy(&mut options);
         assert2::assert!(options.dispatch_queue_capacity.get() == 7);
-        assert2::assert!(options.frame_max.size() == crabka_units::kibibytes(32));
+        assert2::assert!(options.frame_max.size() == krabka_units::kibibytes(32));
     }
 
     #[test]
     fn oauthbearer_credentials_preserve_rotation_path() {
-        let token_path = PathBuf::from("/run/secrets/crabka/inter-broker-token");
+        let token_path = PathBuf::from("/run/secrets/krabka/inter-broker-token");
         let credentials = to_client_creds(&InterBrokerCredentials::OAuthBearer {
             token_path: token_path.clone(),
         });
-        let crabka_client_core::SaslCredentials::OAuthBearer {
+        let krabka_client_core::SaslCredentials::OAuthBearer {
             token_path: actual_path,
         } = credentials
         else {

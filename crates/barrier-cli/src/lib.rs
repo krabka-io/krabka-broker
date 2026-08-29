@@ -7,7 +7,7 @@
 //! define a group, trigger a cut, read the cuts back, and prove that the
 //! marker a cut names is really in the log.
 //!
-//! This is the `crabka barrier` command from the monorepo's `crabka-cli`. That
+//! This is the `krabka barrier` command from the monorepo's `krabka-cli`. That
 //! crate also drives the gres layer, which is why it could not follow the
 //! broker into this repository. It is a library as well as a binary so tests
 //! call [`run_from_args`] in process: a test that spawns the binary needs a
@@ -18,7 +18,7 @@
 //! published to `__barrier_state` where any consumer can read them.
 
 use clap::{Parser, Subcommand};
-use crabka_units::{Time, convert::TimeExt};
+use krabka_units::{Time, convert::TimeExt};
 
 mod verify;
 
@@ -38,13 +38,13 @@ const EXIT_MISMATCH: i32 = 3;
 /// same flags.
 #[derive(Parser)]
 #[command(
-    name = "crabka-barrier",
+    name = "krabka-barrier",
     version,
     about = "Define barrier groups, trigger cuts, and verify a cut against the log"
 )]
 pub struct Cli {
     /// One or more `host:port` pairs to bootstrap against.
-    #[arg(long, short = 'b', env = "CRABKA_BOOTSTRAP_SERVER", required = true)]
+    #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
     pub bootstrap_server: String,
 
     /// What to do.
@@ -126,7 +126,7 @@ pub enum Command {
 
 /// Parse a time argument.
 ///
-/// Delegates to `crabka_units`, so every unit the broker's own configuration
+/// Delegates to `krabka_units`, so every unit the broker's own configuration
 /// accepts works here too: `ns`, `us`, `ms`, `s`, `m`, `h`, `d` and their long
 /// forms.
 ///
@@ -134,7 +134,7 @@ pub enum Command {
 /// crate's rule and it is the right one here: `--timeout 30` from someone who
 /// meant milliseconds would otherwise wait thirty seconds without complaining.
 fn parse_time(raw: &str) -> Result<Time, String> {
-    crabka_units::parse::time(raw).map_err(|e| e.to_string())
+    krabka_units::parse::time(raw).map_err(|e| e.to_string())
 }
 
 /// A time as the whole milliseconds the wire carries.
@@ -165,9 +165,9 @@ where
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client = match crabka_client_core::Client::builder()
+    let client = match krabka_client_core::Client::builder()
         .bootstrap(&cli.bootstrap_server)
-        .client_id("crabka-barrier")
+        .client_id("krabka-barrier")
         .build()
         .await
     {
@@ -181,8 +181,8 @@ pub async fn run(cli: Cli) -> i32 {
 }
 
 /// Send one command's request and print its response.
-async fn dispatch(client: &crabka_client_core::Client, command: Command) -> i32 {
-    use crabka_protocol::krabka::barrier as api;
+async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 {
+    use krabka_protocol::krabka::barrier as api;
 
     match command {
         Command::Define {
@@ -274,25 +274,25 @@ async fn dispatch(client: &crabka_client_core::Client, command: Command) -> i32 
 }
 
 /// Print a transport failure, where the request's outcome is unknown.
-fn unreachable_broker(error: &crabka_client_core::ClientError) -> i32 {
+fn unreachable_broker(error: &krabka_client_core::ClientError) -> i32 {
     eprintln!("the request did not complete, so its outcome is unknown: {error}");
     EXIT_UNREACHABLE
 }
 
 /// Describe an error code.
 ///
-/// `crabka-broker` has no code-to-name table, so this prints the number. The
+/// `krabka-broker` has no code-to-name table, so this prints the number. The
 /// one code an operator of this tool meets that a Kafka reference will not
 /// list is the krabka-private one, so that gets a word.
 fn code_name(code: i16) -> String {
-    if code == crabka_broker::codes::BARRIER_INJECTION_IN_PROGRESS {
+    if code == krabka_broker::codes::BARRIER_INJECTION_IN_PROGRESS {
         return format!("error {code} (an injection is already in flight, retry)");
     }
     format!("error {code}")
 }
 
 /// One line per altered group.
-fn report_alter(response: &crabka_protocol::krabka::barrier::AlterBarrierGroupsResponse) -> i32 {
+fn report_alter(response: &krabka_protocol::krabka::barrier::AlterBarrierGroupsResponse) -> i32 {
     let mut exit = 0;
     for result in &response.results {
         if result.error_code == 0 {
@@ -315,7 +315,7 @@ fn report_alter(response: &crabka_protocol::krabka::barrier::AlterBarrierGroupsR
 
 /// One block per described group.
 fn report_describe(
-    response: &crabka_protocol::krabka::barrier::DescribeBarrierGroupsResponse,
+    response: &krabka_protocol::krabka::barrier::DescribeBarrierGroupsResponse,
 ) -> i32 {
     let mut exit = 0;
     for group in &response.groups {
@@ -353,7 +353,7 @@ fn report_describe(
 }
 
 /// The epoch a trigger produced, and the offsets it took.
-fn report_trigger(response: &crabka_protocol::krabka::barrier::TriggerBarrierResponse) -> i32 {
+fn report_trigger(response: &krabka_protocol::krabka::barrier::TriggerBarrierResponse) -> i32 {
     if response.error_code != 0 {
         eprintln!(
             "{}{}",
@@ -385,7 +385,7 @@ fn report_trigger(response: &crabka_protocol::krabka::barrier::TriggerBarrierRes
 }
 
 /// One line per partition of each retained cut.
-fn report_list(response: &crabka_protocol::krabka::barrier::ListBarrierCutsResponse) -> i32 {
+fn report_list(response: &krabka_protocol::krabka::barrier::ListBarrierCutsResponse) -> i32 {
     if response.error_code != 0 {
         eprintln!(
             "{}{}",
@@ -450,7 +450,7 @@ fn report_verify(outcome: &VerifyOutcome) -> i32 {
 
 /// The name of a cut status code.
 fn status_name(status: i8) -> &'static str {
-    if status == crabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE {
+    if status == krabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE {
         "complete"
     } else {
         "partial"
@@ -493,9 +493,9 @@ mod tests {
     /// guess about where the cluster is.
     #[test]
     fn a_command_line_without_a_bootstrap_server_is_refused() {
-        assert!(Cli::try_parse_from(["crabka-barrier", "describe"]).is_err());
+        assert!(Cli::try_parse_from(["krabka-barrier", "describe"]).is_err());
         assert!(
-            Cli::try_parse_from(["crabka-barrier", "-b", "localhost:9092", "describe"]).is_ok()
+            Cli::try_parse_from(["krabka-barrier", "-b", "localhost:9092", "describe"]).is_ok()
         );
     }
 
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn define_without_an_interval_asks_for_on_demand_only() {
         let cli = Cli::try_parse_from([
-            "crabka-barrier",
+            "krabka-barrier",
             "-b",
             "localhost:9092",
             "define",
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn list_defaults_to_every_retained_cut() {
         let cli = Cli::try_parse_from([
-            "crabka-barrier",
+            "krabka-barrier",
             "-b",
             "localhost:9092",
             "list",
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn a_status_code_reads_as_a_word() {
-        check!(status_name(crabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE) == "complete");
-        check!(status_name(crabka_protocol::krabka::barrier::CUT_STATUS_PARTIAL) == "partial");
+        check!(status_name(krabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE) == "complete");
+        check!(status_name(krabka_protocol::krabka::barrier::CUT_STATUS_PARTIAL) == "partial");
     }
 }

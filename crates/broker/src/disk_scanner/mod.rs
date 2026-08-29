@@ -9,7 +9,7 @@ pub mod scan;
 
 use std::path::PathBuf;
 
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -76,7 +76,7 @@ mod tests {
     use std::{io::Write, time::Duration};
 
     use assert2::assert;
-    use crabka_units::{hours, millis, minutes};
+    use krabka_units::{hours, millis, minutes};
 
     use super::*;
 

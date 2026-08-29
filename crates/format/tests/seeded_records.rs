@@ -2,7 +2,7 @@
 //!
 //! A point-in-time restore rebuilds a cluster from tiered-storage archives, and
 //! the broker it hands the directory to has to boot with the restored topics
-//! already present. `crabka_format::run_with_records` takes those topic and
+//! already present. `krabka_format::run_with_records` takes those topic and
 //! partition records and seeds them next to the records the flags produce, so
 //! the restore tool does not repeat the bootstrap write itself.
 //!
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use assert2::check;
 use clap::Parser as _;
-use crabka_format::MetadataRecord;
-use crabka_metadata::{
+use krabka_format::MetadataRecord;
+use krabka_metadata::{
     KRaftVersionRecord, LeaderEpoch, MetadataImage, NodeId, PartitionRecord, TopicRecord,
 };
 use serde_wincode::SerdeCompat;
@@ -65,19 +65,19 @@ fn restored_topic(name: &str, topic_id: u128, partitions: i32) -> Vec<MetadataRe
 /// Formats `log_dir` with a pinned cluster id, `flags`, and `extra` seeded.
 async fn format(log_dir: &Path, flags: &[&str], extra: Vec<MetadataRecord>) {
     let mut argv = vec![
-        "crabka-format".to_string(),
+        "krabka-format".to_string(),
         "--log-dir".to_string(),
         log_dir.display().to_string(),
         "--cluster-id".to_string(),
         CLUSTER_ID.to_string(),
     ];
     argv.extend(flags.iter().map(|flag| (*flag).to_string()));
-    let code = crabka_format::run_from_args_with_records(argv, extra).await;
+    let code = krabka_format::run_from_args_with_records(argv, extra).await;
     check!(code == 0);
 }
 
 fn bootstrap_records(log_dir: &Path) -> Vec<MetadataRecord> {
-    crabka_broker::bootstrap::load_bootstrap_records(log_dir).expect("bootstrap records")
+    krabka_broker::bootstrap::load_bootstrap_records(log_dir).expect("bootstrap records")
 }
 
 fn offset_zero_checkpoint(log_dir: &Path) -> PathBuf {
@@ -204,7 +204,7 @@ async fn a_dynamic_format_seeds_the_offset_zero_checkpoint() {
                 replication_factor: 1,
             })
     );
-    let expected = crabka_raft::serialize_metadata_snapshot(&image, 0).expect("serialize image");
+    let expected = krabka_raft::serialize_metadata_snapshot(&image, 0).expect("serialize image");
     let written = std::fs::read(offset_zero_checkpoint(&log_dir)).expect("checkpoint");
     check!(written.as_slice() == &expected[..]);
 }
@@ -219,7 +219,7 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
     let via_seam = empty_log_dir(&parent, "seam");
     let argv = |log_dir: &Path| {
         vec![
-            "crabka-format".to_string(),
+            "krabka-format".to_string(),
             "--log-dir".to_string(),
             log_dir.display().to_string(),
             "--cluster-id".to_string(),
@@ -230,9 +230,9 @@ async fn run_writes_what_run_with_records_writes_for_no_extras() {
         ]
     };
 
-    let run_code = crabka_format::run(crabka_format::Cli::parse_from(argv(&via_run)).args).await;
-    let seam_code = crabka_format::run_with_records(
-        crabka_format::Cli::parse_from(argv(&via_seam)).args,
+    let run_code = krabka_format::run(krabka_format::Cli::parse_from(argv(&via_run)).args).await;
+    let seam_code = krabka_format::run_with_records(
+        krabka_format::Cli::parse_from(argv(&via_seam)).args,
         Vec::new(),
     )
     .await;

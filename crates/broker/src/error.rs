@@ -19,13 +19,13 @@ pub enum BrokerError {
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Storage-layer error that comes up from [`crabka_log`].
+    /// Storage-layer error that comes up from [`krabka_log`].
     #[error("log: {0}")]
-    Log(#[from] crabka_log::LogError),
+    Log(#[from] krabka_log::LogError),
 
     /// Wire-protocol decoding or encoding error.
     #[error("protocol: {0}")]
-    Protocol(#[from] crabka_protocol::ProtocolError),
+    Protocol(#[from] krabka_protocol::ProtocolError),
 
     /// The peer sent an `(api_key, version)` pair that the handler table
     /// cannot serve.
@@ -137,7 +137,7 @@ pub enum BrokerError {
 
     /// A non-controller node lists itself in `controller_quorum_voters`.
     #[error("node {node_id} is not a controller but appears in its own controller_quorum_voters")]
-    NonControllerIsVoter { node_id: crabka_raft::NodeId },
+    NonControllerIsVoter { node_id: krabka_raft::NodeId },
 
     /// `process.roles` names `witness` without `broker`.
     #[error(
@@ -231,7 +231,7 @@ pub enum BrokerError {
     /// The stretch profile cannot survive a site loss with `acks=all` intact.
     ///
     /// Either bound of
-    /// [`crabka_verified::stretch::min_insync_is_site_loss_safe`] can fail
+    /// [`krabka_verified::stretch::min_insync_is_site_loss_safe`] can fail
     /// here, so the message names both.
     #[error(
         "min.insync.replicas {min_insync} is unsafe at replication factor {replication_factor} \
@@ -261,7 +261,7 @@ pub enum BrokerError {
     Tls(String),
 
     /// The broker failed to read or decode the bootstrap records file that
-    /// `crabka format --add-scram` wrote.
+    /// `krabka format --add-scram` wrote.
     #[error("bootstrap file {path:?}: {source}")]
     BootstrapFile {
         /// Path to the file that could not be read or decoded.

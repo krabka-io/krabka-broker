@@ -1,15 +1,15 @@
 //! End-to-end proof that the restore bound changes what a full restore
 //! actually WRITES, through the whole `discover -> verify -> bound ->
-//! materialize` pipeline behind [`crabka_restore::restore`] -- not just what
+//! materialize` pipeline behind [`krabka_restore::restore`] -- not just what
 //! `Predicates::decide_batch`/`decide_record` decide in isolation, and not
 //! just what `materialize::write_segment` does when handed a hand-built
 //! `VerifiedSegment` directly.
 //!
-//! Every scenario archives real batches through a real `crabka_log::Log`
+//! Every scenario archives real batches through a real `krabka_log::Log`
 //! and a real `LocalTieredStorage`, the same pattern
 //! `crates/remote-storage/tests/jvm_tiered_storage.rs` uses to build a
 //! KIP-405 archive, then drives `restore()` and reads the restored
-//! partition back with a fresh `crabka_log::Log`.
+//! partition back with a fresh `krabka_log::Log`.
 
 use std::{
     collections::BTreeMap,
@@ -19,14 +19,14 @@ use std::{
 use assert2::{assert, check};
 use bytes::Bytes;
 use clap::Parser as _;
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_log::{Log, LogConfig, name};
-use crabka_protocol::records::{Attributes, Record, RecordBatch, RecordHeader};
-use crabka_remote_storage::{
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_log::{Log, LogConfig, name};
+use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordHeader};
+use krabka_remote_storage::{
     LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
 };
-use crabka_restore::{Cli, RestoreArgs, restore};
+use krabka_restore::{Cli, RestoreArgs, restore};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -50,12 +50,12 @@ const LEADER_EPOCH_CHECKPOINT: &[u8] = b"0\n1\n0 0\n";
 /// first, so [`build_archive`] can seal each fixture batch into its own
 /// segment.
 ///
-/// `crabka-restore` does not depend on `crabka-units`, so this scales the
+/// `krabka-restore` does not depend on `krabka-units`, so this scales the
 /// log crate's own default `segment_size` -- Kafka's documented 1 GiB
 /// `segment.bytes` -- down by its own byte count rather than naming
-/// `crabka_units::ByteSize` directly. The result is far smaller than any
+/// `krabka_units::ByteSize` directly. The result is far smaller than any
 /// batch this file builds (every one is at least several dozen bytes) even
-/// if `crabka_log`'s default ever changes, because the division only ever
+/// if `krabka_log`'s default ever changes, because the division only ever
 /// shrinks it further.
 fn roll_after_every_batch() -> LogConfig {
     LogConfig {

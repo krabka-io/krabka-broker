@@ -1,5 +1,5 @@
 //! Slice-48f broker integration: the topic-backed
-//! [`RemoteLogMetadataManager`](crabka_remote_storage::RemoteLogMetadataManager)
+//! [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
 //! wired against a single broker's own loopback listener. The manager is
 //! configured with `[remote_storage.kafka_metadata]`.
 //!
@@ -26,11 +26,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_broker::{
+use krabka_broker::{
     Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind,
 };
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -85,16 +85,16 @@ async fn start_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
     cfg.advertised_listener = listen.to_string();
     cfg.controller_listen_addr = controller_addrs[0];
     cfg.controller_quorum_voters =
-        vec![(crabka_broker::NodeId(1), controller_addrs[0].to_string())];
+        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
     cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: remote_dir.path().to_path_buf(),
     });
-    cfg.remote_log_manager_interval = crabka_units::secs(1);
+    cfg.remote_log_manager_interval = krabka_units::secs(1);
     cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
         bootstrap: format!("127.0.0.1:{}", listen.port()),
         num_partitions: 1,
         replication: 1,
-        snapshot_interval: crabka_units::hours(1),
+        snapshot_interval: krabka_units::hours(1),
         snapshot_dir: log_dir.path().join("remote-log-metadata"),
         security: None,
         ..KafkaRlmmConfig::default()
@@ -115,8 +115,8 @@ async fn await_tiered_config(broker: &BrokerHandle, topic: &str) {
             .partition_log_config_for_test(topic, 0)
             .is_some_and(|config| {
                 config.remote_storage_enable
-                    && config.segment_size == crabka_units::kibibytes(1)
-                    && config.local_retention_size == Some(crabka_units::bytes(1))
+                    && config.segment_size == krabka_units::kibibytes(1)
+                    && config.local_retention_size == Some(krabka_units::bytes(1))
             })
         {
             return;
@@ -139,7 +139,7 @@ async fn build_client(broker: &BrokerHandle) -> Client {
 /// against a SASL listener.
 async fn build_client_secured(
     broker: &BrokerHandle,
-    security: Option<crabka_client_core::security::ClientSecurity>,
+    security: Option<krabka_client_core::security::ClientSecurity>,
 ) -> Client {
     Client::builder()
         .bootstrap(broker.listen_addr().to_string())
@@ -279,8 +279,8 @@ async fn copy_then_fetch_round_trip(
     loop {
         if let Some(cfg) = broker.partition_log_config_for_test(topic, 0)
             && cfg.remote_storage_enable
-            && cfg.segment_size == crabka_units::kibibytes(1)
-            && cfg.local_retention_size == Some(crabka_units::bytes(1))
+            && cfg.segment_size == krabka_units::kibibytes(1)
+            && cfg.local_retention_size == Some(krabka_units::bytes(1))
         {
             break;
         }
@@ -416,8 +416,8 @@ fn count_remote_log_files(root: &std::path::Path) -> usize {
 /// listener, is `SASL_PLAINTEXT/PLAIN`. The topic-backed RLMM points at it. The
 /// RLMM authenticates as the inter-broker PLAIN principal.
 async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     support::init_tracing();
     // Held listeners eliminate the bind-and-drop TOCTOU race. The data
@@ -434,7 +434,7 @@ async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir)
     cfg.advertised_listener = listen.to_string();
     cfg.controller_listen_addr = controller_addrs[0];
     cfg.controller_quorum_voters =
-        vec![(crabka_broker::NodeId(1), controller_addrs[0].to_string())];
+        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: listen,
@@ -454,14 +454,14 @@ async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir)
     cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: remote_dir.path().to_path_buf(),
     });
-    cfg.remote_log_manager_interval = crabka_units::secs(1);
+    cfg.remote_log_manager_interval = krabka_units::secs(1);
     cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
         // The broker overrides bootstrap + security from the inter-broker
         // listener; the operator value here is the same loopback addr.
         bootstrap: format!("127.0.0.1:{}", listen.port()),
         num_partitions: 1,
         replication: 1,
-        snapshot_interval: crabka_units::hours(1),
+        snapshot_interval: krabka_units::hours(1),
         snapshot_dir: log_dir.path().join("remote-log-metadata"),
         security: None,
         ..KafkaRlmmConfig::default()
@@ -508,18 +508,18 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
     cfg.advertised_listener = listen.to_string();
     cfg.controller_listen_addr = controller_addrs[0];
     cfg.controller_quorum_voters =
-        vec![(crabka_broker::NodeId(1), controller_addrs[0].to_string())];
+        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
     cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: remote_dir.path().to_path_buf(),
     });
-    cfg.remote_log_manager_interval = crabka_units::millis(200);
+    cfg.remote_log_manager_interval = krabka_units::millis(200);
     // Dead port: the retry loop can never dial the bootstrap; the SwappableRlmm
     // stays on the NotReadyRlmm stub for the entire test.
     cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
         bootstrap: "127.0.0.1:1".into(),
         num_partitions: 1,
         replication: 1,
-        snapshot_interval: crabka_units::hours(1),
+        snapshot_interval: krabka_units::hours(1),
         snapshot_dir: log_dir.path().join("rlmm-snap"),
         security: None,
         ..KafkaRlmmConfig::default()
@@ -623,8 +623,8 @@ fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip() {
 }
 
 async fn topic_rlmm_sasl_loopback_copy_then_fetch_round_trip_case() {
-    use crabka_client_core::security::{ClientSecurity, SaslCredentials};
-    use crabka_security::ListenerProtocol;
+    use krabka_client_core::security::{ClientSecurity, SaslCredentials};
+    use krabka_security::ListenerProtocol;
 
     const TOPIC: &str = "tiered-topic-rlmm-sasl-itest";
     let (broker, _log_dir, remote_dir) = start_sasl_broker_with_topic_rlmm().await;

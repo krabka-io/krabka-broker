@@ -17,7 +17,7 @@ use assert2::assert;
 mod support;
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -156,7 +156,7 @@ async fn large_message_fetch_round_trips_byte_exact() {
     let batches = r.responses[0].partitions[0]
         .records
         .as_ref()
-        .and_then(crabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
         .expect("v2 records decoded from the fetch response");
 
     // Flatten all returned records and compare their values byte-for-byte to

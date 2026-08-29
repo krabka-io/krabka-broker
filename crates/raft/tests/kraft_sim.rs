@@ -1,5 +1,5 @@
 //! Deterministic, in-memory, multi-node simulation of the KIP-595 and KIP-996
-//! `KRaft` consensus core (`crabka_raft::kraft`).
+//! `KRaft` consensus core (`krabka_raft::kraft`).
 //!
 //! This is the headline acceptance test for slice 3a. It wires N
 //! `QuorumStateMachine`s together through an in-memory message bus and a logical
@@ -12,7 +12,7 @@
 
 mod sim_harness;
 
-use crabka_ids::NodeId;
+use krabka_ids::NodeId;
 use sim_harness::{Sim, SimLog};
 
 /// A cluster whose nodes use the in-memory fake log.

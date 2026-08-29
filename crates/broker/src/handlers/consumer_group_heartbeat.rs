@@ -3,7 +3,7 @@
 //! `GroupCoordinator`.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -100,10 +100,10 @@ pub(crate) async fn handle(
     }
 }
 
-fn group_version_disabled(image: &crabka_metadata::MetadataImage) -> bool {
+fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> bool {
     !crate::features::feature_enabled(
         image,
-        crabka_metadata::group_version::GROUP_VERSION_FEATURE,
+        krabka_metadata::group_version::GROUP_VERSION_FEATURE,
         1,
     )
 }
@@ -125,10 +125,10 @@ mod tests {
 
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
-    use crabka_protocol::Encode;
+    use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+    use krabka_protocol::Encode;
 
-    const VERSION: i16 = crabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
+    const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
 
     fn request(group_id: &str) -> Bytes {
         let req = ConsumerGroupHeartbeatRequest {
@@ -155,16 +155,16 @@ mod tests {
     fn image_with_group_version(level: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+            name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
             level,
         }));
         image
     }
 
-    fn anonymous_principal() -> crabka_security::Principal {
-        crabka_security::Principal {
+    fn anonymous_principal() -> krabka_security::Principal {
+        krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         }
     }
@@ -197,16 +197,16 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use crabka_protocol::owned::consumer_group_heartbeat_response::{
+        use krabka_protocol::owned::consumer_group_heartbeat_response::{
             self, ConsumerGroupHeartbeatResponse,
         };
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn group_read_denied_allows_allow_all_authorizer() {
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = anonymous_principal();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
@@ -276,7 +276,7 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
                 level: 1,
             })])
             .await

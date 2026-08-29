@@ -28,8 +28,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -39,7 +39,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -66,7 +66,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-throttle-test";
+    let client_id = "krabka-throttle-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -177,7 +177,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -205,7 +205,7 @@ fn start_single_broker_sasl_plaintext_with_users(
 /// Returns `(handle, _dir, addr)`.
 async fn start_single_broker_plaintext() -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
-    let cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
     (handle, log_dir, addr)
@@ -219,7 +219,7 @@ async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -255,7 +255,7 @@ async fn create_topic_as_admin(
 /// Create a topic through PLAINTEXT. There is no SASL, and the compat shim
 /// allows everything.
 async fn create_topic_plaintext(addr: SocketAddr, topic: &str, partitions: i32, rf: i16) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -307,7 +307,7 @@ async fn drive_incremental_alter_configs(
 ) -> i16 {
     const VERSION: i16 = 1;
 
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
@@ -362,7 +362,7 @@ async fn drive_incremental_alter_configs_plaintext(
 ) -> i16 {
     const VERSION: i16 = 1;
 
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
@@ -418,7 +418,7 @@ async fn drive_describe_configs(
 ) -> Vec<(i16, Vec<(String, String)>)> {
     const VERSION: i16 = 1;
 
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
         describe_configs_response::DescribeConfigsResponse,
     };
@@ -473,7 +473,7 @@ async fn drive_describe_configs(
 async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usize, count: usize) {
     const VERSION: i16 = 9; // flexible, pre-KIP-516 (no topic_id needed)
 
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::{
             produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
             produce_response::ProduceResponse,
@@ -535,7 +535,7 @@ async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usize, c
 async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: i32) -> usize {
     const VERSION: i16 = 12; // flexible
 
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
     };
@@ -568,7 +568,7 @@ async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: i32)
     frame.put_i16(1i16); // api_key
     frame.put_i16(VERSION);
     frame.put_i32(1i32); // corr_id
-    let client_id = "crabka-throttle-test";
+    let client_id = "krabka-throttle-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     frame.put_u8(0); // flexible header tagged-fields
@@ -628,9 +628,9 @@ async fn broker_scoped_alter_persists_in_image() {
     handle
         .wait_for_image(|img| {
             img.broker_throttle_rate(
-                crabka_metadata::NodeId(node_id),
-                crabka_metadata::ThrottleKind::Leader,
-            ) == Some(crabka_units::bytes_per_sec(2048))
+                krabka_metadata::NodeId(node_id),
+                krabka_metadata::ThrottleKind::Leader,
+            ) == Some(krabka_units::bytes_per_sec(2048))
         })
         .await;
     handle.shutdown().await;
@@ -667,9 +667,9 @@ async fn topic_throttle_config_propagates() {
     // Allow raft commit to propagate.
     handle
         .wait_for_image(|img| {
-            let throttle = crabka_broker::throttle::TopicThrottle::for_topic(img, "foo");
-            throttle.leader.contains(0, crabka_broker::NodeId(1))
-                && throttle.leader.contains(0, crabka_broker::NodeId(2))
+            let throttle = krabka_broker::throttle::TopicThrottle::for_topic(img, "foo");
+            throttle.leader.contains(0, krabka_broker::NodeId(1))
+                && throttle.leader.contains(0, krabka_broker::NodeId(2))
         })
         .await;
     handle.shutdown().await;
@@ -728,12 +728,12 @@ async fn throttle_rate_caps_fetch_response_size() {
     handle
         .wait_for_image(|img| {
             let rate = img.broker_throttle_rate(
-                crabka_metadata::NodeId(node_id),
-                crabka_metadata::ThrottleKind::Leader,
+                krabka_metadata::NodeId(node_id),
+                krabka_metadata::ThrottleKind::Leader,
             );
-            let throttle = crabka_broker::throttle::TopicThrottle::for_topic(img, "bar");
-            rate == Some(crabka_units::bytes_per_sec(512))
-                && throttle.leader.contains(0, crabka_broker::NodeId(2))
+            let throttle = krabka_broker::throttle::TopicThrottle::for_topic(img, "bar");
+            rate == Some(krabka_units::bytes_per_sec(512))
+                && throttle.leader.contains(0, krabka_broker::NodeId(2))
         })
         .await;
 

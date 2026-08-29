@@ -1,5 +1,5 @@
 //! End-to-end integration tests for KIP-932 share-group membership, driven
-//! against an in-process Crabka broker through `crabka-client-core`.
+//! against an in-process Krabka broker through `krabka-client-core`.
 //!
 //! The typed client works because `ApiVersions` advertises `api_keys` 76 and
 //! 77. `ShareGroupHeartbeatRequest` and `ShareGroupDescribeRequest` implement
@@ -11,9 +11,9 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     list_groups_request::ListGroupsRequest,
     share_group_describe_request::ShareGroupDescribeRequest,
@@ -28,7 +28,7 @@ fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(broker_config(dir.path().to_path_buf()))
         .await
@@ -78,7 +78,7 @@ fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ShareGroupHeartbeatReq
 }
 
 fn total_assigned(
-    resp: &crabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+    resp: &krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
 ) -> usize {
     resp.assignment.as_ref().map_or(0, |a| {
         a.topic_partitions.iter().map(|t| t.partitions.len()).sum()
@@ -88,7 +88,7 @@ fn total_assigned(
 async fn describe(
     client: &Client,
     group: &str,
-) -> crabka_protocol::owned::share_group_describe_response::ShareGroupDescribeResponse {
+) -> krabka_protocol::owned::share_group_describe_response::ShareGroupDescribeResponse {
     client
         .send(ShareGroupDescribeRequest {
             group_ids: vec![group.into()],
@@ -262,7 +262,7 @@ async fn state_survives_restart() {
 }
 
 /// Resolves the id of a created topic from this broker's metadata image.
-fn topic_id(broker: &crabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
+fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
     let image = broker.controller_image_for_test();
     image
         .topic(topic)

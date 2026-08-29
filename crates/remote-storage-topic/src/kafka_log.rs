@@ -2,10 +2,10 @@
 //! adapter that persists events in the internal `__remote_log_metadata`
 //! Kafka topic.
 //!
-//! Writes flow through a [`crabka_client_producer::Producer`] with
+//! Writes flow through a [`krabka_client_producer::Producer`] with
 //! explicit per-record partition pinning. Reads come back through one
 //! cancellable manual-`Fetch` task per assigned partition. Each task
-//! drives its own dedicated [`crabka_client_core::Connection`] and emits
+//! drives its own dedicated [`krabka_client_core::Connection`] and emits
 //! [`MetadataEventRecord`]s into a shared mpsc. There is **no consumer
 //! group and no broker-side offset commit**. The RLMM owns the read
 //! position. The manager assigns all partitions from offset 0 today, then
@@ -16,7 +16,7 @@
 //! head-of-line-block any other RPC that shares the socket.
 //!
 //! Topic provisioning runs once at [`KafkaMetadataEventLog::start`] through
-//! the [`crabka_client_admin::AdminClient`]. It reuses an existing topic, and
+//! the [`krabka_client_admin::AdminClient`]. It reuses an existing topic, and
 //! the topic's actual partition count then overrides the configured
 //! `num_partitions`. It creates an absent topic with `cleanup.policy=delete`
 //! and `retention.ms=-1`. The same admin round-trip surfaces the topic's
@@ -24,7 +24,7 @@
 //! `topic_id` and not the name.
 //!
 //! One `ListOffsets(timestamp=-1)` over the raw
-//! [`crabka_client_core::Client`] pulls the high-water marks, rather than a
+//! [`krabka_client_core::Client`] pulls the high-water marks, rather than a
 //! consumer. [`MetadataEventLog::high_water_marks`] therefore does not need
 //! any fetch task to have made progress.
 
@@ -35,19 +35,19 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use crabka_client_admin::{AdminClient, CreateTopicSpec};
-use crabka_client_core::{
+use futures_util::stream::{StreamExt, unfold};
+use krabka_client_admin::{AdminClient, CreateTopicSpec};
+use krabka_client_core::{
     Client, ClientFrameMax, ConnectionDispatchQueueCapacity, ConnectionOptions,
 };
-use crabka_client_producer::{Acks, Producer, ProducerRecord};
-use crabka_protocol::{
+use krabka_client_producer::{Acks, Producer, ProducerRecord};
+use krabka_protocol::{
     owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     primitives::uuid::Uuid as WireUuid,
 };
-use crabka_units::prelude::{
+use krabka_units::prelude::{
     ByteSize, ByteSizeExt as _, Time, TimeExt as _, mebibytes, millis, secs,
 };
-use futures_util::stream::{StreamExt, unfold};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
@@ -144,7 +144,7 @@ pub struct KafkaMetadataLogConfig {
     /// Client TLS/SASL security applied to the producer, the raw client,
     /// the admin client, and every per-partition fetch connection.
     /// `None` is plaintext loopback, and it is the default.
-    pub security: Option<crabka_client_core::security::ClientSecurity>,
+    pub security: Option<krabka_client_core::security::ClientSecurity>,
     /// Timeout for provisioning the internal topic.
     pub topic_create_timeout: Time,
     /// Maximum wait for each per-partition metadata fetch.
@@ -170,7 +170,7 @@ impl KafkaMetadataLogConfig {
             topic: METADATA_TOPIC.to_string(),
             num_partitions: DEFAULT_NUM_PARTITIONS,
             replication: DEFAULT_REPLICATION,
-            client_id: "crabka-rlmm".to_string(),
+            client_id: "krabka-rlmm".to_string(),
             security: None,
             topic_create_timeout: DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
             fetch_max_wait: DEFAULT_METADATA_FETCH_MAX_WAIT,
@@ -244,7 +244,7 @@ pub struct KafkaMetadataEventLog {
     partition_count: i32,
     bootstrap: String,
     client_id: String,
-    security: Option<crabka_client_core::security::ClientSecurity>,
+    security: Option<krabka_client_core::security::ClientSecurity>,
     fetch_max_wait: Time,
     fetch_max_bytes: ByteSize,
     fetch_retry_backoff: Time,
@@ -341,7 +341,7 @@ impl Drop for KafkaMetadataEventLog {
 struct ConsumerState {
     bootstrap: String,
     client_id: String,
-    security: Option<crabka_client_core::security::ClientSecurity>,
+    security: Option<krabka_client_core::security::ClientSecurity>,
     topic: String,
     topic_id: WireUuid,
     tx: mpsc::Sender<MetadataEventRecord>,
@@ -667,7 +667,7 @@ async fn partition_fetch_loop(
 ) {
     use std::net::ToSocketAddrs;
 
-    use crabka_client_core::{Connection, fetch_partition};
+    use krabka_client_core::{Connection, fetch_partition};
 
     // Dedicated connection for this partition's fetch loop. Resolve the
     // bootstrap address; on failure, warn and exit. The partition then
@@ -761,7 +761,7 @@ fn usize_count(n: i32) -> Result<usize, MetadataLogError> {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::convert::{ByteSizeExt as _, TimeExt as _};
+    use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
     use super::*;
 
@@ -930,17 +930,17 @@ mod tests {
     fn config_carries_client_resource_policy() {
         let cfg = KafkaMetadataLogConfig {
             dispatch_queue_capacity: ConnectionDispatchQueueCapacity::new(7).unwrap(),
-            frame_max: ClientFrameMax::try_from(crabka_units::kibibytes(32)).unwrap(),
+            frame_max: ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
             ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
         };
         check!(cfg.dispatch_queue_capacity.get() == 7);
-        check!(cfg.frame_max.size() == crabka_units::kibibytes(32));
+        check!(cfg.frame_max.size() == krabka_units::kibibytes(32));
     }
 
     #[test]
     fn config_carries_security() {
-        use crabka_client_core::security::{ClientSecurity, SaslCredentials};
-        use crabka_security::ListenerProtocol;
+        use krabka_client_core::security::{ClientSecurity, SaslCredentials};
+        use krabka_security::ListenerProtocol;
         let cfg = KafkaMetadataLogConfig {
             bootstrap: "127.0.0.1:9092".into(),
             topic: METADATA_TOPIC.into(),

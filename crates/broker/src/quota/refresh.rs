@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use crabka_metadata::{EntityKey, MetadataImage};
-use crabka_units::convert::ByteRateExt as _;
+use krabka_metadata::{EntityKey, MetadataImage};
+use krabka_units::convert::ByteRateExt as _;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -59,7 +59,7 @@ fn persisted_quota_entity_key(entity_key: &EntityKey) -> EntityKey {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::EntityKey;
+    use krabka_metadata::EntityKey;
 
     use super::{super::bucket_rate, *};
     use crate::quota::test_support::image_with_quota as quota_image;

@@ -51,7 +51,7 @@ Two sibling repositories sit below this one:
 layer and [`krabka-client-rs`](https://github.com/krabka-io/krabka-client-rs)
 for the Kafka client. Both are pinned by revision in one place -- the
 `[patch.crates-io]` block at the bottom of the root `Cargo.toml`. Member
-manifests declare those crates as ordinary `crabka-x = "0.4.0"` requirements;
+manifests declare those crates as ordinary `krabka-x = "0.4.0"` requirements;
 the patch is what redirects them at the git checkouts. To move to a newer
 sibling, change the revision there, re-run `cargo generate-lockfile`, and commit
 both files.
@@ -60,10 +60,10 @@ both files.
 a git crate's path by matching the crate name against the workspace `members`
 list, and both siblings' members is the glob `crates/*`, which it skips.
 
-`crabka format` lives here as the `crabka-format` crate, extracted from the
-monorepo's `crabka-cli` because that crate also drives the gres layer and could
-not follow the broker out. It is a library as well as a binary: broker tests that
-need a formatted log directory call `crabka_format::run_from_args` in process
+`krabka format` lives here as the `krabka-format` crate, extracted from
+`krabka-cli` because that crate also drives the gres layer and could not follow
+the broker out. It is a library as well as a binary: broker tests that
+need a formatted log directory call `krabka_format::run_from_args` in process
 rather than spawning it, because a subprocess needs a Cargo working tree and a
 Bazel test sandbox has none.
 
@@ -123,6 +123,6 @@ shape.
 
 ## Releases
 
-This repository has no release automation. The `crabka-*` crates.io names are
+This repository has no release automation. The `krabka-*` crates.io names are
 still published from [`robot-head/crabka`](https://github.com/robot-head/crabka);
 consumers here pin by git revision.

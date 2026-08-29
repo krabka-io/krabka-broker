@@ -35,9 +35,9 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use crabka_log::Offset;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_log::Offset;
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         share_fetch_request::{FetchPartition, ShareFetchRequest},
@@ -48,7 +48,7 @@ use crabka_protocol::{
     },
     records::RecordsPayload,
 };
-use crabka_units::{ByteSize, convert::ByteSizeExt as _};
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio::sync::Notify;
 
 use crate::{
@@ -528,7 +528,7 @@ async fn acquire_pass(
         let part = p.topic_name.as_deref().and_then(|name| {
             broker
                 .partitions
-                .get(name, crabka_ids::PartitionIndex(p.partition_index))
+                .get(name, krabka_ids::PartitionIndex(p.partition_index))
         });
         let Some(part) = part else {
             // Lost the partition between the leadership check and here.
@@ -747,7 +747,7 @@ async fn control_batch_ranges(
     let join = tokio::task::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
         let read = log.read(start, ByteSize::from_bytes(u64::MAX))?;
-        Ok::<_, crabka_log::LogError>(
+        Ok::<_, krabka_log::LogError>(
             read.batches
                 .into_iter()
                 .filter(|batch| batch.attributes.is_control_batch())
@@ -825,7 +825,7 @@ async fn long_poll(
             partition.topic_name.as_deref().and_then(|name| {
                 broker
                     .partitions
-                    .get(name, crabka_ids::PartitionIndex(partition.partition_index))
+                    .get(name, krabka_ids::PartitionIndex(partition.partition_index))
             })
         })
         .flat_map(|partition| {
@@ -869,7 +869,7 @@ fn group_responses(pending: Vec<PendingPartition>) -> Vec<ShareFetchableTopicRes
     order
         .into_iter()
         .map(|tid| ShareFetchableTopicResponse {
-            topic_id: crabka_protocol::primitives::uuid::Uuid(*tid.as_bytes()),
+            topic_id: krabka_protocol::primitives::uuid::Uuid(*tid.as_bytes()),
             partitions: by_topic.remove(&tid).unwrap_or_default(),
             ..Default::default()
         })
@@ -897,8 +897,8 @@ fn encode_error_response(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_log::DeliveryPolicy;
-    use crabka_protocol::{
+    use krabka_log::DeliveryPolicy;
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             share_fetch_request::{AcknowledgementBatch, FetchTopic},

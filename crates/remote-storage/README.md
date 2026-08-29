@@ -1,17 +1,17 @@
-# crabka-remote-storage
+# krabka-remote-storage
 
-[![Crates.io](https://img.shields.io/crates/v/crabka-remote-storage.svg)](https://crates.io/crates/crabka-remote-storage)
-[![Docs.rs](https://docs.rs/crabka-remote-storage/badge.svg)](https://docs.rs/crabka-remote-storage)
+[![Crates.io](https://img.shields.io/crates/v/krabka-remote-storage.svg)](https://crates.io/crates/krabka-remote-storage)
+[![Docs.rs](https://docs.rs/krabka-remote-storage/badge.svg)](https://docs.rs/krabka-remote-storage)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
-KIP-405 tiered-storage SPI (RemoteStorageManager / RemoteLogMetadataManager) and reference implementations for Crabka.
+KIP-405 tiered-storage SPI (RemoteStorageManager / RemoteLogMetadataManager) and reference implementations for Krabka.
 
-This crate is part of [Crabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
+This crate is part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
 
 ## Install
 
 ```sh
-cargo add crabka-remote-storage
+cargo add krabka-remote-storage
 ```
 
 For workspace development, use the path dependency from this repository instead.
@@ -24,15 +24,15 @@ Copy a closed log segment into the filesystem-backed remote tier and fetch its o
 use std::{collections::BTreeMap, path::PathBuf};
 
 use bytes::Bytes;
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     IndexType, LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
 };
 use uuid::Uuid;
 
 # fn run() -> Result<(), Box<dyn std::error::Error>> {
-let storage = LocalTieredStorage::new(PathBuf::from("/var/lib/crabka-remote"));
+let storage = LocalTieredStorage::new(PathBuf::from("/var/lib/krabka-remote"));
 let topic_partition = TopicIdPartition::new(Uuid::new_v4(), "orders", 0);
 let segment_id = RemoteLogSegmentId::new(topic_partition, Uuid::new_v4());
 let mut leader_epochs = BTreeMap::new();
@@ -51,9 +51,9 @@ let metadata = RemoteLogSegmentMetadata::new(
     ),
 )?;
 let segment = LogSegmentData {
-    log_segment: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.log"),
-    offset_index: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.index"),
-    time_index: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.timeindex"),
+    log_segment: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.log"),
+    offset_index: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.index"),
+    time_index: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.timeindex"),
     transaction_index: None,
     producer_snapshot_index: None,
     leader_epoch_index: Bytes::new(),
@@ -98,11 +98,11 @@ write_only = false
 | `signing_key_id` | unset | Stable id recorded in every signature, so a chain stays verifiable across a key rotation. Set it together with `signing_key_path`. |
 | `write_only` | `false` | Refuse every remote fetch from this archive. |
 
-An unsigned archive is legal: leave both key fields unset and the archive keeps the per-object digests and the hash chain. It then proves continuity but not authorship, and `crabka-worm-verify` grades it as an incomplete attestation.
+An unsigned archive is legal: leave both key fields unset and the archive keeps the per-object digests and the hash chain. It then proves continuity but not authorship, and `krabka-worm-verify` grades it as an incomplete attestation.
 
 ### The bucket enforces WORM, not the broker
 
-The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, which is how a compliance deployment is built anyway. Crabka does not set the lock. `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so bumping it alone splits the dependency graph.
+The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, which is how a compliance deployment is built anyway. Krabka does not set the lock. `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so bumping it alone splits the dependency graph.
 
 There is an untyped way through — `ClientOptions::with_default_headers` — and it was considered and rejected rather than missed. `x-amz-object-lock-retain-until-date` is an absolute timestamp, so a default header pins one date for the lifetime of the process instead of holding each object for a period measured from its own write, and the header would ride every request the client makes, reads included. A bucket default expresses the policy correctly and outlives any broker that writes to it.
 
@@ -130,7 +130,7 @@ That is intended. Erasing a compliance archive must not be a side effect of a to
 
 The broker reads its chain tip back from the remote-log metadata manager. With `RlmmKind::InMemory` that metadata does not survive a restart, so the broker starts a new epoch at genesis rather than continue a chain it cannot read. Nothing binds the manifests before the restart to the manifests after it.
 
-`crabka-worm-verify` reports that as an attestation hole, and it is one. A WORM deployment should use the topic-backed `[remote_storage.kafka_metadata]` manager, which recovers its state from `__remote_log_metadata` after a restart.
+`krabka-worm-verify` reports that as an attestation hole, and it is one. A WORM deployment should use the topic-backed `[remote_storage.kafka_metadata]` manager, which recovers its state from `__remote_log_metadata` after a restart.
 
 ### Tail truncation is not detectable from the archive alone
 
@@ -138,12 +138,12 @@ An attacker who deletes the newest manifests of a partition, and the objects the
 
 Close that gap outside the archive. A successful verify prints each partition's tip head; record it somewhere the bucket's writers cannot reach, and pass it to the next run as `--expect-head`. A run that holds no expected head proves internal consistency and says nothing about completeness.
 
-### Verify an archive with `crabka-worm-verify`
+### Verify an archive with `krabka-worm-verify`
 
-`crabka-worm-verify` audits an archive with read-only credentials, with no broker and no cluster. It takes its credentials from the ambient AWS chain, and it has no `--access-key` flag on purpose: an auditor should hold a read-only role and not a copy of the writer's keys.
+`krabka-worm-verify` audits an archive with read-only credentials, with no broker and no cluster. It takes its credentials from the ambient AWS chain, and it has no `--access-key` flag on purpose: an auditor should hold a read-only role and not a copy of the writer's keys.
 
 ```sh
-crabka-worm-verify verify \
+krabka-worm-verify verify \
   --bucket krabka-archive \
   --region us-east-1 \
   --key-id worm-2026-q3 \
@@ -184,7 +184,7 @@ On a versioned bucket an overwrite does not replace the locked original; it stac
 
 ## Documentation
 
-Read the API documentation at [docs.rs/crabka-remote-storage](https://docs.rs/crabka-remote-storage). The repository README contains the project-wide setup, development, and release notes.
+Read the API documentation at [docs.rs/krabka-remote-storage](https://docs.rs/krabka-remote-storage). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

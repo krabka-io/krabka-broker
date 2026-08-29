@@ -16,7 +16,7 @@
 //! response carries `CLUSTER_AUTHORIZATION_FAILED` (31).
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     krabka::barrier::{BarrierCut, ListBarrierCutsRequest, ListBarrierCutsResponse},
 };
@@ -126,9 +126,9 @@ fn refused(error_code: i16, error_message: Option<String>) -> ListBarrierCutsRes
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_ids::PartitionIndex;
-    use crabka_log::Offset;
-    use crabka_protocol::krabka::barrier::{
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_protocol::krabka::barrier::{
         BarrierCutPartition, BarrierCutTopic, CUT_STATUS_COMPLETE,
     };
 

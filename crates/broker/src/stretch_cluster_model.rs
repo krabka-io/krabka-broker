@@ -19,7 +19,7 @@
 //! - [`select_new_leader_for_partition`] takes every KIP-460 preferred
 //!   election.
 //! - The durability arithmetic comes from the Creusot-proved kernels in
-//!   [`crabka_verified::stretch`].
+//!   [`krabka_verified::stretch`].
 //!
 //! Two behaviours have no pure production core to call, so the model states
 //! them itself and names the code they mirror.
@@ -79,7 +79,7 @@
 //!
 //! Such a configuration is therefore rejected before a broker starts, and not
 //! merely left out of the model.
-//! [`crabka_verified::stretch::min_insync_is_site_loss_safe`] requires that no
+//! [`krabka_verified::stretch::min_insync_is_site_loss_safe`] requires that no
 //! single site hold `min.insync.replicas` replicas, which for four replicas
 //! over three sites leaves no safe value at all. The model checks the profile
 //! that validation admits, which is one replica per site.
@@ -103,9 +103,9 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_metadata::{LeaderEpoch, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-use crabka_raft::NodeId;
-use crabka_verified::stretch::{
+use krabka_metadata::{LeaderEpoch, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_raft::NodeId;
+use krabka_verified::stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
 };
 use stateright::{Checker, Model, Property};
@@ -469,7 +469,7 @@ impl StretchModel {
     /// A liveness registry that holds a fresh heartbeat for every broker the
     /// controller reaches, for the real [`select_new_leader_for_partition`].
     fn liveness(&self, state: &StretchState) -> ControllerLivenessState {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(60));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(60));
         let alive = self.alive(state);
         block_on(async {
             // Node-id order, not hash order, so the registry is the same on

@@ -2,17 +2,17 @@
 //!
 //! The task issues standard Kafka `Fetch` requests against the leader of the
 //! partition, with `replica_id` set to the `node_id` of the local broker. It
-//! appends each returned batch to the local `crabka-log`. On
+//! appends each returned batch to the local `krabka-log`. On
 //! `OFFSET_OUT_OF_RANGE` it truncates the local log to 0 and restarts. On
 //! `NOT_LEADER_FOR_PARTITION` it returns, so that the next reconcile of the
 //! supervisor evaluates the partition again.
 
 use std::{path::PathBuf, sync::Arc};
 
-use crabka_client_core::{ClientError, Connection, ConnectionOptions};
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, LogConfig, Offset};
-use crabka_protocol::{
+use krabka_client_core::{ClientError, Connection, ConnectionOptions};
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig, Offset};
+use krabka_protocol::{
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
         fetch_response::{FetchResponse, PartitionData},
@@ -23,9 +23,9 @@ use crabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::RecordsPayload,
 };
-use crabka_raft::NodeId;
-use crabka_security::ListenerProtocol;
-use crabka_units::{
+use krabka_raft::NodeId;
+use krabka_security::ListenerProtocol;
+use krabka_units::{
     ByteRate, ByteSize, Time,
     convert::{ByteRateExt, ByteSizeExt, TimeExt},
     fmt::Human as _,
@@ -66,7 +66,7 @@ pub(crate) struct Config {
     pub topic_id: WireUuid,
     pub partition: PartitionIndex,
     pub leader_node_id: NodeId,
-    pub leader_epoch: crabka_metadata::LeaderEpoch,
+    pub leader_epoch: krabka_metadata::LeaderEpoch,
     /// The `host` portion of the leader from the metadata image.
     ///
     /// This is the inter-broker endpoint when one is available, and the legacy
@@ -865,17 +865,17 @@ mod tests {
     };
 
     use assert2::assert;
-    use crabka_metadata::{
+    use krabka_metadata::{
         MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
     };
-    use crabka_protocol::owned::fetch_response::{
+    use krabka_protocol::owned::fetch_response::{
         EpochEndOffset, FetchableTopicResponse, PartitionData,
     };
-    use crabka_raft::{
+    use krabka_raft::{
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         UpdateVoter,
     };
-    use crabka_units::{bytes, bytes_per_sec, millis, secs};
+    use krabka_units::{bytes, bytes_per_sec, millis, secs};
     use tokio::sync::watch;
 
     use super::*;
@@ -933,7 +933,7 @@ mod tests {
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
             panic!("unused in replicator tests")
         }
 
@@ -990,7 +990,7 @@ mod tests {
             leader,
             replicas: vec![LEADER_ID, NODE_ID],
             isr: vec![LEADER_ID, NODE_ID],
-            leader_epoch: crabka_metadata::LeaderEpoch(4),
+            leader_epoch: krabka_metadata::LeaderEpoch(4),
             adding_replicas: Vec::new(),
             removing_replicas: Vec::new(),
             directories: Vec::new(),
@@ -1021,7 +1021,7 @@ mod tests {
             topic_id: WIRE_TOPIC_ID,
             partition: PartitionIndex(PARTITION),
             leader_node_id: LEADER_ID,
-            leader_epoch: crabka_metadata::LeaderEpoch(4),
+            leader_epoch: krabka_metadata::LeaderEpoch(4),
             leader_host: "127.0.0.1".into(),
             leader_port: 9,
             partitions: Arc::new(PartitionRegistry::new()),
@@ -1094,9 +1094,9 @@ mod tests {
                     partition_max_bytes: 456,
                     replica_directory_id: WireUuid::ZERO,
                     high_watermark: i64::MAX,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }],
             forgotten_topics_data: Vec::new(),
             rack_id: String::new(),
@@ -1104,9 +1104,9 @@ mod tests {
             replica_state: ReplicaState {
                 replica_id: rid,
                 replica_epoch: -1,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(req == expected);
     }
@@ -1137,11 +1137,11 @@ mod tests {
                     partition: PARTITION,
                     current_leader_epoch: 7,
                     leader_epoch: 7,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(req == expected);
     }
@@ -1221,9 +1221,9 @@ mod tests {
     #[test]
     fn replication_target_changed_compares_topic_leader_and_epoch() {
         let cases = [
-            (LEADER_ID, crabka_metadata::LeaderEpoch(4), false),
-            (NODE_ID, crabka_metadata::LeaderEpoch(4), true),
-            (LEADER_ID, crabka_metadata::LeaderEpoch(3), true),
+            (LEADER_ID, krabka_metadata::LeaderEpoch(4), false),
+            (NODE_ID, krabka_metadata::LeaderEpoch(4), true),
+            (LEADER_ID, krabka_metadata::LeaderEpoch(3), true),
         ];
         for (leader, target_epoch, want) in cases {
             let (mut cfg, _log_dir) = test_config(image_with_leader(leader));
@@ -1372,7 +1372,7 @@ mod tests {
                 == ReplicationTarget {
                     topic_id: Some(uuid::Uuid::from_bytes(WIRE_TOPIC_ID.0)),
                     leader_node_id: LEADER_ID,
-                    leader_epoch: crabka_metadata::LeaderEpoch(4),
+                    leader_epoch: krabka_metadata::LeaderEpoch(4),
                 }
         );
     }

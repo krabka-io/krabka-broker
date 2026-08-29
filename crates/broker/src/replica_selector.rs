@@ -18,7 +18,7 @@ pub(crate) struct ReplicaView {
 }
 
 /// Which built-in selector the broker uses. Maps to Kafka's
-/// `replica.selector.class`, but as a native enum. Crabka does not load
+/// `replica.selector.class`, but as a native enum. Krabka does not load
 /// JVM classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReplicaSelectorKind {

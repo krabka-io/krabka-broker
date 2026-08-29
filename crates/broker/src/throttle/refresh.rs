@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crabka_metadata::{MetadataImage, NodeId, ThrottleKind};
-use crabka_units::{ByteRate, convert::ByteRateExt};
+use krabka_metadata::{MetadataImage, NodeId, ThrottleKind};
+use krabka_units::{ByteRate, convert::ByteRateExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -68,8 +68,8 @@ pub(crate) fn apply_image(image: &MetadataImage, node_id: NodeId, throttle: &Thr
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::{BrokerConfigRecord, MetadataRecord};
-    use crabka_units::bytes_per_sec;
+    use krabka_metadata::{BrokerConfigRecord, MetadataRecord};
+    use krabka_units::bytes_per_sec;
     use uuid::Uuid;
 
     use super::*;

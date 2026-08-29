@@ -1,17 +1,17 @@
 [package]
-name = "crabka-remote-storage"
+name = "krabka-remote-storage"
 publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "KIP-405 tiered-storage SPI (RemoteStorageManager / RemoteLogMetadataManager) and reference implementations for Crabka"
+description = "KIP-405 tiered-storage SPI (RemoteStorageManager / RemoteLogMetadataManager) and reference implementations for Krabka"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-remote-storage"
+documentation = "https://docs.rs/krabka-remote-storage"
 readme = "README.md"
-keywords = ["kafka", "tiered-storage", "object-store", "crabka"]
+keywords = ["kafka", "tiered-storage", "object-store", "krabka"]
 categories = ["database-implementations", "filesystem"]
 
 [lints]
@@ -20,14 +20,14 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 bytes = { workspace = true }
-# `crabka-worm-verify`, the standalone archive auditor, is a `[[bin]]` of this
+# `krabka-worm-verify`, the standalone archive auditor, is a `[[bin]]` of this
 # crate: the verifier and the manifest types it checks belong together.
 clap = { workspace = true, features = ["derive"] }
-crabka-audit = { workspace = true }
-crabka-ids = { version = "0.4.0" }
-crabka-object-store = { version = "0.4.0", path = "../object-store" }
-crabka-protocol = { version = "0.4.0", default-features = false }
-crabka-units = { workspace = true }
+krabka-audit = { workspace = true }
+krabka-ids = { version = "0.4.0" }
+krabka-object-store = { version = "0.4.0", path = "../object-store" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-units = { workspace = true }
 derive_more = { workspace = true }
 # Streams the object listing, and the object bodies a deep verify re-hashes.
 futures-util = { workspace = true }
@@ -48,16 +48,16 @@ assert2 = { workspace = true }
 # `object_store::ObjectStore` is an `#[async_trait]` trait, so the versioned
 # test double in `worm::verify` has to be written with the same attribute.
 async-trait = { workspace = true }
-crabka-log = { version = "0.4.0", path = "../log" }
-crabka-protocol = { version = "0.4.0", default-features = false }
+krabka-log = { version = "0.4.0", path = "../log" }
+krabka-protocol = { version = "0.4.0", default-features = false }
 proptest = { workspace = true }
 # Generates a throwaway Ed25519 key pair for the WORM manifest signing tests.
-# `crabka-audit` exposes no key generator, only `FileEd25519Signer`, which
+# `krabka-audit` exposes no key generator, only `FileEd25519Signer`, which
 # needs a PKCS#8 key that already exists.
 ring = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [[bin]]
-name = "crabka-worm-verify"
+name = "krabka-worm-verify"
 path = "src/bin/worm-verify.rs"

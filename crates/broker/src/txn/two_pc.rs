@@ -10,7 +10,7 @@
 //!
 //! ## How "this is a 2PC transaction" is encoded
 //!
-//! Crabka follows Apache Kafka exactly, so 2PC is NOT a new persisted field.
+//! Krabka follows Apache Kafka exactly, so 2PC is NOT a new persisted field.
 //! The already-persisted `TransactionTimeoutMs` encodes it as the sentinel
 //! [`NO_TIMEOUT_MS`] (`i32::MAX`). Kafka's
 //! `TransactionMetadata.isDistributedTwoPhaseCommitTxn()` is literally

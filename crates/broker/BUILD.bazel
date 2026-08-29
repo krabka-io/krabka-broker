@@ -7,9 +7,9 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "broker")
 
-# The broker server. `bazel run //crates/broker:crabka-broker -- --help`.
+# The broker server. `bazel run //crates/broker:krabka-broker -- --help`.
 crate_binary(
-    name = "crabka-broker",
+    name = "krabka-broker",
     crate_root = "src/bin/broker.rs",
     lib = ":broker",
 )
@@ -24,7 +24,7 @@ crate_tests(
     # the test run and fails under coverage instrumentation, which is a statement
     # about the instrumentation rather than about the code.
     cpu_heavy = ["sharegroup_backlog"],
-    data = glob(["tests/fixtures/**"]) + [":crabka-broker"],
+    data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
         "jvm_acceptance_cli": [
             "cp_kafka_6_1_1",
@@ -89,7 +89,7 @@ crate_tests(
     # `cli_smoke` boots the real binary and finds it through the variable Cargo
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
-    env = {"CARGO_BIN_EXE_crabka-broker": "$(rootpath :crabka-broker)"},
+    env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},
     lib = "broker",
     # Suites whose `#[ignore]`d cases drive real containers, and the images
     # each one starts. //bazel/images pins those by digest and //bazel/defs.bzl

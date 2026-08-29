@@ -2,7 +2,7 @@
 //! contract, driving the pure decision cores in [`super`]
 //! ([`super::retain_decision`], [`super::should_index_key`],
 //! [`super::compute_horizon`]). See the design spec
-//! `docs/superpowers/specs/2026-06-14-crabka-data-plane-safety-models-design.md`
+//! `docs/superpowers/specs/2026-06-14-krabka-data-plane-safety-models-design.md`
 //! and [KIP-534](https://cwiki.apache.org/confluence/display/KAFKA/KIP-534).
 //!
 //! # The control-batch dedup bug
@@ -55,7 +55,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crabka_units::prelude::{Time, TimeExt as _, minutes};
+use krabka_units::prelude::{Time, TimeExt as _, minutes};
 use stateright::{Checker, Model, Property};
 
 use super::{

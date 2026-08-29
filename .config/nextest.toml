@@ -10,7 +10,7 @@
 # `broker-integration`, `broker-jvm-acceptance`, `workspace-integration-coverage`,
 # `client-core-integration`, `grpc-gateway-integration`, and the conformance
 # lanes) found a maximum of 176.6s, in
-# `crabka-gres-ranges::tso_monotonicity_model`. No test was above 180s, so the
+# `krabka-gres-ranges::tso_monotonicity_model`. No test was above 180s, so the
 # bound has a wide margin over the whole distribution, not only over the mean.
 #
 # The bound catches a hang. It does not police slow tests. A stalled container
@@ -31,41 +31,41 @@ broker-transactions = { max-threads = 1 }
 broker-tiered-storage-rlmm = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
+filter = 'package(krabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
 test-group = 'broker-jvm-acceptance'
 threads-required = 'num-test-threads'
 
 [[profile.default.overrides]]
-filter = 'package(crabka-broker) & (binary(share_consume) | binary(share_admin_offsets))'
+filter = 'package(krabka-broker) & (binary(share_consume) | binary(share_admin_offsets))'
 test-group = 'broker-share-state'
 threads-required = 'num-test-threads'
 
 [[profile.default.overrides]]
-filter = 'package(crabka-broker) & binary(transactions)'
+filter = 'package(krabka-broker) & binary(transactions)'
 test-group = 'broker-transactions'
 threads-required = 'num-test-threads'
 
 [[profile.default.overrides]]
-filter = 'package(crabka-broker) & binary(tiered_storage_topic_rlmm)'
+filter = 'package(krabka-broker) & binary(tiered_storage_topic_rlmm)'
 test-group = 'broker-tiered-storage-rlmm'
 threads-required = 'num-test-threads'
 
 [[profile.ci.overrides]]
-filter = 'package(crabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
+filter = 'package(krabka-broker) & (binary(describe_groups_jvm) | binary(~jvm_acceptance) | binary(jvm_consumer_group_next_gen) | binary(jvm_kip320_divergence))'
 test-group = 'broker-jvm-acceptance'
 threads-required = 'num-test-threads'
 
 [[profile.ci.overrides]]
-filter = 'package(crabka-broker) & (binary(share_consume) | binary(share_admin_offsets))'
+filter = 'package(krabka-broker) & (binary(share_consume) | binary(share_admin_offsets))'
 test-group = 'broker-share-state'
 threads-required = 'num-test-threads'
 
 [[profile.ci.overrides]]
-filter = 'package(crabka-broker) & binary(transactions)'
+filter = 'package(krabka-broker) & binary(transactions)'
 test-group = 'broker-transactions'
 threads-required = 'num-test-threads'
 
 [[profile.ci.overrides]]
-filter = 'package(crabka-broker) & binary(tiered_storage_topic_rlmm)'
+filter = 'package(krabka-broker) & binary(tiered_storage_topic_rlmm)'
 test-group = 'broker-tiered-storage-rlmm'
 threads-required = 'num-test-threads'

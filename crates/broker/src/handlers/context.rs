@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use crabka_security::Principal;
+use krabka_security::Principal;
 
 /// Per-request connection metadata. Constructed once per frame in
 /// `network::dispatch` from the authenticated `ConnectionAuth`, the
@@ -30,7 +30,7 @@ pub(crate) struct RequestContext<'a> {
     /// Name of the [`crate::config::ListenerSpec`] serving this connection
     /// such as `"PLAINTEXT"`, `"SSL"`, or a configured listener name. This is
     /// the same string that self-registration writes as each
-    /// [`crabka_metadata::BrokerEndpoint::name`]. Address-projecting
+    /// [`krabka_metadata::BrokerEndpoint::name`]. Address-projecting
     /// handlers (`Metadata`, `FindCoordinator`, `DescribeCluster`) therefore
     /// advertise the endpoint that matches the listener the request arrived
     /// on, exactly as Apache Kafka does. Handlers that do not project broker
@@ -108,7 +108,7 @@ impl<'a> TelemetryContext<'a> {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
 
@@ -169,11 +169,11 @@ mod tests {
     fn telemetry_context_new_preserves_client_identity_fields() {
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
 
-        let ctx = TelemetryContext::new(&peer, "client-a", "crabka-test", "1.2.3");
+        let ctx = TelemetryContext::new(&peer, "client-a", "krabka-test", "1.2.3");
 
         assert!(ctx.peer == &peer);
         assert!(ctx.client_id == "client-a");
-        assert!(ctx.software_name == "crabka-test");
+        assert!(ctx.software_name == "krabka-test");
         assert!(ctx.software_version == "1.2.3");
     }
 }

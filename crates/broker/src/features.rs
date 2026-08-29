@@ -1,25 +1,25 @@
 //! KIP-584 supported-feature surface for the broker. This module re-exports
-//! the `crabka_metadata` feature registry and derives the `ApiVersions`
+//! the `krabka_metadata` feature registry and derives the `ApiVersions`
 //! advertisement rows from it, so the advertised and the validated feature
 //! sets can never disagree. The behavioral gating helper `require_feature`
 //! lives here because it returns broker error codes.
 
-use crabka_metadata::MetadataImage;
-pub(crate) use crabka_metadata::metadata_version::METADATA_VERSION_FEATURE as METADATA_VERSION;
+use krabka_metadata::MetadataImage;
+pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE as METADATA_VERSION;
 // Re-exported for `ApiVersions` tests / range-bound assertions; consumed only
 // from `#[cfg(test)]` modules, so the non-test lib target sees them as unused.
 #[cfg(test)]
-pub(crate) use crabka_metadata::metadata_version::METADATA_VERSION_MAX;
+pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 #[cfg(test)]
-pub(crate) use crabka_metadata::metadata_version::METADATA_VERSION_MIN;
+pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
 /// The `share.version` feature name (KIP-932). Only the `#[cfg(test)]`
 /// module that asserts share.version is advertised uses it.
 #[cfg(test)]
-pub(crate) use crabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE_VERSION;
+pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE_VERSION;
 /// The `streams.version` feature name (KIP-1071). It gates
 /// `StreamsGroupHeartbeat` and `StreamsGroupDescribe`. Those handlers read it
 /// with `feature_enabled`.
-pub(crate) use crabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
+pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
 
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,9 +30,9 @@ pub(crate) struct SupportedFeature {
 }
 
 /// The features this broker supports finalizing. They come from the
-/// `crabka_metadata` registry, the single source of truth.
+/// `krabka_metadata` registry, the single source of truth.
 pub(crate) fn supported_features() -> Vec<SupportedFeature> {
-    crabka_metadata::feature_registry()
+    krabka_metadata::feature_registry()
         .iter()
         .map(|f| {
             let (min_version, max_version) = f.supported_range();
@@ -50,7 +50,7 @@ pub(crate) fn supported_features() -> Vec<SupportedFeature> {
 /// registry feature directly, so the non-test lib target sees this as unused.
 #[cfg(test)]
 pub(crate) fn lookup(name: &str) -> Option<SupportedFeature> {
-    crabka_metadata::feature(name).map(|f| {
+    krabka_metadata::feature(name).map(|f| {
         let (min_version, max_version) = f.supported_range();
         SupportedFeature {
             name: f.name(),
@@ -83,7 +83,7 @@ pub(crate) fn require_feature(
 /// from `require_feature`, which is permissive on absence and serves
 /// metadata.version-gated RPCs on legacy images.
 pub(crate) fn feature_enabled(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     name: &str,
     level: i16,
 ) -> bool {
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn feature_enabled_treats_absence_as_disabled() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         assert!(!feature_enabled(&image, "group.version", 1)); // absent → disabled
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -118,7 +118,7 @@ mod tests {
         assert!(lookup(METADATA_VERSION) == Some(expected));
         assert!(lookup("not.a.feature").is_none());
         assert!(
-            lookup(crabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
+            lookup(krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
                 .is_none()
         );
     }
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn require_feature_gates_below_level() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: METADATA_VERSION.to_string(),

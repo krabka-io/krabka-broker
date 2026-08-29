@@ -8,9 +8,9 @@
 //! the partition's delivery watermark. See [`delivery_capped`].
 
 use bytes::Bytes;
-use crabka_log::Offset;
-use crabka_metadata::AclOperation;
-use crabka_protocol::{
+use krabka_log::Offset;
+use krabka_metadata::AclOperation;
+use krabka_protocol::{
     Decode,
     owned::{
         delete_records_request::DeleteRecordsRequest,
@@ -78,11 +78,11 @@ fn delete_records_response(topics: Vec<DeleteRecordsTopicResult>) -> DeleteRecor
 }
 
 fn target_offset(requested_offset: i64, high_watermark: i64) -> i64 {
-    crabka_verified::delete_records_target(requested_offset, high_watermark)
+    krabka_verified::delete_records_target(requested_offset, high_watermark)
 }
 
 fn offset_out_of_range(target: i64, log_end_offset: i64) -> bool {
-    crabka_verified::delete_records_offset_out_of_range(target, log_end_offset)
+    krabka_verified::delete_records_offset_out_of_range(target, log_end_offset)
 }
 
 /// KFC-1: the offset a trim may actually reach.
@@ -160,7 +160,7 @@ pub(crate) async fn handle(
 
         for fp in topic.partitions {
             let part_opt =
-                partitions.get(&topic.name, crabka_ids::PartitionIndex(fp.partition_index));
+                partitions.get(&topic.name, krabka_ids::PartitionIndex(fp.partition_index));
             let Some(part) = part_opt else {
                 part_results.push(error_partition_result(
                     fp.partition_index,
@@ -246,10 +246,10 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_protocol::owned::delete_records_request::{
+    use krabka_protocol::owned::delete_records_request::{
         DeleteRecordsPartition, DeleteRecordsTopic,
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -352,7 +352,7 @@ mod tests {
             partition_index: 7,
             low_watermark: -1,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(denied == expected_denied);
 
@@ -361,7 +361,7 @@ mod tests {
             partition_index: 3,
             low_watermark: 44,
             error_code: codes::NONE,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(ok == expected_ok);
 
@@ -369,7 +369,7 @@ mod tests {
         let expected_topic = DeleteRecordsTopicResult {
             name: "orders".into(),
             partitions: vec![expected_denied],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(topic == expected_topic);
 
@@ -377,7 +377,7 @@ mod tests {
         let expected_resp = DeleteRecordsResponse {
             throttle_time_ms: 0,
             topics: vec![expected_topic],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected_resp);
     }
@@ -401,18 +401,18 @@ mod tests {
                         partition_index: 0,
                         low_watermark: -1,
                         error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                     },
                     DeleteRecordsPartitionResult {
                         partition_index: 2,
                         low_watermark: -1,
                         error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                     },
                 ],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -437,11 +437,11 @@ mod tests {
                     partition_index: 4,
                     low_watermark: -1,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -456,8 +456,8 @@ mod tests {
 
     // A two-record batch that activates at `activation_ms`, stamped with the
     // epoch the partition writer expects from a leader append.
-    fn batch_at(activation_ms: i64, leader_epoch: i32) -> crabka_protocol::records::RecordBatch {
-        crabka_protocol::records::RecordBatch {
+    fn batch_at(activation_ms: i64, leader_epoch: i32) -> krabka_protocol::records::RecordBatch {
+        krabka_protocol::records::RecordBatch {
             partition_leader_epoch: leader_epoch,
             ..crate::delivery::test_support::batch_at(activation_ms)
         }
@@ -473,7 +473,7 @@ mod tests {
         delivery_mode: Option<&str>,
         ctx: &crate::handlers::RequestContext<'_>,
     ) {
-        use crabka_protocol::owned::{
+        use krabka_protocol::owned::{
             create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
             create_topics_response::{self, CreateTopicsResponse},
         };
@@ -509,9 +509,9 @@ mod tests {
 
         let expected_policy = if delivery_mode == Some(crate::config_keys::DELIVERY_MODE_SCHEDULED)
         {
-            crabka_log::DeliveryPolicy::Scheduled
+            krabka_log::DeliveryPolicy::Scheduled
         } else {
-            crabka_log::DeliveryPolicy::Immediate
+            krabka_log::DeliveryPolicy::Immediate
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -529,7 +529,7 @@ mod tests {
 
         let part = broker
             .partitions
-            .get(topic, crabka_ids::PartitionIndex(0))
+            .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
         let leader_epoch = part
             .current_leader_epoch
@@ -576,11 +576,11 @@ mod tests {
                         partition_index: 0,
                         low_watermark: expected_low_watermark,
                         error_code: codes::NONE,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                     }],
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             };
             check!(resp == expected, "{topic}");
         }

@@ -9,15 +9,15 @@
 //! Response fields: `throttle_time_ms`, `error_code`.
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::PartitionIndex;
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_ids::PartitionIndex;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{
     broker::Broker,
@@ -75,7 +75,7 @@ pub(crate) fn handle(
 
         // `req.producer_id` is the raw wire `i64`; wrap to compare with the
         // coordinator's `ProducerId`.
-        if entry.producer_id != crabka_log::ProducerId(req.producer_id)
+        if entry.producer_id != krabka_log::ProducerId(req.producer_id)
             || entry.producer_epoch != req.producer_epoch
         {
             return encode_err(version, codes::INVALID_PRODUCER_EPOCH);

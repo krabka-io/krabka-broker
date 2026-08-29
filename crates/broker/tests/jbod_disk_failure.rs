@@ -17,8 +17,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         assign_replicas_to_dirs_request::{
@@ -42,7 +42,7 @@ use tokio::{
     net::TcpStream,
 };
 
-const CLIENT_ID: &str = "crabka-jbod-disk-failure-test";
+const CLIENT_ID: &str = "krabka-jbod-disk-failure-test";
 const PRODUCE_VERSION: i16 = 9; // flexible, acks=1
 
 /// Raw wire round trip. It sends a framed request, reads the response, strips
@@ -371,7 +371,7 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
 /// end, on the no-change path.
 #[tokio::test]
 async fn heartbeat_with_offline_log_dirs_is_accepted() {
-    use crabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
+    use krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
 
     let primary = tempfile::tempdir().unwrap();
     let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
@@ -383,7 +383,7 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
     handle.wait_until_controller_leader().await;
     let broker_epoch = handle
         .controller_image_for_test()
-        .broker(crabka_raft::NodeId(handle.node_id()))
+        .broker(krabka_raft::NodeId(handle.node_id()))
         .expect("registered broker")
         .broker_epoch;
 

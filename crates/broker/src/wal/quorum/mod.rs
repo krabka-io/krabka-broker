@@ -14,10 +14,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use crabka_ids::{Offset, PartitionIndex};
-use crabka_kraft_core::NodeId;
-use crabka_log::{Log, LogConfig};
-use crabka_units::{ByteSize, convert::ByteSizeExt as _};
+use krabka_ids::{Offset, PartitionIndex};
+use krabka_kraft_core::NodeId;
+use krabka_log::{Log, LogConfig};
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use uuid::Uuid;
 
 use self::engine::{OpenMode, WalShardEngine};
@@ -215,7 +215,7 @@ fn persist_quorum_membership(
     // A durable file is not enough on filesystems where the rename itself is
     // only stable after the parent directory is synced. Rust does not expose
     // directory handles that can be flushed on Windows; the file sync above is
-    // the strongest portable guarantee there, matching `crabka-log`.
+    // the strongest portable guarantee there, matching `krabka-log`.
     #[cfg(unix)]
     fs::File::open(root)?.sync_all()?;
     Ok(())
@@ -389,10 +389,10 @@ mod tests {
     };
 
     use assert2::assert;
-    use crabka_compression::CompressionType;
-    use crabka_kraft_core::NodeId;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::records::{Record, RecordBatch};
+    use krabka_compression::CompressionType;
+    use krabka_kraft_core::NodeId;
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
 

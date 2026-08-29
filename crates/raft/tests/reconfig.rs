@@ -1,5 +1,5 @@
-use crabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint};
-use crabka_raft::{
+use krabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint};
+use krabka_raft::{
     NodeId,
     reconfig::{AddVoter, RemoveVoter, UpdateVoter, VoterChange},
 };

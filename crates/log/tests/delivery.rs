@@ -4,10 +4,10 @@ use std::time::{Duration, SystemTime};
 
 use assert2::check;
 use bytes::Bytes;
-use crabka_ids::Offset;
-use crabka_log::{DeliveryAdvance, DeliveryPolicy, Log, LogConfig};
-use crabka_protocol::records::{Record, RecordBatch};
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, millis};
+use krabka_ids::Offset;
+use krabka_log::{DeliveryAdvance, DeliveryPolicy, Log, LogConfig};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, millis};
 use tempfile::tempdir;
 
 /// The default clock-confidence bound, in milliseconds.

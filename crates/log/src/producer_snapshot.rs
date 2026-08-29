@@ -8,7 +8,7 @@ use std::{
 };
 
 use bytes::{BufMut as _, BytesMut};
-use crabka_ids::{Offset, ProducerId};
+use krabka_ids::{Offset, ProducerId};
 
 use crate::{LogError, name};
 

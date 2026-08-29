@@ -1,8 +1,8 @@
 //! `ListPartitionReassignments` (`api_key` 46, KIP-455).
 
 use bytes::Bytes;
-use crabka_metadata::{PartitionRecord, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{PartitionRecord, ResourceType};
+use krabka_protocol::{
     Encode,
     owned::{
         list_partition_reassignments_request::ListPartitionReassignmentsRequest,
@@ -40,7 +40,7 @@ pub(crate) fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Describe,
+            operation: krabka_metadata::AclOperation::Describe,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
@@ -106,7 +106,7 @@ pub(crate) fn handle(
     encode_response(&resp, api_version)
 }
 
-fn wire_node_ids(nodes: &[crabka_metadata::NodeId]) -> Vec<i32> {
+fn wire_node_ids(nodes: &[krabka_metadata::NodeId]) -> Vec<i32> {
     nodes
         .iter()
         .map(|node| i32::try_from(node.0).unwrap_or(i32::MAX))
@@ -129,8 +129,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{MetadataRecord, NodeId, TopicRecord};
-    use crabka_protocol::owned::list_partition_reassignments_request::ListPartitionReassignmentsTopics;
+    use krabka_metadata::{MetadataRecord, NodeId, TopicRecord};
+    use krabka_protocol::owned::list_partition_reassignments_request::ListPartitionReassignmentsTopics;
     use uuid::Uuid;
 
     use super::*;
@@ -139,7 +139,7 @@ mod tests {
         test_support::{DenyAll, peer, principal},
     };
 
-    const VERSION: i16 = crabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
+    const VERSION: i16 = krabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
 
     crate::test_support::response_helpers!(
         ListPartitionReassignmentsResponse,
@@ -166,7 +166,7 @@ mod tests {
                     leader: NodeId(1),
                     replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
                     isr: vec![NodeId(1), NodeId(2)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(4),
+                    leader_epoch: krabka_metadata::LeaderEpoch(4),
                     adding_replicas: vec![NodeId(3)],
                     removing_replicas: vec![],
                     directories: vec![Uuid::nil(), Uuid::nil(), Uuid::nil()],
@@ -199,7 +199,7 @@ mod tests {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("list-reassignment denied".to_string()),
             topics: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -242,11 +242,11 @@ mod tests {
                     replicas: vec![1, 2, 3],
                     adding_replicas: vec![3],
                     removing_replicas: vec![],
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;

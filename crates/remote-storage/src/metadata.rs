@@ -12,7 +12,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crabka_ids::LeaderEpoch;
+use krabka_ids::LeaderEpoch;
 use uuid::Uuid;
 
 use crate::error::RemoteStorageError;

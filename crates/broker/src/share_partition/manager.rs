@@ -12,10 +12,10 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_metadata::NodeId;
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_metadata::NodeId;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -381,12 +381,12 @@ mod tests {
     const LOCK: Duration = Duration::from_secs(30);
 
     use async_trait::async_trait;
-    use crabka_metadata::{MetadataImage, MetadataRecord};
-    use crabka_raft::{
+    use krabka_metadata::{MetadataImage, MetadataRecord};
+    use krabka_raft::{
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         UpdateVoter,
     };
-    use crabka_security::ListenerProtocol;
+    use krabka_security::ListenerProtocol;
     use tokio::sync::watch;
 
     use crate::{
@@ -412,7 +412,7 @@ mod tests {
         }
 
         fn with_image(image: Arc<MetadataImage>) -> Self {
-            let (tx, rx) = watch::channel(Some(crabka_metadata::NodeId(1)));
+            let (tx, rx) = watch::channel(Some(krabka_metadata::NodeId(1)));
             Self {
                 image,
                 leader_rx: rx,
@@ -438,8 +438,8 @@ mod tests {
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
-            Ok(crabka_raft::SubmitChangeResult::default())
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
+            Ok(krabka_raft::SubmitChangeResult::default())
         }
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
             unimplemented!()
@@ -482,13 +482,13 @@ mod tests {
         let reg = Arc::new(PartitionRegistry::new());
         let controller: Arc<dyn MetadataSource> = Arc::new(MockSource::with_image(image));
         let coord = Arc::new(ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg.clone(),
             ShareCoordinatorConfig::default(),
         ));
         let client = Arc::new(InterBrokerClient::new(None, None));
         let persister = Arc::new(SharePersister::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             coord,
             controller.clone(),
             client,
@@ -496,7 +496,7 @@ mod tests {
             "INTERNAL".to_string(),
         ));
         Arc::new(SharePartitionLeaderManager::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg,
             controller,
             persister,
@@ -509,13 +509,13 @@ mod tests {
         let reg = Arc::new(PartitionRegistry::new());
         let controller: Arc<dyn MetadataSource> = Arc::new(MockSource::new());
         let coord = Arc::new(ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg.clone(),
             ShareCoordinatorConfig::default(),
         ));
         let client = Arc::new(InterBrokerClient::new(None, None));
         let persister = Arc::new(SharePersister::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             coord,
             controller.clone(),
             client,
@@ -523,7 +523,7 @@ mod tests {
             "INTERNAL".to_string(),
         ));
         Arc::new(SharePartitionLeaderManager::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg,
             controller,
             persister,
@@ -681,8 +681,8 @@ mod tests {
 
     #[tokio::test]
     async fn current_leader_of_reads_image_leader_and_epoch() {
-        use crabka_ids::LeaderEpoch;
-        use crabka_metadata::{PartitionRecord, TopicRecord};
+        use krabka_ids::LeaderEpoch;
+        use krabka_metadata::{PartitionRecord, TopicRecord};
 
         let tid = uuid::Uuid::from_bytes([31; 16]);
         // A topic-partition led by node 2 at leader epoch 5. Both components are

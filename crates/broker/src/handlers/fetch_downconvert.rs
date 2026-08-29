@@ -6,9 +6,9 @@
 //! support zstd.
 
 use bytes::{Bytes, BytesMut};
-use crabka_compression::CompressionType;
-use crabka_protocol::records::{RecordBatch, RecordsPayload};
-use crabka_records_legacy::{Magic, v2_to_legacy};
+use krabka_compression::CompressionType;
+use krabka_protocol::records::{RecordBatch, RecordsPayload};
+use krabka_records_legacy::{Magic, v2_to_legacy};
 
 use crate::codes;
 
@@ -121,7 +121,7 @@ pub(crate) fn down_convert_payload_for_fetch(
 mod tests {
     use assert2::{assert, check};
     use bytes::Bytes;
-    use crabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
     use super::*;
 
@@ -216,7 +216,7 @@ mod tests {
     /// to the original records.
     #[test]
     fn uncompressed_batch_decodes_correctly() {
-        use crabka_records_legacy::decode_message_set;
+        use krabka_records_legacy::decode_message_set;
 
         let batch = make_batch(CompressionType::None, vec![sample_record("hello", "world")]);
         let result = down_convert_for_fetch(&batch, 3).unwrap();
@@ -234,7 +234,7 @@ mod tests {
     /// Version 0 uses `Magic::V0`, which has no timestamps.
     #[test]
     fn version_0_uses_magic_v0() {
-        use crabka_records_legacy::decode_message_set;
+        use krabka_records_legacy::decode_message_set;
 
         let mut batch = make_batch(CompressionType::None, vec![sample_record("k", "v")]);
         batch.base_timestamp = 1_700_000_000;
@@ -264,7 +264,7 @@ mod tests {
             panic!("expected Legacy");
         };
         let mut cur: &[u8] = &bytes;
-        let recs = crabka_records_legacy::decode_message_set(&mut cur, bytes.len()).unwrap();
+        let recs = krabka_records_legacy::decode_message_set(&mut cur, bytes.len()).unwrap();
         assert!(recs.len() == 2);
     }
 }

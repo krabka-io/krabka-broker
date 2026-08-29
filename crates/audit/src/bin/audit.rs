@@ -1,12 +1,12 @@
-//! `crabka-audit`: offline audit-log tools.
+//! `krabka-audit`: offline audit-log tools.
 
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use crabka_audit::{TrustedKeys, verify_partition_dir};
+use krabka_audit::{TrustedKeys, verify_partition_dir};
 
 #[derive(Parser)]
-#[command(name = "crabka-audit", about = "Crabka audit-log tools (FedRAMP MLA)")]
+#[command(name = "krabka-audit", about = "Krabka audit-log tools (FedRAMP MLA)")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -16,7 +16,7 @@ struct Cli {
 enum Command {
     /// Verify a partition's hash-chain and signed checkpoints offline.
     Verify {
-        /// Path to the audit partition directory, for example `<log_dir>/__crabka_audit-0`
+        /// Path to the audit partition directory, for example `<log_dir>/__krabka_audit-0`
         #[arg(long)]
         partition_dir: PathBuf,
         /// The `key_id` that the trusted public key corresponds to.

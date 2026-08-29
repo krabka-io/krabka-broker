@@ -1,6 +1,6 @@
-//! `crabka format --add-scram` -> broker bootstrap consumption.
+//! `krabka format --add-scram` -> broker bootstrap consumption.
 //!
-//! Each test either runs the `crabka` CLI to produce a `log_dir` that holds a
+//! Each test either runs the `krabka` CLI to produce a `log_dir` that holds a
 //! `bootstrap.records.bin` file, or writes that file directly for the
 //! corruption case. It then starts a single-broker `Broker` that points at the
 //! dir, and verifies that the broker's bootstrap path behaves correctly.
@@ -24,8 +24,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -36,7 +36,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -45,19 +45,19 @@ use tokio::{
 /// Formats `log_dir`, seeding one SCRAM credential.
 ///
 /// Calls the formatter in process rather than spawning it. The formatting is
-/// setup for the test below, not the thing under test -- `crabka-format`'s own
+/// setup for the test below, not the thing under test -- `krabka-format`'s own
 /// `format_smoke` suite runs the real binary -- and a subprocess would need a
 /// Cargo working tree to build from, which a Bazel test sandbox does not have.
-async fn run_crabka_format(log_dir: &std::path::Path, add_scram: &str) {
-    let code = crabka_format::run_from_args([
-        "crabka-format",
+async fn run_krabka_format(log_dir: &std::path::Path, add_scram: &str) {
+    let code = krabka_format::run_from_args([
+        "krabka-format",
         "--log-dir",
         log_dir.to_str().unwrap(),
         "--add-scram",
         add_scram,
     ])
     .await;
-    assert!(code == 0, "crabka-format exited {code}");
+    assert!(code == 0, "krabka-format exited {code}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -73,7 +73,7 @@ async fn bootstrap_records_provisions_scram_user() {
     // to overwrite a non-empty directory, and `tempfile::tempdir()` returns
     // a path whose parent already exists.
     let boot_dir = dir.path().join("boot");
-    run_crabka_format(
+    run_krabka_format(
         &boot_dir,
         "SCRAM-SHA-512=[name=alice,password=wonderland,iterations=4096]",
     )
@@ -90,7 +90,7 @@ async fn bootstrap_records_provisions_scram_user() {
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".into();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
-    cfg.bootstrap_mode = crabka_broker::BootstrapMode::Bootstrap;
+    cfg.bootstrap_mode = krabka_broker::BootstrapMode::Bootstrap;
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -118,7 +118,7 @@ async fn corrupt_bootstrap_refuses_start() {
     // be `{:?}`-formatted directly. Branch on the variant for the panic
     // message instead.
     match result {
-        Err(crabka_broker::BrokerError::BootstrapFile { .. }) => {}
+        Err(krabka_broker::BrokerError::BootstrapFile { .. }) => {}
         Err(other) => panic!("expected BootstrapFile error, got {other:?}"),
         Ok(handle) => {
             handle.shutdown().await;
@@ -185,10 +185,10 @@ async fn drive_sasl_scram_session(
     }
 
     // 3. SCRAM client-first → server-first.
-    let client = crabka_security::ScramClientExchange::new(
+    let client = krabka_security::ScramClientExchange::new(
         user.to_string(),
         password.as_bytes().to_vec(),
-        crabka_security::SaslMechanism::ScramSha512,
+        krabka_security::SaslMechanism::ScramSha512,
     );
     let (client_first, client) = client
         .client_first()
@@ -274,7 +274,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-bootstrap-test";
+    let client_id = "krabka-bootstrap-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
     frame.put_slice(client_id.as_bytes());
     if flexible {

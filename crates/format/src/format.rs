@@ -1,4 +1,4 @@
-//! `crabka format` subcommand.
+//! `krabka format` subcommand.
 //!
 //! Writes bootstrap metadata for a fresh broker:
 //! - a randomly-generated (or operator-supplied) cluster id
@@ -25,11 +25,11 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::Args;
-use crabka_metadata::{
+use krabka_metadata::{
     AclEntry, KRaftVersionRange, KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, Voter,
     VoterEndpoint, VoterSet, VotersRecord, metadata_version::KRAFT_VERSION_FEATURE,
 };
-use crabka_security::{
+use krabka_security::{
     SaslMechanism,
     scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
 };
@@ -85,7 +85,7 @@ pub struct FormatArgs {
     /// This node's raft id. Required with `--standalone` and
     /// `--initial-controllers` so the local directory id can be persisted.
     #[arg(long, value_parser = parse_node_id)]
-    node_id: Option<crabka_metadata::NodeId>,
+    node_id: Option<krabka_metadata::NodeId>,
     /// Stable directory identity. Intended for orchestrators that must verify
     /// the exact node incarnation before declaring it ready.
     #[arg(long, value_parser = parse_directory_id)]
@@ -126,10 +126,10 @@ pub struct ScramSpec {
 /// Map a release string to a supported `metadata.version` feature level,
 /// erroring if it is unknown or outside `[MIN, MAX]`.
 fn resolve_release_level(s: &str) -> Result<i16, String> {
-    let mv = crabka_metadata::metadata_version::from_version_string(s)
+    let mv = krabka_metadata::metadata_version::from_version_string(s)
         .ok_or_else(|| format!("unknown metadata.version {s:?}"))?;
     let level = mv.feature_level();
-    if !crabka_metadata::metadata_version::is_supported_level(level) {
+    if !krabka_metadata::metadata_version::is_supported_level(level) {
         return Err(format!(
             "metadata.version {s:?} (level {level}) is outside the supported range"
         ));
@@ -138,9 +138,9 @@ fn resolve_release_level(s: &str) -> Result<i16, String> {
 }
 
 /// Parse a node id: a bare `u64` wrapped in the `NodeId` newtype.
-fn parse_node_id(s: &str) -> Result<crabka_metadata::NodeId, String> {
+fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
     let id: u64 = s.trim().parse().map_err(|e| format!("node id: {e}"))?;
-    Ok(crabka_metadata::NodeId(id))
+    Ok(krabka_metadata::NodeId(id))
 }
 
 fn parse_directory_id(s: &str) -> Result<DirectoryId, String> {
@@ -165,7 +165,7 @@ fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
     Ok((name.to_string(), level))
 }
 
-/// Resolve `crabka format`'s KIP-1022 feature flags into the bootstrap
+/// Resolve `krabka format`'s KIP-1022 feature flags into the bootstrap
 /// `metadata.version` level and the per-feature override map, applying the
 /// validation `kafka-storage format` performs:
 ///
@@ -179,7 +179,7 @@ fn resolve_format_features(
     release_version: Option<&str>,
     features: &[(String, i16)],
 ) -> Result<(i16, BTreeMap<String, i16>), String> {
-    use crabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, METADATA_VERSION_MAX};
+    use krabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, METADATA_VERSION_MAX};
 
     let mut overrides: BTreeMap<String, i16> = BTreeMap::new();
     let mut feature_mv: Option<i16> = None;
@@ -190,8 +190,8 @@ fn resolve_format_features(
         if name == KRAFT_VERSION_FEATURE {
             continue;
         }
-        let Some(feat) = crabka_metadata::feature(name) else {
-            let mut known: Vec<&str> = crabka_metadata::feature_registry()
+        let Some(feat) = krabka_metadata::feature(name) else {
+            let mut known: Vec<&str> = krabka_metadata::feature_registry()
                 .iter()
                 .map(|f| f.name())
                 .collect();
@@ -230,7 +230,7 @@ fn resolve_format_features(
 
     // KIP-1022 dependency validation over the fully-resolved feature set
     // (every registered feature at its override-or-default level).
-    let resolved: BTreeMap<String, i16> = crabka_metadata::feature_registry()
+    let resolved: BTreeMap<String, i16> = krabka_metadata::feature_registry()
         .iter()
         .map(|f| {
             let level = overrides
@@ -240,7 +240,7 @@ fn resolve_format_features(
             (f.name().to_string(), level)
         })
         .collect();
-    crabka_metadata::validate_feature_dependencies(&resolved)?;
+    krabka_metadata::validate_feature_dependencies(&resolved)?;
 
     Ok((bootstrap_mv, overrides))
 }
@@ -317,7 +317,7 @@ fn parse_scram_spec(s: &str) -> Result<ScramSpec, String> {
 }
 
 fn parse_acl_spec(spec: &str) -> Result<AclEntry, String> {
-    use crabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
+    use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
 
     let mut principal = None;
     let mut host = None;
@@ -399,7 +399,7 @@ fn parse_acl_spec(spec: &str) -> Result<AclEntry, String> {
 /// it off the right first, then peel `host:port` off the remainder.
 fn parse_initial_controller(spec: &str) -> Result<Voter, String> {
     let (id_part, rest) = spec.split_once('@').ok_or("missing '@'")?;
-    let id = crabka_metadata::NodeId(id_part.parse::<u64>().map_err(|_| "bad id")?);
+    let id = krabka_metadata::NodeId(id_part.parse::<u64>().map_err(|_| "bad id")?);
     let (host_port, dir_part) = rest.rsplit_once(':').ok_or("missing directory uuid")?;
     let dir: Uuid = dir_part.parse().map_err(|_| "bad directory uuid")?;
     if dir.is_nil() {
@@ -450,7 +450,7 @@ fn build_initial_voters(args: &FormatArgs, directory_id: DirectoryId) -> Result<
         }
         Ok(VoterSet::from_voters([Voter {
             id,
-            // `Voter.directory_id` is a raw `Uuid` (owned by `crabka_voters`);
+            // `Voter.directory_id` is a raw `Uuid` (owned by `krabka_voters`);
             // unwrap the newtype at this crate boundary.
             directory_id: directory_id.into(),
             endpoints: vec![VoterEndpoint {
@@ -597,7 +597,7 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
     let dynamic_format = match is_dynamic_format(&args) {
         Ok(dynamic) => dynamic,
         Err(e) => {
-            eprintln!("crabka format: {e}");
+            eprintln!("krabka format: {e}");
             return EXIT_INVALID_FEATURE;
         }
     };
@@ -609,7 +609,7 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
             Ok(mut it) => {
                 if it.next().is_some() {
                     eprintln!(
-                        "crabka format: refusing to overwrite non-empty log_dir {}",
+                        "krabka format: refusing to overwrite non-empty log_dir {}",
                         args.log_dir.display(),
                     );
                     return EXIT_DIRTY_LOG_DIR;
@@ -617,7 +617,7 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
             }
             Err(e) => {
                 eprintln!(
-                    "crabka format: cannot read log_dir {}: {e}",
+                    "krabka format: cannot read log_dir {}: {e}",
                     args.log_dir.display(),
                 );
                 return EXIT_BOOTSTRAP_FAIL;
@@ -627,7 +627,7 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
 
     if let Err(e) = std::fs::create_dir_all(&args.log_dir) {
         eprintln!(
-            "crabka format: cannot create log_dir {}: {e}",
+            "krabka format: cannot create log_dir {}: {e}",
             args.log_dir.display(),
         );
         return EXIT_BOOTSTRAP_FAIL;
@@ -644,7 +644,7 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
     let initial_voters = match build_initial_voters(&args, generated_directory_id) {
         Ok(voters) => voters,
         Err(e) => {
-            eprintln!("crabka format: {e}");
+            eprintln!("krabka format: {e}");
             return EXIT_BOOTSTRAP_FAIL;
         }
     };
@@ -659,11 +659,11 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
         )
     };
     if args.directory_id.is_some() && directory_id != generated_directory_id {
-        eprintln!("crabka format: --directory-id must match the local --initial-controllers entry");
+        eprintln!("krabka format: --directory-id must match the local --initial-controllers entry");
         return EXIT_BOOTSTRAP_FAIL;
     }
     if let Err(e) = write_meta_properties(&args.log_dir, cluster_id, directory_id) {
-        eprintln!("crabka format: {e}");
+        eprintln!("krabka format: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
 
@@ -694,11 +694,11 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
         match resolve_format_features(args.release_version.as_deref(), &args.feature) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("crabka format: {e}");
+                eprintln!("krabka format: {e}");
                 return EXIT_INVALID_FEATURE;
             }
         };
-    records.extend(crabka_metadata::bootstrap_feature_records_with_overrides(
+    records.extend(krabka_metadata::bootstrap_feature_records_with_overrides(
         bootstrap_mv,
         &feature_overrides,
     ));
@@ -709,21 +709,21 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
     records.extend(extra);
 
     // Build the seed records. Each `--add-scram` is hashed *here* (CLI
-    // side) using `hash_scram_password_with_salt` from `crabka-security`
+    // side) using `hash_scram_password_with_salt` from `krabka-security`
     // so the on-disk record carries the stretched keys, never the plain
     // password.
     for spec in &args.add_scram {
         if spec.iterations < u32::try_from(MIN_SCRAM_ITERATIONS).expect("SCRAM minimum is positive")
         {
             eprintln!(
-                "crabka format: iterations must be >= {MIN_SCRAM_ITERATIONS}, got {} for user {}",
+                "krabka format: iterations must be >= {MIN_SCRAM_ITERATIONS}, got {} for user {}",
                 spec.iterations, spec.name,
             );
             return EXIT_LOW_ITERATIONS;
         }
         let mut salt = vec![0u8; 16];
         if let Err(e) = SystemRandom::new().fill(&mut salt) {
-            eprintln!("crabka format: rng failure: {e}");
+            eprintln!("krabka format: rng failure: {e}");
             return EXIT_BOOTSTRAP_FAIL;
         }
         let cred = hash_scram_password_with_salt(
@@ -750,12 +750,12 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
         && let Err(e) =
             write_dynamic_checkpoint(&args.log_dir, cluster_id, &raft_control_records, &records)
     {
-        eprintln!("crabka format: checkpoint failed: {e}");
+        eprintln!("krabka format: checkpoint failed: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
 
     if let Err(e) = write_bootstrap_files(&args.log_dir, cluster_id, &records) {
-        eprintln!("crabka format: bootstrap failed: {e}");
+        eprintln!("krabka format: bootstrap failed: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
 
@@ -776,13 +776,13 @@ fn write_dynamic_checkpoint(
     control_records: &[MetadataRecord],
     metadata_records: &[MetadataRecord],
 ) -> Result<(), String> {
-    let mut image = crabka_metadata::MetadataImage::new(cluster_id.into());
+    let mut image = krabka_metadata::MetadataImage::new(cluster_id.into());
     for record in control_records.iter().chain(metadata_records) {
         image.apply(record);
     }
-    let bytes = crabka_raft::serialize_metadata_snapshot(&image, 0)
+    let bytes = krabka_raft::serialize_metadata_snapshot(&image, 0)
         .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
-    let checkpoint_dir = crabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"));
+    let checkpoint_dir = krabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"));
     std::fs::create_dir_all(&checkpoint_dir)
         .map_err(|e| format!("create checkpoint directory: {e}"))?;
     std::fs::write(checkpoint_dir.join(ZERO_CHECKPOINT_NAME), bytes)
@@ -954,7 +954,7 @@ mod tests {
             let tmp = tempfile::tempdir().expect("tempdir");
             let log_dir = tmp.path().join("data");
             let mut argv = vec![
-                "crabka-format".to_owned(),
+                "krabka-format".to_owned(),
                 "--log-dir".to_owned(),
                 log_dir.display().to_string(),
             ];
@@ -968,7 +968,7 @@ mod tests {
     async fn format_into(tmp: &std::path::Path, extra: &[&str]) -> (i32, std::path::PathBuf) {
         let log_dir = tmp.join("data");
         let mut argv = vec![
-            "crabka-format".to_owned(),
+            "krabka-format".to_owned(),
             "--log-dir".to_owned(),
             log_dir.display().to_string(),
         ];
@@ -977,7 +977,7 @@ mod tests {
     }
 
     fn checkpoint_len(log_dir: &std::path::Path) -> u64 {
-        let path = crabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
+        let path = krabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
             .join(ZERO_CHECKPOINT_NAME);
         std::fs::metadata(path).map_or(0, |m| m.len())
     }
@@ -1166,7 +1166,7 @@ mod tests {
         std::fs::write(log_dir.join("someone-elses.txt"), b"x").expect("write");
 
         let code =
-            crate::run_from_args(["crabka-format", "--log-dir", &log_dir.display().to_string()])
+            crate::run_from_args(["krabka-format", "--log-dir", &log_dir.display().to_string()])
                 .await;
         check!(code == EXIT_DIRTY_LOG_DIR);
     }
@@ -1180,7 +1180,7 @@ mod tests {
         let log_dir = tmp.path().join("data");
 
         let code = crate::run_from_args([
-            "crabka-format",
+            "krabka-format",
             "--log-dir",
             &log_dir.display().to_string(),
             "--standalone",
@@ -1204,7 +1204,7 @@ mod tests {
 
         // KIP-853 dynamic quorum: the voter set lives in the offset-zero
         // checkpoint, not in the bootstrap record stream.
-        let checkpoint = crabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
+        let checkpoint = krabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"))
             .join(ZERO_CHECKPOINT_NAME);
         let len = std::fs::metadata(&checkpoint).map_or(0, |m| m.len());
         check!(len > 0, "offset-zero checkpoint should carry the voter set");
@@ -1249,15 +1249,15 @@ mod tests {
 
     #[test]
     fn bootstrap_seeds_every_nonzero_feature_at_release_default() {
-        let bootstrap_mv = crabka_metadata::metadata_version::from_version_string("4.0")
+        let bootstrap_mv = krabka_metadata::metadata_version::from_version_string("4.0")
             .unwrap()
             .feature_level();
         // Exercises the exact helper `run()` uses, so it tracks the registry
         // as features are added in later tasks. Features whose release default
         // is 0 are omitted (KIP-1022: level 0 = absent = disabled), matching
         // `kafka-storage format`.
-        let records = crabka_metadata::bootstrap_feature_records(bootstrap_mv);
-        for feat in crabka_metadata::feature_registry() {
+        let records = krabka_metadata::bootstrap_feature_records(bootstrap_mv);
+        for feat in krabka_metadata::feature_registry() {
             let found = records.iter().find_map(|r| match r {
                 MetadataRecord::V1FeatureLevel(f) if f.name == feat.name() => Some(f.level),
                 _ => None,
@@ -1278,7 +1278,7 @@ mod tests {
     fn max_version_string_resolves_to_max() {
         assert2::assert!(
             resolve_release_level("4.0").unwrap()
-                == crabka_metadata::metadata_version::METADATA_VERSION_MAX
+                == krabka_metadata::metadata_version::METADATA_VERSION_MAX
         );
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
         // an explicit non-metadata feature becomes an override.
         let (mv, ov) =
             resolve_format_features(None, &[("group.version".into(), 1)]).expect("resolve");
-        assert2::assert!(mv == crabka_metadata::metadata_version::METADATA_VERSION_MAX);
+        assert2::assert!(mv == krabka_metadata::metadata_version::METADATA_VERSION_MAX);
         assert2::assert!(ov.get("group.version") == Some(&1));
     }
 
@@ -1421,13 +1421,13 @@ mod tests {
         assert2::assert!(
             entry
                 == AclEntry {
-                    resource_type: crabka_metadata::ResourceType::Cluster,
+                    resource_type: krabka_metadata::ResourceType::Cluster,
                     resource_name: "kafka-cluster".to_string(),
-                    pattern_type: crabka_metadata::PatternType::Literal,
+                    pattern_type: krabka_metadata::PatternType::Literal,
                     principal: "User:admin".to_string(),
                     host: "*".to_string(),
-                    operation: crabka_metadata::AclOperation::All,
-                    permission_type: crabka_metadata::PermissionType::Allow,
+                    operation: krabka_metadata::AclOperation::All,
+                    permission_type: krabka_metadata::PermissionType::Allow,
                 }
         );
     }
@@ -1436,7 +1436,7 @@ mod tests {
     fn parse_acl_spec_with_prefixed_pattern() {
         let s = "principal=User:alice,host=*,operation=Read,permission=Allow,resource=Topic:team-:Prefixed";
         let entry = parse_acl_spec(s).unwrap();
-        assert2::assert!(entry.pattern_type == crabka_metadata::PatternType::Prefixed);
+        assert2::assert!(entry.pattern_type == krabka_metadata::PatternType::Prefixed);
         assert2::assert!(entry.resource_name.as_str() == "team-");
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
             parse_initial_controller("3@host:9093:00000000-0000-0000-0000-000000000003").unwrap();
         assert2::assert!(
             v == Voter {
-                id: crabka_metadata::NodeId(3),
+                id: krabka_metadata::NodeId(3),
                 directory_id: Uuid::from_u128(3),
                 endpoints: vec![VoterEndpoint {
                     name: "CONTROLLER".to_string(),
@@ -1476,7 +1476,7 @@ mod tests {
 
     #[test]
     fn parse_acl_spec_all_operations() {
-        use crabka_metadata::AclOperation;
+        use krabka_metadata::AclOperation;
         for (s, op) in [
             ("All", AclOperation::All),
             ("Read", AclOperation::Read),
@@ -1499,7 +1499,7 @@ mod tests {
 
     #[test]
     fn parse_acl_spec_all_resource_types_and_deny() {
-        use crabka_metadata::{PermissionType, ResourceType};
+        use krabka_metadata::{PermissionType, ResourceType};
         for (s, rt) in [
             ("Topic", ResourceType::Topic),
             ("Group", ResourceType::Group),

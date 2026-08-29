@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
         share_group_describe_response::{DescribedGroup, Member as DescribeMember},
@@ -106,7 +106,7 @@ impl ShareDescribeView {
     /// the handler owns the ACL outcome.
     #[must_use]
     pub fn into_described_group(self) -> DescribedGroup {
-        use crabka_protocol::owned::common::share_group_describe_response::{
+        use krabka_protocol::owned::common::share_group_describe_response::{
             assignment::Assignment, topic_partitions::TopicPartitions,
         };
 
@@ -436,7 +436,7 @@ async fn reconcile_share_state(
                 topic_uuid,
                 partition,
                 state_epoch,
-                crabka_log::Offset(0),
+                krabka_log::Offset(0),
             )
             .await
         {
@@ -749,7 +749,7 @@ fn apply_seed(state: &mut ShareGroupState, seed: super::super::ShareGroupSeed) {
 // encodes them as a single RecordBatch ready for OffsetsLog::append.
 // ---------------------------------------------------------------------------
 
-use crabka_protocol::records::RecordBatch;
+use krabka_protocol::records::RecordBatch;
 
 #[derive(Debug, Default)]
 pub(crate) struct PendingShareRecords {
@@ -992,7 +992,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use crabka_protocol::primitives::uuid::Uuid;
+    use krabka_protocol::primitives::uuid::Uuid;
 
     use super::*;
     use crate::coordinator::unified::{

@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     join_group_response::JoinGroupResponse,
 };
@@ -28,7 +28,7 @@ const ERR_MEMBER_ID_REQUIRED: i16 = 79;
 /// processes the requests on one TCP connection in sequence. Two concurrent
 /// `JoinGroup` waits over one `Client` would deadlock the second member behind
 /// the first member's `INITIAL_REBALANCE_DELAY` wait.
-async fn start_broker() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn start_broker() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     let handle = Broker::start(config).await.expect("broker must start");

@@ -7,16 +7,16 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use crabka_client_core::{ClientError, Connection, ConnectionOptions};
-use crabka_ids::Offset;
-use crabka_log::{Log, LogConfig};
-use crabka_protocol::{
+use krabka_client_core::{ClientError, Connection, ConnectionOptions};
+use krabka_ids::Offset;
+use krabka_log::{Log, LogConfig};
+use krabka_protocol::{
     owned::fetch_response::{FetchResponse, PartitionData},
     records::RecordsPayload,
 };
-use crabka_raft::NodeId;
-use crabka_security::ListenerProtocol;
-use crabka_units::{
+use krabka_raft::NodeId;
+use krabka_security::ListenerProtocol;
+use krabka_units::{
     Time,
     convert::{ByteSizeExt as _, TimeExt as _},
     fmt::Human as _,
@@ -576,7 +576,7 @@ fn fetch_progress(requested: Offset, appended: Offset) -> Result<FetchProgress, 
 }
 
 fn response_partition(response: FetchResponse, shard: ShardId) -> Option<PartitionData> {
-    let topic_id = crabka_protocol::primitives::uuid::Uuid(*shard.topic_id.as_bytes());
+    let topic_id = krabka_protocol::primitives::uuid::Uuid(*shard.topic_id.as_bytes());
     response
         .responses
         .into_iter()
@@ -659,10 +659,10 @@ mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use assert2::assert;
-    use crabka_ids::PartitionIndex;
-    use crabka_log::LogConfig;
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_units::{mebibytes, millis, secs};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::LogConfig;
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_units::{mebibytes, millis, secs};
 
     use super::*;
     use crate::wal::{WalStore as _, quorum::registry::WalShardRegistry};
@@ -1206,7 +1206,7 @@ mod tests {
             NodeId(2),
             0,
             0,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         );
         let response = registry.route_fetch_request(&request).unwrap().unwrap();
         let partition = response_partition(response, shard).unwrap();
@@ -1225,7 +1225,7 @@ mod tests {
             NodeId(2),
             0,
             follower_end.0,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         );
         registry
             .route_fetch_request(&acknowledgement)

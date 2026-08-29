@@ -8,8 +8,8 @@ mod jvm_acceptance;
 mod support;
 
 use assert2::assert;
-use crabka_broker::Broker;
 use jvm_acceptance::*;
+use krabka_broker::Broker;
 
 // Same multi-thread caveat as `console_producer_round_trip`: blocking
 // `Command::output()` calls would starve the broker accept loop on a
@@ -17,7 +17,7 @@ use jvm_acceptance::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn tiered_storage_round_trip_through_minio() {
-    const TOPIC: &str = "crabka-tiered-minio-itest";
+    const TOPIC: &str = "krabka-tiered-minio-itest";
     // 200 records of ~30 bytes each → ~6 KiB total. With `segment.bytes=2048`
     // that rolls into ~3 sealed segments plus the active one — enough to
     // exercise the copy path multiple times.
@@ -27,7 +27,7 @@ async fn tiered_storage_round_trip_through_minio() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = crabka_remote_storage::S3Config {
+    let s3 = krabka_remote_storage::S3Config {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
@@ -51,7 +51,7 @@ async fn tiered_storage_round_trip_through_minio() {
         checksum_sha256: false,
     };
     let (broker, _dir, _cfg) =
-        start_host_broker_with_minio_tier(s3, crabka_broker::RlmmKind::InMemory).await;
+        start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
     nc_check_connectivity();
 
     create_tiered_topic(&broker, TOPIC).await;
@@ -92,7 +92,7 @@ async fn tiered_storage_round_trip_through_minio() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn tiered_storage_topic_rlmm_survives_restart() {
-    const TOPIC: &str = "crabka-tiered-restart-itest";
+    const TOPIC: &str = "krabka-tiered-restart-itest";
     // 200 records of ~30 bytes each → ~6 KiB total. With `segment.bytes=2048`
     // that rolls into ~3 sealed segments plus the active one — enough to
     // exercise the copy path multiple times.
@@ -102,7 +102,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = crabka_remote_storage::S3Config {
+    let s3 = krabka_remote_storage::S3Config {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
@@ -129,14 +129,14 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // broker derives it from `log.dir` at startup.
     let (broker, _dir, config) = start_host_broker_with_minio_tier(
         s3,
-        crabka_broker::RlmmKind::TopicBacked(crabka_broker::KafkaRlmmConfig {
+        krabka_broker::RlmmKind::TopicBacked(krabka_broker::KafkaRlmmConfig {
             bootstrap: String::new(),
             num_partitions: 5,
             replication: 1,
-            snapshot_interval: crabka_units::secs(2),
+            snapshot_interval: krabka_units::secs(2),
             snapshot_dir: std::path::PathBuf::new(),
             security: None,
-            ..crabka_broker::KafkaRlmmConfig::default()
+            ..krabka_broker::KafkaRlmmConfig::default()
         }),
     )
     .await;
@@ -164,18 +164,18 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // `BootstrapMode::Rejoin` replays the existing on-disk raft log rather
     // than re-initializing a fresh cluster — the correct mode for restarts.
     // -----------------------------------------------------------------------
-    eprintln!("CRABKA[test] shutting down broker for restart test");
+    eprintln!("KRABKA[test] shutting down broker for restart test");
     broker.shutdown().await;
-    eprintln!("CRABKA[test] broker shut down; restarting with Rejoin mode");
+    eprintln!("KRABKA[test] broker shut down; restarting with Rejoin mode");
 
     let mut restart_config = config;
-    restart_config.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
+    restart_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     // `BootstrapMode::Rejoin` replays the existing on-disk raft log rather
     // than re-initializing a fresh cluster — the correct mode for restarts.
     let broker = Broker::start(restart_config).await.expect("restart broker");
     nc_check_connectivity();
 
-    eprintln!("CRABKA[test] broker restarted; consuming from offset 0");
+    eprintln!("KRABKA[test] broker restarted; consuming from offset 0");
 
     // Consume from offset 0 post-restart. Older offsets only exist in MinIO;
     // the RLMM must recover its metadata from __remote_log_metadata + snapshot.
@@ -198,7 +198,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     );
     let stdout = String::from_utf8_lossy(&consumer_out.stdout);
     let consumed = stdout.lines().filter(|l| !l.trim().is_empty()).count();
-    eprintln!("CRABKA[test] consumed {consumed} records post-restart");
+    eprintln!("KRABKA[test] consumed {consumed} records post-restart");
 
     // Spot-check a sample across the offset range.
     for i in [0usize, 1, 50, 100, 150, RECORDS - 1] {
@@ -244,9 +244,9 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
 /// claim. It uses `127.0.0.1` advertised addresses and runs under plain
 /// `cargo test`, with no Docker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker + Linux host networking + CRABKA_RUN_JVM_MULTI_BROKER_TIER=1; in-process multi-broker test is the CI-validated proof"]
+#[ignore = "requires Docker + Linux host networking + KRABKA_RUN_JVM_MULTI_BROKER_TIER=1; in-process multi-broker test is the CI-validated proof"]
 async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
-    const TOPIC: &str = "crabka-tiered-multi-itest";
+    const TOPIC: &str = "krabka-tiered-multi-itest";
     const RECORDS: usize = 200;
 
     let bootstrap_b1 = broker1_advertised();
@@ -260,10 +260,10 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     // (tests/tiered_storage_multi_broker.rs) is the deterministic, CI-validated
     // multi-broker proof; this JVM variant is opt-in for manual verification.
     let bootstrap = broker0_advertised();
-    if std::env::var("CRABKA_RUN_JVM_MULTI_BROKER_TIER").is_err() {
+    if std::env::var("KRABKA_RUN_JVM_MULTI_BROKER_TIER").is_err() {
         eprintln!(
             "Skipping tiered_storage_topic_rlmm_multi_broker_metadata_sharing: set \
-             CRABKA_RUN_JVM_MULTI_BROKER_TIER=1 to run. The in-process \
+             KRABKA_RUN_JVM_MULTI_BROKER_TIER=1 to run. The in-process \
              tiered_storage_multi_broker test is the CI-validated multi-broker proof."
         );
         return;
@@ -272,7 +272,7 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = crabka_remote_storage::S3Config {
+    let s3 = krabka_remote_storage::S3Config {
         bucket: MINIO_BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
@@ -333,13 +333,13 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
     loop {
         let b1_ok = b1.partition_log_config_for_test(TOPIC, 0).is_some_and(|c| {
             c.remote_storage_enable
-                && c.segment_size == crabka_units::bytes(2048)
-                && c.local_retention_size == Some(crabka_units::bytes(1))
+                && c.segment_size == krabka_units::bytes(2048)
+                && c.local_retention_size == Some(krabka_units::bytes(1))
         });
         let b2_ok = b2.partition_log_config_for_test(TOPIC, 0).is_some_and(|c| {
             c.remote_storage_enable
-                && c.segment_size == crabka_units::bytes(2048)
-                && c.local_retention_size == Some(crabka_units::bytes(1))
+                && c.segment_size == krabka_units::bytes(2048)
+                && c.local_retention_size == Some(krabka_units::bytes(1))
         });
         if b1_ok || b2_ok {
             break;
@@ -355,46 +355,46 @@ async fn tiered_storage_topic_rlmm_multi_broker_metadata_sharing() {
         // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
-    eprintln!("CRABKA[test] tiered config propagated; producing {RECORDS} records");
+    eprintln!("KRABKA[test] tiered config propagated; producing {RECORDS} records");
 
     // Produce records via broker 1's bootstrap. The cluster routes to the
     // actual partition leader internally.
     produce_records(TOPIC, RECORDS);
-    eprintln!("CRABKA[test] produced {RECORDS} records; waiting for MinIO segments");
+    eprintln!("KRABKA[test] produced {RECORDS} records; waiting for MinIO segments");
 
     // Wait for at least 2 sealed segments to land in MinIO (confirming the
     // leader ran the copy task and local-retention eviction fired).
     wait_for_minio_segments(MINIO_BUCKET, 2).await;
-    eprintln!("CRABKA[test] MinIO has >=2 segments; waiting for RLMM metadata propagation to b2");
+    eprintln!("KRABKA[test] MinIO has >=2 segments; waiting for RLMM metadata propagation to b2");
 
     // intentional: give the topic-backed RLMM enough time to flush metadata
     // records to `__remote_log_metadata` and for broker 2 (the survivor) to
     // consume them. Cross-broker consumption of those metadata records has no
-    // crabka awaiter/metric. The RLMM reconciler ticks every 1s, topic rf=2.
+    // krabka awaiter/metric. The RLMM reconciler ticks every 1s, topic rf=2.
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
 
     // Kill broker 1: forces the user-partition leader election to move to b2.
     // b2 must now serve the remote read entirely from metadata it consumed
     // from __remote_log_metadata (it never ran the copy task itself).
-    eprintln!("CRABKA[test] shutting down broker 1 to force failover to broker 2");
+    eprintln!("KRABKA[test] shutting down broker 1 to force failover to broker 2");
     b1.shutdown().await;
 
     // intentional: allow the survivor to (a) win the user-partition leader
     // election and (b) have its RLMM reconciler settle on the now-led
     // partition's metadata. The RLMM reconciler settling has no awaiter/metric,
     // so a fixed window is used rather than a possibly-never-resolving wait.
-    eprintln!("CRABKA[test] waiting for b2 to become leader and RLMM to settle (10s)");
+    eprintln!("KRABKA[test] waiting for b2 to become leader and RLMM to settle (10s)");
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
     // Consume from offset 0 via the SURVIVING broker (b2, port 9094).
     // Older offsets only exist in MinIO; b2 serves them via the RLMM metadata
     // it consumed off __remote_log_metadata.
     eprintln!(
-        "CRABKA[test] consuming from surviving broker 2 ({bootstrap_b1})",
+        "KRABKA[test] consuming from surviving broker 2 ({bootstrap_b1})",
         bootstrap_b1 = broker1_advertised()
     );
     let consumed = consume_records(TOPIC, RECORDS, 40_000, broker1_advertised());
-    eprintln!("CRABKA[test] consumed {consumed} records from surviving broker 2");
+    eprintln!("KRABKA[test] consumed {consumed} records from surviving broker 2");
 
     assert!(
         consumed >= RECORDS,

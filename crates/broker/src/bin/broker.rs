@@ -1,4 +1,4 @@
-//! `crabka-broker`, the single-node Kafka-compatible broker daemon.
+//! `krabka-broker`, the single-node Kafka-compatible broker daemon.
 
 // Heap profiling: install jemalloc as the global allocator and enable the
 // prof:true malloc_conf so jemalloc_pprof can dump heap profiles at runtime.
@@ -14,7 +14,7 @@ use std::{
 };
 
 use clap::Parser;
-use crabka_broker::{
+use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig,
     config::DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT,
     config_value::{
@@ -22,15 +22,15 @@ use crabka_broker::{
         parse_positive_i16, parse_positive_i32, parse_positive_i64,
     },
 };
-use crabka_client_core::{
+use krabka_client_core::{
     ClientFrameMax, ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
 };
-use crabka_log::LogConfig;
-use crabka_units::{ByteSize, Ratio, Time, convert::TimeExt as _, fmt::Human as _};
+use krabka_log::LogConfig;
+use krabka_units::{ByteSize, Ratio, Time, convert::TimeExt as _, fmt::Human as _};
 
 /// Parse `--process-roles` string values into `NodeRole`s.
-fn parse_roles_arg(roles: &[String]) -> Result<Vec<crabka_broker::config::NodeRole>, String> {
-    use crabka_broker::config::NodeRole;
+fn parse_roles_arg(roles: &[String]) -> Result<Vec<krabka_broker::config::NodeRole>, String> {
+    use krabka_broker::config::NodeRole;
     roles
         .iter()
         .map(|r| match r.to_ascii_lowercase().as_str() {
@@ -47,8 +47,8 @@ fn parse_roles_arg(roles: &[String]) -> Result<Vec<crabka_broker::config::NodeRo
 
 fn parse_share_isolation(
     value: &str,
-) -> Result<crabka_broker::coordinator::unified::share::config::ShareIsolationLevel, String> {
-    use crabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
+) -> Result<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel, String> {
+    use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
     match value {
         "read-uncommitted" => Ok(ShareIsolationLevel::ReadUncommitted),
         "read-committed" => Ok(ShareIsolationLevel::ReadCommitted),
@@ -58,8 +58,8 @@ fn parse_share_isolation(
 
 fn parse_streams_assignor(
     value: &str,
-) -> Result<crabka_broker::coordinator::unified::streams::config::StreamsAssignorKind, String> {
-    use crabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
+) -> Result<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind, String> {
+    use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
     match value {
         "auto" => Ok(StreamsAssignorKind::Auto),
         "sticky" => Ok(StreamsAssignorKind::Sticky),
@@ -72,255 +72,255 @@ fn parse_streams_assignor(
 struct RuntimeArgs {
     #[arg(
         long,
-        env = "CRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY",
+        env = "KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY",
         default_value_t = DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
         value_parser = parse_client_dispatch_queue_capacity
     )]
     client_dispatch_queue_capacity: usize,
     #[arg(
         long,
-        env = "CRABKA_BROKER_CLIENT_FRAME_MAX",
+        env = "KRABKA_BROKER_CLIENT_FRAME_MAX",
         default_value = "100MiB",
         value_parser = parse_client_frame_max
     )]
     client_frame_max: ByteSize,
-    #[arg(long, env = "CRABKA_STARTUP_LEADER_WAIT_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_STARTUP_LEADER_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     startup_leader_wait_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_SELF_REGISTRATION_BACKOFF_MIN", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SELF_REGISTRATION_BACKOFF_MIN", value_parser = krabka_units::parse::positive_time)]
     self_registration_backoff_min: Option<Time>,
-    #[arg(long, env = "CRABKA_SELF_REGISTRATION_BACKOFF_MAX", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SELF_REGISTRATION_BACKOFF_MAX", value_parser = krabka_units::parse::positive_time)]
     self_registration_backoff_max: Option<Time>,
-    #[arg(long, env = "CRABKA_OBSERVER_POLL_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_OBSERVER_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     observer_poll_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_AUDIT_SPOOL_REPLAY_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_AUDIT_SPOOL_REPLAY_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     audit_spool_replay_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_AUDIT_STATS_POLL_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_AUDIT_STATS_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     audit_stats_poll_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_AUDIT_PARTITION_WAIT_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_AUDIT_PARTITION_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     audit_partition_wait_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_LIVENESS_TICK_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_LIVENESS_TICK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     liveness_tick_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_GAUGE_POLL_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_GAUGE_POLL_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     gauge_poll_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_ISR_SCAN_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_ISR_SCAN_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     isr_scan_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_CLEANER_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLEANER_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     cleaner_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_FUTURE_LOG_MOVE_RETRY_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_RETRY_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     future_log_move_retry_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_EVICTION_TICK", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_EVICTION_TICK", value_parser = krabka_units::parse::positive_time)]
     client_metrics_eviction_tick: Option<Time>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_STALE_FLOOR", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_STALE_FLOOR", value_parser = krabka_units::parse::positive_time)]
     client_metrics_stale_floor: Option<Time>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_DEFAULT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_DEFAULT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     client_metrics_default_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_TELEMETRY_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_TELEMETRY_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     client_metrics_telemetry_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_PROM_SNAPSHOT_TTL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_PROM_SNAPSHOT_TTL", value_parser = krabka_units::parse::positive_time)]
     client_metrics_prom_snapshot_ttl: Option<Time>,
-    #[arg(long, env = "CRABKA_RLMM_RECONCILE_TICK", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_RLMM_RECONCILE_TICK", value_parser = krabka_units::parse::positive_time)]
     rlmm_reconcile_tick: Option<Time>,
-    #[arg(long, env = "CRABKA_RLMM_BOOTSTRAP_BACKOFF_INITIAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_RLMM_BOOTSTRAP_BACKOFF_INITIAL", value_parser = krabka_units::parse::positive_time)]
     rlmm_bootstrap_backoff_initial: Option<Time>,
-    #[arg(long, env = "CRABKA_RLMM_BOOTSTRAP_BACKOFF_MAX", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_RLMM_BOOTSTRAP_BACKOFF_MAX", value_parser = krabka_units::parse::positive_time)]
     rlmm_bootstrap_backoff_max: Option<Time>,
-    #[arg(long, env = "CRABKA_CONNECTION_CREATION_THROTTLE_MAX", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONNECTION_CREATION_THROTTLE_MAX", value_parser = krabka_units::parse::positive_time)]
     connection_creation_throttle_max: Option<Time>,
-    #[arg(long, env = "CRABKA_OPA_HTTP_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_OPA_HTTP_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     opa_http_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_OAUTH_JWKS_HTTP_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_OAUTH_JWKS_HTTP_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     oauth_jwks_http_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_AUTO_JOIN_RETRY_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_AUTO_JOIN_RETRY_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     auto_join_retry_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     auto_join_voter_request_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_FETCH_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     replication_fetch_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_REPLICATION_FETCH_MAX_WAIT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MAX_WAIT", value_parser = krabka_units::parse::positive_time)]
     replication_fetch_max_wait: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_FETCH_MIN", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_REPLICATION_FETCH_MIN", value_parser = krabka_units::parse::positive_byte_size)]
     replication_fetch_min: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_REPLICATION_THROTTLE_EXHAUSTED_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_THROTTLE_EXHAUSTED_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     replication_throttle_exhausted_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_SEND_ERROR_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_SEND_ERROR_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     replication_send_error_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_UNKNOWN_TOPIC_RETRY_DELAY", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_UNKNOWN_TOPIC_RETRY_DELAY", value_parser = krabka_units::parse::positive_time)]
     replication_unknown_topic_retry_delay: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_EPOCH_FENCE_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_EPOCH_FENCE_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     replication_epoch_fence_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_UNEXPECTED_ERROR_BACKOFF", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_UNEXPECTED_ERROR_BACKOFF", value_parser = krabka_units::parse::positive_time)]
     replication_unexpected_error_backoff: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_RECONNECT_INITIAL_DELAY", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_RECONNECT_INITIAL_DELAY", value_parser = krabka_units::parse::positive_time)]
     replication_reconnect_initial_delay: Option<Time>,
-    #[arg(long, env = "CRABKA_REPLICATION_RECONNECT_DELAY_CAP", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_REPLICATION_RECONNECT_DELAY_CAP", value_parser = krabka_units::parse::positive_time)]
     replication_reconnect_delay_cap: Option<Time>,
-    #[arg(long, env = "CRABKA_COORDINATOR_SESSION_EXPIRY_TICK", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_COORDINATOR_SESSION_EXPIRY_TICK", value_parser = krabka_units::parse::positive_time)]
     coordinator_session_expiry_tick: Option<Time>,
-    #[arg(long, env = "CRABKA_COORDINATOR_SHUTDOWN_ACK_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_COORDINATOR_SHUTDOWN_ACK_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     coordinator_shutdown_ack_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_SESSION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     consumer_group_session_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     consumer_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_MIN_SESSION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     consumer_group_min_session_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_MAX_SESSION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     consumer_group_max_session_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     consumer_group_min_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     consumer_group_max_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_CONSUMER_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     consumer_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::positive_time)]
     classic_group_initial_rebalance_delay: Option<Time>,
-    #[arg(long, env = "CRABKA_SYNC_GROUP_FOLLOWER_WAIT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SYNC_GROUP_FOLLOWER_WAIT", value_parser = krabka_units::parse::positive_time)]
     sync_group_follower_wait: Option<Time>,
-    #[arg(long, env = "CRABKA_UNCLEAN_RECOVERY_AGGRESSIVE_DEADLINE", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_AGGRESSIVE_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     unclean_recovery_aggressive_deadline: Option<Time>,
-    #[arg(long, env = "CRABKA_UNCLEAN_RECOVERY_BALANCED_DEADLINE", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_BALANCED_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     unclean_recovery_balanced_deadline: Option<Time>,
-    #[arg(long, env = "CRABKA_OPERATOR_RECOVERY_DEADLINE", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_OPERATOR_RECOVERY_DEADLINE", value_parser = krabka_units::parse::positive_time)]
     operator_recovery_deadline: Option<Time>,
-    #[arg(long, env = "CRABKA_QUOTA_THROTTLE_MAX", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_QUOTA_THROTTLE_MAX", value_parser = krabka_units::parse::positive_time)]
     quota_throttle_max: Option<Time>,
-    #[arg(long, env = "CRABKA_CONTROLLER_MUTATION_QUOTA_WINDOW", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CONTROLLER_MUTATION_QUOTA_WINDOW", value_parser = krabka_units::parse::positive_time)]
     controller_mutation_quota_window: Option<Time>,
-    #[arg(long, env = "CRABKA_SELF_REGISTRATION_MAX_ATTEMPTS", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, env = "KRABKA_SELF_REGISTRATION_MAX_ATTEMPTS", value_parser = clap::value_parser!(u32).range(1..))]
     self_registration_max_attempts: Option<u32>,
-    #[arg(long, env = "CRABKA_OBSERVER_FETCH_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_OBSERVER_FETCH_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     observer_fetch_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_AUDIT_EVENT_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_AUDIT_EVENT_QUEUE_CAPACITY", value_parser = parse_positive_count)]
     audit_event_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_AUDIT_TAIL_WINDOW_OFFSETS", value_parser = parse_positive_i64)]
+    #[arg(long, env = "KRABKA_AUDIT_TAIL_WINDOW_OFFSETS", value_parser = parse_positive_i64)]
     audit_tail_window_offsets: Option<PositiveI64>,
-    #[arg(long, env = "CRABKA_AUDIT_TAIL_READ_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_AUDIT_TAIL_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     audit_tail_read_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_OFFSETS_TOPIC_METADATA_WAIT_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_METADATA_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     offsets_topic_metadata_wait_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS", value_parser = clap::value_parser!(u32).range(1..))]
     client_metrics_stale_push_intervals: Option<u32>,
-    #[arg(long, env = "CRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY", value_parser = parse_positive_count)]
     client_metrics_otlp_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_COORDINATOR_ACTOR_MAILBOX_CAPACITY", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_COORDINATOR_ACTOR_MAILBOX_CAPACITY", value_parser = parse_positive_count)]
     coordinator_actor_mailbox_capacity: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", value_parser = parse_positive_count)]
     diskless_wal_local_replica_count: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_DISKLESS_WAL_FLUSH_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     diskless_wal_flush_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     diskless_wal_flush_max_size: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     diskless_wal_trim_safety_lag: Option<i64>,
-    #[arg(long, env = "CRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     diskless_wal_index_projection_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_UNCLEAN_RECOVERY_QUEUE_CAPACITY", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_QUEUE_CAPACITY", value_parser = parse_positive_count)]
     unclean_recovery_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_SHARE_RECOVERY_READ_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_SHARE_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     share_recovery_read_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED", value_parser = parse_positive_count)]
     share_session_cache_max_when_unlimited: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_LOG_READ_BUFFER_CAP", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_LOG_READ_BUFFER_CAP", value_parser = krabka_units::parse::positive_byte_size)]
     log_read_buffer_cap: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_LOG_TIMESTAMP_SCAN_WINDOW", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_LOG_TIMESTAMP_SCAN_WINDOW", value_parser = krabka_units::parse::positive_byte_size)]
     log_timestamp_scan_window: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = krabka_units::parse::positive_time)]
     log_delivery_clock_uncertainty: Option<Time>,
-    #[arg(long, env = "CRABKA_SOCKET_REQUEST_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     socket_request_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_SENDFILE_MIN", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_SENDFILE_MIN", value_parser = krabka_units::parse::positive_byte_size)]
     sendfile_min: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_SOCKET_SEND_BUFFER", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_SOCKET_SEND_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]
     socket_send_buffer: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_SOCKET_RECEIVE_BUFFER", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_SOCKET_RECEIVE_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]
     socket_receive_buffer: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_ACL_MAX_PRINCIPAL", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_ACL_MAX_PRINCIPAL", value_parser = krabka_units::parse::positive_byte_size)]
     acl_max_principal: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_ACL_MAX_RESOURCE_NAME", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_ACL_MAX_RESOURCE_NAME", value_parser = krabka_units::parse::positive_byte_size)]
     acl_max_resource_name: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_TELEMETRY_MAX_DECOMPRESSION_RATIO", value_parser = crabka_units::parse::ratio)]
+    #[arg(long, env = "KRABKA_TELEMETRY_MAX_DECOMPRESSION_RATIO", value_parser = krabka_units::parse::ratio)]
     telemetry_max_decompression_ratio: Option<Ratio>,
-    #[arg(long, env = "CRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_FLOOR", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]
     telemetry_decompressed_output_floor: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_CEILING", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_CEILING", value_parser = krabka_units::parse::positive_byte_size)]
     telemetry_decompressed_output_ceiling: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_RECORD_DECOMPRESSION_MAX_RATIO", value_parser = crabka_units::parse::positive_ratio)]
+    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_MAX_RATIO", value_parser = krabka_units::parse::positive_ratio)]
     record_decompression_max_ratio: Option<Ratio>,
-    #[arg(long, env = "CRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]
     record_decompression_output_floor: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", value_parser = krabka_units::parse::positive_byte_size)]
     record_decompression_output_ceiling: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_INTER_BROKER_SERVER_NAME")]
+    #[arg(long, env = "KRABKA_INTER_BROKER_SERVER_NAME")]
     inter_broker_server_name: Option<String>,
-    #[arg(long, env = "CRABKA_PRODUCER_ID_EXPIRATION", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_PRODUCER_ID_EXPIRATION", value_parser = krabka_units::parse::positive_time)]
     producer_id_expiration: Option<Time>,
-    #[arg(long, env = "CRABKA_PRODUCER_ID_EXPIRATION_SCAN_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_PRODUCER_ID_EXPIRATION_SCAN_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     producer_id_expiration_scan_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_MAX_PRODUCE_GROUP", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_MAX_PRODUCE_GROUP", value_parser = parse_positive_count)]
     max_produce_group: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_PARTITION_WRITER_QUEUE_DEPTH", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_PARTITION_WRITER_QUEUE_DEPTH", value_parser = parse_positive_count)]
     partition_writer_queue_depth: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_DEFAULT_MIN_INSYNC_REPLICAS", value_parser = parse_positive_i32)]
+    #[arg(long, env = "KRABKA_DEFAULT_MIN_INSYNC_REPLICAS", value_parser = parse_positive_i32)]
     default_min_insync_replicas: Option<PositiveI32>,
-    #[arg(long, env = "CRABKA_FUTURE_LOG_MOVE_READ_CHUNK", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_READ_CHUNK", value_parser = krabka_units::parse::positive_byte_size)]
     future_log_move_read_chunk: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_SHARE_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[arg(long, env = "KRABKA_SHARE_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     share_state_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "CRABKA_SHARE_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[arg(long, env = "KRABKA_SHARE_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     share_state_replication_factor: Option<PositiveI16>,
-    #[arg(long, env = "CRABKA_OFFSETS_TOPIC_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     offsets_topic_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "CRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     offsets_topic_replication_factor: Option<PositiveI16>,
-    #[arg(long, env = "CRABKA_TRANSACTION_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    #[arg(long, env = "KRABKA_TRANSACTION_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     transaction_state_num_partitions: Option<PositiveI32>,
-    #[arg(long, env = "CRABKA_TRANSACTION_RECOVERY_READ_MAX", value_parser = crabka_units::parse::positive_byte_size)]
+    #[arg(long, env = "KRABKA_TRANSACTION_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     transaction_recovery_read_max: Option<ByteSize>,
-    #[arg(long, env = "CRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[arg(long, env = "KRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     transaction_state_replication_factor: Option<PositiveI16>,
-    #[arg(long, env = "CRABKA_TRANSACTION_MIN_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_TRANSACTION_MIN_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     transaction_min_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     transaction_max_timeout: Option<Time>,
 
-    #[arg(long, env = "CRABKA_SHARE_GROUP_ENABLE", action = clap::ArgAction::Set)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_ENABLE", action = clap::ArgAction::Set)]
     share_group_enable: Option<bool>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     share_group_session_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     share_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     share_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_RECORD_LOCK_DURATION", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     share_group_record_lock_duration: Option<Time>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_MAX_DELIVERY_ATTEMPTS", value_parser = clap::value_parser!(i16).range(1..))]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_ATTEMPTS", value_parser = clap::value_parser!(i16).range(1..))]
     share_group_max_delivery_attempts: Option<i16>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_MAX_INFLIGHT_RECORDS", value_parser = parse_positive_i32)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_INFLIGHT_RECORDS", value_parser = parse_positive_i32)]
     share_group_max_inflight_records: Option<PositiveI32>,
-    #[arg(long, env = "CRABKA_SHARE_GROUP_ISOLATION_LEVEL", value_parser = parse_share_isolation)]
+    #[arg(long, env = "KRABKA_SHARE_GROUP_ISOLATION_LEVEL", value_parser = parse_share_isolation)]
     share_group_isolation_level:
-        Option<crabka_broker::coordinator::unified::share::config::ShareIsolationLevel>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_ENABLE", action = clap::ArgAction::Set)]
+        Option<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel>,
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_ENABLE", action = clap::ArgAction::Set)]
     streams_group_enable: Option<bool>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_SESSION_TIMEOUT", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     streams_group_session_timeout: Option<Time>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     streams_group_heartbeat_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     streams_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "CRABKA_STREAMS_INTERNAL_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    #[arg(long, env = "KRABKA_STREAMS_INTERNAL_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     streams_internal_topic_replication_factor: Option<PositiveI16>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
     streams_group_num_standby_replicas: Option<i32>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_NUM_WARMUP_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_WARMUP_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
     streams_group_num_warmup_replicas: Option<i32>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_ACCEPTABLE_RECOVERY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_ACCEPTABLE_RECOVERY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     streams_group_acceptable_recovery_lag: Option<i64>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_TASK_OFFSET_INTERVAL", value_parser = crabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_TASK_OFFSET_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     streams_group_task_offset_interval: Option<Time>,
-    #[arg(long, env = "CRABKA_STREAMS_GROUP_ASSIGNOR", value_parser = parse_streams_assignor)]
+    #[arg(long, env = "KRABKA_STREAMS_GROUP_ASSIGNOR", value_parser = parse_streams_assignor)]
     streams_group_assignor:
-        Option<crabka_broker::coordinator::unified::streams::config::StreamsAssignorKind>,
+        Option<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind>,
 }
 
 macro_rules! copy_refined_runtime {
@@ -340,7 +340,7 @@ macro_rules! copy_plain_runtime {
 }
 
 impl RuntimeArgs {
-    fn copy_core(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_core(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -369,7 +369,7 @@ impl RuntimeArgs {
         );
     }
 
-    fn copy_client_metrics(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_client_metrics(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -383,7 +383,7 @@ impl RuntimeArgs {
         copy_refined_runtime!(self, runtime, client_metrics_otlp_queue_capacity,);
     }
 
-    fn copy_replication(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_replication(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -400,7 +400,7 @@ impl RuntimeArgs {
         );
     }
 
-    fn copy_coordinators(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_coordinators(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -432,7 +432,7 @@ impl RuntimeArgs {
         );
     }
 
-    fn copy_storage_and_queues(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_storage_and_queues(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -466,7 +466,7 @@ impl RuntimeArgs {
         );
     }
 
-    fn copy_network_and_limits(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_network_and_limits(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -491,7 +491,7 @@ impl RuntimeArgs {
             .clone_from(&self.inter_broker_server_name);
     }
 
-    fn copy_group_protocols(&self, runtime: &mut crabka_broker::file_config::RuntimeFileConfig) {
+    fn copy_group_protocols(&self, runtime: &mut krabka_broker::file_config::RuntimeFileConfig) {
         copy_plain_runtime!(
             self,
             runtime,
@@ -521,7 +521,7 @@ impl RuntimeArgs {
             streams_group_acceptable_recovery_lag,
         );
         runtime.share_group_isolation_level = self.share_group_isolation_level.map(|value| {
-            use crabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
+            use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
             match value {
                 ShareIsolationLevel::ReadUncommitted => "read-uncommitted",
                 ShareIsolationLevel::ReadCommitted => "read-committed",
@@ -529,7 +529,7 @@ impl RuntimeArgs {
             .to_owned()
         });
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
-            use crabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
+            use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
             match value {
                 StreamsAssignorKind::Auto => "auto",
                 StreamsAssignorKind::Sticky => "sticky",
@@ -539,8 +539,8 @@ impl RuntimeArgs {
         });
     }
 
-    fn as_file_runtime(&self) -> crabka_broker::file_config::RuntimeFileConfig {
-        let mut runtime = crabka_broker::file_config::RuntimeFileConfig::default();
+    fn as_file_runtime(&self) -> krabka_broker::file_config::RuntimeFileConfig {
+        let mut runtime = krabka_broker::file_config::RuntimeFileConfig::default();
         self.copy_core(&mut runtime);
         self.copy_client_metrics(&mut runtime);
         self.copy_replication(&mut runtime);
@@ -554,7 +554,7 @@ impl RuntimeArgs {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "crabka-broker",
+    name = "krabka-broker",
     version,
     about = "Cluster-capable Apache Kafka-compatible krabka broker"
 )]
@@ -563,18 +563,18 @@ struct Args {
     runtime: RuntimeArgs,
 
     #[command(flatten)]
-    profiling: crabka_telemetry::profiling::ProfilingConfig,
+    profiling: krabka_telemetry::profiling::ProfilingConfig,
 
     /// TCP address to listen on. Mutually exclusive with `--config-file`.
     #[arg(long, default_value = "127.0.0.1:9092", conflicts_with = "config_file")]
     listen_addr: SocketAddr,
 
     /// `host:port` to advertise to clients. Default: `listen_addr`.
-    /// The operator sets it with the env var `CRABKA_ADVERTISED_LISTENER`.
+    /// The operator sets it with the env var `KRABKA_ADVERTISED_LISTENER`.
     /// Mutually exclusive with `--config-file`.
     #[arg(
         long,
-        env = "CRABKA_ADVERTISED_LISTENER",
+        env = "KRABKA_ADVERTISED_LISTENER",
         conflicts_with = "config_file"
     )]
     advertised_listener: Option<String>,
@@ -582,13 +582,13 @@ struct Args {
     /// Path to an operator-managed TOML config file. When it is set,
     /// `--listen-addr` and `--advertised-listener` must NOT be set. The
     /// listener configuration then comes from the file's `[[listeners]]`
-    /// table. See `crabka_broker::file_config::FileConfig`.
+    /// table. See `krabka_broker::file_config::FileConfig`.
     #[arg(long)]
     config_file: Option<PathBuf>,
 
     /// Primary log directory. Holds the cluster-metadata raft log and is
     /// the default partition data directory.
-    #[arg(long, default_value = "./crabka-data")]
+    #[arg(long, default_value = "./krabka-data")]
     log_dir: PathBuf,
 
     /// More JBOD data directories (KIP-113), comma-separated. Least-loaded
@@ -597,7 +597,7 @@ struct Args {
     /// This maps to a Kafka `log.dirs` with more than one entry.
     #[arg(
         long,
-        env = "CRABKA_EXTRA_LOG_DIRS",
+        env = "KRABKA_EXTRA_LOG_DIRS",
         value_delimiter = ',',
         num_args = 0..
     )]
@@ -613,16 +613,16 @@ struct Args {
     /// the `[process]` section of `--config-file` instead.
     #[arg(
         long,
-        env = "CRABKA_PROCESS_ROLES",
+        env = "KRABKA_PROCESS_ROLES",
         value_delimiter = ',',
         num_args = 0..
     )]
     process_roles: Vec<String>,
 
     /// Cluster UUID. Every broker in the same cluster must share this
-    /// value. The operator sets it with the env var `CRABKA_CLUSTER_ID`,
+    /// value. The operator sets it with the env var `KRABKA_CLUSTER_ID`,
     /// which holds the `KafkaCluster` UID.
-    #[arg(long, env = "CRABKA_CLUSTER_ID")]
+    #[arg(long, env = "KRABKA_CLUSTER_ID")]
     cluster_id: Option<uuid::Uuid>,
 
     /// Bind address for the Prometheus `/metrics` HTTP endpoint.
@@ -631,7 +631,7 @@ struct Args {
     /// Kafka, so existing scrape configs apply unchanged.
     #[arg(
         long,
-        env = "CRABKA_METRICS_LISTEN_ADDR",
+        env = "KRABKA_METRICS_LISTEN_ADDR",
         default_value = "0.0.0.0:9404"
     )]
     metrics_listen_addr: String,
@@ -639,7 +639,7 @@ struct Args {
     /// Partition disk-usage scan cadence. `0s` disables the scanner entirely.
     /// The scanner populates the `partition_disk_bytes` gauge, and the
     /// rebalancer's usage scraper reads that gauge.
-    #[arg(long, env = "CRABKA_PARTITION_DISK_SCAN_INTERVAL", value_parser = crabka_units::parse::non_negative_time)]
+    #[arg(long, env = "KRABKA_PARTITION_DISK_SCAN_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     partition_disk_scan_interval: Option<Time>,
 
     /// KIP-853: controller endpoints to discover the quorum leader at cold
@@ -648,7 +648,7 @@ struct Args {
     /// This maps to Kafka's `controller.quorum.bootstrap.servers`.
     #[arg(
         long,
-        env = "CRABKA_CONTROLLER_BOOTSTRAP_SERVERS",
+        env = "KRABKA_CONTROLLER_BOOTSTRAP_SERVERS",
         value_delimiter = ',',
         num_args = 0..
     )]
@@ -657,57 +657,57 @@ struct Args {
     /// KIP-853: auto-join the quorum as a voter after the node catches up as
     /// an observer. This maps to Kafka's
     /// `controller.quorum.auto.join.enable`.
-    #[arg(long, env = "CRABKA_CONTROLLER_AUTO_JOIN")]
+    #[arg(long, env = "KRABKA_CONTROLLER_AUTO_JOIN")]
     controller_auto_join: bool,
 
     /// KIP-853 observer promotion lag bound.
-    #[arg(long, env = "CRABKA_OBSERVER_LAG_BOUND")]
+    #[arg(long, env = "KRABKA_OBSERVER_LAG_BOUND")]
     observer_lag_bound: Option<u64>,
 
     /// Broker heartbeat interval in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_HEARTBEAT_INTERVAL",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_HEARTBEAT_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
     )]
     heartbeat_interval: Option<Time>,
 
     /// Broker heartbeat timeout in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_HEARTBEAT_TIMEOUT",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_HEARTBEAT_TIMEOUT",
+        value_parser = krabka_units::parse::positive_time
     )]
     heartbeat_timeout: Option<Time>,
 
     /// Follower lag timeout in milliseconds before ISR shrink.
     #[arg(
         long,
-        env = "CRABKA_REPLICA_LAG_TIME_MAX",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_REPLICA_LAG_TIME_MAX",
+        value_parser = krabka_units::parse::positive_time
     )]
     replica_lag_time_max: Option<Time>,
 
     /// Controller election timeout in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_CONTROLLER_ELECTION_TIMEOUT",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_CONTROLLER_ELECTION_TIMEOUT",
+        value_parser = krabka_units::parse::positive_time
     )]
     controller_election_timeout: Option<Time>,
 
     /// Controller heartbeat interval in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_CONTROLLER_HEARTBEAT_INTERVAL",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_CONTROLLER_HEARTBEAT_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
     )]
     controller_heartbeat_interval: Option<Time>,
 
     /// Consecutive controller fetch misses tolerated before election.
     #[arg(
         long,
-        env = "CRABKA_CONTROLLER_FETCH_MISS_LIMIT",
+        env = "KRABKA_CONTROLLER_FETCH_MISS_LIMIT",
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     controller_fetch_miss_limit: Option<u32>,
@@ -715,7 +715,7 @@ struct Args {
     /// Capacity of the metadata Raft command queue.
     #[arg(
         long,
-        env = "CRABKA_METADATA_RAFT_COMMAND_QUEUE_CAPACITY",
+        env = "KRABKA_METADATA_RAFT_COMMAND_QUEUE_CAPACITY",
         value_parser = parse_metadata_raft_command_queue_capacity
     )]
     metadata_raft_command_queue_capacity: Option<usize>,
@@ -723,35 +723,35 @@ struct Args {
     /// Per-read and per-snapshot-request metadata Raft byte budget.
     #[arg(
         long,
-        env = "CRABKA_METADATA_RAFT_FETCH_MAX",
-        value_parser = crabka_units::parse::positive_byte_size
+        env = "KRABKA_METADATA_RAFT_FETCH_MAX",
+        value_parser = krabka_units::parse::positive_byte_size
     )]
     metadata_raft_fetch_max: Option<ByteSize>,
 
     /// Controlled-shutdown leadership drain timeout in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT",
+        value_parser = krabka_units::parse::positive_time
     )]
     controlled_shutdown_drain_timeout: Option<Time>,
 
     /// Maximum bytes between metadata-log snapshots.
     #[arg(
         long,
-        env = "CRABKA_METADATA_MAX_BETWEEN_SNAPSHOTS",
-        value_parser = crabka_units::parse::positive_byte_size
+        env = "KRABKA_METADATA_MAX_BETWEEN_SNAPSHOTS",
+        value_parser = krabka_units::parse::positive_byte_size
     )]
     metadata_max_between_snapshots: Option<ByteSize>,
 
     /// Maximum time between metadata-log snapshots. `0s` disables the interval cap.
-    #[arg(long, env = "CRABKA_METADATA_MAX_SNAPSHOT_INTERVAL", value_parser = crabka_units::parse::non_negative_time)]
+    #[arg(long, env = "KRABKA_METADATA_MAX_SNAPSHOT_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     metadata_max_snapshot_interval: Option<Time>,
 
     /// Committed-record gap between metadata-log snapshots.
     #[arg(
         long,
-        env = "CRABKA_METADATA_SNAPSHOT_INTERVAL_RECORDS",
+        env = "KRABKA_METADATA_SNAPSHOT_INTERVAL_RECORDS",
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     metadata_snapshot_interval_records: Option<u64>,
@@ -759,83 +759,83 @@ struct Args {
     /// Maximum metadata snapshot size a follower will fetch.
     #[arg(
         long,
-        env = "CRABKA_METADATA_SNAPSHOT_FETCH_MAX",
-        value_parser = crabka_units::parse::positive_byte_size
+        env = "KRABKA_METADATA_SNAPSHOT_FETCH_MAX",
+        value_parser = krabka_units::parse::positive_byte_size
     )]
     metadata_snapshot_fetch_max: Option<ByteSize>,
 
     /// Idle-transaction abort cleanup interval. `0s` disables the reaper.
-    #[arg(long, env = "CRABKA_TXN_ABORT_CLEANUP_INTERVAL", value_parser = crabka_units::parse::non_negative_time)]
+    #[arg(long, env = "KRABKA_TXN_ABORT_CLEANUP_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     txn_abort_cleanup_interval: Option<Time>,
 
     /// Auto preferred-replica election scan cadence.
     #[arg(
         long,
-        env = "CRABKA_LEADER_IMBALANCE_CHECK_INTERVAL",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_LEADER_IMBALANCE_CHECK_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
     )]
     leader_imbalance_check_interval: Option<Time>,
 
     /// Minimum per-broker leader imbalance percentage before auto-rebalance acts.
     #[arg(
         long,
-        env = "CRABKA_LEADER_IMBALANCE_PER_BROKER",
-        value_parser = crabka_units::parse::ratio
+        env = "KRABKA_LEADER_IMBALANCE_PER_BROKER",
+        value_parser = krabka_units::parse::ratio
     )]
     leader_imbalance_per_broker: Option<Ratio>,
 
     /// TLS cert/key reload polling interval. `0s` disables the watcher.
-    #[arg(long, env = "CRABKA_TLS_RELOAD_INTERVAL", value_parser = crabka_units::parse::non_negative_time)]
+    #[arg(long, env = "KRABKA_TLS_RELOAD_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     tls_reload_interval: Option<Time>,
 
     /// Maximum incremental fetch-session cache slots.
-    #[arg(long, env = "CRABKA_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS")]
+    #[arg(long, env = "KRABKA_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS")]
     max_incremental_fetch_session_cache_slots: Option<usize>,
 
     /// Maximum live broker connections across all listeners.
-    #[arg(long, env = "CRABKA_MAX_CONNECTIONS")]
+    #[arg(long, env = "KRABKA_MAX_CONNECTIONS")]
     max_connections: Option<usize>,
 
     /// Maximum live broker connections from any single client IP.
-    #[arg(long, env = "CRABKA_MAX_CONNECTIONS_PER_IP")]
+    #[arg(long, env = "KRABKA_MAX_CONNECTIONS_PER_IP")]
     max_connections_per_ip: Option<usize>,
 
     /// Delegation-token maximum lifetime.
     #[arg(
         long,
-        env = "CRABKA_DELEGATION_TOKEN_MAX_LIFETIME",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_DELEGATION_TOKEN_MAX_LIFETIME",
+        value_parser = krabka_units::parse::positive_time
     )]
     delegation_token_max_lifetime: Option<Time>,
 
     /// Delegation-token expiry sweep interval.
     #[arg(
         long,
-        env = "CRABKA_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
     )]
     delegation_token_expiry_check_interval: Option<Time>,
 
     /// Delegation-token default renew period.
     #[arg(
         long,
-        env = "CRABKA_DELEGATION_TOKEN_RENEW_PERIOD",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_DELEGATION_TOKEN_RENEW_PERIOD",
+        value_parser = krabka_units::parse::positive_time
     )]
     delegation_token_default_renew_period: Option<Time>,
 
     /// `RemoteLogManager` copy/retention cadence in milliseconds.
     #[arg(
         long,
-        env = "CRABKA_REMOTE_LOG_MANAGER_INTERVAL",
-        value_parser = crabka_units::parse::positive_time
+        env = "KRABKA_REMOTE_LOG_MANAGER_INTERVAL",
+        value_parser = krabka_units::parse::positive_time
     )]
     remote_log_manager_interval: Option<Time>,
 
     /// Delegation-token HMAC master key. Prefer secrets managers over shell history.
     #[arg(
         long,
-        env = "CRABKA_DELEGATION_TOKEN_SECRET_KEY",
+        env = "KRABKA_DELEGATION_TOKEN_SECRET_KEY",
         hide_env_values = true
     )]
     delegation_token_secret_key: Option<String>,
@@ -844,9 +844,9 @@ struct Args {
     #[arg(long, env = "OTEL_SDK_DISABLED")]
     otel_sdk_disabled: Option<String>,
 
-    /// CRABKA-specific OTLP endpoint override.
-    #[arg(long, env = "CRABKA_OTLP_ENDPOINT")]
-    crabka_otlp_endpoint: Option<String>,
+    /// KRABKA-specific OTLP endpoint override.
+    #[arg(long, env = "KRABKA_OTLP_ENDPOINT")]
+    krabka_otlp_endpoint: Option<String>,
 
     /// OpenTelemetry traces endpoint override.
     #[arg(long, env = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")]
@@ -857,20 +857,20 @@ struct Args {
     otel_exporter_otlp_endpoint: Option<String>,
 
     /// Enable OTLP export without setting an endpoint.
-    #[arg(long, env = "CRABKA_OTLP_ENABLED")]
-    crabka_otlp_enabled: Option<String>,
+    #[arg(long, env = "KRABKA_OTLP_ENABLED")]
+    krabka_otlp_enabled: Option<String>,
 
     /// OTLP protocol (`grpc` or `http/protobuf`).
-    #[arg(long, env = "CRABKA_OTLP_PROTOCOL")]
-    crabka_otlp_protocol: Option<String>,
+    #[arg(long, env = "KRABKA_OTLP_PROTOCOL")]
+    krabka_otlp_protocol: Option<String>,
 
     /// OpenTelemetry exporter protocol (`grpc` or `http/protobuf`).
     #[arg(long, env = "OTEL_EXPORTER_OTLP_PROTOCOL")]
     otel_exporter_otlp_protocol: Option<String>,
 
     /// OTLP head sampling ratio in `[0.0, 1.0]`.
-    #[arg(long, env = "CRABKA_OTLP_SAMPLE_RATIO")]
-    crabka_otlp_sample_ratio: Option<String>,
+    #[arg(long, env = "KRABKA_OTLP_SAMPLE_RATIO")]
+    krabka_otlp_sample_ratio: Option<String>,
 
     /// OpenTelemetry sampler argument used as the trace sample ratio.
     #[arg(long, env = "OTEL_TRACES_SAMPLER_ARG")]
@@ -880,21 +880,21 @@ struct Args {
     #[arg(long, env = "OTEL_SERVICE_NAME")]
     otel_service_name: Option<String>,
 
-    /// CRABKA-specific OTLP timeout.
-    #[arg(long, env = "CRABKA_OTLP_TIMEOUT", value_parser = crabka_units::parse::non_negative_time)]
-    crabka_otlp_timeout: Option<Time>,
+    /// KRABKA-specific OTLP timeout.
+    #[arg(long, env = "KRABKA_OTLP_TIMEOUT", value_parser = krabka_units::parse::non_negative_time)]
+    krabka_otlp_timeout: Option<Time>,
 
     /// OpenTelemetry exporter timeout in seconds.
     #[arg(long, env = "OTEL_EXPORTER_OTLP_TIMEOUT_SECS")]
     otel_exporter_otlp_timeout_secs: Option<String>,
 
     /// OTLP heartbeat interval. `0s` disables heartbeats.
-    #[arg(long, env = "CRABKA_OTLP_HEARTBEAT_INTERVAL", value_parser = crabka_units::parse::non_negative_time)]
-    crabka_otlp_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_OTLP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
+    krabka_otlp_heartbeat_interval: Option<Time>,
 }
 
 impl Args {
-    fn runtime_overlay(&self) -> crabka_broker::file_config::RuntimeFileConfig {
+    fn runtime_overlay(&self) -> krabka_broker::file_config::RuntimeFileConfig {
         let mut runtime = self.runtime.as_file_runtime();
         copy_plain_runtime!(
             self,
@@ -955,7 +955,7 @@ impl Args {
         node_id: u64,
         metrics_listen_addr: Option<SocketAddr>,
         client_metrics_otlp_endpoint: Option<String>,
-        client_metrics_otlp_protocol: crabka_broker::telemetry::OtlpProtocol,
+        client_metrics_otlp_protocol: krabka_broker::telemetry::OtlpProtocol,
     ) -> BrokerConfig {
         BrokerConfig {
             broker_id: self.broker_id,
@@ -964,10 +964,10 @@ impl Args {
             log_dir: std::mem::take(&mut self.log_dir),
             extra_log_dirs: std::mem::take(&mut self.extra_log_dirs),
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(node_id),
+            node_id: krabka_broker::NodeId(node_id),
             controller_listen_addr,
             controller_quorum_voters: vec![(
-                crabka_broker::NodeId(node_id),
+                krabka_broker::NodeId(node_id),
                 controller_listen_addr.to_string(),
             )],
             bootstrap_servers: std::mem::take(&mut self.controller_bootstrap_servers)
@@ -985,7 +985,7 @@ impl Args {
             delegation_token_secret_key: self
                 .delegation_token_secret_key
                 .take()
-                .map(|key| crabka_security::SecretBytes::new(key.into_bytes())),
+                .map(|key| krabka_security::SecretBytes::new(key.into_bytes())),
             ..BrokerConfig::default()
         }
     }
@@ -993,21 +993,21 @@ impl Args {
     fn telemetry_value(&self, key: &str) -> Option<String> {
         match key {
             "OTEL_SDK_DISABLED" => self.otel_sdk_disabled.clone(),
-            "CRABKA_OTLP_ENDPOINT" => self.crabka_otlp_endpoint.clone(),
+            "KRABKA_OTLP_ENDPOINT" => self.krabka_otlp_endpoint.clone(),
             "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" => self.otel_exporter_otlp_traces_endpoint.clone(),
             "OTEL_EXPORTER_OTLP_ENDPOINT" => self.otel_exporter_otlp_endpoint.clone(),
-            "CRABKA_OTLP_ENABLED" => self.crabka_otlp_enabled.clone(),
-            "CRABKA_OTLP_PROTOCOL" => self.crabka_otlp_protocol.clone(),
+            "KRABKA_OTLP_ENABLED" => self.krabka_otlp_enabled.clone(),
+            "KRABKA_OTLP_PROTOCOL" => self.krabka_otlp_protocol.clone(),
             "OTEL_EXPORTER_OTLP_PROTOCOL" => self.otel_exporter_otlp_protocol.clone(),
-            "CRABKA_OTLP_SAMPLE_RATIO" => self.crabka_otlp_sample_ratio.clone(),
+            "KRABKA_OTLP_SAMPLE_RATIO" => self.krabka_otlp_sample_ratio.clone(),
             "OTEL_TRACES_SAMPLER_ARG" => self.otel_traces_sampler_arg.clone(),
             "OTEL_SERVICE_NAME" => self.otel_service_name.clone(),
-            "CRABKA_OTLP_TIMEOUT" => self
-                .crabka_otlp_timeout
+            "KRABKA_OTLP_TIMEOUT" => self
+                .krabka_otlp_timeout
                 .map(|value| value.human().to_string()),
             "OTEL_EXPORTER_OTLP_TIMEOUT_SECS" => self.otel_exporter_otlp_timeout_secs.clone(),
-            "CRABKA_OTLP_HEARTBEAT_INTERVAL" => self
-                .crabka_otlp_heartbeat_interval
+            "KRABKA_OTLP_HEARTBEAT_INTERVAL" => self
+                .krabka_otlp_heartbeat_interval
                 .map(|value| value.human().to_string()),
             _ => None,
         }
@@ -1021,13 +1021,13 @@ fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
 
 fn parse_metadata_raft_command_queue_capacity(value: &str) -> Result<usize, String> {
     let value = value.parse::<usize>().map_err(|error| error.to_string())?;
-    crabka_raft::MetadataRaftCommandQueueCapacity::new(value)
-        .map(crabka_raft::MetadataRaftCommandQueueCapacity::get)
+    krabka_raft::MetadataRaftCommandQueueCapacity::new(value)
+        .map(krabka_raft::MetadataRaftCommandQueueCapacity::get)
 }
 
 fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
     let value =
-        crabka_units::parse::positive_byte_size(value).map_err(|error| error.to_string())?;
+        krabka_units::parse::positive_byte_size(value).map_err(|error| error.to_string())?;
     ClientFrameMax::try_from(value).map(ClientFrameMax::size)
 }
 
@@ -1035,11 +1035,11 @@ const BROKER_MAIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = std::thread::Builder::new()
-        .name("crabka-broker-main".into())
+        .name("krabka-broker-main".into())
         .stack_size(BROKER_MAIN_STACK_BYTES)
         .spawn(|| broker_main().map_err(|error| error.to_string()))?
         .join()
-        .map_err(|_| "crabka-broker main thread panicked")?;
+        .map_err(|_| "krabka-broker main thread panicked")?;
     result.map_err(Into::into)
 }
 
@@ -1050,27 +1050,27 @@ async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Install the tracing subscriber — stdout `fmt` plus an
     // optional OTLP export layer. OTLP stays off unless the environment
-    // opts in (see `crabka_broker::telemetry`). Built here, inside the
+    // opts in (see `krabka_broker::telemetry`). Built here, inside the
     // tokio runtime, so the gRPC exporter captures the runtime handle.
-    let otlp = crabka_broker::telemetry::OtlpConfig::from_env(
+    let otlp = krabka_broker::telemetry::OtlpConfig::from_env(
         |k| args.telemetry_value(k),
         &args.broker_id.to_string(),
         env!("CARGO_PKG_VERSION"),
-        "crabka-broker",
+        "krabka-broker",
     )?;
     let client_metrics_otlp_endpoint = otlp.as_ref().map(|cfg| cfg.endpoint.clone());
     let client_metrics_otlp_protocol = otlp
         .as_ref()
-        .map_or(crabka_broker::telemetry::OtlpProtocol::Grpc, |cfg| {
+        .map_or(krabka_broker::telemetry::OtlpProtocol::Grpc, |cfg| {
             cfg.protocol
         });
-    let telemetry = crabka_broker::telemetry::init(
+    let telemetry = krabka_broker::telemetry::init(
         otlp,
-        "crabka_broker=info,crabka_log=info,info",
-        "info,crabka_broker::request=debug,crabka_log=info",
-        "crabka-broker",
+        "krabka_broker=info,krabka_log=info,info",
+        "info,krabka_broker::request=debug,krabka_log=info",
+        "krabka-broker",
     )?;
-    let file_config: Option<crabka_broker::file_config::FileConfig> =
+    let file_config: Option<krabka_broker::file_config::FileConfig> =
         match args.config_file.as_ref() {
             Some(p) => {
                 let contents = std::fs::read_to_string(p)
@@ -1135,9 +1135,9 @@ async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     // Rejoin against an existing PVC.
     config.bootstrap_mode = detect_bootstrap_mode(&config.log_dir);
     // KIP-853: recover this replica's stable directory id, written by
-    // `crabka format`. Required for every formatted node; absence means the
+    // `krabka format`. Required for every formatted node; absence means the
     // dir was never formatted, which is an operator error.
-    config.directory_id = crabka_broker::bootstrap::read_directory_id(&config.log_dir)?;
+    config.directory_id = krabka_broker::bootstrap::read_directory_id(&config.log_dir)?;
     tracing::info!(
         bootstrap_mode = ?config.bootstrap_mode,
         directory_id = %config.directory_id,
@@ -1146,7 +1146,7 @@ async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let handle = Broker::start(config).await?;
-    tracing::info!(addr = %handle.listen_addr(), "crabka-broker listening");
+    tracing::info!(addr = %handle.listen_addr(), "krabka-broker listening");
 
     let mut shutdown_rx = handle.should_shutdown_rx();
     tokio::select! {
@@ -1179,7 +1179,7 @@ async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(()) => tracing::info!("controlled shutdown complete (leadership drained)"),
         Err(e) => tracing::warn!(error = %e, "controlled shutdown incomplete; hard-stopped"),
     }
-    tracing::info!("crabka-broker stopped");
+    tracing::info!("krabka-broker stopped");
     telemetry.shutdown();
     Ok(())
 }
@@ -1249,7 +1249,7 @@ fn detect_bootstrap_mode(log_dir: &Path) -> BootstrapMode {
     // and died with "Rejoin requires non-empty raft log" — a crashloop. A node
     // with no persisted quorum-state now correctly re-Bootstraps.
     let metadata_dir = log_dir.join("__cluster_metadata");
-    if crabka_raft::metadata_log_nonempty(&metadata_dir) {
+    if krabka_raft::metadata_log_nonempty(&metadata_dir) {
         BootstrapMode::Rejoin
     } else {
         BootstrapMode::Bootstrap
@@ -1261,7 +1261,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use assert2::assert;
-    use crabka_units::secs;
+    use krabka_units::secs;
     use tempfile::tempdir;
 
     use super::*;
@@ -1273,17 +1273,17 @@ mod tests {
         let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
         let _guard = lock.lock().expect("environment lock");
 
-        let defaults = Args::try_parse_from(["crabka-broker"]).expect("parse defaults");
-        assert!(defaults.profiling == crabka_telemetry::profiling::ProfilingConfig::default());
+        let defaults = Args::try_parse_from(["krabka-broker"]).expect("parse defaults");
+        assert!(defaults.profiling == krabka_telemetry::profiling::ProfilingConfig::default());
 
         temp_env::with_vars(
             [
-                ("CRABKA_PROFILING_CPU_DEFAULT_DURATION", Some("2s")),
-                ("CRABKA_PROFILING_CPU_SAMPLE_FREQUENCY", Some("101Hz")),
+                ("KRABKA_PROFILING_CPU_DEFAULT_DURATION", Some("2s")),
+                ("KRABKA_PROFILING_CPU_SAMPLE_FREQUENCY", Some("101Hz")),
             ],
             || {
                 let args = Args::try_parse_from([
-                    "crabka-broker",
+                    "krabka-broker",
                     "--profiling-cpu-default-duration=3s",
                     "--profiling-cpu-sample-frequency=103Hz",
                 ])
@@ -1291,7 +1291,7 @@ mod tests {
                 assert!(args.profiling.profiling_cpu_default_duration == secs(3));
                 assert!(
                     args.profiling.profiling_cpu_sample_frequency.frequency()
-                        == crabka_units::per_sec(103)
+                        == krabka_units::per_sec(103)
                 );
             },
         );
@@ -1308,8 +1308,8 @@ mod tests {
         assert!(
             parse_roles_arg(&["controller".to_string(), "broker".to_string()]).unwrap()
                 == vec![
-                    crabka_broker::config::NodeRole::Controller,
-                    crabka_broker::config::NodeRole::Broker
+                    krabka_broker::config::NodeRole::Controller,
+                    krabka_broker::config::NodeRole::Broker
                 ]
         );
     }
@@ -1329,9 +1329,9 @@ mod tests {
             ])
             .unwrap()
                 == vec![
-                    crabka_broker::config::NodeRole::Broker,
-                    crabka_broker::config::NodeRole::Controller,
-                    crabka_broker::config::NodeRole::Witness
+                    krabka_broker::config::NodeRole::Broker,
+                    krabka_broker::config::NodeRole::Controller,
+                    krabka_broker::config::NodeRole::Witness
                 ]
         );
     }
@@ -1340,7 +1340,7 @@ mod tests {
     fn detect_bootstrap_when_metadata_dir_missing() {
         let dir = tempdir().unwrap();
         // log_dir exists with unrelated content (bootstrap.json from
-        // `crabka format`) but no __cluster_metadata/@metadata-0 subdir.
+        // `krabka format`) but no __cluster_metadata/@metadata-0 subdir.
         std::fs::write(dir.path().join("bootstrap.json"), "{}").unwrap();
         assert!(detect_bootstrap_mode(dir.path()) == BootstrapMode::Bootstrap);
     }
@@ -1392,7 +1392,7 @@ mod tests {
         use clap::Parser;
 
         let res = Args::try_parse_from([
-            "crabka-broker",
+            "krabka-broker",
             "--config-file=/tmp/a.toml",
             "--listen-addr=127.0.0.1:9092",
         ]);
@@ -1409,7 +1409,7 @@ mod tests {
         use clap::Parser;
 
         let res = Args::try_parse_from([
-            "crabka-broker",
+            "krabka-broker",
             "--config-file=/tmp/a.toml",
             "--advertised-listener=h:9092",
         ]);
@@ -1425,7 +1425,7 @@ mod tests {
     fn config_file_alone_parses() {
         use clap::Parser;
 
-        let args = Args::try_parse_from(["crabka-broker", "--config-file=/tmp/a.toml"]).unwrap();
+        let args = Args::try_parse_from(["krabka-broker", "--config-file=/tmp/a.toml"]).unwrap();
         assert!(args.config_file.as_deref() == Some(std::path::Path::new("/tmp/a.toml")));
         assert!(args.advertised_listener.is_none());
     }
@@ -1433,76 +1433,76 @@ mod tests {
     #[test]
     fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
         let cases = [
-            (vec!["crabka-broker", "--cleaner-interval=0ms"], false),
-            (vec!["crabka-broker", "--cleaner-interval=1ms"], true),
+            (vec!["krabka-broker", "--cleaner-interval=0ms"], false),
+            (vec!["krabka-broker", "--cleaner-interval=1ms"], true),
             (
                 vec![
-                    "crabka-broker",
+                    "krabka-broker",
                     "--streams-internal-topic-replication-factor=0",
                 ],
                 false,
             ),
             (
                 vec![
-                    "crabka-broker",
+                    "krabka-broker",
                     "--streams-internal-topic-replication-factor=1",
                 ],
                 true,
             ),
-            (vec!["crabka-broker", "--replication-fetch-min=0B"], false),
-            (vec!["crabka-broker", "--replication-fetch-min=1B"], true),
+            (vec!["krabka-broker", "--replication-fetch-min=0B"], false),
+            (vec!["krabka-broker", "--replication-fetch-min=1B"], true),
             (
-                vec!["crabka-broker", "--metadata-snapshot-fetch-max=0B"],
+                vec!["krabka-broker", "--metadata-snapshot-fetch-max=0B"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--metadata-snapshot-fetch-max=512MiB"],
+                vec!["krabka-broker", "--metadata-snapshot-fetch-max=512MiB"],
                 true,
             ),
             (
-                vec!["crabka-broker", "--record-decompression-max-ratio=0"],
+                vec!["krabka-broker", "--record-decompression-max-ratio=0"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--record-decompression-max-ratio=50"],
+                vec!["krabka-broker", "--record-decompression-max-ratio=50"],
                 true,
             ),
             (
-                vec!["crabka-broker", "--record-decompression-output-floor=0B"],
+                vec!["krabka-broker", "--record-decompression-output-floor=0B"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--client-dispatch-queue-capacity=0"],
+                vec!["krabka-broker", "--client-dispatch-queue-capacity=0"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-local-replica-count=0"],
+                vec!["krabka-broker", "--diskless-wal-local-replica-count=0"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-local-replica-count=5"],
+                vec!["krabka-broker", "--diskless-wal-local-replica-count=5"],
                 true,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-flush-interval=0ms"],
+                vec!["krabka-broker", "--diskless-wal-flush-interval=0ms"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-flush-max-size=4MiB"],
+                vec!["krabka-broker", "--diskless-wal-flush-max-size=4MiB"],
                 true,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-trim-safety-lag=-1"],
+                vec!["krabka-broker", "--diskless-wal-trim-safety-lag=-1"],
                 false,
             ),
             (
-                vec!["crabka-broker", "--diskless-wal-trim-safety-lag=0"],
+                vec!["krabka-broker", "--diskless-wal-trim-safety-lag=0"],
                 true,
             ),
-            (vec!["crabka-broker", "--client-frame-max=101MiB"], false),
+            (vec!["krabka-broker", "--client-frame-max=101MiB"], false),
             (
                 vec![
-                    "crabka-broker",
+                    "krabka-broker",
                     "--client-dispatch-queue-capacity=7",
                     "--client-frame-max=32KiB",
                 ],
@@ -1510,7 +1510,7 @@ mod tests {
             ),
             (
                 vec![
-                    "crabka-broker",
+                    "krabka-broker",
                     "--record-decompression-output-ceiling=512MiB",
                 ],
                 true,
@@ -1521,21 +1521,21 @@ mod tests {
             assert!(Args::try_parse_from(args).is_ok() == accepted);
         }
 
-        let args = Args::try_parse_from(["crabka-broker", "--leader-imbalance-per-broker=101%"])
+        let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=101%"])
             .expect("parse ratio");
         assert!(
             args.apply_runtime_to(&mut BrokerConfig::default(), None)
                 .is_err()
         );
 
-        let args = Args::try_parse_from(["crabka-broker", "--record-decompression-max-ratio=101"])
+        let args = Args::try_parse_from(["krabka-broker", "--record-decompression-max-ratio=101"])
             .expect("parse positive ratio");
         assert!(
             args.apply_runtime_to(&mut BrokerConfig::default(), None)
                 .is_err()
         );
 
-        let args = Args::try_parse_from(["crabka-broker", "--leader-imbalance-per-broker=100%"])
+        let args = Args::try_parse_from(["krabka-broker", "--leader-imbalance-per-broker=100%"])
             .expect("parse ratio");
         assert!(
             args.apply_runtime_to(&mut BrokerConfig::default(), None)
@@ -1543,7 +1543,7 @@ mod tests {
         );
 
         let args =
-            Args::try_parse_from(["crabka-broker", "--metadata-snapshot-fetch-max=1073741825B"])
+            Args::try_parse_from(["krabka-broker", "--metadata-snapshot-fetch-max=1073741825B"])
                 .expect("parse dimensioned over-ceiling size");
         assert!(
             args.apply_runtime_to(&mut BrokerConfig::default(), None)
@@ -1552,94 +1552,94 @@ mod tests {
     }
 
     #[test]
-    fn runtime_policy_cli_reads_crabka_environment() {
+    fn runtime_policy_cli_reads_krabka_environment() {
         let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
         let _guard = lock.lock().expect("environment lock");
 
         temp_env::with_vars(
             [
-                ("CRABKA_CLEANER_INTERVAL", Some("17ms")),
-                ("CRABKA_SOCKET_REQUEST_MAX", Some("100MiB")),
-                ("CRABKA_LEADER_IMBALANCE_PER_BROKER", Some("10%")),
-                ("CRABKA_METADATA_SNAPSHOT_FETCH_MAX", Some("512MiB")),
-                ("CRABKA_CONTROLLER_HEARTBEAT_INTERVAL", Some("500ms")),
-                ("CRABKA_CONTROLLER_FETCH_MISS_LIMIT", Some("7")),
-                ("CRABKA_METADATA_RAFT_COMMAND_QUEUE_CAPACITY", Some("512")),
-                ("CRABKA_METADATA_RAFT_FETCH_MAX", Some("4MiB")),
-                ("CRABKA_RECORD_DECOMPRESSION_MAX_RATIO", Some("50")),
-                ("CRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", Some("8MiB")),
-                ("CRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", Some("512MiB")),
-                ("CRABKA_LOG_READ_BUFFER_CAP", Some("2MiB")),
-                ("CRABKA_LOG_TIMESTAMP_SCAN_WINDOW", Some("32KiB")),
-                ("CRABKA_TRANSACTION_RECOVERY_READ_MAX", Some("3MiB")),
-                ("CRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", Some("5")),
-                ("CRABKA_DISKLESS_WAL_FLUSH_INTERVAL", Some("125ms")),
-                ("CRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", Some("4MiB")),
-                ("CRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", Some("0")),
-                ("CRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", Some("3s")),
-                ("CRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
-                ("CRABKA_BROKER_CLIENT_FRAME_MAX", Some("32KiB")),
+                ("KRABKA_CLEANER_INTERVAL", Some("17ms")),
+                ("KRABKA_SOCKET_REQUEST_MAX", Some("100MiB")),
+                ("KRABKA_LEADER_IMBALANCE_PER_BROKER", Some("10%")),
+                ("KRABKA_METADATA_SNAPSHOT_FETCH_MAX", Some("512MiB")),
+                ("KRABKA_CONTROLLER_HEARTBEAT_INTERVAL", Some("500ms")),
+                ("KRABKA_CONTROLLER_FETCH_MISS_LIMIT", Some("7")),
+                ("KRABKA_METADATA_RAFT_COMMAND_QUEUE_CAPACITY", Some("512")),
+                ("KRABKA_METADATA_RAFT_FETCH_MAX", Some("4MiB")),
+                ("KRABKA_RECORD_DECOMPRESSION_MAX_RATIO", Some("50")),
+                ("KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", Some("8MiB")),
+                ("KRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", Some("512MiB")),
+                ("KRABKA_LOG_READ_BUFFER_CAP", Some("2MiB")),
+                ("KRABKA_LOG_TIMESTAMP_SCAN_WINDOW", Some("32KiB")),
+                ("KRABKA_TRANSACTION_RECOVERY_READ_MAX", Some("3MiB")),
+                ("KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", Some("5")),
+                ("KRABKA_DISKLESS_WAL_FLUSH_INTERVAL", Some("125ms")),
+                ("KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", Some("4MiB")),
+                ("KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", Some("0")),
+                ("KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", Some("3s")),
+                ("KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
+                ("KRABKA_BROKER_CLIENT_FRAME_MAX", Some("32KiB")),
             ],
             || {
-                let args = Args::try_parse_from(["crabka-broker"]).expect("parse environment");
+                let args = Args::try_parse_from(["krabka-broker"]).expect("parse environment");
                 assert!(args.runtime.cleaner_interval == Some(Time::from_millis(17)));
-                assert!(args.runtime.socket_request_max == Some(crabka_units::mebibytes(100)));
-                assert!(args.leader_imbalance_per_broker == Some(crabka_units::fraction(0.1)));
-                assert!(args.metadata_snapshot_fetch_max == Some(crabka_units::mebibytes(512)));
+                assert!(args.runtime.socket_request_max == Some(krabka_units::mebibytes(100)));
+                assert!(args.leader_imbalance_per_broker == Some(krabka_units::fraction(0.1)));
+                assert!(args.metadata_snapshot_fetch_max == Some(krabka_units::mebibytes(512)));
                 assert!(args.controller_fetch_miss_limit == Some(7));
                 assert!(args.metadata_raft_command_queue_capacity == Some(512));
-                assert!(args.metadata_raft_fetch_max == Some(crabka_units::mebibytes(4)));
+                assert!(args.metadata_raft_fetch_max == Some(krabka_units::mebibytes(4)));
                 assert!(
                     args.runtime.record_decompression_max_ratio
-                        == Some(crabka_units::fraction(50.0))
+                        == Some(krabka_units::fraction(50.0))
                 );
                 let mut config = BrokerConfig::default();
                 args.apply_runtime_to(&mut config, None)
                     .expect("apply environment runtime");
-                assert!(config.metadata_snapshot_fetch_max == crabka_units::mebibytes(512));
+                assert!(config.metadata_snapshot_fetch_max == krabka_units::mebibytes(512));
                 assert!(config.controller_heartbeat_interval_explicit);
-                assert!(config.controller_heartbeat_interval == crabka_units::millis(500));
+                assert!(config.controller_heartbeat_interval == krabka_units::millis(500));
                 assert!(config.controller_fetch_miss_limit.get() == 7);
                 assert!(config.metadata_raft_command_queue_capacity.get() == 512);
                 assert!(config.metadata_raft_fetch_max.bytes() == 4 * 1024 * 1024);
                 assert!(
                     config.record_decompression_policy().unwrap().output_floor()
-                        == crabka_units::mebibytes(8)
+                        == krabka_units::mebibytes(8)
                 );
-                assert!(config.log_config.read_buffer_cap == crabka_units::mebibytes(2));
-                assert!(config.log_config.timestamp_scan_window == crabka_units::kibibytes(32));
-                assert!(config.transaction_recovery_read_max == crabka_units::mebibytes(3));
+                assert!(config.log_config.read_buffer_cap == krabka_units::mebibytes(2));
+                assert!(config.log_config.timestamp_scan_window == krabka_units::kibibytes(32));
+                assert!(config.transaction_recovery_read_max == krabka_units::mebibytes(3));
                 assert!(config.diskless_wal_local_replica_count == 5);
-                assert!(config.diskless_wal_flush_interval == crabka_units::millis(125));
-                assert!(config.diskless_wal_flush_max_size == crabka_units::mebibytes(4));
+                assert!(config.diskless_wal_flush_interval == krabka_units::millis(125));
+                assert!(config.diskless_wal_flush_max_size == krabka_units::mebibytes(4));
                 assert!(config.diskless_wal_trim_safety_lag == 0);
-                assert!(config.diskless_wal_index_projection_timeout == crabka_units::secs(3));
+                assert!(config.diskless_wal_index_projection_timeout == krabka_units::secs(3));
                 assert!(config.client_dispatch_queue_capacity.get() == 7);
-                assert!(config.client_frame_max.size() == crabka_units::kibibytes(32));
+                assert!(config.client_frame_max.size() == krabka_units::kibibytes(32));
             },
         );
     }
 
     #[test]
     fn client_resource_policy_defaults_and_cli_precedence() {
-        let defaults = Args::try_parse_from(["crabka-broker"]).expect("parse defaults");
+        let defaults = Args::try_parse_from(["krabka-broker"]).expect("parse defaults");
         let mut config = BrokerConfig::default();
         defaults
             .apply_runtime_to(&mut config, None)
             .expect("apply defaults");
         assert!(config.client_dispatch_queue_capacity.get() == 64);
-        assert!(config.client_frame_max.size() == crabka_units::mebibytes(100));
+        assert!(config.client_frame_max.size() == krabka_units::mebibytes(100));
 
         let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
         let _guard = lock.lock().expect("environment lock");
         temp_env::with_vars(
             [
-                ("CRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
-                ("CRABKA_BROKER_CLIENT_FRAME_MAX", Some("32KiB")),
+                ("KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
+                ("KRABKA_BROKER_CLIENT_FRAME_MAX", Some("32KiB")),
             ],
             || {
                 let args = Args::try_parse_from([
-                    "crabka-broker",
+                    "krabka-broker",
                     "--client-dispatch-queue-capacity=9",
                     "--client-frame-max=64KiB",
                 ])
@@ -1648,7 +1648,7 @@ mod tests {
                 args.apply_runtime_to(&mut config, None)
                     .expect("apply CLI overrides");
                 assert!(config.client_dispatch_queue_capacity.get() == 9);
-                assert!(config.client_frame_max.size() == crabka_units::kibibytes(64));
+                assert!(config.client_frame_max.size() == krabka_units::kibibytes(64));
             },
         );
     }
@@ -1656,7 +1656,7 @@ mod tests {
     #[test]
     fn group_member_limits_and_streams_switch_apply_from_cli() {
         let args = Args::try_parse_from([
-            "crabka-broker",
+            "krabka-broker",
             "--share-group-max-size=17",
             "--streams-group-enable=false",
             "--streams-group-max-size=19",
@@ -1679,27 +1679,27 @@ mod tests {
 
         temp_env::with_vars(
             [
-                ("CRABKA_OTLP_TIMEOUT", Some("17s")),
-                ("CRABKA_OTLP_HEARTBEAT_INTERVAL", Some("19s")),
+                ("KRABKA_OTLP_TIMEOUT", Some("17s")),
+                ("KRABKA_OTLP_HEARTBEAT_INTERVAL", Some("19s")),
             ],
             || {
                 let args = Args::try_parse_from([
-                    "crabka-broker",
-                    "--crabka-otlp-timeout=23s",
-                    "--crabka-otlp-heartbeat-interval=29s",
+                    "krabka-broker",
+                    "--krabka-otlp-timeout=23s",
+                    "--krabka-otlp-heartbeat-interval=29s",
                 ])
                 .expect("parse CLI OTLP overrides");
                 assert!(
                     (
-                        args.telemetry_value("CRABKA_OTLP_TIMEOUT"),
-                        args.telemetry_value("CRABKA_OTLP_HEARTBEAT_INTERVAL"),
+                        args.telemetry_value("KRABKA_OTLP_TIMEOUT"),
+                        args.telemetry_value("KRABKA_OTLP_HEARTBEAT_INTERVAL"),
                     ) == (Some("23s".to_owned()), Some("29s".to_owned()))
                 );
             },
         );
     }
 
-    fn file_runtime_with_nondefault_values() -> crabka_broker::file_config::FileConfig {
+    fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConfig {
         toml::from_str(
             r#"
             [runtime]
@@ -1717,7 +1717,7 @@ mod tests {
     #[test]
     fn explicit_cli_default_runtime_values_override_file() {
         let args = Args::try_parse_from([
-            "crabka-broker",
+            "krabka-broker",
             "--cleaner-interval=30s",
             "--controlled-shutdown-drain-timeout=20s",
             "--auto-join-voter-request-timeout=30s",
@@ -1757,18 +1757,18 @@ mod tests {
 
         temp_env::with_vars(
             [
-                ("CRABKA_CLEANER_INTERVAL", Some("30s")),
-                ("CRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT", Some("20s")),
-                ("CRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", Some("30s")),
-                ("CRABKA_SHARE_STATE_REPLICATION_FACTOR", Some("3")),
-                ("CRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", Some("3")),
+                ("KRABKA_CLEANER_INTERVAL", Some("30s")),
+                ("KRABKA_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT", Some("20s")),
+                ("KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", Some("30s")),
+                ("KRABKA_SHARE_STATE_REPLICATION_FACTOR", Some("3")),
+                ("KRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", Some("3")),
                 (
-                    "CRABKA_STREAMS_INTERNAL_TOPIC_REPLICATION_FACTOR",
+                    "KRABKA_STREAMS_INTERNAL_TOPIC_REPLICATION_FACTOR",
                     Some("3"),
                 ),
             ],
             || {
-                let args = Args::try_parse_from(["crabka-broker"]).expect("parse env defaults");
+                let args = Args::try_parse_from(["krabka-broker"]).expect("parse env defaults");
                 let mut config = BrokerConfig::default();
                 let file = file_runtime_with_nondefault_values();
                 let file_shutdown = file

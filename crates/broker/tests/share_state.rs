@@ -1,5 +1,5 @@
 //! End-to-end integration tests for the KIP-932 share coordinator (persister).
-//! The tests run against an in-process Crabka broker with `crabka-client-core`.
+//! The tests run against an in-process Krabka broker with `krabka-client-core`.
 //!
 //! The typed client works because `ApiVersions` advertises `api_keys` 83-87.
 //! Each `*ShareGroupState*Request` impls `ProtocolRequest`, so
@@ -16,9 +16,9 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         delete_share_group_state_request::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
@@ -52,7 +52,7 @@ fn not_ready(code: i16) -> bool {
         || code == NOT_COORDINATOR
 }
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -176,7 +176,7 @@ async fn read_summary(
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
-) -> crabka_protocol::owned::read_share_group_state_summary_response::PartitionResult {
+) -> krabka_protocol::owned::read_share_group_state_summary_response::PartitionResult {
     let resp = client
         .send(ReadShareGroupStateSummaryRequest {
             group_id: group.into(),
@@ -201,7 +201,7 @@ async fn read_state(
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
-) -> crabka_protocol::owned::read_share_group_state_response::PartitionResult {
+) -> krabka_protocol::owned::read_share_group_state_response::PartitionResult {
     let resp = client
         .send(ReadShareGroupStateRequest {
             group_id: group.into(),

@@ -2,7 +2,7 @@
 //!
 //! This is Apache Kafka's `Utils.abs(murmur2(...)) % numPartitions`
 //! convention. It matches the JVM client, so a tid hashes to the same
-//! `__transaction_state` partition on Crabka as it does on Apache Kafka.
+//! `__transaction_state` partition on Krabka as it does on Apache Kafka.
 
 use crate::kafka_hash::murmur2_partition;
 

@@ -13,11 +13,11 @@
 //!   up to the high-water mark.
 //!
 //! This placeholder is stricter than
-//! [`crabka_remote_storage::InmemoryRemoteLogMetadataManager`], which silently
+//! [`krabka_remote_storage::InmemoryRemoteLogMetadataManager`], which silently
 //! accepts writes that are then lost when the real manager replaces it.
 
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
     RemotePartitionDeleteMetadata, RemoteStorageError, TopicIdPartition,
 };
@@ -117,7 +117,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::assert;
-    use crabka_remote_storage::{
+    use krabka_remote_storage::{
         RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState,
     };
     use uuid::Uuid;
@@ -164,7 +164,7 @@ mod tests {
             100,
             1,
             100,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 2048,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), 0)]),

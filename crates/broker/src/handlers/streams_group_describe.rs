@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         common::streams_group_describe_response::{
@@ -63,9 +63,9 @@ pub(crate) async fn handle(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            crabka_metadata::ResourceType::Group,
+            krabka_metadata::ResourceType::Group,
             gid,
-            crabka_metadata::AclOperation::Describe,
+            krabka_metadata::AclOperation::Describe,
         ) {
             groups.push(DescribedGroup {
                 group_id: gid.clone(),
@@ -239,8 +239,8 @@ mod tests {
     use std::time::Duration;
 
     use assert2::assert;
-    use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use crabka_protocol::{
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_protocol::{
         UnknownTaggedFields, owned::streams_group_describe_response as response_mod,
     };
 

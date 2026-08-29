@@ -19,11 +19,11 @@
 
 use std::{collections::HashSet, net::SocketAddr};
 
-use crabka_metadata::{
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataImage, MetadataRecord, PatternType, PermissionType,
     ResourceType,
 };
-use crabka_security::{AuthMethod, Principal};
+use krabka_security::{AuthMethod, Principal};
 use uuid::Uuid;
 
 use crate::{AclCache, AuthorizationRequest, AuthorizationResult, Authorizer, SimpleAclAuthorizer};
@@ -262,7 +262,7 @@ fn acl_precedence_exhaustive() {
 mod fuzz {
     use std::{collections::HashSet, net::SocketAddr};
 
-    use crabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+    use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
     use proptest::prelude::*;
 
     use super::{check, principal};

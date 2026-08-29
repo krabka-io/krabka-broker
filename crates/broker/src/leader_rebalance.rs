@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_metadata::{MetadataImage, MetadataRecord};
-use crabka_units::{
+use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_units::{
     Ratio, Time,
     convert::{RatioExt, TimeExt as _},
     fraction,
@@ -128,8 +128,8 @@ mod tests {
     use std::{sync::Mutex, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::{PartitionRecord, TopicRecord};
-    use crabka_units::{millis, minutes, percent, secs};
+    use krabka_metadata::{PartitionRecord, TopicRecord};
+    use krabka_units::{millis, minutes, percent, secs};
     use uuid::Uuid;
 
     use super::*;
@@ -182,18 +182,18 @@ mod tests {
             img.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: "foo".into(),
                 partition: p,
-                leader: crabka_audit::NodeId(2),
+                leader: krabka_audit::NodeId(2),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(5),
+                leader_epoch: krabka_metadata::LeaderEpoch(5),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -206,18 +206,18 @@ mod tests {
             img.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: "foo".into(),
                 partition: p,
-                leader: crabka_audit::NodeId(1),
+                leader: krabka_audit::NodeId(1),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(5),
+                leader_epoch: krabka_metadata::LeaderEpoch(5),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -326,7 +326,7 @@ mod tests {
         // Every submitted record must promote preferred (replicas[0] = 1).
         for record in submitted.iter() {
             match record {
-                MetadataRecord::V1Partition(p) => assert!(p.leader == crabka_audit::NodeId(1)),
+                MetadataRecord::V1Partition(p) => assert!(p.leader == krabka_audit::NodeId(1)),
                 _ => panic!("unexpected record type"),
             }
         }

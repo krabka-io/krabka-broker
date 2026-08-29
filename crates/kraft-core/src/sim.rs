@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crabka_units::prelude::{Time, TimeExt as _, millis};
+use krabka_units::prelude::{Time, TimeExt as _, millis};
 
 use crate::{
     action::{Action, TimerKind},
@@ -281,12 +281,12 @@ fn consider(
     }
 }
 
-fn make_voter_set(ids: &[NodeId]) -> crabka_voters::VoterSet {
-    crabka_voters::VoterSet::from_voters(ids.iter().map(|&id| crabka_voters::Voter {
+fn make_voter_set(ids: &[NodeId]) -> krabka_voters::VoterSet {
+    krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
         id,
         directory_id: uuid::Uuid::nil(),
         endpoints: Vec::new(),
-        kraft_version: crabka_voters::KRaftVersionRange::default(),
+        kraft_version: krabka_voters::KRaftVersionRange::default(),
     }))
 }
 
@@ -324,7 +324,7 @@ fn event_label(event: &Event) -> String {
 /// instrumented to record a [`ScenarioTrace`].
 ///
 /// This type also backs the interactive in-browser playground through
-/// `crabka-playground`, not only the curated [`scenarios`]. The playground
+/// `krabka-playground`, not only the curated [`scenarios`]. The playground
 /// drives the same scheduler one step at a time with operator-injected faults:
 /// partition, heal, drop, reorder, duplicate, and append. It reads back a
 /// serializable [`SimSnapshot`] after each step. The recorded

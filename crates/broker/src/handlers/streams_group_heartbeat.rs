@@ -12,7 +12,7 @@
 //! BOTH must allow the request.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
@@ -134,9 +134,9 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use crabka_protocol::owned::streams_group_heartbeat_response;
-    use crabka_security::Principal;
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_protocol::owned::streams_group_heartbeat_response;
+    use krabka_security::Principal;
 
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
         StreamsGroupHeartbeatRequest {
@@ -308,16 +308,16 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use crabka_protocol::owned::streams_group_heartbeat_response::{
+        use krabka_protocol::owned::streams_group_heartbeat_response::{
             self, StreamsGroupHeartbeatResponse,
         };
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

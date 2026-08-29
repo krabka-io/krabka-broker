@@ -3,7 +3,7 @@
 //! Client metric *names* are dynamic, so this module registers a custom
 //! `Collector` instead of static `Family` values. That collector renders a
 //! live snapshot at scrape time, with stale points removed, as
-//! `crabka_client_*` series.
+//! `krabka_client_*` series.
 
 use std::{
     collections::HashMap,
@@ -251,7 +251,7 @@ impl prometheus_client::collector::Collector for SharedClientMetricsCollector {
 }
 
 /// Prometheus metric names allow `[a-zA-Z0-9_:]`. This function maps every
-/// other character to `_`, and adds the prefix `crabka_client_`.
+/// other character to `_`, and adds the prefix `krabka_client_`.
 fn sanitize(metric: &str) -> String {
     let body: String = metric
         .chars()
@@ -263,7 +263,7 @@ fn sanitize(metric: &str) -> String {
             }
         })
         .collect();
-    format!("crabka_client_{body}")
+    format!("krabka_client_{body}")
 }
 
 #[cfg(test)]
@@ -306,7 +306,7 @@ mod tests {
             "attribute label missing:\n{buf}"
         );
         assert!(
-            buf.contains("# TYPE crabka_client_org_apache_kafka_consumer_fetch_size gauge"),
+            buf.contains("# TYPE krabka_client_org_apache_kafka_consumer_fetch_size gauge"),
             "gauge type missing:\n{buf}"
         );
         assert!(buf.contains("42"), "value missing:\n{buf}");
@@ -344,15 +344,15 @@ mod tests {
         prometheus_client::encoding::text::encode(&mut output, &registry).unwrap();
 
         assert!(
-            output.contains("# TYPE crabka_client_requests counter"),
+            output.contains("# TYPE krabka_client_requests counter"),
             "{output}"
         );
         assert!(
-            output.contains("# TYPE crabka_client_latency histogram"),
+            output.contains("# TYPE krabka_client_latency histogram"),
             "{output}"
         );
-        assert!(output.contains("crabka_client_latency_count"), "{output}");
-        assert!(output.contains("crabka_client_latency_sum"), "{output}");
+        assert!(output.contains("krabka_client_latency_count"), "{output}");
+        assert!(output.contains("krabka_client_latency_sum"), "{output}");
         assert!(output.contains("le=\"5.0\""), "{output}");
     }
 
@@ -462,7 +462,7 @@ mod tests {
         prometheus_client::encoding::text::encode(&mut buf, &reg).expect("encode");
         // ... and emit exactly ONE HELP line for the metric name.
         let help_count = buf
-            .matches("# HELP crabka_client_org_apache_kafka_consumer_fetch_size")
+            .matches("# HELP krabka_client_org_apache_kafka_consumer_fetch_size")
             .count();
         assert!(
             help_count == 1,
@@ -541,7 +541,7 @@ mod tests {
 
         let output = encode_collector(SharedClientMetricsCollector(sink));
         assert!(
-            output.contains("crabka_client_valid_name:total_bad"),
+            output.contains("krabka_client_valid_name:total_bad"),
             "{output}"
         );
     }

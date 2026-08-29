@@ -7,9 +7,9 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "audit")
 
-# `crabka-audit verify` — replays an audit log and checks its hash chain.
+# `krabka-audit verify` — replays an audit log and checks its hash chain.
 crate_binary(
-    name = "crabka-audit",
+    name = "krabka-audit",
     crate_root = "src/bin/audit.rs",
     lib = ":audit",
 )

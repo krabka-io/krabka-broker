@@ -1,8 +1,8 @@
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_consumer::{AutoOffsetReset, Consumer, Header as ConsumerHeader};
-use crabka_client_core::Client;
-use crabka_client_producer::{Header, Producer, ProducerRecord};
-use crabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_consumer::{AutoOffsetReset, Consumer, Header as ConsumerHeader};
+use krabka_client_core::Client;
+use krabka_client_producer::{Header, Producer, ProducerRecord};
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_record_carries_headers() {
@@ -64,7 +64,7 @@ async fn consumer_record_carries_headers() {
         .await
         .unwrap();
     let recs = loop {
-        let r = consumer.poll(crabka_units::secs(2)).await.unwrap();
+        let r = consumer.poll(krabka_units::secs(2)).await.unwrap();
         if !r.is_empty() {
             break r;
         }

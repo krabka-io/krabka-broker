@@ -104,9 +104,9 @@ pub enum RemoteStorageError {
     },
 }
 
-impl From<crabka_object_store::ObjectStoreError> for RemoteStorageError {
-    fn from(err: crabka_object_store::ObjectStoreError) -> Self {
-        use crabka_object_store::ObjectStoreError as E;
+impl From<krabka_object_store::ObjectStoreError> for RemoteStorageError {
+    fn from(err: krabka_object_store::ObjectStoreError) -> Self {
+        use krabka_object_store::ObjectStoreError as E;
 
         match err {
             E::Io(e) => Self::Io(e),
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn conditional_write_errors_convert_to_structured_variants() {
         let already = RemoteStorageError::from(
-            crabka_object_store::ObjectStoreError::AlreadyExists(Path::from("worm/manifest")),
+            krabka_object_store::ObjectStoreError::AlreadyExists(Path::from("worm/manifest")),
         );
         check!(
             matches!(&already, RemoteStorageError::ObjectExists { key } if key == "worm/manifest")
@@ -150,7 +150,7 @@ mod tests {
         check!(already.to_string() == "object already exists: worm/manifest");
 
         let precondition =
-            RemoteStorageError::from(crabka_object_store::ObjectStoreError::Precondition {
+            RemoteStorageError::from(krabka_object_store::ObjectStoreError::Precondition {
                 key: Path::from("worm/manifest"),
                 reason: "etag mismatch".to_owned(),
             });
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn object_store_too_large_converts_to_backend_message() {
-        let err = crabka_object_store::ObjectStoreError::TooLarge {
+        let err = krabka_object_store::ObjectStoreError::TooLarge {
             key: Path::from("index/snapshot.json"),
             size: 1000,
             max_bytes: 256,

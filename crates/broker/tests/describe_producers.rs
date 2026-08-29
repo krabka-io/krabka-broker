@@ -14,8 +14,8 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         describe_producers_request::{DescribeProducersRequest, TopicRequest},
@@ -32,7 +32,7 @@ use crabka_protocol::{
 async fn topic_id_for(
     p: &support::InProcess,
     name: &str,
-) -> crabka_protocol::primitives::uuid::Uuid {
+) -> krabka_protocol::primitives::uuid::Uuid {
     let resp = p
         .client
         .send(MetadataRequest {

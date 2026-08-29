@@ -5,11 +5,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crabka_ids::PartitionIndex;
-use crabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
-use crabka_protocol::records::RecordBatch;
-use crabka_raft::RaftError;
-use crabka_units::{ByteSize, convert::TimeExt as _, mebibytes};
+use krabka_ids::PartitionIndex;
+use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_protocol::records::RecordBatch;
+use krabka_raft::RaftError;
+use krabka_units::{ByteSize, convert::TimeExt as _, mebibytes};
 
 use crate::{
     broker::spawn_partition,
@@ -43,9 +43,9 @@ pub const OFFSETS_NUM_PARTITIONS: i32 = 50;
 
 /// Internal topic that carries tamper-evident OCSF audit records for the
 /// `FedRAMP` MLA.
-pub const AUDIT_TOPIC: &str = "__crabka_audit";
+pub const AUDIT_TOPIC: &str = "__krabka_audit";
 
-/// Create `__crabka_audit` with one partition per registered broker at RF=1.
+/// Create `__krabka_audit` with one partition per registered broker at RF=1.
 ///
 /// Broker-affinity: the i-th broker in ascending node-id order leads partition
 /// `i`. Each broker therefore leads exactly one audit partition and writes to
@@ -87,7 +87,7 @@ pub async fn bootstrap_audit_topic(
     }
 
     let image = controller.current_image();
-    let mut brokers: Vec<crabka_raft::NodeId> = image.brokers().map(|b| b.node_id).collect();
+    let mut brokers: Vec<krabka_raft::NodeId> = image.brokers().map(|b| b.node_id).collect();
     drop(image);
     if brokers.is_empty() {
         brokers.push(config.node_id);
@@ -116,7 +116,7 @@ pub async fn bootstrap_audit_topic(
             leader: replicas[0],
             replicas: replicas.clone(),
             isr: replicas.clone(),
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -126,7 +126,7 @@ pub async fn bootstrap_audit_topic(
 
     match controller.submit_change(records).await {
         // Idempotent: another broker / a restart already created it.
-        Ok(_) | Err(RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
+        Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
         Err(e) => Err(BrokerError::Startup(e.to_string())),
     }
 }
@@ -238,7 +238,7 @@ pub async fn bootstrap(
                     leader: replicas[0],
                     replicas: replicas.clone(),
                     isr: replicas,
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![],
@@ -249,7 +249,7 @@ pub async fn bootstrap(
                 // An earlier boot of ours already registered it (single
                 // writer, so no conflicting-id race) — treat as success.
                 Ok(_)
-                | Err(RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))) => {}
+                | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {}
                 Err(e) => return Err(BrokerError::Startup(e.to_string())),
             }
         } else {
@@ -309,7 +309,7 @@ pub async fn bootstrap(
         let topic_dir =
             log_dir::place_partition_dir(&placement_dirs, OFFSETS_TOPIC, record.partition);
         std::fs::create_dir_all(&topic_dir)?;
-        let log = crabka_log::Log::open(&topic_dir, config.log_config.clone())?;
+        let log = krabka_log::Log::open(&topic_dir, config.log_config.clone())?;
         if record.leader == config.node_id {
             replayed.merge(replay_records(&log, coordinator)?);
         }
@@ -357,7 +357,7 @@ pub(crate) fn replay_partition(
     Ok(())
 }
 
-fn offsets_topic_ready(image: &crabka_metadata::MetadataImage, expected_partitions: i32) -> bool {
+fn offsets_topic_ready(image: &krabka_metadata::MetadataImage, expected_partitions: i32) -> bool {
     image.topic(OFFSETS_TOPIC).is_some()
         && image.topic_partition_count(OFFSETS_TOPIC) == expected_partitions
 }
@@ -366,7 +366,7 @@ fn offsets_topic_ready(image: &crabka_metadata::MetadataImage, expected_partitio
 /// and apply each record's key/value into the accumulator (classic + offsets)
 /// or, for next-gen records, the coordinator's seed accumulator.
 fn replay_records(
-    log: &crabka_log::Log,
+    log: &krabka_log::Log,
     coordinator: &Arc<GroupCoordinator>,
 ) -> Result<Replayed, BrokerError> {
     struct DeferredRecord {
@@ -409,7 +409,7 @@ fn replay_records(
                     }
                 }
                 advanced_to =
-                    crabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+                    krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
                 continue;
             }
             for record in &batch.records {
@@ -440,7 +440,7 @@ fn replay_records(
             // The loop threads the log's `Offset` cursor (`next`/`end` feed
             // `Log::read`); wrap the batch-derived next offset back into `Offset`.
             advanced_to =
-                crabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+                krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
         }
         if advanced_to <= next {
             break;
@@ -808,7 +808,7 @@ mod tests {
     };
 
     use assert2::{assert, check};
-    use crabka_raft::ControllerHandle;
+    use krabka_raft::ControllerHandle;
     use tempfile::tempdir;
 
     use super::*;
@@ -817,13 +817,13 @@ mod tests {
     /// Start a controller, wait until it reports a leader, and return the
     /// handle.
     async fn controller_with_leader(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = crabka_raft::ControllerConfig {
-            election_timeout: crabka_units::millis(200),
-            heartbeat_interval: Some(crabka_units::millis(50)),
+        let cfg = krabka_raft::ControllerConfig {
+            election_timeout: krabka_units::millis(200),
+            heartbeat_interval: Some(krabka_units::millis(50)),
             client_id: "test".into(),
-            ..crabka_raft::ControllerConfig::for_tests(crabka_raft::NodeId(1), log_dir)
+            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
         };
-        let handle = Arc::new(crabka_raft::Controller::start(cfg).await.unwrap());
+        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
         let mut rx = handle.watch_leader();
         let deadline = Instant::now() + Duration::from_secs(5);
         while rx.borrow().is_none() {
@@ -841,7 +841,7 @@ mod tests {
     /// assignment, and the current assignment.
     #[tokio::test]
     async fn share_group_records_replay_into_seed() {
-        use crabka_protocol::primitives::uuid::Uuid;
+        use krabka_protocol::primitives::uuid::Uuid;
 
         use crate::coordinator::unified::{
             GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
@@ -1599,8 +1599,8 @@ mod tests {
     /// `acc.committed`.
     #[tokio::test]
     async fn replay_records_walks_all_batches() {
-        use crabka_log::Offset;
-        use crabka_protocol::records::Record;
+        use krabka_log::Offset;
+        use krabka_protocol::records::Record;
 
         use crate::coordinator::unified::{
             GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
@@ -1640,7 +1640,7 @@ mod tests {
         };
 
         let dir = tempdir().unwrap();
-        let mut log = crabka_log::Log::open(dir.path(), crabka_log::LogConfig::default()).unwrap();
+        let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
 
         // First batch spans TWO offsets (last_offset_delta == 1): partitions 0
         // and 1 commit at offsets 100 and 101.
@@ -1677,8 +1677,8 @@ mod tests {
 
     #[test]
     fn replay_applies_only_committed_transactional_offsets() {
-        use crabka_log::{Offset, ProducerId};
-        use crabka_protocol::records::{Attributes, Record};
+        use krabka_log::{Offset, ProducerId};
+        use krabka_protocol::records::{Attributes, Record};
 
         use crate::{
             coordinator::unified::{
@@ -1724,7 +1724,7 @@ mod tests {
         };
 
         let dir = tempdir().unwrap();
-        let mut log = crabka_log::Log::open(dir.path(), crabka_log::LogConfig::default()).unwrap();
+        let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
         log.append(&mut transactional(0, 111)).unwrap();
         log.append(&mut build_marker_batch(
             ProducerId(7),

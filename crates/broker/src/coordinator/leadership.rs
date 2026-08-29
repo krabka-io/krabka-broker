@@ -2,8 +2,8 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use crabka_ids::PartitionIndex;
-use crabka_metadata::{MetadataImage, NodeId};
+use krabka_ids::PartitionIndex;
+use krabka_metadata::{MetadataImage, NodeId};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -216,7 +216,7 @@ async fn unload_partition(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::{MetadataRecord, PartitionRecord};
+    use krabka_metadata::{MetadataRecord, PartitionRecord};
 
     use super::*;
 

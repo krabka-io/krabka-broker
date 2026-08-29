@@ -7,8 +7,8 @@
 //! `controller.submit_change`.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, MetadataRecord, PartitionRecord, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, MetadataRecord, PartitionRecord, ResourceType};
+use krabka_protocol::{
     Decode, UnknownTaggedFields,
     owned::{
         alter_partition_request::AlterPartitionRequest,
@@ -137,12 +137,12 @@ pub(crate) async fn handle(
 /// `new_isr_with_epochs`. When `new_isr` is empty, this function therefore
 /// takes the broker IDs from `new_isr_with_epochs`.
 fn handle_partition(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic_name: Option<&str>,
     partition_index: i32,
     req_leader_epoch: i32,
     new_isr_i32: &[i32],
-    new_isr_with_epochs: &[crabka_protocol::owned::alter_partition_request::BrokerState],
+    new_isr_with_epochs: &[krabka_protocol::owned::alter_partition_request::BrokerState],
     changes: &mut Vec<MetadataRecord>,
 ) -> RespPartitionData {
     let Some(topic_name) = topic_name else {
@@ -197,11 +197,11 @@ fn handle_partition(
     };
 
     // Validate proposed ISR: non-empty + subset of replicas.
-    let proposed_isr: Vec<crabka_metadata::NodeId> = effective_isr_i32
+    let proposed_isr: Vec<krabka_metadata::NodeId> = effective_isr_i32
         .iter()
-        .map(|&n| crabka_metadata::NodeId(u64::try_from(n).unwrap_or(0)))
+        .map(|&n| krabka_metadata::NodeId(u64::try_from(n).unwrap_or(0)))
         .collect();
-    let replicas_set: std::collections::HashSet<crabka_metadata::NodeId> =
+    let replicas_set: std::collections::HashSet<krabka_metadata::NodeId> =
         part_rec.replicas.iter().copied().collect();
     let valid = !proposed_isr.is_empty() && proposed_isr.iter().all(|n| replicas_set.contains(n));
     if !valid {
@@ -219,7 +219,7 @@ fn handle_partition(
     // epoch is non-sentinel (-1) and disagrees with the controller's
     // registration epoch. Any ineligible replica fails the whole partition.
     for bstate in new_isr_with_epochs {
-        let node = crabka_metadata::NodeId(u64::try_from(bstate.broker_id).unwrap_or(u64::MAX));
+        let node = krabka_metadata::NodeId(u64::try_from(bstate.broker_id).unwrap_or(u64::MAX));
         let registered = image.broker_epoch(node);
         let ineligible = registered.is_none()
             || (bstate.broker_epoch != -1 && registered != Some(bstate.broker_epoch));
@@ -285,8 +285,8 @@ fn error_part(
 /// control-plane RPC.
 fn cluster_action_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
 ) -> bool {
     authorizer.authorize(
@@ -324,10 +324,10 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::{
+    use krabka_metadata::{
         BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
     };
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::{
             alter_partition_request::{
                 BrokerState, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
@@ -336,7 +336,7 @@ mod tests {
         },
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
     use crate::test_support::DenyAll;
@@ -345,7 +345,7 @@ mod tests {
 
     fn reg(node_id: u64, epoch: i64) -> MetadataRecord {
         MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-            node_id: crabka_metadata::NodeId(node_id),
+            node_id: krabka_metadata::NodeId(node_id),
             broker_epoch: epoch,
             incarnation_id: uuid::Uuid::nil(),
             host: "h".into(),
@@ -382,18 +382,18 @@ mod tests {
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: fixture.partition,
-            leader: crabka_metadata::NodeId(fixture.leader),
+            leader: krabka_metadata::NodeId(fixture.leader),
             replicas: fixture
                 .replicas
                 .iter()
-                .map(|&n| crabka_metadata::NodeId(n))
+                .map(|&n| krabka_metadata::NodeId(n))
                 .collect(),
             isr: fixture
                 .isr
                 .iter()
-                .map(|&n| crabka_metadata::NodeId(n))
+                .map(|&n| krabka_metadata::NodeId(n))
                 .collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(fixture.leader_epoch),
+            leader_epoch: krabka_metadata::LeaderEpoch(fixture.leader_epoch),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -477,10 +477,10 @@ mod tests {
                 MetadataRecord::V1Partition(PartitionRecord {
                     topic: "t".into(),
                     partition: 0,
-                    leader: crabka_metadata::NodeId(1),
-                    replicas: vec![crabka_metadata::NodeId(1)],
-                    isr: vec![crabka_metadata::NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(5),
+                    leader: krabka_metadata::NodeId(1),
+                    replicas: vec![krabka_metadata::NodeId(1)],
+                    isr: vec![krabka_metadata::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(5),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![],
@@ -508,9 +508,9 @@ mod tests {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -532,9 +532,9 @@ mod tests {
     #[test]
     fn cluster_action_allowed_does_not_yield_denial() {
         let image = MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -762,7 +762,7 @@ mod tests {
         let MetadataRecord::V1Partition(record) = &changes[0] else {
             panic!("wrong change variant");
         };
-        assert!(record.isr == vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)]);
+        assert!(record.isr == vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)]);
     }
 
     #[test]

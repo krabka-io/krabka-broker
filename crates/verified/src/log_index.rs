@@ -1,6 +1,6 @@
 //! Offset-index lookup kernel.
 //!
-//! This kernel comes out of the `OffsetIndex` of `crabka-log`, so that Creusot
+//! This kernel comes out of the `OffsetIndex` of `krabka-log`, so that Creusot
 //! can verify it. It uses a hand-rolled binary search, the canonical Creusot
 //! loop, and not `binary_search_by_key`. The proof thus does not depend on a
 //! model of the std search.

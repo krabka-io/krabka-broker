@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crabka_ids::{Offset, PartitionIndex};
-use crabka_log::{Log, LogConfig};
+use krabka_ids::{Offset, PartitionIndex};
+use krabka_log::{Log, LogConfig};
 
 use crate::{error::BrokerError, producer_state::ProducerState};
 
@@ -55,7 +55,7 @@ pub(crate) async fn rebuild_producer_state(
 mod tests {
     use assert2::assert;
     use bytes::Bytes;
-    use crabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
     use tempfile::tempdir;
 
     use super::*;
@@ -119,7 +119,7 @@ mod tests {
         let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
         log.append(&mut idempotent_batch(0, 0, 2)).unwrap();
         let mut marker = crate::txn::marker::build_marker_batch(
-            crabka_log::ProducerId(42),
+            krabka_log::ProducerId(42),
             3,
             Offset(2),
             crate::txn::marker::MarkerType::Commit,
@@ -152,7 +152,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
         let mut marker = crate::txn::marker::build_marker_batch(
-            crabka_log::ProducerId(42),
+            krabka_log::ProducerId(42),
             3,
             Offset(0),
             crate::txn::marker::MarkerType::Commit,

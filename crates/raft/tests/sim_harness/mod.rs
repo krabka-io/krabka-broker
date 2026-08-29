@@ -1,10 +1,10 @@
 //! Shared deterministic, multi-node simulation harness for the KIP-595/996
-//! `KRaft` consensus core (`crabka_raft::kraft`). This module is included by both
+//! `KRaft` consensus core (`krabka_raft::kraft`). This module is included by both
 //! integration test binaries:
 //!
 //! - `kraft_sim.rs` runs the core over an in-memory [`SimLog`] (slice 3a).
 //! - `kraft_log_sim.rs` runs the *same* core over a real on-disk
-//!   [`crabka_raft::kraft::KraftLog`] (slice 3b).
+//!   [`krabka_raft::kraft::KraftLog`] (slice 3b).
 //!
 //! The harness wires N [`QuorumStateMachine`]s together through an in-memory
 //! message bus and a logical clock. It translates every emitted [`Action`] into
@@ -27,14 +27,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crabka_raft::kraft::{
+use krabka_raft::kraft::{
     QuorumStateMachine,
     action::{Action, TimerKind},
     event::{Event, LogEnd},
     role::Role,
     types::{Epoch, LogView, NodeId, QuorumState, SimInstant},
 };
-use crabka_units::prelude::{Time, TimeExt as _};
+use krabka_units::prelude::{Time, TimeExt as _};
 
 // --------------------------------------------------------------------------
 // Pluggable per-node log
@@ -822,13 +822,13 @@ fn consider(
     }
 }
 
-fn make_voter_set(ids: &[NodeId]) -> crabka_metadata::voters::VoterSet {
-    crabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-        crabka_metadata::voters::Voter {
+fn make_voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
+    krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
+        krabka_metadata::voters::Voter {
             id,
             directory_id: uuid::Uuid::nil(),
             endpoints: Vec::new(),
-            kraft_version: crabka_metadata::voters::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
         }
     }))
 }

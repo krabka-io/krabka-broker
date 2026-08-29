@@ -2,7 +2,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
     primitives::uuid::Uuid as WireUuid,
 };

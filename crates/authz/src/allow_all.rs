@@ -28,8 +28,8 @@ impl Authorizer for AllowAllAuthorizer {
 mod tests {
     use std::net::SocketAddr;
 
-    use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+    use krabka_security::{AuthMethod, Principal};
     use uuid::Uuid;
 
     use super::*;

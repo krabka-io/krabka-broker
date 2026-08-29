@@ -27,9 +27,9 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         alter_share_group_offsets_request::{
             AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
@@ -85,7 +85,7 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
 }
 
 async fn create_topic(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     client: &Client,
     topic: &str,
     partitions: i32,
@@ -110,7 +110,7 @@ async fn create_topic(
     broker.wait_until_partition_present(topic, 0).await;
 }
 
-fn topic_id(broker: &crabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
+fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
     let image = broker.controller_image_for_test();
     image
         .topic(topic)
@@ -144,7 +144,7 @@ fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
-async fn bootstrap_share_state(broker: &crabka_broker::BrokerHandle, client: &Client, key: &str) {
+async fn bootstrap_share_state(broker: &krabka_broker::BrokerHandle, client: &Client, key: &str) {
     let resp = client
         .send(FindCoordinatorRequest {
             key_type: 2, // SHARE
@@ -168,7 +168,7 @@ async fn bootstrap_share_state(broker: &crabka_broker::BrokerHandle, client: &Cl
 }
 
 async fn wait_for_share_init(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     group: &str,
     tid: uuid::Uuid,
     partition: i32,
@@ -331,7 +331,7 @@ async fn share_fetch(
     partition: i32,
     epoch: i32,
     max_wait_ms: i32,
-) -> crabka_protocol::owned::share_fetch_response::PartitionData {
+) -> krabka_protocol::owned::share_fetch_response::PartitionData {
     let req = share_fetch_req(group, member, tid, partition, epoch, max_wait_ms, vec![]);
     let resp: ShareFetchResponse = client.send(req).await.expect("ShareFetch");
     assert!(
@@ -356,7 +356,7 @@ struct ShareAck<'a> {
 async fn share_ack(
     client: &Client,
     ack: ShareAck<'_>,
-) -> crabka_protocol::owned::share_acknowledge_response::PartitionData {
+) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
     let count = usize::try_from(ack.last - ack.first + 1).unwrap();
     let req = ShareAcknowledgeRequest {
         group_id: Some(ack.group.into()),
@@ -388,7 +388,7 @@ async fn share_ack(
     resp.responses[0].partitions[0].clone()
 }
 
-fn acquired_count(p: &crabka_protocol::owned::share_fetch_response::PartitionData) -> i64 {
+fn acquired_count(p: &krabka_protocol::owned::share_fetch_response::PartitionData) -> i64 {
     p.acquired_records
         .iter()
         .map(|r| r.last_offset - r.first_offset + 1)
@@ -402,7 +402,7 @@ async fn fetch_until_acquired(
     tid: uuid::Uuid,
     partition: i32,
     epoch: i32,
-) -> crabka_protocol::owned::share_fetch_response::PartitionData {
+) -> krabka_protocol::owned::share_fetch_response::PartitionData {
     for _ in 0..40 {
         let row = share_fetch(client, group, member, tid, partition, epoch, 0).await;
         if row.error_code == NONE && acquired_count(&row) > 0 {
@@ -428,7 +428,7 @@ async fn describe_offsets(
     group: &str,
     topic: &str,
     partitions: Vec<i32>,
-) -> crabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
+) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
 {
     let resp = client
         .send(DescribeShareGroupOffsetsRequest {
@@ -525,7 +525,7 @@ async fn describe_until(
     topic: &str,
     partitions: Vec<i32>,
     want_spso: i64,
-) -> crabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
+) -> krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup
 {
     let mut last = describe_offsets(client, group, topic, partitions.clone()).await;
     for _ in 0..40 {

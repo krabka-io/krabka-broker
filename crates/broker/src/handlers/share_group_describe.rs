@@ -7,8 +7,8 @@
 //! peer `SocketAddr` for the per-group `Describe` ACL gate.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         share_group_describe_request::ShareGroupDescribeRequest,
@@ -132,8 +132,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::{UnknownTaggedFields, owned::share_group_describe_response};
-    use crabka_security::Principal;
+    use krabka_protocol::{UnknownTaggedFields, owned::share_group_describe_response};
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{authorizer::Authorizer, test_support::DenyAll};

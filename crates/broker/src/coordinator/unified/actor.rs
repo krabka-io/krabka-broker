@@ -16,7 +16,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         consumer_group_heartbeat_response::{
@@ -1844,7 +1844,7 @@ fn build_assignment_resp(
         topic_partitions: target_partitions
             .iter()
             .map(
-                |(tid, parts)| crabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions {
+                |(tid, parts)| krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions {
                     topic_id: *tid,
                     partitions: parts.clone(),
                     ..Default::default()
@@ -1891,7 +1891,7 @@ fn build_describe(state: &GroupState) -> DescribeView {
 // encodes them as a single RecordBatch ready for OffsetsLog::append.
 // ---------------------------------------------------------------------------
 
-use crabka_protocol::records::RecordBatch;
+use krabka_protocol::records::RecordBatch;
 
 use super::persistence_next_gen::{
     CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
@@ -2330,7 +2330,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use crabka_log::Offset;
+    use krabka_log::Offset;
 
     use super::*;
     use crate::coordinator::unified::{
@@ -2511,7 +2511,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leader_sync_persists_complete_stable_snapshot() {
-        use crabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
+        use krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
 
         let (coord, log) = make_coordinator();
         let group = completing_classic_group(&["m1", "m2"]);
@@ -2565,7 +2565,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_sync_append_failure_rolls_back_and_can_retry() {
-        use crabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
+        use krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
 
         let (coord, log) = make_coordinator();
         let group = completing_classic_group(&["m1"]);
@@ -2619,7 +2619,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_stable_static_rejoin_persists_refreshed_member() {
-        use crabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
+        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
 
         let (coord, log) = make_coordinator();
         let mut group = completing_classic_group(&["m1"]);
@@ -2674,7 +2674,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_static_rejoin_append_failure_rolls_back_and_reports_error() {
-        use crabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
+        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
 
         let (coord, log) = make_coordinator();
         let mut group = completing_classic_group(&["m1"]);
@@ -2733,7 +2733,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leave_last_member_persists_empty_generation() {
-        use crabka_protocol::owned::leave_group_request::MemberIdentity;
+        use krabka_protocol::owned::leave_group_request::MemberIdentity;
 
         let (coord, log) = make_coordinator();
         let mut group = completing_classic_group(&["m1"]);
@@ -2774,7 +2774,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leave_with_members_remaining_does_not_commit_empty_generation() {
-        use crabka_protocol::owned::leave_group_request::MemberIdentity;
+        use krabka_protocol::owned::leave_group_request::MemberIdentity;
 
         let (coord, log) = make_coordinator();
         let mut group = completing_classic_group(&["m1", "m2"]);
@@ -3567,7 +3567,7 @@ mod tests {
         let topic = {
             let mut b = [0u8; 16];
             b[15] = 0xEF;
-            crabka_protocol::primitives::uuid::Uuid(b)
+            krabka_protocol::primitives::uuid::Uuid(b)
         };
         let mut state = GroupState::new("g");
         state.group_epoch = 7;
@@ -3765,7 +3765,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_admin_surface_and_immediate_join() {
-        use crabka_protocol::owned::join_group_request::JoinGroupRequest;
+        use krabka_protocol::owned::join_group_request::JoinGroupRequest;
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_classic("g");
         coord.mark_classic("g");
@@ -3829,7 +3829,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_offset_validate_heartbeat_arms() {
-        use crabka_protocol::owned::heartbeat_request::HeartbeatRequest;
+        use krabka_protocol::owned::heartbeat_request::HeartbeatRequest;
 
         use super::super::classic_state::OffsetEntry;
         let (coord, _log) = make_coordinator();
@@ -4138,7 +4138,7 @@ mod tests {
     /// prefix.
     fn subscription_blob(topics: &[&str]) -> Bytes {
         use bytes::{BufMut, BytesMut};
-        use crabka_protocol::{
+        use krabka_protocol::{
             Encode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
         };
         let sub = ConsumerProtocolSubscription {
@@ -4155,9 +4155,9 @@ mod tests {
     /// `ConsumerProtocolAssignment`.
     fn decode_assignment(
         blob: &Bytes,
-    ) -> crabka_protocol::owned::consumer_protocol_assignment::ConsumerProtocolAssignment {
+    ) -> krabka_protocol::owned::consumer_protocol_assignment::ConsumerProtocolAssignment {
         use bytes::Buf;
-        use crabka_protocol::{
+        use krabka_protocol::{
             Decode, owned::consumer_protocol_assignment::ConsumerProtocolAssignment,
         };
         let mut cur = &blob[..];
@@ -4251,7 +4251,7 @@ mod tests {
                     member_id: member_id.into(),
                     protocol_type: "consumer".into(),
                     protocols: vec![
-                        crabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
                             name: "range".into(),
                             metadata: subscription_blob(&[topic]),
                             ..Default::default()
@@ -4700,7 +4700,7 @@ mod tests {
 
     /// A classic member leaves the group (v3 single-member leave list).
     async fn classic_leave(handle: &GroupActorHandle, member_id: &str) -> Vec<MemberResponse> {
-        use crabka_protocol::owned::leave_group_request::MemberIdentity;
+        use krabka_protocol::owned::leave_group_request::MemberIdentity;
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
@@ -4882,7 +4882,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_leave_consumer_log_failure_stops_the_actor() {
-        use crabka_protocol::owned::leave_group_request::MemberIdentity;
+        use krabka_protocol::owned::leave_group_request::MemberIdentity;
 
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_consumer("g");
@@ -5275,7 +5275,7 @@ mod tests {
 
     #[test]
     fn consumer_classic_leave_resolves_batch_and_static_identities() {
-        use crabka_protocol::owned::leave_group_request::MemberIdentity;
+        use krabka_protocol::owned::leave_group_request::MemberIdentity;
 
         let mut group = GroupState::new("g");
         let dynamic = ConsumerGroupHeartbeatRequest {

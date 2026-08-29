@@ -95,7 +95,7 @@ impl OffsetIndex {
     /// `relative_offset <= target`, or 0 when there are no entries.
     #[must_use]
     pub fn lookup(&self, target: u32) -> u32 {
-        crabka_verified::offset_index_lookup(&self.entries, target)
+        krabka_verified::offset_index_lookup(&self.entries, target)
     }
 
     /// Truncate the entries, and the on-disk file, so that no entry with

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crabka_units::convert::TimeExt as _;
+use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 

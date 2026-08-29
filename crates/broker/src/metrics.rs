@@ -7,10 +7,10 @@
 //! handles that handlers and background tasks clone and increment
 //! directly.
 //!
-//! Naming follows Prometheus convention: `crabka_broker_<subject>_<unit>`.
+//! Naming follows Prometheus convention: `krabka_broker_<subject>_<unit>`.
 //! Where Kafka has a canonical JMX name, we keep the metric semantics
 //! close to it (e.g. `BrokerTopicMetrics:BytesInPerSec` ↔
-//! `crabka_broker_topic_bytes_in_total`), but the units convert from
+//! `krabka_broker_topic_bytes_in_total`), but the units convert from
 //! per-second gauges to monotonic counters per Prometheus best practice
 //! — operators compute rates with `rate()` at scrape time.
 
@@ -127,7 +127,7 @@ pub struct DirectoryLabel {
 /// SASL mechanism fingerprint, paired with the
 /// `{successful,failed}_authentication_total` counter families.
 /// `mechanism` is the canonical Kafka wire name from
-/// [`crabka_security::SaslMechanism::wire_name`] (`"PLAIN"`,
+/// [`krabka_security::SaslMechanism::wire_name`] (`"PLAIN"`,
 /// `"SCRAM-SHA-256"`, `"SCRAM-SHA-512"`, `"OAUTHBEARER"`) when the
 /// `SaslAuthenticate` frame arrived in a valid sequence; the
 /// `"Unknown"` sentinel covers `ILLEGAL_SASL_STATE` rejects where
@@ -205,7 +205,7 @@ pub struct BrokerMetrics {
     pub share_group_backlog: Family<ShareGroupLabel, Gauge>,
     /// Cumulative handler-thread microseconds spent processing each
     /// (topic, partition). Exported as
-    /// `crabka_broker_partition_cpu_micros_total`. Rebalancer takes
+    /// `krabka_broker_partition_cpu_micros_total`. Rebalancer takes
     /// `rate(...)` to get micros/sec; dividing by `1_000_000` yields the
     /// per-partition core occupancy. We track microseconds (integer
     /// counter) rather than seconds (float) because `prometheus-client`
@@ -313,7 +313,7 @@ pub struct BrokerMetrics {
     /// or misconfigured clients.
     pub unsupported_api_requests: Family<ApiKeyLabel, Counter>,
     /// Per-Kafka-API request-handling latency in seconds
-    /// (`crabka_broker_request_duration_seconds{api}`). Observed in the
+    /// (`krabka_broker_request_duration_seconds{api}`). Observed in the
     /// dispatch path around the full handler round-trip (decode → handle →
     /// encode) for every dispatched frame, labelled by the `ApiKey`
     /// variant name. Operators graph
@@ -378,7 +378,7 @@ pub struct BrokerMetrics {
     pub unclean_leader_elections_total: Counter,
     /// `FedRAMP` MLA: cumulative audit records successfully written to the
     /// audit topic. Incremented by the audit subsystem on each successful
-    /// produce to `__crabka_audit`.
+    /// produce to `__krabka_audit`.
     pub audit_events_total: Counter,
     /// `FedRAMP` MLA: cumulative audit records that failed to write to the
     /// audit topic. Incremented on each produce error; operators alert on
@@ -1188,7 +1188,7 @@ impl BrokerMetrics {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn new() -> Self {
-        let registry = Arc::new(Mutex::new(Registry::with_prefix("crabka_broker")));
+        let registry = Arc::new(Mutex::new(Registry::with_prefix("krabka_broker")));
         let metrics = Self::unregistered(registry);
         {
             let mut registry = metrics
@@ -1524,7 +1524,7 @@ fn api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'static str {
     if api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR {
         return krabka_private_api_key_label_name(api_key);
     }
-    match crabka_protocol::api_key::ApiKey::from_i16(api_key) {
+    match krabka_protocol::api_key::ApiKey::from_i16(api_key) {
         Some(k) => k.into(),
         None => UNKNOWN_LABEL,
     }
@@ -1550,7 +1550,7 @@ fn krabka_private_api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::{convert::TimeExt as _, millis, secs};
+    use krabka_units::{convert::TimeExt as _, millis, secs};
 
     use super::*;
 
@@ -1568,7 +1568,7 @@ mod tests {
             prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
             drop(r);
 
-            let name = "crabka_broker_delivery_clock_uncertainty_seconds ";
+            let name = "krabka_broker_delivery_clock_uncertainty_seconds ";
             let line = buf
                 .lines()
                 .find(|line| line.starts_with(name))
@@ -1677,64 +1677,64 @@ mod tests {
         prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
         // Spot-check every metric is present and prefixed.
         for needle in [
-            "crabka_broker_topic_bytes_in_total",
-            "crabka_broker_topic_bytes_out_total",
-            "crabka_broker_topic_produce_requests_total",
-            "crabka_broker_topic_fetch_requests_total",
-            "crabka_broker_partitions_led",
-            "crabka_broker_partitions_total",
-            "crabka_broker_under_replicated_partitions",
-            "crabka_broker_under_min_isr_partition_count",
-            "crabka_broker_offline_partitions_count",
-            "crabka_broker_active_controller",
-            "crabka_broker_ignored_static_voters",
-            "crabka_broker_witness_role",
-            "crabka_broker_leader_site_drift_partitions",
-            "crabka_broker_voted_directory",
-            "crabka_broker_controller_leader_changes_total",
-            "crabka_broker_isr_shrinks_total",
-            "crabka_broker_isr_expands_total",
-            "crabka_broker_partition_bytes_in_total",
-            "crabka_broker_partition_bytes_out_total",
-            "crabka_broker_partition_disk_bytes",
-            "crabka_broker_share_group_backlog",
-            "crabka_broker_partition_cpu_micros_total",
-            "crabka_broker_incremental_fetch_sessions",
-            "crabka_broker_incremental_fetch_session_evictions_total",
-            "crabka_broker_incremental_fetch_partitions_cached",
-            "crabka_broker_replication_bytes_in_total",
-            "crabka_broker_replication_bytes_out_total",
-            "crabka_broker_tiered_storage_rlmm_topic_backed",
-            "crabka_broker_produce_message_conversions_total",
-            "crabka_broker_fetch_message_conversions_total",
-            "crabka_broker_unclean_leader_elections_total",
-            "crabka_broker_log_cleaner_runs_total",
-            "crabka_broker_log_compactions_total",
-            "crabka_broker_api_requests_total",
-            "crabka_broker_unsupported_api_requests_total",
-            "crabka_broker_request_duration_seconds_bucket",
-            "crabka_broker_request_duration_seconds_sum",
-            "crabka_broker_request_duration_seconds_count",
-            "crabka_broker_in_flight_requests",
-            "crabka_broker_active_connections",
-            "crabka_broker_request_errors_total",
-            "crabka_broker_messages_in_total",
-            "crabka_broker_topic_failed_produce_requests_total",
-            "crabka_broker_topic_failed_fetch_requests_total",
-            "crabka_broker_successful_authentication_total",
-            "crabka_broker_failed_authentication_total",
-            "crabka_broker_barrier_epochs_started_total",
-            "crabka_broker_barrier_epochs_committed_total",
-            "crabka_broker_barrier_epochs_published_partial_total",
-            "crabka_broker_barrier_injection_duration_seconds_bucket",
-            "crabka_broker_barrier_injection_duration_seconds_sum",
-            "crabka_broker_barrier_injection_duration_seconds_count",
-            "crabka_broker_barrier_latest_epoch",
-            "crabka_broker_barrier_markers_written_total",
-            "crabka_broker_barrier_groups_coordinated",
-            "crabka_broker_schema_validation_rejections_total",
-            "crabka_broker_schema_validation_cache_hits_total",
-            "crabka_broker_schema_validation_cache_misses_total",
+            "krabka_broker_topic_bytes_in_total",
+            "krabka_broker_topic_bytes_out_total",
+            "krabka_broker_topic_produce_requests_total",
+            "krabka_broker_topic_fetch_requests_total",
+            "krabka_broker_partitions_led",
+            "krabka_broker_partitions_total",
+            "krabka_broker_under_replicated_partitions",
+            "krabka_broker_under_min_isr_partition_count",
+            "krabka_broker_offline_partitions_count",
+            "krabka_broker_active_controller",
+            "krabka_broker_ignored_static_voters",
+            "krabka_broker_witness_role",
+            "krabka_broker_leader_site_drift_partitions",
+            "krabka_broker_voted_directory",
+            "krabka_broker_controller_leader_changes_total",
+            "krabka_broker_isr_shrinks_total",
+            "krabka_broker_isr_expands_total",
+            "krabka_broker_partition_bytes_in_total",
+            "krabka_broker_partition_bytes_out_total",
+            "krabka_broker_partition_disk_bytes",
+            "krabka_broker_share_group_backlog",
+            "krabka_broker_partition_cpu_micros_total",
+            "krabka_broker_incremental_fetch_sessions",
+            "krabka_broker_incremental_fetch_session_evictions_total",
+            "krabka_broker_incremental_fetch_partitions_cached",
+            "krabka_broker_replication_bytes_in_total",
+            "krabka_broker_replication_bytes_out_total",
+            "krabka_broker_tiered_storage_rlmm_topic_backed",
+            "krabka_broker_produce_message_conversions_total",
+            "krabka_broker_fetch_message_conversions_total",
+            "krabka_broker_unclean_leader_elections_total",
+            "krabka_broker_log_cleaner_runs_total",
+            "krabka_broker_log_compactions_total",
+            "krabka_broker_api_requests_total",
+            "krabka_broker_unsupported_api_requests_total",
+            "krabka_broker_request_duration_seconds_bucket",
+            "krabka_broker_request_duration_seconds_sum",
+            "krabka_broker_request_duration_seconds_count",
+            "krabka_broker_in_flight_requests",
+            "krabka_broker_active_connections",
+            "krabka_broker_request_errors_total",
+            "krabka_broker_messages_in_total",
+            "krabka_broker_topic_failed_produce_requests_total",
+            "krabka_broker_topic_failed_fetch_requests_total",
+            "krabka_broker_successful_authentication_total",
+            "krabka_broker_failed_authentication_total",
+            "krabka_broker_barrier_epochs_started_total",
+            "krabka_broker_barrier_epochs_committed_total",
+            "krabka_broker_barrier_epochs_published_partial_total",
+            "krabka_broker_barrier_injection_duration_seconds_bucket",
+            "krabka_broker_barrier_injection_duration_seconds_sum",
+            "krabka_broker_barrier_injection_duration_seconds_count",
+            "krabka_broker_barrier_latest_epoch",
+            "krabka_broker_barrier_markers_written_total",
+            "krabka_broker_barrier_groups_coordinated",
+            "krabka_broker_schema_validation_rejections_total",
+            "krabka_broker_schema_validation_cache_hits_total",
+            "krabka_broker_schema_validation_cache_misses_total",
         ] {
             assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
         }
@@ -1865,12 +1865,12 @@ mod tests {
     #[test]
     fn record_client_software_accumulates_per_name_version() {
         let m = BrokerMetrics::new();
-        let crabka_100 = ClientSoftwareLabel {
-            software_name: "crabka".to_string(),
+        let krabka_100 = ClientSoftwareLabel {
+            software_name: "krabka".to_string(),
             software_version: "1.0.0".to_string(),
         };
-        let crabka_101 = ClientSoftwareLabel {
-            software_name: "crabka".to_string(),
+        let krabka_101 = ClientSoftwareLabel {
+            software_name: "krabka".to_string(),
             software_version: "1.0.1".to_string(),
         };
         let other = ClientSoftwareLabel {
@@ -1878,12 +1878,12 @@ mod tests {
             software_version: "1.0.0".to_string(),
         };
 
-        m.record_client_software("crabka", "1.0.0");
-        m.record_client_software("crabka", "1.0.0");
-        m.record_client_software("crabka", "1.0.1");
+        m.record_client_software("krabka", "1.0.0");
+        m.record_client_software("krabka", "1.0.0");
+        m.record_client_software("krabka", "1.0.1");
         m.record_client_software("other-lib", "1.0.0");
 
-        for (label, want) in [(&crabka_100, 2), (&crabka_101, 1), (&other, 1)] {
+        for (label, want) in [(&krabka_100, 2), (&krabka_101, 1), (&other, 1)] {
             let got = m.client_software_versions.get_or_create(label).get();
             assert!(got == want, "label {label:?}");
         }
@@ -1899,7 +1899,7 @@ mod tests {
         let registry = m.registry.lock().await;
         prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
         assert!(body.contains(
-            "crabka_broker_client_software_versions_total{software_name=\"render-lib\",software_version=\"2.0.0\"} 1"
+            "krabka_broker_client_software_versions_total{software_name=\"render-lib\",software_version=\"2.0.0\"} 1"
         ));
     }
 
@@ -2269,15 +2269,15 @@ mod tests {
         let r = m.registry.lock().await;
         prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
         assert!(
-            buf.contains("crabka_broker_request_duration_seconds_count{api_key=\"Produce\"} 2"),
+            buf.contains("krabka_broker_request_duration_seconds_count{api_key=\"Produce\"} 2"),
             "expected 2 Produce latency samples in:\n{buf}"
         );
         assert!(
-            buf.contains("crabka_broker_request_errors_total{api_key=\"Fetch\"} 2"),
+            buf.contains("krabka_broker_request_errors_total{api_key=\"Fetch\"} 2"),
             "expected 2 Fetch request errors in:\n{buf}"
         );
-        assert!(buf.contains("crabka_broker_in_flight_requests 1"));
-        assert!(buf.contains("crabka_broker_active_connections 5"));
+        assert!(buf.contains("krabka_broker_in_flight_requests 1"));
+        assert!(buf.contains("krabka_broker_active_connections 5"));
         // Unknown api_key folds under the shared "Unknown" label.
         assert!(buf.contains("api_key=\"Unknown\""), "unknown label missing");
         // Keep `produce` referenced to document the intended label.

@@ -19,7 +19,7 @@
 use std::slice;
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     krabka::barrier::{
         AlterBarrierGroupResult, AlterBarrierGroupsRequest, AlterBarrierGroupsResponse,
@@ -157,7 +157,7 @@ fn row(group: &str, error_code: i16, error_message: Option<String>) -> AlterBarr
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::millis;
+    use krabka_units::millis;
 
     use super::*;
     use crate::barrier::error::BarrierError;
@@ -169,7 +169,7 @@ mod tests {
             interval_ms,
             retained_cuts,
             delete: false,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         }
     }
 

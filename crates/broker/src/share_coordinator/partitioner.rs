@@ -3,7 +3,7 @@
 //! This is Apache Kafka's share-coordinator key form. The module hashes it
 //! with the same `Utils.abs(murmur2(...)) % numPartitions` convention as
 //! `__transaction_state`. A share key therefore resolves to the same
-//! `__share_group_state` partition on Crabka as on Apache Kafka.
+//! `__share_group_state` partition on Krabka as on Apache Kafka.
 
 use crate::kafka_hash::murmur2_partition;
 

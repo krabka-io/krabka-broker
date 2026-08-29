@@ -3,7 +3,7 @@
 //! The snapshot implements [`AclSource`] with EXACTLY the broker's matching
 //! semantics.
 
-use crabka_metadata::{AclEntry, PatternType, ResourceType};
+use krabka_metadata::{AclEntry, PatternType, ResourceType};
 
 use crate::AclSource;
 
@@ -49,7 +49,7 @@ impl AclSource for AclCache {
 #[cfg(test)]
 mod tests {
 
-    use crabka_metadata::{
+    use krabka_metadata::{
         AclOperation, MetadataImage, MetadataRecord, PermissionType, ResourceType,
     };
     use uuid::Uuid;

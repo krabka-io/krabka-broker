@@ -22,7 +22,7 @@ use assert2::assert;
 
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -50,7 +50,7 @@ const NOT_COORDINATOR: i16 = 16;
 /// partition has a real leader, so the later `InitProducerId` does not race
 /// the lazy leader election. Mirrors the retry-with-deadline idiom in the
 /// marker-fanout test.
-async fn await_txn_coordinator(client: &crabka_client_core::Client, tid: &str) {
+async fn await_txn_coordinator(client: &krabka_client_core::Client, tid: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let fc = client
@@ -81,7 +81,7 @@ const TOPIC: &str = "src";
 
 /// Create a single-partition topic and return nothing. This test keys offsets
 /// by name.
-async fn create_topic(client: &crabka_client_core::Client) {
+async fn create_topic(client: &krabka_client_core::Client) {
     let resp = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -101,7 +101,7 @@ async fn create_topic(client: &crabka_client_core::Client) {
 /// Resolve `TOPIC`'s `topic_id` with Metadata. At v10 the v8+ `OffsetFetch`
 /// `groups[]` shape keys topics by `topic_id`, and the wire drops the name. So
 /// the read must carry the id, not only the name.
-async fn topic_id_for(client: &crabka_client_core::Client) -> WireUuid {
+async fn topic_id_for(client: &krabka_client_core::Client) -> WireUuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
@@ -125,7 +125,7 @@ async fn topic_id_for(client: &crabka_client_core::Client) -> WireUuid {
 /// whatever wire version the client negotiates. Returns the committed offset,
 /// or `-1` when it is absent. That is the only signal this test asserts on.
 async fn fetch_offset(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     group_id: &str,
     topic_id: WireUuid,
 ) -> i64 {
@@ -175,7 +175,7 @@ async fn fetch_offset(
 /// `(tid, group_id)`. Returns `(producer_id, producer_epoch)` so the caller
 /// can finalize the transaction with `EndTxn`.
 async fn begin_and_commit_offsets(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     tid: &str,
     group_id: &str,
     offset: i64,

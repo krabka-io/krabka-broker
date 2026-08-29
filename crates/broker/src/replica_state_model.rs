@@ -6,7 +6,7 @@
 //! The BFS checker explores every interleaving of leader append, follower
 //! fetch, and ISR shrink/expand. It asserts that the partition-replication
 //! safety invariants never break, above all no-committed-data-loss. Design:
-//! `docs/superpowers/specs/2026-06-13-crabka-isr-replica-state-model-design.md`.
+//! `docs/superpowers/specs/2026-06-13-krabka-isr-replica-state-model-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! this module fences each run with `within_boundary` + `target_state_count` +
@@ -19,8 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_log::Offset;
-use crabka_raft::NodeId;
+use krabka_log::Offset;
+use krabka_raft::NodeId;
 use stateright::{Checker, Model, Property};
 
 use super::ReplicaState;
@@ -52,9 +52,9 @@ impl IsrModel {
         Self {
             t0: Instant::now(),
             replicas: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
             max_offset,
             test_overshoot: false,
@@ -65,9 +65,9 @@ impl IsrModel {
         Self {
             t0: Instant::now(),
             replicas: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
             max_offset,
             test_overshoot: true,

@@ -4,8 +4,8 @@
 //! non-empty groups with `NON_EMPTY_GROUP`.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         delete_groups_request::DeleteGroupsRequest,
@@ -96,7 +96,7 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::test_support::{DenyAll, peer, principal};
@@ -149,15 +149,15 @@ mod tests {
                 DeletableGroupResult {
                     group_id: "group-a".to_string(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
                 DeletableGroupResult {
                     group_id: "group-b".to_string(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -179,9 +179,9 @@ mod tests {
             results: vec![DeletableGroupResult {
                 group_id: "missing".to_string(),
                 error_code: codes::GROUP_ID_NOT_FOUND,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;

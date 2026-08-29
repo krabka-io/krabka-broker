@@ -47,7 +47,7 @@ use std::{
     },
 };
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::fetch_request::{FetchRequest, FetchTopic, ForgottenTopic},
     primitives::uuid::Uuid as WireUuid,
 };
@@ -550,7 +550,7 @@ mod fetch_session_model;
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_protocol::owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic};
+    use krabka_protocol::owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic};
     use qubit_clock::MockTime;
 
     use super::*;
@@ -1275,7 +1275,7 @@ mod tests {
 mod fuzz {
     use std::collections::HashMap;
 
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     };

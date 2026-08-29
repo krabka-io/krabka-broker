@@ -7,7 +7,7 @@
 use std::{fmt, sync::Arc};
 
 use bytes::Bytes;
-use crabka_audit::signing::FileEd25519Signer;
+use krabka_audit::signing::FileEd25519Signer;
 
 use crate::{
     metadata::RemoteLogSegmentMetadata,
@@ -162,7 +162,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::{assert, check};
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
     use tempfile::TempDir;
     use uuid::Uuid;

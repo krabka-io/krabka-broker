@@ -7,17 +7,17 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "remote-storage")
 
-# `crabka-worm-verify verify` — audits a WORM archive with read-only credentials.
+# `krabka-worm-verify verify` — audits a WORM archive with read-only credentials.
 crate_binary(
-    name = "crabka-worm-verify",
+    name = "krabka-worm-verify",
     crate_root = "src/bin/worm-verify.rs",
     lib = ":remote-storage",
 )
 
 crate_tests(
     # `worm_verify_cli` runs the binary against an archive it writes.
-    data = [":crabka-worm-verify"],
+    data = [":krabka-worm-verify"],
     docker = {"jvm_tiered_storage": ["apache_kafka_4_0_0"]},
-    env = {"CARGO_BIN_EXE_crabka-worm-verify": "$(rootpath :crabka-worm-verify)"},
+    env = {"CARGO_BIN_EXE_krabka-worm-verify": "$(rootpath :krabka-worm-verify)"},
     lib = "remote-storage",
 )

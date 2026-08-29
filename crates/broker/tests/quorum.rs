@@ -1,4 +1,4 @@
-//! Multi-node in-process Crabka cluster tests. Each test starts
+//! Multi-node in-process Krabka cluster tests. Each test starts
 //! 3 brokers on distinct loopback ports. The config of each broker
 //! lists all three as voters.
 //!
@@ -19,7 +19,7 @@
 use std::{sync::OnceLock, time::Duration};
 
 use assert2::assert;
-use crabka_broker::{BrokerConfig, BrokerHandle};
+use krabka_broker::{BrokerConfig, BrokerHandle};
 use tokio::sync::Mutex;
 
 mod support;
@@ -39,8 +39,8 @@ fn cluster_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     metadata_request::MetadataRequest,
 };
@@ -74,7 +74,7 @@ async fn three_node_cluster_elects_leader() {
         }
     }
     assert!(
-        leaders.len() == 1 && !leaders.contains(&crabka_broker::NodeId(0)),
+        leaders.len() == 1 && !leaders.contains(&krabka_broker::NodeId(0)),
         "leader not converged: {leaders:?}"
     );
     for (h, _, _) in cluster {
@@ -156,7 +156,7 @@ async fn leader_kill_recovers() {
         let mut rx = h.watch_leader_for_test();
         tokio::time::timeout(
             Duration::from_secs(30),
-            rx.wait_for(|l| matches!(l, Some(id) if *id != crabka_broker::NodeId(0) && *id != killed_node_id)),
+            rx.wait_for(|l| matches!(l, Some(id) if *id != krabka_broker::NodeId(0) && *id != killed_node_id)),
         )
         .await
         .expect("no new leader within 30s after kill")
@@ -170,7 +170,7 @@ async fn leader_kill_recovers() {
     }
     assert!(
         leaders.len() == 1
-            && !leaders.contains(&crabka_broker::NodeId(0))
+            && !leaders.contains(&krabka_broker::NodeId(0))
             && !leaders.contains(&killed_node_id),
         "no single new leader: {leaders:?}"
     );

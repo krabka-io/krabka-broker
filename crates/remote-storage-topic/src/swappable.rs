@@ -2,7 +2,7 @@
 //! implementation can be replaced atomically after construction.
 //!
 //! It lets [`crate::TopicBasedRemoteLogMetadataManager`] take over from
-//! [`crabka_remote_storage::InmemoryRemoteLogMetadataManager`] *after* the
+//! [`krabka_remote_storage::InmemoryRemoteLogMetadataManager`] *after* the
 //! broker's listener accept loop is serving, so the manager's loopback
 //! `AdminClient` call to provision `__remote_log_metadata` has a server to
 //! talk to. Until a caller calls [`SwappableRlmm::swap`], every RLMM method
@@ -21,8 +21,8 @@
 
 use std::sync::{Arc, RwLock};
 
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
     RemotePartitionDeleteMetadata, RemoteStorageError, TopicIdPartition,
 };
@@ -127,7 +127,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::assert;
-    use crabka_remote_storage::{
+    use krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentState,
     };
     use uuid::Uuid;
@@ -146,7 +146,7 @@ mod tests {
             end + 1,
             1,
             100,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 2048,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), start)]),

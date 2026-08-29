@@ -19,8 +19,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crabka_ids::{Offset, ProducerId};
-use crabka_protocol::records::{RecordBatchBorrowed, RecordBorrowed};
+use krabka_ids::{Offset, ProducerId};
+use krabka_protocol::records::{RecordBatchBorrowed, RecordBorrowed};
 use regex::Regex;
 
 use crate::{
@@ -36,8 +36,8 @@ pub enum BatchDecision {
     Keep,
     /// Every record in the batch is excluded. The batch's offset range is
     /// still written, as a bare header with zero records:
-    /// [`crabka_log::filter_batch`] calls this outcome
-    /// [`crabka_log::FilteredBatch::Empty`] and leaves the caller to decide
+    /// [`krabka_log::filter_batch`] calls this outcome
+    /// [`krabka_log::FilteredBatch::Empty`] and leaves the caller to decide
     /// what an emptied batch becomes, and for a restore that must preserve
     /// offsets, becoming a bare header is the only choice that does not
     /// silently shift every later record. The bare header keeps the archived
@@ -46,7 +46,7 @@ pub enum BatchDecision {
     Empty,
     /// Some records survive. The batch is re-encoded from the records that
     /// [`Predicates::decide_record`] keeps, so its bytes differ from the
-    /// archived copy. [`crabka_log::filter_batch`] keeps the batch's
+    /// archived copy. [`krabka_log::filter_batch`] keeps the batch's
     /// `base_offset` and recomputes `last_offset_delta` from the survivors,
     /// so surviving records keep their absolute offsets and the gap left by a
     /// dropped record is invisible to the log format.
@@ -344,7 +344,7 @@ mod tests {
     use assert2::check;
     use bytes::{Bytes, BytesMut};
     use clap::Parser as _;
-    use crabka_protocol::{
+    use krabka_protocol::{
         DecodeBorrow as _,
         records::{Attributes, Record, RecordBatch, RecordHeader},
     };
@@ -400,7 +400,7 @@ mod tests {
     }
 
     // Every header field holds a distinctive value, matching
-    // `crabka_log::filter::tests::batch`'s convention, so a mistaken swap
+    // `krabka_log::filter::tests::batch`'s convention, so a mistaken swap
     // between two header fields would show up as a wrong test outcome.
     fn batch(producer_id: i64, records: Vec<Record>) -> RecordBatch {
         RecordBatch {

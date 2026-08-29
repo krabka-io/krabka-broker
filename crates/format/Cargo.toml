@@ -1,5 +1,5 @@
 [package]
-name = "crabka-format"
+name = "krabka-format"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -11,24 +11,24 @@ description = "Formats a krabka broker log directory: meta.properties.json, the 
 [lints]
 workspace = true
 
-# `crabka format` in the monorepo's `crabka-cli`. That crate also drives the gres
+# `krabka format` in `krabka-cli`. That crate also drives the gres
 # layer, so it could not follow the broker out; the command itself needs only the
-# metadata and security crates, so it lives here and `crabka-cli` can depend on
+# metadata and security crates, so it lives here and `krabka-cli` can depend on
 # this library rather than carrying a second copy.
 [lib]
-name = "crabka_format"
+name = "krabka_format"
 path = "src/lib.rs"
 
 [[bin]]
-name = "crabka-format"
+name = "krabka-format"
 path = "src/main.rs"
 
 [dependencies]
-crabka-metadata = { version = "0.4.0" }
-crabka-security = { workspace = true }
+krabka-metadata = { version = "0.4.0" }
+krabka-security = { workspace = true }
 # The singleton VotersRecord this writes is the one the consensus engine reads
 # back on the node's first boot.
-crabka-raft = { version = "0.4.0", path = "../raft" }
+krabka-raft = { version = "0.4.0", path = "../raft" }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 derive_more = { workspace = true }
@@ -44,5 +44,5 @@ tracing-subscriber = { workspace = true }
 assert2 = { workspace = true }
 
 [dev-dependencies]
-crabka-broker = { version = "0.4.0", path = "../broker" }
+krabka-broker = { version = "0.4.0", path = "../broker" }
 tempfile = { workspace = true }

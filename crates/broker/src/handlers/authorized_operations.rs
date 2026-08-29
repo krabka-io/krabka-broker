@@ -30,8 +30,8 @@
 
 use std::net::SocketAddr;
 
-use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use crabka_security::Principal;
+use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+use krabka_security::Principal;
 
 use super::acl_wire::operation_to_wire;
 use crate::authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer};
@@ -115,8 +115,8 @@ mod tests {
     use std::collections::HashSet;
 
     use assert2::assert;
-    use crabka_metadata::{AclEntry, MetadataRecord, PatternType, PermissionType, ResourceType};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_metadata::{AclEntry, MetadataRecord, PatternType, PermissionType, ResourceType};
+    use krabka_security::{AuthMethod, Principal};
     use uuid::Uuid;
 
     use super::*;

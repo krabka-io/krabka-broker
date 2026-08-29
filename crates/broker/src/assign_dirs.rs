@@ -10,7 +10,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use crabka_protocol::owned::assign_replicas_to_dirs_request::{
+use krabka_protocol::owned::assign_replicas_to_dirs_request::{
     AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
 };
 
@@ -52,7 +52,7 @@ pub(crate) fn build_request(
                 .map(|(topic_bytes, mut partitions)| {
                     partitions.sort_unstable();
                     TopicData {
-                        topic_id: crabka_protocol::primitives::uuid::Uuid(topic_bytes),
+                        topic_id: krabka_protocol::primitives::uuid::Uuid(topic_bytes),
                         partitions: partitions
                             .into_iter()
                             .map(|p| PartitionData {
@@ -65,7 +65,7 @@ pub(crate) fn build_request(
                 })
                 .collect();
             DirectoryData {
-                id: crabka_protocol::primitives::uuid::Uuid(dir_bytes),
+                id: krabka_protocol::primitives::uuid::Uuid(dir_bytes),
                 topics,
                 ..Default::default()
             }
@@ -76,14 +76,14 @@ pub(crate) fn build_request(
         broker_id,
         broker_epoch: UNKNOWN_BROKER_EPOCH,
         directories,
-        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
     }
 }
 
 /// Sends an `AssignReplicasToDirs` report to the controller leader.
 ///
 /// It resolves the controller leader's address from `controller`, opens a
-/// short-lived `crabka_client_core::Client`, sends `req`, and checks the
+/// short-lived `krabka_client_core::Client`, sends `req`, and checks the
 /// top-level `error_code`.
 ///
 /// It returns `Err` in these cases:
@@ -102,8 +102,8 @@ pub(crate) async fn send_assignments(
         controller,
         client_id,
         req,
-        crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-        crabka_client_core::ClientFrameMax::default(),
+        krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+        krabka_client_core::ClientFrameMax::default(),
     )
     .await
 }
@@ -112,8 +112,8 @@ pub(crate) async fn send_assignments_with_policy(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     client_id: &str,
     req: AssignReplicasToDirsRequest,
-    dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: crabka_client_core::ClientFrameMax,
+    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    frame_max: krabka_client_core::ClientFrameMax,
 ) -> Result<(), String> {
     // Resolve the controller leader address — same pattern as
     // `isr_maintenance::send_alter_partition`.
@@ -127,7 +127,7 @@ pub(crate) async fn send_assignments_with_policy(
     };
     let addr = format!("{}:{}", broker_rec.host, broker_rec.port);
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(addr)
         .client_id(client_id.to_owned())
         .dispatch_queue_capacity(dispatch_queue_capacity.get())
@@ -154,9 +154,9 @@ mod tests {
     use std::{collections::BTreeSet, net::SocketAddr};
 
     use assert2::{assert, check};
-    use crabka_metadata::MetadataImage;
-    use crabka_protocol::{Decode, Encode};
-    use crabka_raft::{
+    use krabka_metadata::MetadataImage;
+    use krabka_protocol::{Decode, Encode};
+    use krabka_raft::{
         AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
         SnapshotRange, UpdateVoter,
     };
@@ -192,8 +192,8 @@ mod tests {
 
         async fn submit_change(
             &self,
-            _records: Vec<crabka_metadata::MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
+            _records: Vec<krabka_metadata::MetadataRecord>,
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
             panic!("not used by assign_dirs tests")
         }
 

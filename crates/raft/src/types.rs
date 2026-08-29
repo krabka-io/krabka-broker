@@ -1,18 +1,18 @@
 //! Shared controller types: the `NodeId` alias, the KIP-853 voter `Node`
 //! identity, and the `AppData`/`AppDataResponse` records carried through the
-//! controller. These are the plain Crabka types the engine and reconfig
+//! controller. These are the plain Krabka types the engine and reconfig
 //! coordinator use.
 
-pub use crabka_ids::NodeId;
-use crabka_metadata::{MetadataRecord, VoterEndpoint};
+pub use krabka_ids::NodeId;
+use krabka_metadata::{MetadataRecord, VoterEndpoint};
 use serde::{Deserialize, Serialize};
 
 /// KIP-853 voter node identity used by controller membership.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
     pub directory_id: uuid::Uuid,
-    pub endpoints: Vec<crabka_metadata::VoterEndpoint>,
-    pub kraft_version: crabka_metadata::KRaftVersionRange,
+    pub endpoints: Vec<krabka_metadata::VoterEndpoint>,
+    pub kraft_version: krabka_metadata::KRaftVersionRange,
 }
 
 impl Node {
@@ -90,18 +90,18 @@ mod node_tests {
         let n = Node {
             directory_id: uuid::Uuid::nil(),
             endpoints: vec![
-                crabka_metadata::VoterEndpoint {
+                krabka_metadata::VoterEndpoint {
                     name: "PLAINTEXT".into(),
                     host: "127.0.0.1".into(),
                     port: 9092,
                 },
-                crabka_metadata::VoterEndpoint {
+                krabka_metadata::VoterEndpoint {
                     name: "CONTROLLER".into(),
                     host: "127.0.0.1".into(),
                     port: 9093,
                 },
             ],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         };
         assert2::assert!(n.controller_addr() == Some("127.0.0.1:9093".to_string()));
     }
@@ -114,12 +114,12 @@ mod node_tests {
         let host = "demo-broker-0-0.demo-broker-headless.default.svc.cluster.local";
         let n = Node {
             directory_id: uuid::Uuid::nil(),
-            endpoints: vec![crabka_metadata::VoterEndpoint {
+            endpoints: vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".into(),
                 host: host.into(),
                 port: 9093,
             }],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         };
         assert2::assert!(n.controller_addr() == Some(format!("{host}:9093")));
     }

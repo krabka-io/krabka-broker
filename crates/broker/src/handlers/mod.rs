@@ -9,7 +9,7 @@
 
 /// Raw wire `api_key` (i16) that selects the RPC.
 ///
-/// This is the numeric form of a [`crabka_protocol::api_key::ApiKey`] variant.
+/// This is the numeric form of a [`krabka_protocol::api_key::ApiKey`] variant.
 /// It stays an `i16` because it arrives off the wire and may name an API that
 /// this broker does not know.
 pub type ApiKeyCode = i16;
@@ -62,7 +62,7 @@ pub(crate) fn is_internal_topic(name: &str) -> bool {
 }
 
 use bytes::{Bytes, BytesMut};
-use crabka_protocol::Encode;
+use krabka_protocol::Encode;
 
 use crate::error::BrokerError;
 
@@ -94,11 +94,11 @@ pub(crate) fn encode_response_with_context<R: Encode>(
 
 pub(crate) fn acl_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
-    resource_type: crabka_metadata::ResourceType,
+    resource_type: krabka_metadata::ResourceType,
     resource_name: &str,
-    operation: crabka_metadata::AclOperation,
+    operation: krabka_metadata::AclOperation,
 ) -> bool {
     authorizer.authorize(
         image,
@@ -114,7 +114,7 @@ pub(crate) fn acl_denied(
 
 pub(crate) fn group_read_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
     group_id: &str,
 ) -> bool {
@@ -122,9 +122,9 @@ pub(crate) fn group_read_denied(
         authorizer,
         image,
         ctx,
-        crabka_metadata::ResourceType::Group,
+        krabka_metadata::ResourceType::Group,
         group_id,
-        crabka_metadata::AclOperation::Read,
+        krabka_metadata::AclOperation::Read,
     )
 }
 
@@ -149,16 +149,16 @@ pub(crate) fn group_coordinator_error(
 
 pub(crate) fn cluster_alter_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
 ) -> bool {
     acl_denied(
         authorizer,
         image,
         ctx,
-        crabka_metadata::ResourceType::Cluster,
+        krabka_metadata::ResourceType::Cluster,
         acl_wire::CLUSTER_RESOURCE_NAME,
-        crabka_metadata::AclOperation::Alter,
+        krabka_metadata::AclOperation::Alter,
     )
 }
 
@@ -292,19 +292,19 @@ pub(crate) mod update_raft_voter;
 /// successfully. This function does nothing when `resources` is empty. The
 /// caller guards with `if !resources.is_empty()`.
 pub(crate) fn audit_admin(
-    audit_log: &crabka_audit::AuditLog,
+    audit_log: &krabka_audit::AuditLog,
     ctx: &RequestContext<'_>,
     operation: &str,
-    outcome: crabka_audit::AuditOutcome,
-    resources: Vec<crabka_audit::AuditResource>,
+    outcome: krabka_audit::AuditOutcome,
+    resources: Vec<krabka_audit::AuditResource>,
 ) {
-    audit_log.emit(crabka_audit::AuditEvent::AdminOperation {
+    audit_log.emit(krabka_audit::AuditEvent::AdminOperation {
         outcome,
-        principal: crabka_audit::AuditPrincipal {
+        principal: krabka_audit::AuditPrincipal {
             name: ctx.principal.name.clone(),
             auth_method: format!("{:?}", ctx.principal.auth_method),
         },
-        source: crabka_audit::AuditEndpoint {
+        source: krabka_audit::AuditEndpoint {
             ip: ctx.peer.ip().to_string(),
             port: ctx.peer.port(),
         },
@@ -319,12 +319,12 @@ mod tests {
     use std::{collections::HashSet, net::SocketAddr};
 
     use assert2::assert;
-    use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-    use crabka_protocol::{
+    use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+    use krabka_protocol::{
         Decode,
         owned::api_versions_response::{ApiVersion, ApiVersionsResponse},
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
 
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn audit_admin_emits_admin_operation_event() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let principal = Principal {
             name: "admin".into(),
             auth_method: AuthMethod::SaslPlain,
@@ -358,15 +358,15 @@ mod tests {
             log.as_ref(),
             &ctx,
             "CreateTopics",
-            crabka_audit::AuditOutcome::Success,
-            vec![crabka_audit::AuditResource {
+            krabka_audit::AuditOutcome::Success,
+            vec![krabka_audit::AuditResource {
                 resource_type: "Topic".into(),
                 name: "orders".into(),
             }],
         );
 
         match rx.try_recv().expect("admin audit event") {
-            crabka_audit::AuditEvent::AdminOperation {
+            krabka_audit::AuditEvent::AdminOperation {
                 outcome,
                 principal,
                 source,
@@ -386,7 +386,7 @@ mod tests {
                         resources[0].resource_type.as_str(),
                         resources[0].name.as_str()
                     ) == (
-                        crabka_audit::AuditOutcome::Success,
+                        krabka_audit::AuditOutcome::Success,
                         "admin",
                         "SaslPlain",
                         "192.0.2.10",

@@ -7,8 +7,9 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use crabka_log::Offset;
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_log::Offset;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         write_share_group_state_request::WriteShareGroupStateRequest,
@@ -17,7 +18,6 @@ use crabka_protocol::{
         },
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{
     broker::Broker, codes, error::BrokerError, share_coordinator::persistence::StateBatch,
@@ -98,7 +98,7 @@ pub(crate) fn handle(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             write_share_group_state_request::{

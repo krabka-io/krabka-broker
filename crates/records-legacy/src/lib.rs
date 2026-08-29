@@ -1,7 +1,7 @@
 //! Apache Kafka legacy (v0/v1) `MessageSet` codec.
 //!
 //! This crate also bridges to and from the v2 `RecordBatch` types in
-//! [`crabka_protocol`].
+//! [`krabka_protocol`].
 //!
 //! See the [Kafka protocol docs] for the wire layout that this crate
 //! implements. v0 carries no per-message timestamp. v1 adds one `i64`
@@ -21,7 +21,7 @@
 //! - [`decode_message_set`] / [`encode_flat_message_set`] /
 //!   [`encode_compressed_message_set`]: top-level codec.
 //! - [`v2_to_legacy`] / [`legacy_to_v2`]: bridge to and from
-//!   `crabka_protocol::records::RecordBatch`. Use these from the Fetch
+//!   `krabka_protocol::records::RecordBatch`. Use these from the Fetch
 //!   handler for down-conversion, and from the Produce handler for
 //!   up-conversion.
 //!
@@ -29,8 +29,8 @@
 //!
 //! ```rust
 //! use bytes::{Bytes, BytesMut};
-//! use crabka_ids::Offset;
-//! use crabka_records_legacy::{Magic, ParsedRecord, decode_message_set, encode_flat_message_set};
+//! use krabka_ids::Offset;
+//! use krabka_records_legacy::{Magic, ParsedRecord, decode_message_set, encode_flat_message_set};
 //!
 //! # fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let records = vec![ParsedRecord {

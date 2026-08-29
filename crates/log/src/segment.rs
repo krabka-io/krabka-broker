@@ -10,11 +10,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_protocol::records::{
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_protocol::records::{
     HEADER_LEN, RecordBatch, RecordBatchHeader, patch_base_offset_and_leader_epoch,
 };
-use crabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
+use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 use tracing::instrument;
 use zerocopy::FromBytes;
 
@@ -139,7 +139,7 @@ crate::sendfile_cfg! {
     /// Increments D + E.
     ///
     /// This type carries the same offset and boundary metadata, but the
-    /// records run is a [`crabka_protocol::records::FileRegion`] descriptor of
+    /// records run is a [`krabka_protocol::records::FileRegion`] descriptor of
     /// the form `(Arc<File>, offset, len)`, not an owned `Bytes` slice. The
     /// broker can therefore `sendfile(2)` the run straight from the page cache
     /// with no userspace copy. This type is compiled on the SENDFILE alias:
@@ -152,7 +152,7 @@ crate::sendfile_cfg! {
         pub last_offset: Offset,
         /// The records run, as a file-backed descriptor. `None` when the walk
         /// found no complete batch in range.
-        pub region: Option<crabka_protocol::records::FileRegion>,
+        pub region: Option<krabka_protocol::records::FileRegion>,
     }
 
     impl RawSegmentDesc {
@@ -934,7 +934,7 @@ impl Segment {
     ///
     /// This method runs the **same** boundary walk and selects the identical
     /// `[start_pos+range_start, start_pos+range_end)` byte range that
-    /// `read_raw` would have sliced. It returns a [`crabka_protocol::records::FileRegion`] descriptor
+    /// `read_raw` would have sliced. It returns a [`krabka_protocol::records::FileRegion`] descriptor
     /// instead of a `pread` of the payload into an owned `Bytes`.
     ///
     /// The walk is header-only. It `pread`s only the fixed v2 batch headers to
@@ -1027,7 +1027,7 @@ impl Segment {
                     return Ok(RawSegmentDesc {
                         start_offset: Offset(base),
                         last_offset: Offset(batch_last),
-                        region: Some(crabka_protocol::records::FileRegion {
+                        region: Some(krabka_protocol::records::FileRegion {
                             file: Arc::clone(&self.log_file),
                             offset: start_pos + pos,
                             len,
@@ -1057,7 +1057,7 @@ impl Segment {
                 Ok(RawSegmentDesc {
                     start_offset,
                     last_offset,
-                    region: Some(crabka_protocol::records::FileRegion {
+                    region: Some(krabka_protocol::records::FileRegion {
                         file: Arc::clone(&self.log_file),
                         offset: start_pos + s,
                         len,
@@ -1363,9 +1363,9 @@ impl Segment {
 mod tests {
     use assert2::check;
     use bytes::Bytes;
-    use crabka_ids::Offset;
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_units::prelude::{gibibytes, kibibytes, mebibytes};
+    use krabka_ids::Offset;
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_units::prelude::{gibibytes, kibibytes, mebibytes};
     use tempfile::tempdir;
 
     use super::*;
@@ -2105,7 +2105,7 @@ mod tests {
     /// `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
     /// broker's sendfile would transmit, and that its TLS pread-fallback would
     /// copy.
-    fn region_bytes(region: &crabka_protocol::records::FileRegion) -> Vec<u8> {
+    fn region_bytes(region: &krabka_protocol::records::FileRegion) -> Vec<u8> {
         use std::os::unix::fs::FileExt;
         let mut buf = vec![0u8; region.len];
         let mut filled = 0;
@@ -2216,7 +2216,7 @@ mod tests {
 
         // And it decodes (CRC still valid).
         let mut cur: &[u8] = &on_disk;
-        let decoded = crabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
+        let decoded = krabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
         assert2::assert!(decoded.base_offset == assigned_base.0);
         assert2::assert!(decoded.partition_leader_epoch == stamped_epoch);
         drop(dir);

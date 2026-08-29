@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 use crate::ids::RecordCount;
 

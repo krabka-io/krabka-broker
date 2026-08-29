@@ -17,7 +17,7 @@
 //! 3. `consumer_byte_rate_throttles_fetch` — Set low `consumer_byte_rate` for
 //!    alice; produce then fetch a large payload; assert `throttle_time_ms` > 0.
 //! 4. `user_client_tuple_overrides_user_specific` — Set
-//!    (user=alice, client-id=crabka-quota-test) `producer_byte_rate=128` AND
+//!    (user=alice, client-id=krabka-quota-test) `producer_byte_rate=128` AND
 //!    (user=alice) `producer_byte_rate=8192`; produce with that client id; the
 //!    tight tuple limit fires, not the user-only limit.
 //! 5. `non_super_user_denied` — alice (no ACLs) calls `AlterClientQuotas`;
@@ -43,11 +43,11 @@ use std::{
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -63,7 +63,7 @@ use crabka_protocol::{
     },
     records::{Record, RecordBatch},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -91,7 +91,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-quota-test";
+    let client_id = "krabka-quota-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -203,7 +203,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -238,7 +238,7 @@ async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -296,7 +296,7 @@ async fn drive_alter_client_quotas_sasl(
     entries: QuotaEntries,
     validate_only: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
         alter_client_quotas_response::AlterClientQuotasResponse,
     };
@@ -370,7 +370,7 @@ async fn drive_describe_client_quotas_sasl(
     components: Vec<(String, i8, Option<String>)>,
     strict: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, Vec<(String, f64)>)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
         describe_client_quotas_response::DescribeClientQuotasResponse,
     };
@@ -614,7 +614,7 @@ async fn alter_then_describe_round_trip() {
     // Await until the quota is visible in the committed metadata image.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|cfgs| cfgs.get("producer_byte_rate"))
@@ -695,7 +695,7 @@ async fn producer_byte_rate_throttles_produce() {
     // Wait for the quota to appear in the image before producing.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|cfgs| cfgs.get("producer_byte_rate"))
@@ -785,7 +785,7 @@ async fn request_percentage_throttles_produce() {
     // Wait for the quota to appear in the image before producing.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|cfgs| cfgs.get("request_percentage"))
@@ -868,7 +868,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     // Wait for the quota to appear in the image.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|cfgs| cfgs.get("consumer_byte_rate"))
@@ -950,7 +950,7 @@ async fn user_client_tuple_overrides_user_specific() {
         vec![(
             vec![
                 ("user".into(), Some("alice".into())),
-                ("client-id".into(), Some("crabka-quota-test".into())),
+                ("client-id".into(), Some("krabka-quota-test".into())),
             ],
             vec![("producer_byte_rate".into(), 128.0, false)],
         )],
@@ -962,9 +962,9 @@ async fn user_client_tuple_overrides_user_specific() {
     // Wait for both quotas to appear in the image.
     handle
         .wait_for_image(|img| {
-            let user_key: crabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            let tuple_key: crabka_metadata::EntityKey = vec![
-                ("client-id".into(), Some("crabka-quota-test".into())),
+            let user_key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            let tuple_key: krabka_metadata::EntityKey = vec![
+                ("client-id".into(), Some("krabka-quota-test".into())),
                 ("user".into(), Some("alice".into())),
             ];
             let user_rate = img
@@ -981,7 +981,7 @@ async fn user_client_tuple_overrides_user_specific() {
         })
         .await;
 
-    // Alice produces 8 KB with `crabka-quota-test`. The 128-byte tuple quota
+    // Alice produces 8 KB with `krabka-quota-test`. The 128-byte tuple quota
     // throttles it; the 8192-byte user-only quota would fit in the burst window.
     let deadline = Instant::now() + Duration::from_secs(15);
     let resp = loop {

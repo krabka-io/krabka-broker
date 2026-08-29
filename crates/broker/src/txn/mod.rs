@@ -1,4 +1,4 @@
-//! Transaction subsystem for the Crabka broker.
+//! Transaction subsystem for the Krabka broker.
 
 pub(crate) mod bootstrap;
 pub(crate) mod coordinator;

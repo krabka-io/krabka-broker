@@ -22,9 +22,9 @@ use std::{
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_compression::CompressionType;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_compression::CompressionType;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
@@ -44,7 +44,7 @@ use tokio::{
     net::TcpStream,
 };
 
-const CLIENT_ID: &str = "crabka-recompression-test";
+const CLIENT_ID: &str = "krabka-recompression-test";
 
 async fn round_trip(
     stream: &mut TcpStream,

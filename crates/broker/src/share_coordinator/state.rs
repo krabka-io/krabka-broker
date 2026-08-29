@@ -9,7 +9,7 @@
 //! batches that lie fully below the SPSO, and upserts the written batches
 //! keyed by their first offset.
 
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 use crate::share_coordinator::persistence::{ShareSnapshotValue, ShareUpdateValue, StateBatch};
 

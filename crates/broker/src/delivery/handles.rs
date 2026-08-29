@@ -10,8 +10,8 @@ use std::sync::{
 };
 
 use arc_swap::ArcSwapOption;
-use crabka_ids::Offset;
-use crabka_log::{DeliveryPolicy, Log};
+use krabka_ids::Offset;
+use krabka_log::{DeliveryPolicy, Log};
 use qubit_clock::{Clock, SystemClock};
 use tokio::sync::Notify;
 
@@ -163,7 +163,7 @@ impl std::fmt::Debug for DeliveryHandles {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_log::LogConfig;
+    use krabka_log::LogConfig;
     use qubit_clock::{DateTime, MockTime};
     use tempfile::tempdir;
 

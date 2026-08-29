@@ -27,8 +27,8 @@ use axum::{
 };
 use clap::Args;
 #[cfg(unix)]
-use crabka_units::convert::TimeExt as _;
-use crabka_units::{Frequency, Time, convert::FrequencyExt as _, parse, per_sec, secs};
+use krabka_units::convert::TimeExt as _;
+use krabka_units::{Frequency, Time, convert::FrequencyExt as _, parse, per_sec, secs};
 use refined_type::rule::GreaterI32;
 use serde::Deserialize;
 use thiserror::Error;
@@ -92,23 +92,23 @@ impl FromStr for ProfilingSampleFrequency {
 /// Process-local CPU and heap profiling policy.
 #[derive(Args, Clone, Debug, PartialEq)]
 pub struct ProfilingConfig {
-    #[arg(long, env = "CRABKA_PROFILING_CPU_DEFAULT_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[arg(long, env = "KRABKA_PROFILING_CPU_DEFAULT_DURATION", default_value = "30s", value_parser = parse::positive_time)]
     pub profiling_cpu_default_duration: Time,
-    #[arg(long, env = "CRABKA_PROFILING_CPU_MAX_DURATION", default_value = "60s", value_parser = parse::positive_time)]
+    #[arg(long, env = "KRABKA_PROFILING_CPU_MAX_DURATION", default_value = "60s", value_parser = parse::positive_time)]
     pub profiling_cpu_max_duration: Time,
     #[arg(
         long,
-        env = "CRABKA_PROFILING_CPU_SAMPLE_FREQUENCY",
+        env = "KRABKA_PROFILING_CPU_SAMPLE_FREQUENCY",
         default_value = "99Hz"
     )]
     pub profiling_cpu_sample_frequency: ProfilingSampleFrequency,
-    #[arg(long, env = "CRABKA_PROFILING_HEAP_DEFAULT_DURATION", default_value = "5s", value_parser = parse::positive_time)]
+    #[arg(long, env = "KRABKA_PROFILING_HEAP_DEFAULT_DURATION", default_value = "5s", value_parser = parse::positive_time)]
     pub profiling_heap_default_duration: Time,
-    #[arg(long, env = "CRABKA_PROFILING_HEAP_MAX_DURATION", default_value = "30s", value_parser = parse::positive_time)]
+    #[arg(long, env = "KRABKA_PROFILING_HEAP_MAX_DURATION", default_value = "30s", value_parser = parse::positive_time)]
     pub profiling_heap_max_duration: Time,
     #[arg(
         long,
-        env = "CRABKA_PROFILING_NATIVE_FRAME_BLOCKLIST",
+        env = "KRABKA_PROFILING_NATIVE_FRAME_BLOCKLIST",
         default_value = "libc,libgcc,pthread,vdso",
         value_delimiter = ','
     )]
@@ -417,7 +417,7 @@ pub async fn await_admin_exit(
 
 /// Like [`serve_admin`], but with the bind address from the environment.
 ///
-/// This function reads `CRABKA_ADMIN_LISTEN_ADDR` and falls back to
+/// This function reads `KRABKA_ADMIN_LISTEN_ADDR` and falls back to
 /// `default_addr`.
 /// # Errors
 /// Returns an error when telemetry input is malformed, a query cannot be evaluated, or the configured storage or export backend fails.
@@ -436,10 +436,10 @@ pub async fn serve_admin_from_env(default_addr: &str) -> std::io::Result<()> {
 /// Panics if synchronized telemetry state is poisoned or validated columnar data is missing a required field.
 pub async fn serve_admin_from_env_with(default_addr: &str, extra: Router) -> std::io::Result<()> {
     let raw =
-        std::env::var("CRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
+        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let addr: SocketAddr = raw
         .parse()
-        .unwrap_or_else(|e| panic!("invalid CRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
     serve_admin(addr, extra).await
 }
 
@@ -449,7 +449,7 @@ pub async fn serve_admin_from_env_with(default_addr: &str, extra: Router) -> std
 /// Returns an error for invalid profiling configuration or listener failure.
 ///
 /// # Panics
-/// Panics when `CRABKA_ADMIN_LISTEN_ADDR` is not a socket address. This
+/// Panics when `KRABKA_ADMIN_LISTEN_ADDR` is not a socket address. This
 /// behavior is the same as the default-compatible wrapper's behavior.
 pub async fn serve_admin_from_env_with_config(
     default_addr: &str,
@@ -457,10 +457,10 @@ pub async fn serve_admin_from_env_with_config(
     config: ProfilingConfig,
 ) -> Result<(), ProfilingError> {
     let raw =
-        std::env::var("CRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
+        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let addr: SocketAddr = raw
         .parse()
-        .unwrap_or_else(|e| panic!("invalid CRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
     serve_admin_with_config(addr, extra, config).await
 }
 
@@ -470,24 +470,24 @@ pub async fn serve_admin_from_env_with_config(
 /// Returns an error for invalid profiling configuration or listener failure.
 ///
 /// # Panics
-/// Panics when `CRABKA_ADMIN_LISTEN_ADDR` is not a socket address.
+/// Panics when `KRABKA_ADMIN_LISTEN_ADDR` is not a socket address.
 pub async fn spawn_admin_from_env_with_config(
     default_addr: &str,
     extra: Router,
     config: ProfilingConfig,
 ) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ProfilingError> {
     let raw =
-        std::env::var("CRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
+        std::env::var("KRABKA_ADMIN_LISTEN_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let addr: SocketAddr = raw
         .parse()
-        .unwrap_or_else(|e| panic!("invalid CRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
+        .unwrap_or_else(|e| panic!("invalid KRABKA_ADMIN_LISTEN_ADDR `{raw}`: {e}"));
     spawn_admin_with_config(addr, extra, config).await
 }
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use crabka_units::{convert::FrequencyExt as _, millis, minutes};
+    use krabka_units::{convert::FrequencyExt as _, millis, minutes};
 
     use super::*;
 

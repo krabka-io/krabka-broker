@@ -32,11 +32,11 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crabka_ids::Offset;
-use crabka_metadata::{
+use krabka_ids::Offset;
+use krabka_metadata::{
     MetadataImage, MetadataRecord, VoterSet, VotersRecord, from_kraft_value, to_kraft_values,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         k_raft_version_record::KRaftVersionRecord as WireKRaftVersionRecord,
@@ -50,7 +50,7 @@ use crabka_protocol::{
         metadata::control::{ControlRecord, ControlRecordType, control_record_key},
     },
 };
-use crabka_units::{
+use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, Time, TimeExt as _},
 };
@@ -90,12 +90,12 @@ const HEARTBEAT_DIVISOR: u64 = 3;
 
 /// Floor on an observer's metadata-fetch budget: at least the first committed
 /// batch is always emitted so a zero-budget fetch still makes progress.
-const MIN_FETCH_BUDGET: ByteSize = crabka_units::bytes(1);
+const MIN_FETCH_BUDGET: ByteSize = krabka_units::bytes(1);
 
 /// Filename of the node-local durable quorum-state file.
 const QUORUM_STATE_FILE: &str = "quorum-state";
 
-/// Crabka-internal "snapshot not available" signal in a `FetchSnapshot`
+/// Krabka-internal "snapshot not available" signal in a `FetchSnapshot`
 /// response (voter↔voter).
 const SNAPSHOT_NOT_FOUND: i16 = 98;
 
@@ -461,10 +461,10 @@ fn typed_control_batch(
                 ..Default::default()
             })
         })
-        .collect::<Result<Vec<_>, crabka_protocol::ProtocolError>>()?;
+        .collect::<Result<Vec<_>, krabka_protocol::ProtocolError>>()?;
     Ok(RecordBatch {
         partition_leader_epoch: i32::try_from(leader_epoch).unwrap_or(i32::MAX),
-        attributes: crabka_protocol::records::Attributes::default().with_control(true),
+        attributes: krabka_protocol::records::Attributes::default().with_control(true),
         last_offset_delta: i32::try_from(controls.len().saturating_sub(1)).unwrap_or(i32::MAX),
         records,
         ..Default::default()
@@ -478,7 +478,7 @@ fn decode_control_record(record: &Record) -> Result<Option<ControlRecord>, RaftE
     Ok(Some(ControlRecord::decode(key, value)?))
 }
 
-fn voter_supports_version(voter: &crabka_metadata::voters::Voter, version: u16) -> bool {
+fn voter_supports_version(voter: &krabka_metadata::voters::Voter, version: u16) -> bool {
     voter.kraft_version.min <= version && version <= voter.kraft_version.max
 }
 
@@ -487,7 +487,7 @@ fn voter_set_to_wire(voters: &VoterSet) -> WireVotersRecord {
         .iter()
         .map(|voter| WireVoter {
             voter_id: i32::try_from(voter.id.0).unwrap_or(i32::MAX),
-            voter_directory_id: crabka_protocol::primitives::uuid::Uuid(
+            voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
                 *voter.directory_id.as_bytes(),
             ),
             endpoints: voter
@@ -544,18 +544,18 @@ fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftError>
                             "voter endpoint must have a name, host, and nonzero port".into(),
                         ));
                     }
-                    Ok(crabka_metadata::voters::VoterEndpoint {
+                    Ok(krabka_metadata::voters::VoterEndpoint {
                         name: endpoint.name.clone(),
                         host: endpoint.host.clone(),
                         port,
                     })
                 })
                 .collect::<Result<Vec<_>, RaftError>>()?;
-            Ok(crabka_metadata::voters::Voter {
+            Ok(krabka_metadata::voters::Voter {
                 id: NodeId(id),
                 directory_id: Uuid::from_bytes(voter.voter_directory_id.0),
                 endpoints,
-                kraft_version: crabka_metadata::voters::KRaftVersionRange { min, max },
+                kraft_version: krabka_metadata::voters::KRaftVersionRange { min, max },
             })
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
@@ -756,7 +756,7 @@ impl KraftController {
         // voter-set views, auto-join) observe the live quorum membership.
         let mut image = image;
         image.apply(&MetadataRecord::V1KRaftVersion(
-            crabka_metadata::KRaftVersionRecord {
+            krabka_metadata::KRaftVersionRecord {
                 kraft_version: core.quorum_state().kraft_version,
             },
         ));
@@ -873,7 +873,7 @@ impl KraftController {
         data_dir: PathBuf,
         me: NodeId,
         cluster_id: Uuid,
-        bootstrap_voters: crabka_metadata::voters::VoterSet,
+        bootstrap_voters: krabka_metadata::voters::VoterSet,
         election_timeout: Time,
         heartbeat_interval: Option<Time>,
         controller_fetch_miss_limit: ControllerFetchMissLimit,
@@ -883,7 +883,7 @@ impl KraftController {
         snapshot_interval_records: u64,
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     ) -> Result<Self, RaftError> {
-        std::fs::create_dir_all(&data_dir).map_err(crabka_log::LogError::Io)?;
+        std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let legacy_quorum_state = std::fs::metadata(data_dir.join(QUORUM_STATE_FILE))
             .is_ok_and(|metadata| metadata.len() == 54);
         let mut log = KraftLog::open(&data_dir)?;
@@ -906,7 +906,7 @@ impl KraftController {
             image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
             if let Some(control) = contents.control_state {
                 image.apply(&MetadataRecord::V1KRaftVersion(
-                    crabka_metadata::KRaftVersionRecord {
+                    krabka_metadata::KRaftVersionRecord {
                         kraft_version: control.kraft_version,
                     },
                 ));
@@ -952,7 +952,7 @@ impl KraftController {
                 metadata_raft_fetch_max,
             )?;
             pending.image.apply(&MetadataRecord::V1KRaftVersion(
-                crabka_metadata::KRaftVersionRecord {
+                krabka_metadata::KRaftVersionRecord {
                     kraft_version: boundary_state.kraft_version,
                 },
             ));
@@ -962,7 +962,7 @@ impl KraftController {
         }
         replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max);
         image.apply(&MetadataRecord::V1KRaftVersion(
-            crabka_metadata::KRaftVersionRecord {
+            krabka_metadata::KRaftVersionRecord {
                 kraft_version: initial_state.kraft_version,
             },
         ));
@@ -1048,7 +1048,7 @@ impl KraftController {
     /// - [`RaftError::Shutdown`] if the engine task is gone.
     pub async fn submit_change(
         &self,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx
@@ -1165,7 +1165,7 @@ impl KraftController {
     #[cfg(test)]
     async fn test_append_and_commit(
         &self,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<i64, RaftError> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx
@@ -1980,7 +1980,7 @@ impl Engine {
     )]
     fn on_submit_change(
         &mut self,
-        records: &[crabka_metadata::MetadataRecord],
+        records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
         if !self.core.role().is_leader() {
@@ -2031,7 +2031,7 @@ impl Engine {
                 return;
             }
             if let MetadataRecord::V1PartitionOffsetAdvance(r) = r {
-                let (base_offset, _next_offset) = crabka_verified::reserve_offsets(
+                let (base_offset, _next_offset) = krabka_verified::reserve_offsets(
                     scratch
                         .partition_next_offset(&r.topic, r.partition)
                         .unwrap_or(0),
@@ -2101,7 +2101,7 @@ impl Engine {
     /// Test-only: append a metadata batch and commit it through the real apply
     /// pipeline. Returns the appended base offset (or -1 on failure).
     #[cfg(test)]
-    fn test_append_and_commit(&mut self, records: &[crabka_metadata::MetadataRecord]) -> i64 {
+    fn test_append_and_commit(&mut self, records: &[krabka_metadata::MetadataRecord]) -> i64 {
         let leader_epoch = self.core.quorum_state().leader_epoch;
         let mut scratch = self.image.clone();
         let mut blobs: Vec<bytes::Bytes> = Vec::new();
@@ -2188,7 +2188,7 @@ impl Engine {
         self.core.commit_voter_set();
         self.core.set_kraft_version(self.controls.committed_version);
         self.image.apply(&MetadataRecord::V1KRaftVersion(
-            crabka_metadata::KRaftVersionRecord {
+            krabka_metadata::KRaftVersionRecord {
                 kraft_version: self.controls.committed_version,
             },
         ));
@@ -2288,7 +2288,7 @@ impl Engine {
                                             &meta,
                                             MetadataRecord::V1FeatureLevel(feature)
                                                 if feature.name
-                                                    == crabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                                    == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
                                                     && self
                                                         .image
                                                         .finalized_metadata_version()
@@ -2306,7 +2306,7 @@ impl Engine {
                                             );
                                             let mut image = self.image.clone();
                                             image.apply(&MetadataRecord::V1KRaftVersion(
-                                                crabka_metadata::KRaftVersionRecord {
+                                                krabka_metadata::KRaftVersionRecord {
                                                     kraft_version: self
                                                         .controls
                                                         .version_at(end_offset),
@@ -2424,7 +2424,7 @@ impl Engine {
             MetadataImage::from_records(pending.image.cluster_id(), &contents.metadata_records);
         if let Some(control) = &contents.control_state {
             reloaded.apply(&MetadataRecord::V1KRaftVersion(
-                crabka_metadata::KRaftVersionRecord {
+                krabka_metadata::KRaftVersionRecord {
                     kraft_version: control.kraft_version,
                 },
             ));
@@ -2449,7 +2449,7 @@ impl Engine {
             self.metadata_raft_fetch_max,
         )?;
         reloaded.apply(&MetadataRecord::V1KRaftVersion(
-            crabka_metadata::KRaftVersionRecord {
+            krabka_metadata::KRaftVersionRecord {
                 kraft_version: self.controls.committed_version,
             },
         ));
@@ -2503,7 +2503,7 @@ impl Engine {
     /// both bounds (not just `need_offset > record_offset`) prevents a failing
     /// record from bleeding its rejection onto later, unrelated waiters whose
     /// own records committed fine (FIX 2).
-    fn note_rejection(&mut self, record_offset: Offset, err: &crabka_metadata::MetadataError) {
+    fn note_rejection(&mut self, record_offset: Offset, err: &krabka_metadata::MetadataError) {
         for w in &mut self.commit_waiters {
             if w.base_offset <= record_offset
                 && record_offset < w.need_offset
@@ -2957,7 +2957,7 @@ impl Engine {
         let mut new_image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
         if let Some(control) = &contents.control_state {
             new_image.apply(&MetadataRecord::V1KRaftVersion(
-                crabka_metadata::KRaftVersionRecord {
+                krabka_metadata::KRaftVersionRecord {
                     kraft_version: control.kraft_version,
                 },
             ));
@@ -3109,7 +3109,7 @@ fn initial_state_voters(core: &QuorumStateMachine) -> Vec<NodeId> {
 /// the new leader and the current voter set. A real `KRaft` batch MUST contain at
 /// least one record — an empty batch crashes a JVM follower
 /// (`Batch must contain at least one record`) — so this carries the proper
-/// `LeaderChangeMessage` rather than zero records. Crabka readers skip it via
+/// `LeaderChangeMessage` rather than zero records. Krabka readers skip it via
 /// `is_control_batch()`; it occupies exactly one log offset
 /// (`last_offset_delta = 0`), unchanged from the prior empty batch.
 // The `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
@@ -3122,7 +3122,7 @@ fn leader_change_batch(
     voter_set: &VoterSet,
     kraft_version: u16,
 ) -> RecordBatch {
-    use crabka_protocol::{
+    use krabka_protocol::{
         Encode,
         owned::{
             common::leader_change_message::voter::Voter, leader_change_message::LeaderChangeMessage,
@@ -3138,7 +3138,7 @@ fn leader_change_batch(
         .iter()
         .map(|voter| Voter {
             voter_id: i32::try_from(voter.id.0).unwrap_or(i32::MAX),
-            voter_directory_id: crabka_protocol::primitives::uuid::Uuid(
+            voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
                 *voter.directory_id.as_bytes(),
             ),
             ..Default::default()
@@ -3212,7 +3212,7 @@ fn replay_committed(
                         &meta,
                         MetadataRecord::V1FeatureLevel(feature)
                             if feature.name
-                                == crabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
                                 && image
                                     .finalized_metadata_version()
                                     .is_some_and(|current| feature.level < current)
@@ -3433,17 +3433,17 @@ fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), R
         }
     };
     let json = serde_json::to_string(&data).map_err(|e| {
-        RaftError::Storage(crabka_log::LogError::Corrupt(format!(
+        RaftError::Storage(krabka_log::LogError::Corrupt(format!(
             "serialize quorum-state: {e}"
         )))
     })?;
     let path = dir.join(QUORUM_STATE_FILE);
     let tmp = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp).map_err(crabka_log::LogError::Io)?;
+    let mut file = std::fs::File::create(&tmp).map_err(krabka_log::LogError::Io)?;
     file.write_all(json.as_bytes())
-        .map_err(crabka_log::LogError::Io)?;
-    file.sync_all().map_err(crabka_log::LogError::Io)?;
-    std::fs::rename(&tmp, &path).map_err(crabka_log::LogError::Io)?;
+        .map_err(krabka_log::LogError::Io)?;
+    file.sync_all().map_err(krabka_log::LogError::Io)?;
+    std::fs::rename(&tmp, &path).map_err(krabka_log::LogError::Io)?;
     Ok(())
 }
 
@@ -3452,13 +3452,13 @@ fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(), R
 fn load_quorum_state(
     dir: &std::path::Path,
     cluster_id: Uuid,
-    voters: &crabka_metadata::voters::VoterSet,
+    voters: &krabka_metadata::voters::VoterSet,
 ) -> Result<Option<QuorumState>, RaftError> {
     let path = dir.join(QUORUM_STATE_FILE);
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(RaftError::Storage(crabka_log::LogError::Io(e))),
+        Err(e) => return Err(RaftError::Storage(krabka_log::LogError::Io(e))),
     };
     let Ok(data) = serde_json::from_slice::<QuorumStateJson>(&bytes) else {
         return Ok(None);
@@ -3507,12 +3507,12 @@ fn write_checkpoint(
     epoch: i32,
     bytes: &[u8],
 ) -> Result<(), RaftError> {
-    std::fs::create_dir_all(dir).map_err(crabka_log::LogError::Io)?;
+    std::fs::create_dir_all(dir).map_err(krabka_log::LogError::Io)?;
     let name = checkpoint_name(end_offset, epoch);
     let path = dir.join(name);
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).map_err(crabka_log::LogError::Io)?;
-    std::fs::rename(&tmp, &path).map_err(crabka_log::LogError::Io)?;
+    std::fs::write(&tmp, bytes).map_err(krabka_log::LogError::Io)?;
+    std::fs::rename(&tmp, &path).map_err(krabka_log::LogError::Io)?;
     Ok(())
 }
 
@@ -3526,7 +3526,7 @@ fn load_latest_checkpoint(dir: &std::path::Path) -> Result<Option<Vec<u8>>, Raft
         return Ok(None);
     };
     let bytes = std::fs::read(dir.join(checkpoint_name(end_offset, epoch)))
-        .map_err(crabka_log::LogError::Io)?;
+        .map_err(krabka_log::LogError::Io)?;
     Ok(Some(bytes))
 }
 
@@ -3596,7 +3596,7 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     use assert2::{assert, check};
-    use crabka_units::prelude::{millis, secs};
+    use krabka_units::prelude::{millis, secs};
 
     use super::*;
     use crate::kraft::transport::NullPeerSender;
@@ -3607,13 +3607,13 @@ mod tests {
     /// Default election timeout for engines built by [`build`].
     const TEST_ELECTION_TIMEOUT: Time = secs(1);
 
-    fn voter_set(ids: &[NodeId]) -> crabka_metadata::voters::VoterSet {
-        crabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-            crabka_metadata::voters::Voter {
+    fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
+        krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
+            krabka_metadata::voters::Voter {
                 id,
                 directory_id: uuid::Uuid::nil(),
                 endpoints: Vec::new(),
-                kraft_version: crabka_metadata::voters::KRaftVersionRange::default(),
+                kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
             }
         }))
     }
@@ -4017,7 +4017,7 @@ mod tests {
             NodeId(1),
             &[NodeId(1)],
             ControllerFetchMissLimit::new(5).expect("positive miss limit"),
-            MetadataRaftFetchMax::try_from(crabka_units::bytes(512))
+            MetadataRaftFetchMax::try_from(krabka_units::bytes(512))
                 .expect("positive fetch maximum"),
         );
 
@@ -4379,7 +4379,7 @@ mod tests {
 
     #[test]
     fn leader_change_batch_encodes_control_record_payload() {
-        use crabka_protocol::{
+        use krabka_protocol::{
             Decode,
             owned::leader_change_message::LeaderChangeMessage,
             records::metadata::control::{ControlRecordType, control_record_key},
@@ -4506,11 +4506,11 @@ mod tests {
 
         fn add_of(id: u64) -> VoterChange {
             VoterChange::Add(AddVoter {
-                voter: crabka_metadata::Voter {
+                voter: krabka_metadata::Voter {
                     id: NodeId(id),
                     directory_id: uuid::Uuid::nil(),
                     endpoints: vec![],
-                    kraft_version: crabka_metadata::KRaftVersionRange::default(),
+                    kraft_version: krabka_metadata::KRaftVersionRange::default(),
                 },
                 ack_when_committed: true,
             })
@@ -4562,7 +4562,7 @@ mod tests {
 
     #[test]
     fn offset_advance_submit_returns_actor_ordered_base() {
-        use crabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+        use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
 
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         elect_single_voter_engine(&mut engine);
@@ -4596,7 +4596,7 @@ mod tests {
 
     #[test]
     fn broker_registration_epoch_is_assigned_from_appended_offset() {
-        use crabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         elect_single_voter_engine(&mut engine);
@@ -4626,7 +4626,7 @@ mod tests {
 
     #[test]
     fn broker_registration_projection_preserves_existing_epoch() {
-        use crabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         elect_single_voter_engine(&mut engine);
@@ -4688,7 +4688,7 @@ mod tests {
 
     #[test]
     fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         let published_image = engine.image_tx.subscribe();
@@ -4713,7 +4713,7 @@ mod tests {
         );
         let update = |level| {
             vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level,
             })]
         };
@@ -4805,14 +4805,14 @@ mod tests {
 
     #[tokio::test]
     async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
         let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         let data_dir = dir.path().to_path_buf();
         elect_single_voter_engine(&mut engine);
         let update = |level| {
             vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level,
             })]
         };
@@ -4880,14 +4880,14 @@ mod tests {
 
     #[tokio::test]
     async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
         let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         let data_dir = dir.path().to_path_buf();
         elect_single_voter_engine(&mut engine);
         let update = |level| {
             vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level,
             })]
         };
@@ -4937,14 +4937,14 @@ mod tests {
 
     #[tokio::test]
     async fn restart_propagates_persistent_downgrade_recovery_error() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
         let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         let data_dir = dir.path().to_path_buf();
         elect_single_voter_engine(&mut engine);
         let update = |level| {
             vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level,
             })]
         };
@@ -5002,7 +5002,7 @@ mod tests {
 
     #[test]
     fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
-        let tiny = MetadataRaftFetchMax::try_from(crabka_units::bytes(1))
+        let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
             .expect("one byte still makes progress");
         let (mut engine, _dir) = build_engine_only_with_policy(
             NodeId(1),
@@ -5275,7 +5275,7 @@ mod tests {
             NodeId(1),
             &[NodeId(1)],
             ControllerFetchMissLimit::default(),
-            MetadataRaftFetchMax::try_from(crabka_units::bytes(1))
+            MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
                 .expect("one byte still serves the first batch"),
         );
         let mut batch = one_offset_batch(0, 1, b"a");
@@ -5302,7 +5302,7 @@ mod tests {
             NodeId(1),
             &[NodeId(1), NodeId(2)],
             ControllerFetchMissLimit::default(),
-            MetadataRaftFetchMax::try_from(crabka_units::bytes(512))
+            MetadataRaftFetchMax::try_from(krabka_units::bytes(512))
                 .expect("positive fetch maximum"),
         );
         let fetch_snapshot_response = wire::PeerResponse::FetchSnapshot {
@@ -5440,7 +5440,7 @@ mod tests {
     /// the partition records (the `TopicRecord` wire shape carries no count), so
     /// a bare `V1Topic` would round-trip back to zero partitions and fail
     /// validation on apply.
-    fn topic_record(name: &str) -> Vec<crabka_metadata::MetadataRecord> {
+    fn topic_record(name: &str) -> Vec<krabka_metadata::MetadataRecord> {
         topic_record_named(name, 1)
     }
 
@@ -5486,7 +5486,7 @@ mod tests {
 
     async fn submit_change_with_timeout(
         ctrl: &KraftController,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
         context: &str,
     ) -> Result<(), RaftError> {
         tokio::time::timeout(StdDuration::from_secs(2), ctrl.submit_change(records))
@@ -5717,21 +5717,21 @@ mod tests {
         ctrl.shutdown().await;
     }
 
-    fn topic_record_named(name: &str, id: u128) -> Vec<crabka_metadata::MetadataRecord> {
+    fn topic_record_named(name: &str, id: u128) -> Vec<krabka_metadata::MetadataRecord> {
         vec![
-            crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
                 name: name.to_string(),
                 topic_id: uuid::Uuid::from_u128(id),
                 partitions: 1,
                 replication_factor: 1,
             }),
-            crabka_metadata::MetadataRecord::V1Partition(crabka_metadata::PartitionRecord {
+            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
                 topic: name.to_string(),
                 partition: 0,
                 leader: NodeId(1),
                 replicas: vec![NodeId(1)],
                 isr: vec![NodeId(1)],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -6028,7 +6028,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_registration_epoch_equals_commit_offset() {
-        use crabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
         let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
         ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
         await_leader(&ctrl, Some(NodeId(1))).await;

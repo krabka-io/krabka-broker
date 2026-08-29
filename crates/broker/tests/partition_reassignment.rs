@@ -24,11 +24,11 @@ use std::{
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -38,7 +38,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -47,11 +47,11 @@ use tokio::{
 
 mod support;
 
-fn node_id(id: i32) -> crabka_metadata::NodeId {
-    crabka_metadata::NodeId(u64::try_from(id).expect("broker IDs are non-negative"))
+fn node_id(id: i32) -> krabka_metadata::NodeId {
+    krabka_metadata::NodeId(u64::try_from(id).expect("broker IDs are non-negative"))
 }
 
-fn broker_id(node: crabka_metadata::NodeId) -> i32 {
+fn broker_id(node: krabka_metadata::NodeId) -> i32 {
     i32::try_from(node.0).expect("test broker ID fits in i32")
 }
 
@@ -73,7 +73,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-reassign-test";
+    let client_id = "krabka-reassign-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -114,7 +114,7 @@ async fn create_topic_plaintext(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -211,7 +211,7 @@ async fn drive_alter_reassignments(
     addr: SocketAddr,
     rows: Vec<(&str, i32, Option<Vec<i32>>)>,
 ) -> Vec<(String, Vec<(i32, i16)>)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_partition_reassignments_request::{
             AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
         },
@@ -278,7 +278,7 @@ async fn drive_list_reassignments(
     addr: SocketAddr,
     filter: Option<Vec<(&str, Vec<i32>)>>,
 ) -> Vec<(String, Vec<(i32, Vec<i32>, Vec<i32>, Vec<i32>)>)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         list_partition_reassignments_request::{
             ListPartitionReassignmentsRequest, ListPartitionReassignmentsTopics,
         },
@@ -393,11 +393,11 @@ async fn alter_then_complete_via_isr_catchup() {
     );
 
     // Inject ISR including the new replica so the background task completes the reassignment.
-    let injected = crabka_metadata::PartitionRecord {
+    let injected = krabka_metadata::PartitionRecord {
         isr: vec![node_id(staying), node_id(new_replica), node_id(removing)],
         ..pr_after_alter.clone()
     };
-    h1.submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1Partition(injected))
+    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
         .await
         .expect("inject");
 
@@ -554,7 +554,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -589,7 +589,7 @@ async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -631,7 +631,7 @@ async fn drive_alter_reassignments_sasl_plain(
     pass: &str,
     rows: Vec<(&str, i32, Option<Vec<i32>>)>,
 ) -> Vec<(String, Vec<(i32, i16)>)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_partition_reassignments_request::{
             AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
         },

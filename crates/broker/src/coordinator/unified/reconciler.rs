@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crabka_protocol::primitives::uuid::Uuid;
+use krabka_protocol::primitives::uuid::Uuid;
 
 use super::assignor::{Assignor, MemberSubscription, TopicMetadata};
 use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
@@ -59,7 +59,7 @@ pub fn reconcile_if_dirty(
 /// and `membership_topic_ids` use it.
 ///
 /// At KIP-848 v1+ the client supplies the regex as a Java `Pattern`-syntax
-/// string. Crabka compiles it with Rust's RE2-based `regex` crate, which
+/// string. Krabka compiles it with Rust's RE2-based `regex` crate, which
 /// differs only in extended constructs such as lookaround. Operator-facing
 /// subscription patterns do not use those. Compilation happens once, when the
 /// pattern changes, and `MemberState` caches the result. An invalid pattern

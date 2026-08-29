@@ -11,7 +11,7 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
     describe_configs_response::DescribeConfigsResponse,
     incremental_alter_configs_request::{
@@ -37,8 +37,8 @@ const CONFIG_SOURCE_DEFAULT: i8 = 5;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-async fn build_client(addr: std::net::SocketAddr) -> crabka_client_core::Client {
-    crabka_client_core::Client::builder()
+async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
+    krabka_client_core::Client::builder()
         .bootstrap(format!("127.0.0.1:{}", addr.port()))
         .client_id("client-metrics-config-test")
         .build()

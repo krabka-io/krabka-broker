@@ -4,9 +4,9 @@
 
 use std::time::Duration;
 
-use crabka_metadata::{MetadataRecord, NodeId, TopicRecord};
-use crabka_raft::{Controller, ControllerConfig};
-use crabka_units::prelude::{Time, millis};
+use krabka_metadata::{MetadataRecord, NodeId, TopicRecord};
+use krabka_raft::{Controller, ControllerConfig};
+use krabka_units::prelude::{Time, millis};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -69,7 +69,7 @@ async fn single_voter_duplicate_topic_rejected() {
     let err = controller.submit_change(vec![topic]).await.unwrap_err();
     assert2::assert!(matches!(
         err,
-        crabka_raft::RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))
+        krabka_raft::RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
     ));
 
     controller.shutdown().await;

@@ -37,7 +37,7 @@
 
 use std::time::Duration;
 
-use crabka_log::{Offset, ProducerId};
+use krabka_log::{Offset, ProducerId};
 use stateright::{Checker, Model, Property};
 
 use super::{

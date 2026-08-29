@@ -23,8 +23,8 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         consumer_protocol_subscription::ConsumerProtocolSubscription,
@@ -247,7 +247,7 @@ fn whole_error(req: &OffsetDeleteRequest, code: i16) -> OffsetDeleteResponse {
 ///   - otherwise the helper queues a tombstone and returns `NONE`.
 fn build_response_rows(
     group_id: &str,
-    topics: &[crabka_protocol::owned::offset_delete_request::OffsetDeleteRequestTopic],
+    topics: &[krabka_protocol::owned::offset_delete_request::OffsetDeleteRequestTopic],
     topic_decisions: &std::collections::HashMap<&str, AuthorizationResult>,
     subscribed_topics: &HashSet<String>,
     topic_partition_counts: &std::collections::HashMap<&str, i32>,
@@ -340,7 +340,7 @@ async fn append_tombstones(
 ) -> Result<(), i16> {
     let Some(part_handle) = broker
         .partitions
-        .get(OFFSETS_TOPIC, crabka_ids::PartitionIndex(offsets_partition))
+        .get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(offsets_partition))
     else {
         return Err(codes::UNKNOWN_SERVER_ERROR);
     };
@@ -413,7 +413,7 @@ mod tests {
 
     use assert2::{assert, check};
     use bytes::BufMut;
-    use crabka_protocol::{
+    use krabka_protocol::{
         Encode, UnknownTaggedFields,
         owned::{
             consumer_protocol_subscription::ConsumerProtocolSubscription,

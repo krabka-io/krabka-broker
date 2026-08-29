@@ -77,7 +77,7 @@ impl ShareGroupAssignor {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_protocol::primitives::uuid::Uuid;
+    use krabka_protocol::primitives::uuid::Uuid;
 
     use super::*;
     use crate::coordinator::unified::assignor::{MemberSubscription, TopicMetadata};

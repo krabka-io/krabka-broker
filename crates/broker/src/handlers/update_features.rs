@@ -8,12 +8,12 @@
 //! `AlterUserScramCredentials`, so the handler receives the authenticated
 //! principal and the peer for the ACL check.
 
-use crabka_metadata::{AclOperation, FeatureLevelRecord, MetadataRecord};
-use crabka_protocol::owned::{
+use krabka_metadata::{AclOperation, FeatureLevelRecord, MetadataRecord};
+use krabka_protocol::owned::{
     update_features_request::UpdateFeaturesRequest,
     update_features_response::{UpdatableFeatureResult, UpdateFeaturesResponse},
 };
-use crabka_raft::RaftError;
+use krabka_raft::RaftError;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -24,7 +24,7 @@ use crate::{
 /// True when the target image already meets every KIP-1022 dependency for a
 /// feature finalize. `deps` is the feature's `dependencies(level)` slice, which
 /// holds `(dependency_feature_name, min_finalized_level)` pairs.
-fn dependencies_met(image: &crabka_metadata::MetadataImage, deps: &[(&str, i16)]) -> bool {
+fn dependencies_met(image: &krabka_metadata::MetadataImage, deps: &[(&str, i16)]) -> bool {
     deps.iter().all(|(dep, min_level)| {
         image
             .finalized_features()
@@ -78,7 +78,7 @@ fn downgrade_allowed(version: i16, allow_downgrade: bool, upgrade_type: i8) -> b
 }
 
 fn unsupported_registered_node(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     feature: &str,
     level: i16,
 ) -> Option<String> {
@@ -110,14 +110,14 @@ fn unsupported_registered_node(
 }
 
 fn registered_node_without_metadata_downgrade_capability(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Option<String> {
     let supports_downgrade = |features: &std::collections::BTreeMap<String, (i16, i16)>| {
         features
-            .get(crabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
+            .get(krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
             .is_some_and(|&(min, max)| {
-                min <= crabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL
-                    && crabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL <= max
+                min <= krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL
+                    && krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL <= max
             })
     };
     for broker in image.brokers() {
@@ -140,8 +140,8 @@ fn registered_node_without_metadata_downgrade_capability(
 }
 
 fn unregistered_controller(
-    image: &crabka_metadata::MetadataImage,
-) -> Option<crabka_metadata::NodeId> {
+    image: &krabka_metadata::MetadataImage,
+) -> Option<krabka_metadata::NodeId> {
     image
         .voters()
         .iter()
@@ -169,7 +169,7 @@ pub(crate) async fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Alter,
         },
@@ -207,13 +207,13 @@ pub(crate) async fn handle(
             .iter()
             .zip(&results)
             .any(|(update, result)| {
-                update.feature == crabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
+                update.feature == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
                     && result.error_code == codes::NONE
             });
     if kraft_upgrade {
         match broker.controller.finalize_kraft_version(1).await {
-            Ok(crabka_raft::ReconfigOutcome::Committed) => {}
-            Ok(crabka_raft::ReconfigOutcome::NotLeader { .. })
+            Ok(krabka_raft::ReconfigOutcome::Committed) => {}
+            Ok(krabka_raft::ReconfigOutcome::NotLeader { .. })
             | Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
                 return apply_request_wide(
                     results,
@@ -262,7 +262,7 @@ pub(crate) async fn handle(
 
 fn validate_updates(
     request: &UpdateFeaturesRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     version: i16,
 ) -> (Vec<UpdatableFeatureResult>, Vec<MetadataRecord>) {
     let mut seen = std::collections::HashSet::new();
@@ -279,7 +279,7 @@ fn validate_updates(
             ));
             continue;
         }
-        let Some(feat) = crabka_metadata::feature(&name) else {
+        let Some(feat) = krabka_metadata::feature(&name) else {
             results.push(row(
                 name,
                 codes::INVALID_REQUEST,
@@ -289,7 +289,7 @@ fn validate_updates(
         };
 
         let level = upd.max_version_level;
-        if name == crabka_metadata::metadata_version::KRAFT_VERSION_FEATURE {
+        if name == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE {
             let current = i16::try_from(image.kraft_version()).unwrap_or(i16::MAX);
             if level != 1 || current > level {
                 results.push(row(
@@ -342,10 +342,10 @@ fn validate_updates(
         }
         let mut downgrade_records = Vec::new();
         let mut projected_image = None;
-        if name == crabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+        if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
             && current.is_some_and(|cur| level < cur)
         {
-            if level < crabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL {
+            if level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL {
                 results.push(row(
                     name,
                     codes::INVALID_UPDATE_VERSION,
@@ -442,7 +442,7 @@ fn validate_updates(
             name: name.clone(),
             level,
         });
-        if name == crabka_metadata::metadata_version::METADATA_VERSION_FEATURE {
+        if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE {
             records.extend(downgrade_records);
             metadata_version_record = Some(feature_record);
         } else {
@@ -519,8 +519,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::owned::update_features_request::FeatureUpdateKey;
-    use crabka_security::Principal;
+    use krabka_protocol::owned::update_features_request::FeatureUpdateKey;
+    use krabka_security::Principal;
 
     use crate::{
         authorizer::Authorizer,
@@ -685,7 +685,7 @@ mod tests {
             error_code: codes::INVALID_REQUEST,
             error_message: Some("bad request".to_string()),
             results: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -716,22 +716,22 @@ mod tests {
                     feature: "metadata.version".to_string(),
                     error_code: codes::FEATURE_UPDATE_FAILED,
                     error_message: Some("persist failed".to_string()),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
                 UpdatableFeatureResult {
                     feature: "eligible.feature".to_string(),
                     error_code: codes::FEATURE_UPDATE_FAILED,
                     error_message: Some("persist failed".to_string()),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
                 UpdatableFeatureResult {
                     feature: "not.a.feature".to_string(),
                     error_code: codes::INVALID_REQUEST,
                     error_message: Some("bad feature".to_string()),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -752,16 +752,16 @@ mod tests {
                     feature: "a".to_string(),
                     error_code: codes::NONE,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
                 UpdatableFeatureResult {
                     feature: "b".to_string(),
                     error_code: codes::INVALID_UPDATE_VERSION,
                     error_message: Some("bad".to_string()),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -778,9 +778,9 @@ mod tests {
                 feature: "b".to_string(),
                 error_code: codes::INVALID_UPDATE_VERSION,
                 error_message: Some("bad".to_string()),
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -789,14 +789,14 @@ mod tests {
     fn metadata_version_floor_via_registry() {
         // A fresh image floors metadata.version at its supported min; the
         // registry trait path returns that floor.
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let feat = crabka_metadata::feature("metadata.version").unwrap();
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let feat = krabka_metadata::feature("metadata.version").unwrap();
         assert!(feat.min_required_floor(&image) == crate::features::METADATA_VERSION_MIN);
     }
 
     #[test]
     fn dependencies_met_checks_finalized_levels() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         // No deps → trivially met.
         assert!(dependencies_met(&image, &[]));
@@ -811,16 +811,16 @@ mod tests {
         assert!(!dependencies_met(&image, &[("metadata.version", 26)]));
     }
 
-    fn image_with_directory(metadata_version: i16) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let supported_features = crabka_metadata::supported_feature_ranges();
+    fn image_with_directory(metadata_version: i16) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let supported_features = krabka_metadata::supported_feature_ranges();
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
             level: metadata_version,
         }));
         image.apply(&MetadataRecord::V1BrokerRegistration(
-            crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_metadata::NodeId(1),
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_metadata::NodeId(1),
                 broker_epoch: 9,
                 incarnation_id: uuid::Uuid::from_u128(1),
                 host: "broker-1".into(),
@@ -832,12 +832,12 @@ mod tests {
             },
         ));
         image.apply(&MetadataRecord::V1Partition(
-            crabka_metadata::PartitionRecord {
+            krabka_metadata::PartitionRecord {
                 topic: "orders".into(),
                 partition: 0,
-                leader: crabka_metadata::NodeId(1),
-                replicas: vec![crabka_metadata::NodeId(1)],
-                isr: vec![crabka_metadata::NodeId(1)],
+                leader: krabka_metadata::NodeId(1),
+                replicas: vec![krabka_metadata::NodeId(1)],
+                isr: vec![krabka_metadata::NodeId(1)],
                 directories: vec![uuid::Uuid::from_u128(0xD1)],
                 ..Default::default()
             },
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn unsafe_metadata_downgrade_cleans_lossy_fields_before_version_record() {
         let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
-        let target = crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1;
+        let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1;
 
         let (safe_results, safe_records) = validate_updates(
             &validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]),
@@ -871,8 +871,8 @@ mod tests {
         );
         assert!(unsafe_results[0].error_code == codes::NONE);
         let expected = vec![
-            MetadataRecord::V1BrokerRegistration(crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_metadata::NodeId(1),
+            MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_metadata::NodeId(1),
                 broker_epoch: 9,
                 incarnation_id: uuid::Uuid::from_u128(1),
                 host: "broker-1".into(),
@@ -880,18 +880,18 @@ mod tests {
                 rack: None,
                 endpoints: vec![],
                 log_dirs: vec![],
-                features: crabka_metadata::supported_feature_ranges(),
+                features: krabka_metadata::supported_feature_ranges(),
             }),
             MetadataRecord::V1PartitionDirAssignment(
-                crabka_metadata::PartitionDirAssignmentRecord {
+                krabka_metadata::PartitionDirAssignmentRecord {
                     topic: "orders".into(),
                     partition: 0,
-                    replica: crabka_metadata::NodeId(1),
+                    replica: krabka_metadata::NodeId(1),
                     directory: uuid::Uuid::nil(),
                 },
             ),
             MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level: target,
             }),
         ];
@@ -910,7 +910,7 @@ mod tests {
         );
         assert!(
             projected
-                .broker(crabka_metadata::NodeId(1))
+                .broker(krabka_metadata::NodeId(1))
                 .expect("broker")
                 .log_dirs
                 .is_empty()
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn safe_metadata_downgrade_preserves_representable_directory_fields() {
         let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
-        let target = crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL;
+        let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL;
 
         let (results, records) = validate_updates(
             &validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]),
@@ -933,7 +933,7 @@ mod tests {
         assert!(
             records
                 == vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                    name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                     level: target,
                 })]
         );
@@ -942,7 +942,7 @@ mod tests {
     #[test]
     fn metadata_downgrade_rejects_registered_nodes_without_capability() {
         let supported = std::collections::BTreeMap::from([(
-            crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
             (
                 crate::features::METADATA_VERSION_MIN,
                 crate::features::METADATA_VERSION_MAX,
@@ -950,8 +950,8 @@ mod tests {
         )]);
         let registrations = [
             (
-                MetadataRecord::V1BrokerRegistration(crabka_metadata::BrokerRegistrationRecord {
-                    node_id: crabka_metadata::NodeId(2),
+                MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_metadata::NodeId(2),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::nil(),
                     host: String::new(),
@@ -965,8 +965,8 @@ mod tests {
             ),
             (
                 MetadataRecord::V1ControllerRegistration(
-                    crabka_metadata::ControllerRegistrationRecord {
-                        node_id: crabka_metadata::NodeId(3),
+                    krabka_metadata::ControllerRegistrationRecord {
+                        node_id: krabka_metadata::NodeId(3),
                         incarnation_id: uuid::Uuid::nil(),
                         zk_migration_ready: false,
                         endpoints: vec![],
@@ -978,15 +978,15 @@ mod tests {
         ];
 
         for (registration, expected_node) in registrations {
-            let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
             image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level: crate::features::METADATA_VERSION_MAX,
             }));
             image.apply(&registration);
             let (results, records) = validate_updates(
                 &validate_only(vec![metadata_update(
-                    crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
+                    krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
                     UPGRADE_TYPE_SAFE_DOWNGRADE,
                 )]),
                 &image,
@@ -1007,18 +1007,18 @@ mod tests {
 
     #[test]
     fn metadata_update_checks_every_capable_registered_node_supports_target() {
-        let mut supported = crabka_metadata::supported_feature_ranges();
+        let mut supported = krabka_metadata::supported_feature_ranges();
         supported.insert(
-            crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
             (
-                crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
+                krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
                 crate::features::METADATA_VERSION_MAX,
             ),
         );
         let registrations = [
             (
-                MetadataRecord::V1BrokerRegistration(crabka_metadata::BrokerRegistrationRecord {
-                    node_id: crabka_metadata::NodeId(2),
+                MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_metadata::NodeId(2),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::nil(),
                     host: String::new(),
@@ -1032,8 +1032,8 @@ mod tests {
             ),
             (
                 MetadataRecord::V1ControllerRegistration(
-                    crabka_metadata::ControllerRegistrationRecord {
-                        node_id: crabka_metadata::NodeId(3),
+                    krabka_metadata::ControllerRegistrationRecord {
+                        node_id: krabka_metadata::NodeId(3),
                         incarnation_id: uuid::Uuid::nil(),
                         zk_migration_ready: false,
                         endpoints: vec![],
@@ -1045,15 +1045,15 @@ mod tests {
         ];
 
         for (registration, expected_node) in registrations {
-            let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
             image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
                 level: crate::features::METADATA_VERSION_MAX,
             }));
             image.apply(&registration);
             let (results, records) = validate_updates(
                 &validate_only(vec![metadata_update(
-                    crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
+                    krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
                     UPGRADE_TYPE_SAFE_DOWNGRADE,
                 )]),
                 &image,
@@ -1074,25 +1074,25 @@ mod tests {
 
     #[test]
     fn metadata_downgrade_rejects_unregistered_quorum_controller() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
             level: crate::features::METADATA_VERSION_MAX,
         }));
-        image.apply(&MetadataRecord::V1Voters(crabka_metadata::VotersRecord {
-            voters: crabka_metadata::voters::VoterSet::from_voters([
-                crabka_metadata::voters::Voter {
-                    id: crabka_metadata::NodeId(3),
+        image.apply(&MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
+            voters: krabka_metadata::voters::VoterSet::from_voters([
+                krabka_metadata::voters::Voter {
+                    id: krabka_metadata::NodeId(3),
                     directory_id: uuid::Uuid::from_u128(3),
                     endpoints: vec![],
-                    kraft_version: crabka_metadata::voters::KRaftVersionRange::default(),
+                    kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
                 },
             ]),
         }));
 
         let (results, records) = validate_updates(
             &validate_only(vec![metadata_update(
-                crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
+                krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
                 UPGRADE_TYPE_SAFE_DOWNGRADE,
             )]),
             &image,
@@ -1112,14 +1112,14 @@ mod tests {
 
     #[test]
     fn downgrade_type_cannot_raise_a_finalized_feature() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            level: krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
         }));
         let (results, records) = validate_updates(
             &validate_only(vec![metadata_update(
-                crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL + 1,
+                krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL + 1,
                 UPGRADE_TYPE_SAFE_DOWNGRADE,
             )]),
             &image,
@@ -1150,7 +1150,7 @@ mod tests {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("Cluster authorization failed.".to_string()),
             results: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -1171,7 +1171,7 @@ mod tests {
                 "Can not provide empty feature updates in the request.".to_string(),
             ),
             results: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -1198,9 +1198,9 @@ mod tests {
                 feature: crate::features::METADATA_VERSION.to_string(),
                 error_code: codes::NONE,
                 error_message: None,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -1255,7 +1255,7 @@ mod tests {
                     feature: crate::features::METADATA_VERSION.to_string(),
                     error_code: codes::NONE,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
                 UpdatableFeatureResult {
                     feature: crate::features::METADATA_VERSION.to_string(),
@@ -1264,10 +1264,10 @@ mod tests {
                         "Provided feature can not be updated more than once in the request."
                             .to_string(),
                     ),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -1307,7 +1307,7 @@ mod tests {
     #[tokio::test]
     async fn handle_accepts_lossless_safe_metadata_downgrade() {
         let req = validate_only(vec![metadata_update(
-            crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
+            krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
             2,
         )]);
 

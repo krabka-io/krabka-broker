@@ -1,4 +1,4 @@
-//! KIP-1022 `crabka format --feature` end-to-end test. A standalone-formatted
+//! KIP-1022 `krabka format --feature` end-to-end test. A standalone-formatted
 //! log dir whose feature levels came from `--feature` boots a broker that
 //! finalizes exactly those levels and surfaces them through `ApiVersions`.
 //!
@@ -8,29 +8,29 @@
 //! `--feature` overrides survive boot and nothing overwrites them.
 
 use assert2::{assert, check};
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::api_versions_request::ApiVersionsRequest;
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
 mod support;
 
-/// Run `crabka format --standalone … --feature …` as a subprocess. The test
+/// Run `krabka format --standalone … --feature …` as a subprocess. The test
 /// shells out through `env!("CARGO")`, because this crate does not get the
-/// `crabka-format` `CARGO_BIN_EXE_*` variable. The dev-dep keeps the
+/// `krabka-format` `CARGO_BIN_EXE_*` variable. The dev-dep keeps the
 /// Formats a standalone log directory with explicit `--feature` overrides.
 ///
 /// Called in process rather than spawned: the formatting is setup for the
 /// `ApiVersions` assertion below, not the thing under test, and a subprocess would
 /// need a Cargo working tree to build from, which a Bazel test sandbox does not
-/// have. `crabka-format`'s own `format_smoke` suite runs the real binary.
-async fn run_crabka_format_with_features(
+/// have. `krabka-format`'s own `format_smoke` suite runs the real binary.
+async fn run_krabka_format_with_features(
     log_dir: &std::path::Path,
     node_id: u64,
     controller_listener: &str,
     features: &[&str],
 ) {
     let mut argv = vec![
-        "crabka-format".to_string(),
+        "krabka-format".to_string(),
         "--log-dir".to_string(),
         log_dir.to_str().unwrap().to_string(),
         "--standalone".to_string(),
@@ -43,8 +43,8 @@ async fn run_crabka_format_with_features(
         argv.push("--feature".to_string());
         argv.push((*f).to_string());
     }
-    let code = crabka_format::run_from_args(argv).await;
-    assert!(code == 0, "crabka-format exited {code}");
+    let code = krabka_format::run_from_args(argv).await;
+    assert!(code == 0, "krabka-format exited {code}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -59,9 +59,9 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
     let controller_addr = controller_addrs[0];
 
     let dir = tempfile::tempdir().unwrap();
-    // `crabka format` creates the dir itself and refuses a non-empty one.
+    // `krabka format` creates the dir itself and refuses a non-empty one.
     let boot_dir = dir.path().join("boot");
-    run_crabka_format_with_features(
+    run_krabka_format_with_features(
         &boot_dir,
         1,
         &controller_addr.to_string(),
@@ -73,12 +73,12 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
 
     let mut cfg = BrokerConfig::for_tests(boot_dir.clone());
     cfg.broker_id = 1;
-    cfg.node_id = crabka_broker::NodeId(1);
+    cfg.node_id = krabka_broker::NodeId(1);
     cfg.listen_addr = client_addr;
     cfg.advertised_listener = client_addr.to_string();
     cfg.controller_listen_addr = controller_addr;
-    cfg.controller_quorum_voters = vec![(crabka_broker::NodeId(1), controller_addr.to_string())];
-    cfg.bootstrap_mode = crabka_broker::BootstrapMode::Bootstrap;
+    cfg.controller_quorum_voters = vec![(krabka_broker::NodeId(1), controller_addr.to_string())];
+    cfg.bootstrap_mode = krabka_broker::BootstrapMode::Bootstrap;
 
     let data_listener = client_listeners.into_iter().next().unwrap();
     let controller_listener = controller_listeners.into_iter().next().unwrap();
@@ -95,7 +95,7 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
 
     let av = client
         .send(ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })

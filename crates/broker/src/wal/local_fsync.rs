@@ -5,8 +5,8 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use crabka_ids::Offset;
-use crabka_log::Log;
+use krabka_ids::Offset;
+use krabka_log::Log;
 use tokio::runtime::RuntimeFlavor;
 
 use super::WalStore;
@@ -78,8 +78,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use assert2::assert;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::records::{Record, RecordBatch};
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
     use crate::partition::ProduceData;
@@ -105,7 +105,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(actual_offsets == vec![Ok(Offset(0)), Ok(Offset(2))]);
         assert!(results.iter().all(Result::is_ok));
-        assert!(leo == crabka_ids::Offset(5));
+        assert!(leo == krabka_ids::Offset(5));
         // Durable watermark only advances after sync_durable.
         let durable = w.sync_durable(leo).await.unwrap();
         assert!(durable == leo);

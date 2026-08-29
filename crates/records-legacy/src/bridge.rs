@@ -1,6 +1,6 @@
 //! Convert between v2 `RecordBatch` and v0/v1 `MessageSet` payloads.
 //!
-//! The v2 types come from `crabka-protocol`.
+//! The v2 types come from `krabka-protocol`.
 //!
 //! Down-conversion goes from v2 to v0/v1. It builds a [`ParsedRecord`]
 //! stream from a v2 batch and decompresses the v2 body one time. It then
@@ -15,9 +15,9 @@
 //! reference broker drops them on down-conversion.
 
 use bytes::{Bytes, BytesMut};
-use crabka_compression::{CompressionType, RecordDecompressionPolicy};
-use crabka_ids::Offset;
-use crabka_protocol::records::{Attributes, Record, RecordBatch, RecordsError};
+use krabka_compression::{CompressionType, RecordDecompressionPolicy};
+use krabka_ids::Offset;
+use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsError};
 
 use crate::{
     error::LegacyRecordsError,
@@ -186,9 +186,9 @@ impl From<RecordsError> for LegacyRecordsError {
 mod tests {
 
     use bytes::Bytes;
-    use crabka_compression::{CompressionError, RecordDecompressionPolicy};
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_units::{bytes, fraction};
+    use krabka_compression::{CompressionError, RecordDecompressionPolicy};
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_units::{bytes, fraction};
 
     use super::*;
     use crate::decode_message_set;
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn headers_are_dropped_on_down_conversion() {
         let mut v2 = v2_batch(CompressionType::None);
-        v2.records[0].headers = vec![crabka_protocol::records::RecordHeader {
+        v2.records[0].headers = vec![krabka_protocol::records::RecordHeader {
             key: "x".to_string(),
             value: Some(Bytes::from_static(b"y")),
         }];

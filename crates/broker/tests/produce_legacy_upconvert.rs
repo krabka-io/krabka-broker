@@ -2,7 +2,7 @@
 //!
 //! The broker's Produce handler accepts a `RecordsPayload::Legacy` arm. It
 //! passes incoming v0/v1 `MessageSet` bytes through
-//! `crabka_records_legacy::legacy_to_v2`, and gives the resulting v2 batch to
+//! `krabka_records_legacy::legacy_to_v2`, and gives the resulting v2 batch to
 //! the existing log-append path.
 //!
 //! These tests exercise the conversion without the wire protocol's version
@@ -14,8 +14,8 @@ use assert2::assert;
 mod support;
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::Offset;
-use crabka_protocol::{
+use krabka_ids::Offset;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -25,7 +25,7 @@ use crabka_protocol::{
     primitives::uuid::Uuid,
     records::RecordsPayload,
 };
-use crabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
+use krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
 
 async fn create_topic(p: &support::InProcess, name: &str) {
     let resp = p

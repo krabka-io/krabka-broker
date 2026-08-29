@@ -19,10 +19,10 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, Offset, ReadOutput, VerbatimBatch};
-use crabka_protocol::records::RecordBatch;
-use crabka_units::ByteSize;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, Offset, ReadOutput, VerbatimBatch};
+use krabka_protocol::records::RecordBatch;
+use krabka_units::ByteSize;
 use tokio::{
     sync::{Notify, mpsc, oneshot},
     task::JoinHandle,
@@ -42,8 +42,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReplicationTarget {
     pub(crate) topic_id: Option<uuid::Uuid>,
-    pub(crate) leader_node_id: crabka_raft::NodeId,
-    pub(crate) leader_epoch: crabka_metadata::LeaderEpoch,
+    pub(crate) leader_node_id: krabka_raft::NodeId,
+    pub(crate) leader_epoch: krabka_metadata::LeaderEpoch,
 }
 
 pub(crate) fn initial_replication_target(
@@ -51,8 +51,8 @@ pub(crate) fn initial_replication_target(
 ) -> Arc<tokio::sync::RwLock<ReplicationTarget>> {
     Arc::new(tokio::sync::RwLock::new(ReplicationTarget {
         topic_id,
-        leader_node_id: crabka_raft::NodeId(0),
-        leader_epoch: crabka_metadata::LeaderEpoch(0),
+        leader_node_id: krabka_raft::NodeId(0),
+        leader_epoch: krabka_metadata::LeaderEpoch(0),
     }))
 }
 
@@ -160,7 +160,7 @@ pub enum WriterMessage {
     /// `ReplicatorSupervisor::reconcile` whenever a `V1TopicConfig`
     /// record changes the topic's overrides.
     SetLogConfig {
-        config: crabka_log::LogConfig,
+        config: krabka_log::LogConfig,
         ack: tokio::sync::oneshot::Sender<()>,
     },
     /// Run one compaction pass. The writer actor serializes this with
@@ -345,7 +345,7 @@ impl Partition {
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &std::collections::BTreeMap<String, String>,
-        base: &crabka_log::LogConfig,
+        base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = crate::config_keys::apply_to_log_config(overrides, base);
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -465,7 +465,7 @@ impl Partition {
 
     /// The additional internal stamp coordinate that covers `offset`. Returns
     /// `None` when this partition is unstamped, that is, when no
-    /// [`crabka_log::StampSource`] is injected, or when no stamped range
+    /// [`krabka_log::StampSource`] is injected, or when no stamped range
     /// covers `offset`.
     ///
     /// Locks the `Arc<Mutex<Log>>` briefly. This is a server-side query only.
@@ -674,9 +674,9 @@ impl Partition {
     /// advances only after WAL fsync.
     pub async fn install_isr(
         &self,
-        isr: &[crabka_raft::NodeId],
-        replicas: &[crabka_raft::NodeId],
-        leader: crabka_raft::NodeId,
+        isr: &[krabka_raft::NodeId],
+        replicas: &[krabka_raft::NodeId],
+        leader: krabka_raft::NodeId,
     ) {
         let leader_leo = self.log_end_offset();
         let mut st = self.replica_state.lock().await;
@@ -724,8 +724,8 @@ impl Partition {
         {
             let current = self.replication_target.read().await;
             if topic_id.is_none_or(|id| current.topic_id == Some(id))
-                && current.leader_node_id == crabka_raft::NodeId(new_leader)
-                && current.leader_epoch == crabka_metadata::LeaderEpoch(new_epoch)
+                && current.leader_node_id == krabka_raft::NodeId(new_leader)
+                && current.leader_epoch == krabka_metadata::LeaderEpoch(new_epoch)
             {
                 return;
             }
@@ -781,8 +781,8 @@ impl Partition {
         if let Some(topic_id) = topic_id {
             target.topic_id = Some(topic_id);
         }
-        target.leader_node_id = crabka_raft::NodeId(new_leader);
-        target.leader_epoch = crabka_metadata::LeaderEpoch(new_epoch);
+        target.leader_node_id = krabka_raft::NodeId(new_leader);
+        target.leader_epoch = krabka_metadata::LeaderEpoch(new_epoch);
         drop(target);
         let leader_changed = prev_leader != new_leader || prev_epoch != new_epoch;
         let mut st = self.replica_state.lock().await;
@@ -803,7 +803,7 @@ impl Partition {
             );
             st.per_follower.clear();
         }
-        st.current_leader_epoch = crabka_ids::LeaderEpoch(new_epoch);
+        st.current_leader_epoch = krabka_ids::LeaderEpoch(new_epoch);
         drop(st);
         self.hw_advance_notify.notify_waiters();
     }
@@ -843,9 +843,9 @@ impl Partition {
                     // silent. Cheap: only fires on a (rare) produce timeout.
                     let leader_leo = self.log_end_offset();
                     let st = self.replica_state.lock().await;
-                    let mut isr: Vec<crabka_raft::NodeId> = st.isr.iter().copied().collect();
+                    let mut isr: Vec<krabka_raft::NodeId> = st.isr.iter().copied().collect();
                     isr.sort_unstable();
-                    let followers: Vec<(crabka_raft::NodeId, Offset)> =
+                    let followers: Vec<(krabka_raft::NodeId, Offset)> =
                         st.per_follower.iter().map(|(k, v)| (*k, v.leo)).collect();
                     tracing::warn!(
                         target_offset = target_offset.0,
@@ -909,7 +909,7 @@ mod tests {
     use std::sync::atomic::{AtomicI32, AtomicU64};
 
     use assert2::{assert, check};
-    use crabka_log::LogConfig;
+    use krabka_log::LogConfig;
     use tempfile::tempdir;
 
     use super::*;
@@ -947,8 +947,8 @@ mod tests {
         let topic_id = uuid::Uuid::new_v4();
         let current = ReplicationTarget {
             topic_id: Some(topic_id),
-            leader_node_id: crabka_raft::NodeId(1),
-            leader_epoch: crabka_metadata::LeaderEpoch(7),
+            leader_node_id: krabka_raft::NodeId(1),
+            leader_epoch: krabka_metadata::LeaderEpoch(7),
         };
         partition
             .install_replication_target(current.topic_id, 1, 7)
@@ -956,11 +956,11 @@ mod tests {
 
         for stale in [
             ReplicationTarget {
-                leader_node_id: crabka_raft::NodeId(2),
+                leader_node_id: krabka_raft::NodeId(2),
                 ..current
             },
             ReplicationTarget {
-                leader_epoch: crabka_metadata::LeaderEpoch(6),
+                leader_epoch: krabka_metadata::LeaderEpoch(6),
                 ..current
             },
             ReplicationTarget {
@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     fn append_records(p: &Partition, count: i32) {
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let mut batch = RecordBatch {
             base_offset: 0,
@@ -1098,7 +1098,7 @@ mod tests {
     async fn stamp_for_offset_delegates_actual_stamp() {
         #[derive(Debug)]
         struct FixedStamp(u64);
-        impl crabka_log::StampSource for FixedStamp {
+        impl krabka_log::StampSource for FixedStamp {
             fn next_stamp(&self) -> u64 {
                 self.0
             }
@@ -1129,9 +1129,9 @@ mod tests {
     #[test]
     fn commit_marker_record_count_uses_batch_offset_span() {
         let data = ProduceData::OwnedCommitMarker {
-            batch: crabka_protocol::records::RecordBatch {
+            batch: krabka_protocol::records::RecordBatch {
                 last_offset_delta: 3,
-                ..crabka_protocol::records::RecordBatch::default()
+                ..krabka_protocol::records::RecordBatch::default()
             },
             commit_stamp: 99,
         };
@@ -1235,30 +1235,30 @@ mod tests {
         };
         p.install_isr(
             &[
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
             &[
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
         )
         .await;
         let st = p.replica_state.lock().await;
         check!(
             st.isr
                 == [
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3)
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3)
                 ]
                 .into_iter()
                 .collect()
         );
-        check!(st.per_follower.get(&crabka_audit::NodeId(2)).map(|f| f.leo) == Some(Offset(0)));
+        check!(st.per_follower.get(&krabka_audit::NodeId(2)).map(|f| f.leo) == Some(Offset(0)));
     }
 
     #[tokio::test]
@@ -1276,9 +1276,9 @@ mod tests {
         );
 
         p.install_isr(
-            &[crabka_audit::NodeId(1)],
-            &[crabka_audit::NodeId(1)],
-            crabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1)],
+            &[krabka_audit::NodeId(1)],
+            krabka_audit::NodeId(1),
         )
         .await;
 
@@ -1305,9 +1305,9 @@ mod tests {
         );
 
         p.install_isr(
-            &[crabka_audit::NodeId(1)],
-            &[crabka_audit::NodeId(1)],
-            crabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1)],
+            &[krabka_audit::NodeId(1)],
+            krabka_audit::NodeId(1),
         )
         .await;
 
@@ -1324,9 +1324,9 @@ mod tests {
         let (p, _td) = test_partition(hw_advance_notify.clone());
         append_records(&p, 2);
         p.install_isr(
-            &[crabka_audit::NodeId(1)],
-            &[crabka_audit::NodeId(1)],
-            crabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1)],
+            &[krabka_audit::NodeId(1)],
+            krabka_audit::NodeId(1),
         )
         .await;
         assert!(p.high_watermark().await == 2);
@@ -1339,9 +1339,9 @@ mod tests {
         );
 
         p.install_isr(
-            &[crabka_audit::NodeId(1)],
-            &[crabka_audit::NodeId(1)],
-            crabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1)],
+            &[krabka_audit::NodeId(1)],
+            krabka_audit::NodeId(1),
         )
         .await;
 
@@ -1361,15 +1361,15 @@ mod tests {
         for (leader, epoch, seeded_leo) in cases {
             let (p, _td) = test_partition(Arc::new(Notify::new()));
             p.install_isr(
-                &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-                &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-                crabka_audit::NodeId(1),
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                krabka_audit::NodeId(1),
             )
             .await;
             {
                 let mut st = p.replica_state.lock().await;
                 st.per_follower
-                    .get_mut(&crabka_audit::NodeId(2))
+                    .get_mut(&krabka_audit::NodeId(2))
                     .expect("follower")
                     .leo = Offset(seeded_leo);
             }
@@ -1387,7 +1387,7 @@ mod tests {
             let st = p.replica_state.lock().await;
             assert!(st.per_follower.is_empty(), "case ({leader}, {epoch})");
             assert!(
-                st.current_leader_epoch == crabka_ids::LeaderEpoch(epoch),
+                st.current_leader_epoch == krabka_ids::LeaderEpoch(epoch),
                 "case ({leader}, {epoch})"
             );
         }
@@ -1479,7 +1479,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_follower_hw_clamps_advances_and_notifies() {
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let dir = tempdir().expect("tempdir");
         let log = Log::open(dir.path(), LogConfig::default()).expect("open log");

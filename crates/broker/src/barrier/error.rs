@@ -4,7 +4,7 @@
 //! not the codes a transaction or a share-state request returns. A handler
 //! maps each variant to one Kafka error code at the request boundary.
 
-use crabka_ids::PartitionIndex;
+use krabka_ids::PartitionIndex;
 use thiserror::Error;
 
 use crate::error::BrokerError;

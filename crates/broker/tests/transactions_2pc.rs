@@ -16,9 +16,9 @@
 use std::time::Duration;
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_client_producer::Producer;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_client_producer::Producer;
+use krabka_protocol::owned::{
     describe_transactions_request::DescribeTransactionsRequest,
     init_producer_id_request::InitProducerIdRequest,
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
@@ -54,8 +54,8 @@ async fn boot(two_pc_enabled: bool) -> (BrokerHandle, String, TempDir) {
     (broker, bootstrap, dir)
 }
 
-async fn client(bootstrap: &str) -> crabka_client_core::Client {
-    crabka_client_core::Client::builder()
+async fn client(bootstrap: &str) -> krabka_client_core::Client {
+    krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await

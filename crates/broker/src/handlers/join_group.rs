@@ -7,8 +7,8 @@
 //! as the earlier `Notify`-based wait.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         join_group_request::JoinGroupRequest,

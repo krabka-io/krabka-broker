@@ -38,8 +38,8 @@
 //! # Reused primitives
 //!
 //! The chain hash and the Ed25519 signing come from
-//! [`crabka_audit`](crabka_audit): [`crabka_audit::chain::chain_hash`] defines
-//! the chain formula, and [`crabka_audit::signing`] supplies the key provider
+//! [`krabka_audit`](krabka_audit): [`krabka_audit::chain::chain_hash`] defines
+//! the chain formula, and [`krabka_audit::signing`] supplies the key provider
 //! and the verifier. This module adds only the domain separation and the
 //! canonical encoding that a segment manifest needs.
 

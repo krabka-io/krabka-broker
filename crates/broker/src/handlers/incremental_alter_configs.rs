@@ -12,11 +12,11 @@
 //!   `INVALID_CONFIG`.
 
 use bytes::Bytes;
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, BrokerConfigRecord, ClientMetricsConfigRecord, GroupConfigRecord, MetadataImage,
     MetadataRecord, NodeId, ResourceType, TopicConfigRecord,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
@@ -25,7 +25,7 @@ use crabka_protocol::{
         },
     },
 };
-use crabka_raft::RaftError;
+use krabka_raft::RaftError;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -92,7 +92,7 @@ pub(super) fn broker_config_node_id(
     image: &MetadataImage,
 ) -> Result<NodeId, (i16, String)> {
     if resource_name.is_empty() {
-        return Ok(crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID);
+        return Ok(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID);
     }
     let node_id = resource_name.parse::<u64>().map(NodeId).map_err(|_| {
         (
@@ -408,7 +408,7 @@ fn handle_broker_scoped(
             out.error_message = Some(format!("unknown broker config {}", cfg.name));
             return; // halt processing this resource
         }
-        if node_id != crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+        if node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
             && is_cluster_default_topic_config(&cfg.name)
         {
             out.error_code = codes::INVALID_CONFIG;
@@ -578,8 +578,8 @@ mod tests {
 
     // ── handle_broker_scoped unit tests ─────────────────────────────────────
 
-    use crabka_metadata::{BrokerRegistrationRecord, MetadataImage};
-    use crabka_protocol::owned::incremental_alter_configs_request::{
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage};
+    use krabka_protocol::owned::incremental_alter_configs_request::{
         AlterConfigsResource, AlterableConfig,
     };
 
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_empty_name_targets_cluster_default() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource(
             "",
             vec![
@@ -646,12 +646,12 @@ mod tests {
             to_submit
                 == vec![
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                         config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_string(),
                         config_value: Some("2048".to_string()),
                     }),
                     MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                         config_name: config_keys::UNCLEAN_RECOVERY_STRATEGY.to_string(),
                         config_value: Some("Balanced".to_string()),
                     }),
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn recovery_settings_reject_per_broker_scope() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         for (key, value) in [
             (config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
             (config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced"),
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn recovery_settings_validate_cluster_default_values() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         for (key, value) in [
             (config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "yes"),
             (config_keys::UNCLEAN_RECOVERY_STRATEGY, "fast"),
@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn controller_managed_broker_configs_are_rejected_as_read_only() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
             for cfg in [make_set_cfg(key, "true"), make_del_cfg(key)] {
                 for resource_name in ["1", ""] {
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_unknown_broker_returns_invalid_request() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource("99", vec![]);
         let mut out = AlterConfigsResourceResponse::default();
         let mut to_submit = Vec::new();
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_unknown_config_key_returns_invalid_config() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource("1", vec![make_set_cfg("some.unknown.key", "123")]);
         let mut out = AlterConfigsResourceResponse::default();
         let mut to_submit = Vec::new();
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_set_produces_broker_config_record() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource(
             "1",
             vec![make_set_cfg(
@@ -757,7 +757,7 @@ mod tests {
         handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
         assert!(out.error_code == codes::NONE);
         let expected = vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_audit::NodeId(1),
+            node_id: krabka_audit::NodeId(1),
             config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_string(),
             config_value: Some("2048".to_string()),
         })];
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_log_dir_rate_is_validated_and_persisted() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource(
             "1",
             vec![make_set_cfg(
@@ -782,7 +782,7 @@ mod tests {
         assert!(
             to_submit
                 == vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                    node_id: crabka_audit::NodeId(1),
+                    node_id: krabka_audit::NodeId(1),
                     config_name: crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY.to_string(),
                     config_value: Some("4096".to_string()),
                 })]
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_delete_produces_broker_config_record_none_value() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource(
             "1",
             vec![make_del_cfg(crate::throttle::FOLLOWER_THROTTLED_RATE_KEY)],
@@ -801,7 +801,7 @@ mod tests {
         handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
         assert!(out.error_code == codes::NONE);
         let expected = vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_audit::NodeId(1),
+            node_id: krabka_audit::NodeId(1),
             config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.to_string(),
             config_value: None,
         })];
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn broker_scoped_invalid_rate_value_returns_invalid_config() {
-        let img = make_image_with_broker(crabka_audit::NodeId(1));
+        let img = make_image_with_broker(krabka_audit::NodeId(1));
         let resource = make_resource(
             "1",
             vec![make_set_cfg(
@@ -836,7 +836,7 @@ mod tests {
 
     fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+        img.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: name.into(),
             topic_id: uuid::Uuid::nil(),
             partitions: 1,
@@ -960,7 +960,7 @@ mod tests {
 
     #[test]
     fn client_metrics_set_produces_record() {
-        use crabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
+        use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
         let img = MetadataImage::new(uuid::Uuid::nil());
         let resource = AlterConfigsResource {
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
@@ -997,7 +997,7 @@ mod tests {
 
     #[test]
     fn client_metrics_bad_interval_rejected() {
-        use crabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
+        use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
         let img = MetadataImage::new(uuid::Uuid::nil());
         let resource = AlterConfigsResource {
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
@@ -1019,8 +1019,8 @@ mod tests {
 
     #[test]
     fn client_metrics_delete_drops_key() {
-        use crabka_metadata::ClientMetricsConfigRecord;
-        use crabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
+        use krabka_metadata::ClientMetricsConfigRecord;
+        use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
         let mut img = MetadataImage::new(uuid::Uuid::nil());
         let mut existing = std::collections::BTreeMap::new();
         existing.insert("interval.ms".to_string(), "60000".to_string());

@@ -31,8 +31,8 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
-use crabka_client_core::Client;
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
+use krabka_client_core::Client;
 use tempfile::TempDir;
 
 // A cut-and-heal TCP relay for partition tests. Declared here so every suite
@@ -52,7 +52,7 @@ pub async fn start() -> InProcess {
     let bootstrap = broker.listen_addr().to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
@@ -68,7 +68,7 @@ pub async fn start() -> InProcess {
 /// Restart tests use this helper. Pass the same path across two boots to
 /// verify that the broker recovers persistent state (audit chain, spool)
 /// correctly. The helper detects an existing raft log and then uses `Rejoin`.
-pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, crabka_client_core::Client) {
+pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_client_core::Client) {
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
     // Mirror the production heuristic from `detect_bootstrap_mode` in
     // broker.rs: key Rejoin on `metadata_log_nonempty` (committed
@@ -76,14 +76,14 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, crabka_clie
     // before the first raft commit, so dir-existence would re-bootstrap a node
     // killed mid-election instead of letting it rejoin correctly.
     let metadata_dir = dir.join("__cluster_metadata");
-    if crabka_raft::metadata_log_nonempty(&metadata_dir) {
-        config.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
+    if krabka_raft::metadata_log_nonempty(&metadata_dir) {
+        config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     }
     let broker = Broker::start(config).await.expect("broker start");
     let bootstrap = broker.listen_addr().to_string();
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(&bootstrap)
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
@@ -92,9 +92,9 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, crabka_clie
 
 /// Fetch the audit topic and return the `seq` header value (parsed as `u64`)
 /// from each non-checkpoint record, in order.
-pub async fn audit_record_seqs(client: &crabka_client_core::Client) -> Vec<u64> {
-    use crabka_broker::coordinator::AUDIT_TOPIC;
-    use crabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
+pub async fn audit_record_seqs(client: &krabka_client_core::Client) -> Vec<u64> {
+    use krabka_broker::coordinator::AUDIT_TOPIC;
+    use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
 
     let topic_id = topic_id_for(client, AUDIT_TOPIC).await;
     let fr = client
@@ -161,13 +161,13 @@ pub fn start_with_audit_key(
     config.audit_signing_key_path = Some(key_path.to_path_buf());
     config.audit_signing_key_id = Some(key_id.to_string());
     config.audit_checkpoint_every_n = every_n;
-    config.audit_checkpoint_every = crabka_units::hours(1); // only count trigger fires
+    config.audit_checkpoint_every = krabka_units::hours(1); // only count trigger fires
     Box::pin(async move {
         let broker = Broker::start(config).await.expect("broker start");
         let bootstrap = broker.listen_addr().to_string();
         let client = Client::builder()
             .bootstrap(&bootstrap)
-            .client_id("crabka-broker-test-audit-key")
+            .client_id("krabka-broker-test-audit-key")
             .build()
             .await
             .expect("client build");
@@ -186,7 +186,7 @@ pub fn start_with_audit_key(
 pub async fn start_with_deny_all_authz() -> InProcess {
     use std::collections::HashSet;
 
-    use crabka_broker::authorizer::SimpleAclAuthorizer;
+    use krabka_broker::authorizer::SimpleAclAuthorizer;
 
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
@@ -199,7 +199,7 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     let bootstrap = broker.listen_addr().to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)
-        .client_id("crabka-broker-test-deny")
+        .client_id("krabka-broker-test-deny")
         .build()
         .await
         .expect("client build");
@@ -214,7 +214,7 @@ pub async fn start_with_deny_all_authz() -> InProcess {
 /// record value, and return the decoded objects. Mirrors the
 /// `broker_started_event_is_written_to_audit_topic` fetch pattern.
 pub async fn wait_for_audit_record<F>(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     what: &str,
     mut predicate: F,
 ) -> Vec<serde_json::Value>
@@ -236,7 +236,7 @@ where
 }
 
 pub async fn wait_for_audit_seq_count(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     min_count: usize,
 ) -> Vec<u64> {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -253,9 +253,9 @@ pub async fn wait_for_audit_seq_count(
     }
 }
 
-pub async fn consume_audit_records(client: &crabka_client_core::Client) -> Vec<serde_json::Value> {
-    use crabka_broker::coordinator::AUDIT_TOPIC;
-    use crabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
+pub async fn consume_audit_records(client: &krabka_client_core::Client) -> Vec<serde_json::Value> {
+    use krabka_broker::coordinator::AUDIT_TOPIC;
+    use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
 
     let topic_id = topic_id_for(client, AUDIT_TOPIC).await;
     let fr = client
@@ -300,10 +300,10 @@ pub async fn consume_audit_records(client: &crabka_client_core::Client) -> Vec<s
 /// Produce / Fetch at v ≥ 13 carry only `topic_id` on the wire, so the
 /// caller must plumb the real UUID through.
 pub async fn topic_id_for(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     name: &str,
-) -> crabka_protocol::primitives::uuid::Uuid {
-    use crabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
+) -> krabka_protocol::primitives::uuid::Uuid {
+    use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
 
     let resp = client
         .send(MetadataRequest {
@@ -369,7 +369,7 @@ pub async fn bind_and_drop_ports(n: usize) -> (Vec<SocketAddr>, Vec<SocketAddr>)
 /// index-aligned.
 ///
 /// Hand `client_listeners[i]` and `controller_listeners[i]` to
-/// [`crabka_broker::Broker::start_with_listeners`] or
+/// [`krabka_broker::Broker::start_with_listeners`] or
 /// `start_with_controller_listener`, so the OS port is never released before
 /// the broker adopts it. That closes the [`bind_and_drop_ports`] TOCTOU window
 /// in which a concurrently-running test binary steals the freed port

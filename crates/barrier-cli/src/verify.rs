@@ -4,7 +4,7 @@
 //! behind it. This reads the log at each of those offsets and checks that the
 //! batch there is a barrier control batch carrying this group and this epoch.
 //!
-//! The read cannot go through [`crabka_client_core::fetch_partition`], because
+//! The read cannot go through [`krabka_client_core::fetch_partition`], because
 //! that drops control batches the way every Kafka consumer does, which is the
 //! whole reason a marker is invisible in the first place. So this sends a raw
 //! `Fetch` and decodes the batches itself.
@@ -14,7 +14,7 @@
 //! metadata read that finds each leader therefore also carries the topic id
 //! back, so the fetch is correct at any version.
 
-use crabka_protocol::{
+use krabka_protocol::{
     krabka::barrier as api,
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -58,7 +58,7 @@ pub struct VerifyOutcome {
 /// the point of the command is to report every one of them, not to stop at the
 /// first.
 pub(crate) async fn verify(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     group: &str,
     epoch: i64,
 ) -> Result<VerifyOutcome, String> {
@@ -118,7 +118,7 @@ pub(crate) async fn verify(
 
 /// Read the one cut a group holds at `epoch`.
 async fn fetch_cut(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     group: &str,
     epoch: i64,
 ) -> Result<api::BarrierCut, String> {
@@ -153,11 +153,11 @@ async fn fetch_cut(
 /// The id is what a modern `Fetch` names the topic by, and the leaders are
 /// where each fetch has to go.
 async fn resolve_topic(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     topic: &str,
 ) -> Result<
     (
-        crabka_protocol::primitives::uuid::Uuid,
+        krabka_protocol::primitives::uuid::Uuid,
         std::collections::BTreeMap<i32, i32>,
     ),
     String,
@@ -195,10 +195,10 @@ async fn resolve_topic(
 
 /// Fetch the batch that starts at `offset`, if the leader serves one.
 async fn fetch_batch_at(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     leader: i32,
     topic: &str,
-    topic_id: crabka_protocol::primitives::uuid::Uuid,
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
     partition: i32,
     offset: i64,
 ) -> Result<Option<RecordBatch>, String> {
@@ -244,7 +244,7 @@ async fn fetch_batch_at(
     Ok(part
         .records
         .as_ref()
-        .and_then(crabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
         .and_then(|batches| {
             batches
                 .iter()
@@ -276,7 +276,7 @@ fn check_batch(
     let Some(record) = batch.records.first() else {
         return Err(format!("the control batch at {offset} holds no record"));
     };
-    let marker = crabka_broker::parse_barrier_marker(record)
+    let marker = krabka_broker::parse_barrier_marker(record)
         .map_err(|e| format!("the control batch at {offset} is not a barrier marker: {e}"))?;
     if marker.group != group {
         return Err(format!(
@@ -297,7 +297,7 @@ fn check_batch(
 mod tests {
     use assert2::check;
     use bytes::Bytes;
-    use crabka_protocol::records::{Attributes, Record};
+    use krabka_protocol::records::{Attributes, Record};
 
     use super::*;
 

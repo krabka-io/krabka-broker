@@ -6,10 +6,10 @@
 use std::{path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use crabka_security::{
+use krabka_security::{
     IntrospectionClient, IntrospectionError, JwksTrustError, build_client_config_from_pem,
 };
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 
 /// reqwest-backed RFC 7662 introspection client.
 ///
@@ -40,7 +40,7 @@ impl ReqwestIntrospectionClient {
     ///
     /// When `tls_trust` is `Some`, this method builds the rustls
     /// `ClientConfig` with
-    /// `crabka_security::build_client_config_from_pem`. The same trust bundle
+    /// `krabka_security::build_client_config_from_pem`. The same trust bundle
     /// then covers JWKS, introspection, and userinfo. When `tls_trust` is
     /// `None`, reqwest's default webpki-roots apply.
     // Returns Arc<dyn IntrospectionClient> to fit the validator's trait-object
@@ -133,7 +133,7 @@ mod tests {
     use std::{net::SocketAddr, sync::Mutex};
 
     use assert2::assert;
-    use crabka_units::{millis, secs};
+    use krabka_units::{millis, secs};
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio_rustls::TlsAcceptor;

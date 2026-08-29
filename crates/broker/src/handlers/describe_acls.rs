@@ -4,8 +4,8 @@
 //! the metadata image that matches the request's filter axes.
 
 use bytes::Bytes;
-use crabka_metadata::{AclEntry, AclEntryFilter};
-use crabka_protocol::{
+use krabka_metadata::{AclEntry, AclEntryFilter};
+use krabka_protocol::{
     Encode,
     owned::{
         describe_acls_request::DescribeAclsRequest,
@@ -89,9 +89,9 @@ pub(crate) fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Describe,
+            operation: krabka_metadata::AclOperation::Describe,
         },
     );
     if allow == AuthorizationResult::Deny {
@@ -176,10 +176,10 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{
+    use krabka_metadata::{
         AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
     };
-    use crabka_protocol::UnknownTaggedFields;
+    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::{

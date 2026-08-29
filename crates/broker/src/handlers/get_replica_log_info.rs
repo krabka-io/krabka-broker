@@ -12,8 +12,8 @@
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         get_replica_log_info_request::GetReplicaLogInfoRequest,
@@ -78,7 +78,7 @@ pub(crate) fn handle(
             for &p in &tp.partitions {
                 let hosted = topic_name
                     .as_deref()
-                    .and_then(|name| broker.partitions.get(name, crabka_ids::PartitionIndex(p)));
+                    .and_then(|name| broker.partitions.get(name, krabka_ids::PartitionIndex(p)));
                 partition_log_info.push(match hosted {
                     Some(part) => {
                         let epoch = part.current_leader_epoch.load(Ordering::Acquire);
@@ -130,8 +130,8 @@ pub(crate) fn handle(
 /// control-plane RPC.
 fn cluster_action_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
 ) -> bool {
     authorizer.authorize(
@@ -201,8 +201,8 @@ mod tests {
         use std::sync::{Arc, atomic::Ordering};
 
         use bytes::BytesMut;
-        use crabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-        use crabka_protocol::owned::{
+        use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+        use krabka_protocol::owned::{
             get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
             get_replica_log_info_response::GetReplicaLogInfoResponse,
         };
@@ -232,7 +232,7 @@ mod tests {
                     leader: NodeId(1),
                     replicas: vec![NodeId(1)],
                     isr: vec![NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
@@ -245,10 +245,10 @@ mod tests {
         // Materialize a local replica and force a non-zero leader epoch.
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
-        let log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default()).unwrap();
+        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         let part = crate::broker::spawn_partition(
             "orders".to_string(),
-            crabka_ids::PartitionIndex(0),
+            krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
             crate::log_dir_status::LogDirRegistry::default(),
@@ -258,12 +258,12 @@ mod tests {
         part.current_leader_epoch.store(11, Ordering::Release);
         broker
             .partitions
-            .insert("orders".to_string(), crabka_ids::PartitionIndex(0), part);
+            .insert("orders".to_string(), krabka_ids::PartitionIndex(0), part);
 
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {
             topic_partitions: vec![TopicPartitions {
-                topic_id: crabka_protocol::primitives::uuid::Uuid(*topic_uuid.as_bytes()),
+                topic_id: krabka_protocol::primitives::uuid::Uuid(*topic_uuid.as_bytes()),
                 partitions: vec![0],
                 ..Default::default()
             }],
@@ -296,17 +296,17 @@ mod tests {
     #[test]
     fn cluster_action_denied_yields_cluster_authorization_failed() {
         use bytes::BytesMut;
-        use crabka_protocol::owned::{
+        use krabka_protocol::owned::{
             get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
             get_replica_log_info_response::GetReplicaLogInfoResponse,
         };
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -321,7 +321,7 @@ mod tests {
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {
             topic_partitions: vec![TopicPartitions {
-                topic_id: crabka_protocol::primitives::uuid::Uuid([7u8; 16]),
+                topic_id: krabka_protocol::primitives::uuid::Uuid([7u8; 16]),
                 partitions: vec![0, 1],
                 ..Default::default()
             }],

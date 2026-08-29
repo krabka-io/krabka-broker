@@ -14,8 +14,8 @@
 
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
-use crabka_metadata::{MetadataImage, MetadataRecord};
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use tokio::{
     sync::{Mutex, watch},
     task::JoinHandle,
@@ -33,7 +33,7 @@ use crate::{
     types::{Node, NodeId, controller_endpoint_addr as endpoint_addr_from_endpoints},
 };
 
-/// Crabka-native view of the controller's current quorum state. Surfaced by
+/// Krabka-native view of the controller's current quorum state. Surfaced by
 /// [`ControllerHandle::quorum_state`] for the broker's `DescribeQuorum` admin
 /// handler so callers don't depend on engine internals directly.
 #[derive(Debug, Clone)]
@@ -92,14 +92,14 @@ pub struct ControllerHandle {
     /// Directory holding the metadata log + KIP-630 `.checkpoint` artifacts.
     data_dir: std::path::PathBuf,
     client_id: String,
-    client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    client_frame_max: crabka_client_core::ClientFrameMax,
+    client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    client_frame_max: krabka_client_core::ClientFrameMax,
     /// This node's own id, used for leader and membership checks.
     self_node_id: NodeId,
     /// Configured bootstrap voter set. Dynamic membership comes from the
     /// engine snapshot; this remains only as an address fallback during
     /// initial discovery at kraft.version 0.
-    voters: crabka_metadata::VoterSet,
+    voters: krabka_metadata::VoterSet,
     /// Compatibility staging area for callers that still separate observer
     /// registration from promotion. Membership itself is changed only by an
     /// engine-owned KIP-853 command.
@@ -308,7 +308,7 @@ impl ControllerHandle {
                     ))
                 })?;
             self.add_voter(crate::reconfig::AddVoter {
-                voter: crabka_metadata::Voter {
+                voter: krabka_metadata::Voter {
                     id: *id,
                     directory_id: node.directory_id,
                     endpoints: node.endpoints,
@@ -427,7 +427,7 @@ impl ControllerHandle {
         &self,
         leader: NodeId,
         addr: &str,
-        records: &[crabka_metadata::MetadataRecord],
+        records: &[krabka_metadata::MetadataRecord],
     ) -> Result<crate::SubmitChangeResult, RaftError> {
         let transport = DialerSubmitTransport {
             dialer: self.dialer.as_ref(),
@@ -449,21 +449,21 @@ impl ControllerHandle {
         addr: SocketAddr,
         fetch_offset: u64,
         max_size: ByteSize,
-    ) -> Result<crate::wire::CrabkaMetadataFetchResponse, RaftError> {
-        let req = crate::wire::CrabkaMetadataFetchRequest {
+    ) -> Result<crate::wire::KrabkaMetadataFetchResponse, RaftError> {
+        let req = crate::wire::KrabkaMetadataFetchRequest {
             fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
-            // `max_bytes` is the KIP-595-shaped `int32` on the Crabka observer
+            // `max_bytes` is the KIP-595-shaped `int32` on the Krabka observer
             // wire; the quantity converts here and nowhere deeper.
             max_bytes: max_size.bytes_i32(),
         };
         let mut body = Vec::with_capacity(12);
         req.encode_v0(&mut body);
 
-        let opts = crabka_client_core::ConnectionOptions {
+        let opts = krabka_client_core::ConnectionOptions {
             client_id: self.client_id.clone(),
             dispatch_queue_capacity: self.client_dispatch_queue_capacity,
             frame_max: self.client_frame_max,
-            ..crabka_client_core::ConnectionOptions::default()
+            ..krabka_client_core::ConnectionOptions::default()
         };
         let conn = self
             .dialer
@@ -481,7 +481,7 @@ impl ControllerHandle {
         conn.close();
 
         let mut cur: &[u8] = &resp_body;
-        crate::wire::CrabkaMetadataFetchResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
+        crate::wire::KrabkaMetadataFetchResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
     }
 
     /// Drain the listener and stop the engine. Idempotent in practice.
@@ -516,7 +516,7 @@ impl ControllerHandle {
 /// (b) fail outright on a non-literal hostname — which silently disabled
 /// leader-forwarding of `submit_change` (e.g. broker self-registration), since
 /// `parse()` returned `None` and the forward was skipped.
-fn controller_endpoint_addr(voters: &crabka_metadata::VoterSet, node_id: NodeId) -> Option<String> {
+fn controller_endpoint_addr(voters: &krabka_metadata::VoterSet, node_id: NodeId) -> Option<String> {
     let voter = voters.get(node_id)?;
     endpoint_addr_from_endpoints(&voter.endpoints)
 }
@@ -524,7 +524,7 @@ fn controller_endpoint_addr(voters: &crabka_metadata::VoterSet, node_id: NodeId)
 /// The single un-mockable step of leader-forwarding a `submit_change`: dial the
 /// leader's controller listener, issue one `API_KEY_SUBMIT_CHANGE` request with
 /// the already-encoded `body`, and return the raw response body bytes. The
-/// concrete [`crabka_client_core::Connection`] is opaque (it cannot be built in
+/// concrete [`krabka_client_core::Connection`] is opaque (it cannot be built in
 /// a test), so this seam returns plain `Bytes` — every serialize/translate
 /// decision around it stays unit-testable against a mock.
 #[cfg_attr(test, mockall::automock)]
@@ -537,7 +537,7 @@ trait SubmitChangeTransport: Send + Sync {
         leader: NodeId,
         addr: &str,
         body: Vec<u8>,
-    ) -> Result<bytes::Bytes, crabka_client_core::ClientError>;
+    ) -> Result<bytes::Bytes, krabka_client_core::ClientError>;
 }
 
 /// Live [`SubmitChangeTransport`] over the injected [`OutboundDialer`]: dials a
@@ -547,14 +547,14 @@ trait SubmitChangeTransport: Send + Sync {
 struct DialerSubmitTransport<'a> {
     dialer: &'a dyn OutboundDialer,
     client_id: &'a str,
-    client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    client_frame_max: crabka_client_core::ClientFrameMax,
+    client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    client_frame_max: krabka_client_core::ClientFrameMax,
 }
 
 #[async_trait::async_trait]
 impl SubmitChangeTransport for DialerSubmitTransport<'_> {
     // The only un-mockable step: dial + one `API_KEY_SUBMIT_CHANGE` + close, with
-    // no offline signal (a `crabka_client_core::Connection` cannot be built in a
+    // no offline signal (a `krabka_client_core::Connection` cannot be built in a
     // test). `#[mutants::skip]` rather than an `exclude_re` because cargo-mutants'
     // name-regex exclusions do not reliably match the struct-field-deletion mutant
     // this method's `ConnectionOptions { .. }` literal generates.
@@ -564,12 +564,12 @@ impl SubmitChangeTransport for DialerSubmitTransport<'_> {
         leader: NodeId,
         addr: &str,
         body: Vec<u8>,
-    ) -> Result<bytes::Bytes, crabka_client_core::ClientError> {
-        let opts = crabka_client_core::ConnectionOptions {
+    ) -> Result<bytes::Bytes, krabka_client_core::ClientError> {
+        let opts = krabka_client_core::ConnectionOptions {
             client_id: self.client_id.to_owned(),
             dispatch_queue_capacity: self.client_dispatch_queue_capacity,
             frame_max: self.client_frame_max,
-            ..crabka_client_core::ConnectionOptions::default()
+            ..krabka_client_core::ConnectionOptions::default()
         };
         let conn = self.dialer.dial(leader, addr, opts).await?;
         let resp_body = conn
@@ -592,7 +592,7 @@ async fn forward_submit_via(
     transport: &dyn SubmitChangeTransport,
     leader: NodeId,
     addr: &str,
-    records: &[crabka_metadata::MetadataRecord],
+    records: &[krabka_metadata::MetadataRecord],
 ) -> Result<crate::SubmitChangeResult, RaftError> {
     let body = encode_submit_change_body(records)?;
     let resp_body = transport
@@ -604,16 +604,16 @@ async fn forward_submit_via(
 
 /// Build the exact `API_KEY_SUBMIT_CHANGE` v0 request body for `records`:
 /// wincode-encode the `Vec<MetadataRecord>`, then frame it with the
-/// length-prefixed [`crate::wire::CrabkaSubmitChangeRequest`] codec. Kept
+/// length-prefixed [`crate::wire::KrabkaSubmitChangeRequest`] codec. Kept
 /// byte-for-byte identical to the inlined path so the wire stays exact.
 fn encode_submit_change_body(
-    records: &[crabka_metadata::MetadataRecord],
+    records: &[krabka_metadata::MetadataRecord],
 ) -> Result<Vec<u8>, RaftError> {
-    let body_bytes = <serde_wincode::SerdeCompat<Vec<crabka_metadata::MetadataRecord>> as wincode::Serialize>::serialize(
+    let body_bytes = <serde_wincode::SerdeCompat<Vec<krabka_metadata::MetadataRecord>> as wincode::Serialize>::serialize(
         &records.to_vec(),
     )
     .map_err(RaftError::from)?;
-    let payload = crate::wire::CrabkaSubmitChangeRequest {
+    let payload = crate::wire::KrabkaSubmitChangeRequest {
         records: bytes::Bytes::from(body_bytes),
     };
     let mut body = Vec::with_capacity(payload.records.len() + 4);
@@ -621,7 +621,7 @@ fn encode_submit_change_body(
     Ok(body)
 }
 
-/// Decode a `CrabkaSubmitChangeResponse` from the leader's `resp_body` and map
+/// Decode a `KrabkaSubmitChangeResponse` from the leader's `resp_body` and map
 /// its transport `error_code` into the caller's `Result`:
 /// - `0` → applied (`Ok`).
 /// - `2` → the leader rejected at apply-time (topic already exists). The wire
@@ -634,14 +634,14 @@ fn translate_submit_change_response(
     leader: NodeId,
 ) -> Result<crate::SubmitChangeResult, RaftError> {
     let mut cur: &[u8] = resp_body;
-    let resp = crate::wire::CrabkaSubmitChangeResponse::decode_v0(&mut cur)?;
+    let resp = crate::wire::KrabkaSubmitChangeResponse::decode_v0(&mut cur)?;
     match resp.error_code {
         0 => <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Deserialize>::deserialize(
             &resp.result,
         )
         .map_err(RaftError::from),
         2 => Err(RaftError::Metadata(
-            crabka_metadata::MetadataError::TopicExists(String::new()),
+            krabka_metadata::MetadataError::TopicExists(String::new()),
         )),
         _ => Err(RaftError::NotLeader {
             current_leader: (resp.leader_hint >= 0)
@@ -703,7 +703,7 @@ impl Controller {
         prebound: Option<tokio::net::TcpListener>,
     ) -> Result<ControllerHandle, RaftError> {
         let metadata_snapshot_fetch_max =
-            crabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
+            krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
                 config.metadata_snapshot_fetch_max,
             )
             .map_err(RaftError::Startup)?;
@@ -795,11 +795,11 @@ impl Controller {
             Some(l) => l,
             None => tokio::net::TcpListener::bind(config.controller_listen_addr)
                 .await
-                .map_err(|e| RaftError::Storage(crabka_log::LogError::Io(e)))?,
+                .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?,
         };
         let actual_addr = listener
             .local_addr()
-            .map_err(|e| RaftError::Storage(crabka_log::LogError::Io(e)))?;
+            .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?;
         let shutdown = CancellationToken::new();
         let leader_rx = engine.watch_leader();
         let listener_task = tokio::spawn(server::run(
@@ -861,7 +861,7 @@ pub fn metadata_log_nonempty(dir: &std::path::Path) -> bool {
 #[cfg(test)]
 mod bootstrap_mode_tests {
     use assert2::check;
-    use crabka_units::prelude::{Time, TimeExt as _, gibibytes, mebibytes, millis, secs};
+    use krabka_units::prelude::{Time, TimeExt as _, gibibytes, mebibytes, millis, secs};
     use tempfile::TempDir;
 
     use super::*;
@@ -883,15 +883,15 @@ mod bootstrap_mode_tests {
         // of `submit_change` — broker self-registration then failed with "not
         // leader" and RF=3 topics could not be placed.
         let host = "demo-broker-2-0.demo-broker-headless.default.svc.cluster.local";
-        let voters = crabka_metadata::VoterSet::from_voters([crabka_metadata::Voter {
+        let voters = krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
             id: NodeId(2),
             directory_id: Uuid::nil(),
-            endpoints: vec![crabka_metadata::VoterEndpoint {
+            endpoints: vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".to_string(),
                 host: host.to_string(),
                 port: 9093,
             }],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         }]);
         for (_name, node_id, expected) in [
             ("registered voter", NodeId(2), Some(format!("{host}:9093"))),
@@ -910,22 +910,22 @@ mod bootstrap_mode_tests {
         // CONTROLLER endpoint is placed FIRST so a flipped `name == "CONTROLLER"`
         // predicate (matching the first NON-controller endpoint instead) returns
         // the wrong address.
-        let voters = crabka_metadata::VoterSet::from_voters([crabka_metadata::Voter {
+        let voters = krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
             id: NodeId(7),
             directory_id: Uuid::nil(),
             endpoints: vec![
-                crabka_metadata::VoterEndpoint {
+                krabka_metadata::VoterEndpoint {
                     name: "REPLICATION".to_string(),
                     host: "replication-host".to_string(),
                     port: 9092,
                 },
-                crabka_metadata::VoterEndpoint {
+                krabka_metadata::VoterEndpoint {
                     name: "CONTROLLER".to_string(),
                     host: "controller-host".to_string(),
                     port: 9093,
                 },
             ],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         }]);
         assert2::assert!(
             controller_endpoint_addr(&voters, NodeId(7))
@@ -933,8 +933,8 @@ mod bootstrap_mode_tests {
         );
     }
 
-    fn topic_record(name: &str) -> crabka_metadata::MetadataRecord {
-        crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+    fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: name.into(),
             topic_id: Uuid::nil(),
             partitions: 1,
@@ -942,8 +942,8 @@ mod bootstrap_mode_tests {
         })
     }
 
-    fn committable_topic_record(name: &str) -> crabka_metadata::MetadataRecord {
-        crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+    fn committable_topic_record(name: &str) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: name.into(),
             topic_id: Uuid::new_v4(),
             partitions: 1,
@@ -964,7 +964,7 @@ mod bootstrap_mode_tests {
 
     async fn submit_change_with_timeout(
         ctrl: &ControllerHandle,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
         context: &str,
     ) -> Result<(), RaftError> {
         tokio::time::timeout(TEST_OP_TIMEOUT.to_std(), ctrl.submit_change(records))
@@ -998,23 +998,23 @@ mod bootstrap_mode_tests {
             &self,
             _target: NodeId,
             addr: &str,
-            options: crabka_client_core::ConnectionOptions,
-        ) -> Result<crabka_client_core::Connection, crabka_client_core::ClientError> {
+            options: krabka_client_core::ConnectionOptions,
+        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
             self.client_ids
                 .lock()
                 .unwrap()
                 .push(options.client_id.clone());
             let sock = tokio::net::lookup_host(addr)
                 .await
-                .map_err(crabka_client_core::ClientError::Io)?
+                .map_err(krabka_client_core::ClientError::Io)?
                 .next()
                 .ok_or_else(|| {
-                    crabka_client_core::ClientError::Io(std::io::Error::new(
+                    krabka_client_core::ClientError::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "test address resolved to no sockets",
                     ))
                 })?;
-            crabka_client_core::Connection::connect(sock, options).await
+            krabka_client_core::Connection::connect(sock, options).await
         }
     }
 
@@ -1024,7 +1024,7 @@ mod bootstrap_mode_tests {
             &crate::SubmitChangeResult::default(),
         )
         .expect("serialize result");
-        crate::wire::CrabkaSubmitChangeResponse {
+        crate::wire::KrabkaSubmitChangeResponse {
             error_code,
             leader_hint,
             result: bytes::Bytes::from(result),
@@ -1056,7 +1056,7 @@ mod bootstrap_mode_tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Join,
-            initial_voters: crabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg).await.expect("join start");
@@ -1139,7 +1139,7 @@ mod bootstrap_mode_tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Join,
-            initial_voters: crabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg).await.expect("join start");
@@ -1205,7 +1205,7 @@ mod bootstrap_mode_tests {
 
     #[test]
     fn encode_submit_change_body_frames_wincode_records_with_i32_length_prefix() {
-        // The forward path must produce the exact `CrabkaSubmitChangeRequest` v0
+        // The forward path must produce the exact `KrabkaSubmitChangeRequest` v0
         // wire bytes: a 4-byte big-endian length prefix followed by the
         // wincode-encoded `Vec<MetadataRecord>`. Decoding the framed body back
         // and re-deserializing must round-trip to the original records, proving
@@ -1215,19 +1215,19 @@ mod bootstrap_mode_tests {
         let body = encode_submit_change_body(&records).expect("encode");
 
         let expected_wincode = <serde_wincode::SerdeCompat<
-            Vec<crabka_metadata::MetadataRecord>,
+            Vec<krabka_metadata::MetadataRecord>,
         > as wincode::Serialize>::serialize(&records)
         .expect("wincode");
         assert2::assert!(body.len() == expected_wincode.len() + 4);
 
         let mut cur: &[u8] = &body;
         let req =
-            crate::wire::CrabkaSubmitChangeRequest::decode_v0(&mut cur).expect("decode frame");
+            crate::wire::KrabkaSubmitChangeRequest::decode_v0(&mut cur).expect("decode frame");
         assert2::assert!(req.records.as_ref() == expected_wincode.as_slice());
         // The framed payload IS the wincode encoding of the original records, so
         // it deserializes back to them — proving no double-framing / corruption.
         let decoded = <serde_wincode::SerdeCompat<
-            Vec<crabka_metadata::MetadataRecord>,
+            Vec<krabka_metadata::MetadataRecord>,
         > as wincode::Deserialize>::deserialize(&req.records)
         .expect("wincode decode");
         assert2::assert!(decoded == records);
@@ -1246,7 +1246,7 @@ mod bootstrap_mode_tests {
             .expect_err("code 2 is an error");
         assert2::assert!(matches!(
             err,
-            RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
         ));
 
         // Any other code collapses to NotLeader, taking the response's
@@ -1334,7 +1334,7 @@ mod bootstrap_mode_tests {
         // retries), not a panic or a swallowed success.
         let mut transport = MockSubmitChangeTransport::new();
         transport.expect_send_submit_change().returning(|_, _, _| {
-            Err(crabka_client_core::ClientError::Io(std::io::Error::new(
+            Err(krabka_client_core::ClientError::Io(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 "refused",
             )))
@@ -1363,8 +1363,8 @@ mod bootstrap_mode_tests {
         wait_for_leader(&ctrl).await;
         submit_change_with_timeout(
             &ctrl,
-            vec![crabka_metadata::MetadataRecord::V1Topic(
-                crabka_metadata::TopicRecord {
+            vec![krabka_metadata::MetadataRecord::V1Topic(
+                krabka_metadata::TopicRecord {
                     name: "seed".into(),
                     topic_id: Uuid::new_v4(),
                     partitions: 1,
@@ -1408,8 +1408,8 @@ mod bootstrap_mode_tests {
 
     #[tokio::test]
     async fn metadata_records_serves_committed_topic() {
-        use crabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
-        use crabka_protocol::records::RecordBatch;
+        use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
+        use krabka_protocol::records::RecordBatch;
 
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
@@ -1463,8 +1463,8 @@ mod bootstrap_mode_tests {
 
     #[tokio::test]
     async fn fetch_metadata_from_returns_committed_records() {
-        use crabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
-        use crabka_protocol::records::RecordBatch;
+        use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
+        use krabka_protocol::records::RecordBatch;
 
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
@@ -1560,7 +1560,7 @@ mod bootstrap_mode_tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Join,
-            initial_voters: crabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg)

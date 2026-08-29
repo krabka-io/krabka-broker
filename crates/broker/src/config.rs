@@ -5,14 +5,14 @@
 
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use crabka_compression::RecordDecompressionPolicy;
-use crabka_log::LogConfig;
-pub use crabka_raft::BootstrapMode;
-use crabka_raft::{
+use krabka_compression::RecordDecompressionPolicy;
+use krabka_log::LogConfig;
+pub use krabka_raft::BootstrapMode;
+use krabka_raft::{
     ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, NodeId,
 };
-use crabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
-use crabka_units::{
+use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
+use krabka_units::{
     ByteSize, Ratio, Time, bytes,
     convert::{ByteSizeExt, RatioExt, TimeExt},
     days, fraction, gibibytes, hours, kibibytes, mebibytes, millis, minutes, percent, secs,
@@ -150,7 +150,7 @@ impl InterBrokerCredentials {
 /// Construction-time configuration for [`crate::Broker::start`].
 ///
 /// Build it directly when you embed the broker as a library. In production,
-/// build it with the `crabka-broker` binary's clap CLI.
+/// build it with the `krabka-broker` binary's clap CLI.
 #[derive(Debug, Clone, Copy)]
 pub struct BrokerFeatureFlags {
     pub oauthbearer_jwks_ignore_key_use: bool,
@@ -212,10 +212,10 @@ impl Default for ReplicationRuntimeConfig {
 pub struct BrokerConfig {
     /// Capacity used by every outbound Kafka client connection owned by this
     /// broker process.
-    pub client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
+    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     /// Maximum frame size used by every outbound Kafka client connection owned
     /// by this broker process.
-    pub client_frame_max: crabka_client_core::ClientFrameMax,
+    pub client_frame_max: krabka_client_core::ClientFrameMax,
     /// Maximum time to wait for a controller leader during startup.
     pub startup_leader_wait_timeout: Time,
     /// Initial delay between self-registration attempts.
@@ -410,7 +410,7 @@ pub struct BrokerConfig {
     /// the broker reads it to detect bootstrap mode. It is also a data
     /// directory: when [`extra_log_dirs`][Self::extra_log_dirs] is empty,
     /// partition data lives only here. The broker creates the directory on
-    /// startup if it is missing. Default: `./crabka-data`.
+    /// startup if it is missing. Default: `./krabka-data`.
     pub log_dir: PathBuf,
 
     /// Extra JBOD data directories (KIP-113). When this list is non-empty,
@@ -428,7 +428,7 @@ pub struct BrokerConfig {
     /// `None` is the Kafka-only default: no `.stampindex` sidecar is opened and
     /// record bytes, offsets, LSO, and high-watermark behavior stay unchanged.
     /// A combined SQL/Kafka runtime injects its tenant timestamp source here.
-    pub stamp_source: Option<Arc<dyn crabka_log::StampSource>>,
+    pub stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 
     /// Raft node id. Conventionally equal to `broker_id as NodeId`.
     pub node_id: NodeId,
@@ -523,7 +523,7 @@ pub struct BrokerConfig {
     pub metadata_snapshot_fetch_max: ByteSize,
 
     /// How this broker takes part in cluster formation. See
-    /// [`crabka_raft::BootstrapMode`] for the trade-offs. The first broker of
+    /// [`krabka_raft::BootstrapMode`] for the trade-offs. The first broker of
     /// a fresh multi-broker cluster uses `Bootstrap`. Later brokers use
     /// `Join`. A restart of any previously-formatted broker uses `Rejoin`.
     /// Single-broker setups always use `Bootstrap`.
@@ -563,7 +563,7 @@ pub struct BrokerConfig {
     /// `SaslPlaintext`, `Ssl`, or `SaslSsl` to require auth on inbound raft
     /// RPCs. Outbound raft RPCs also use auth when you pair this with
     /// `inter_broker_credentials`.
-    pub controller_listener_protocol: crabka_security::ListenerProtocol,
+    pub controller_listener_protocol: krabka_security::ListenerProtocol,
 
     /// Name of the listener used for inter-broker traffic (raft, replication,
     /// heartbeat). Must match a name in `listeners` when `listeners` is
@@ -611,12 +611,12 @@ pub struct BrokerConfig {
     /// unsecured-JWS validator with principal claim `sub`. Set a JWKS
     /// endpoint in `[oauthbearer].jwks_endpoint_uri` to select the signed-JWT
     /// validator.
-    pub oauthbearer_validator: crabka_security::OAuthBearerValidator,
+    pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
 
     /// SASL/GSSAPI (Kerberos) configuration. `Some` only when `Gssapi` is in
     /// `enabled_sasl_mechanisms`; carries the service keytab path,
     /// `auth_to_local` rules, and KDC/realm settings for the initiate path.
-    pub gssapi: Option<crabka_security::gssapi::GssapiConfig>,
+    pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
 
     /// JWKS endpoint to fetch OAUTHBEARER signing keys from. `Some`
     /// only when `oauthbearer_validator` is the signed variant. When set,
@@ -735,14 +735,14 @@ pub struct BrokerConfig {
     pub metrics_listen_addr: Option<SocketAddr>,
 
     /// CPU and heap profiling endpoint policy.
-    pub profiling: crabka_telemetry::profiling::ProfilingConfig,
+    pub profiling: krabka_telemetry::profiling::ProfilingConfig,
 
     /// Optional OTLP endpoint for KIP-714 client metrics forwarding.
     /// Binaries populate it from their parsed runtime configuration. The
     /// broker does not read it from the environment at startup.
     pub client_metrics_otlp_endpoint: Option<String>,
     /// Transport used by the KIP-714 client-metrics forwarder.
-    pub client_metrics_otlp_protocol: crabka_telemetry::OtlpProtocol,
+    pub client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol,
 
     /// KIP-227: maximum number of incremental-fetch sessions kept in the
     /// per-broker cache. Each session tracks the (topic, partition) set a
@@ -778,10 +778,10 @@ pub struct BrokerConfig {
     /// tokens. When `None`, the broker rejects all four delegation-token RPCs
     /// with `DELEGATION_TOKEN_AUTH_DISABLED`, and SCRAM cannot fall back to
     /// token lookup. The broker reads the key from
-    /// `CRABKA_DELEGATION_TOKEN_SECRET_KEY` or from `[delegation_token]
+    /// `KRABKA_DELEGATION_TOKEN_SECRET_KEY` or from `[delegation_token]
     /// secret_key` in `broker.toml`; the environment variable wins. The key
     /// is wrapped in `SecretBytes`, so `Debug` redacts the bytes.
-    pub delegation_token_secret_key: Option<crabka_security::SecretBytes>,
+    pub delegation_token_secret_key: Option<krabka_security::SecretBytes>,
 
     /// KIP-48: hard upper bound on delegation-token lifetime.
     /// A token's `max_timestamp_ms` is set to
@@ -850,7 +850,7 @@ pub struct BrokerConfig {
     /// write-once.
     ///
     /// TOML: `[remote_storage.worm]`
-    pub remote_storage_worm: Option<crabka_remote_storage::WormConfig>,
+    pub remote_storage_worm: Option<krabka_remote_storage::WormConfig>,
 
     /// Whether the audit subsystem is active (`FedRAMP` MLA).
     pub audit_enabled: bool,
@@ -873,7 +873,7 @@ pub struct BrokerConfig {
 }
 
 /// Parameters for the topic-backed
-/// [`RemoteLogMetadataManager`](crabka_remote_storage::RemoteLogMetadataManager).
+/// [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager).
 ///
 /// Does not derive `PartialEq`/`Eq`: the `security` field holds
 /// rustls-adjacent types (a `ClientConfig` connector) that are not
@@ -881,9 +881,9 @@ pub struct BrokerConfig {
 #[derive(Debug, Clone)]
 pub struct KafkaRlmmConfig {
     /// Capacity of every Kafka metadata-log client dispatch queue.
-    pub dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
+    pub dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     /// Maximum frame size for every Kafka metadata-log client.
-    pub frame_max: crabka_client_core::ClientFrameMax,
+    pub frame_max: krabka_client_core::ClientFrameMax,
     /// `host:port` the manager dials to reach its own broker. It is loopback
     /// in a single-broker setup, and the inter-broker listener in a
     /// multi-broker setup.
@@ -908,7 +908,7 @@ pub struct KafkaRlmmConfig {
     /// Backoff after a failed metadata fetch.
     pub fetch_retry_backoff: Time,
     /// Capacity of the shared metadata-event delivery queue.
-    pub event_queue_capacity: crabka_remote_storage_topic::MetadataEventQueueCapacity,
+    pub event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity,
     /// Directory the manager writes the RLMM cache snapshot to, as one
     /// `snapshot` file. The broker derives the path from `log.dir`.
     pub snapshot_dir: std::path::PathBuf,
@@ -921,7 +921,7 @@ pub struct KafkaRlmmConfig {
     /// The field is boxed to keep `KafkaRlmmConfig` and the enclosing
     /// `BrokerConfig` small, because `Broker::start` moves `BrokerConfig` by
     /// value into a large future.
-    pub security: Option<Box<crabka_client_core::security::ClientSecurity>>,
+    pub security: Option<Box<krabka_client_core::security::ClientSecurity>>,
 }
 
 /// Default cadence of the topic-backed RLMM snapshot flush. 60s,
@@ -948,18 +948,18 @@ pub enum RlmmKind {
 impl Default for KafkaRlmmConfig {
     fn default() -> Self {
         Self {
-            dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            frame_max: crabka_client_core::ClientFrameMax::default(),
+            dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            frame_max: krabka_client_core::ClientFrameMax::default(),
             bootstrap: String::new(),
             num_partitions: DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
             replication: DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR,
             snapshot_interval: DEFAULT_RLMM_SNAPSHOT_INTERVAL,
             topic_create_timeout:
-                crabka_remote_storage_topic::DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
-            fetch_max_wait: crabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_WAIT,
-            fetch_max_bytes: crabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_BYTES,
-            fetch_retry_backoff: crabka_remote_storage_topic::DEFAULT_METADATA_FETCH_RETRY_BACKOFF,
-            event_queue_capacity: crabka_remote_storage_topic::MetadataEventQueueCapacity::default(
+                krabka_remote_storage_topic::DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
+            fetch_max_wait: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_WAIT,
+            fetch_max_bytes: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_MAX_BYTES,
+            fetch_retry_backoff: krabka_remote_storage_topic::DEFAULT_METADATA_FETCH_RETRY_BACKOFF,
+            event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::default(
             ),
             snapshot_dir: std::path::PathBuf::new(),
             security: None,
@@ -975,7 +975,7 @@ impl KafkaRlmmConfig {
     /// Returns an invalid-runtime error when a value cannot safely reach its
     /// runtime consumer.
     pub fn validate(&self) -> Result<(), BrokerError> {
-        let transport = crabka_remote_storage_topic::KafkaMetadataLogConfig {
+        let transport = krabka_remote_storage_topic::KafkaMetadataLogConfig {
             dispatch_queue_capacity: self.dispatch_queue_capacity,
             frame_max: self.frame_max,
             topic_create_timeout: self.topic_create_timeout,
@@ -983,7 +983,7 @@ impl KafkaRlmmConfig {
             fetch_max_bytes: self.fetch_max_bytes,
             fetch_retry_backoff: self.fetch_retry_backoff,
             event_queue_capacity: self.event_queue_capacity,
-            ..crabka_remote_storage_topic::KafkaMetadataLogConfig::new(&self.bootstrap)
+            ..krabka_remote_storage_topic::KafkaMetadataLogConfig::new(&self.bootstrap)
         };
         transport.validate().map_err(|error| {
             BrokerError::InvalidRuntimeConfig(format!("remote_storage.kafka_metadata: {error}"))
@@ -1018,11 +1018,11 @@ pub enum RemoteStorageBackend {
     /// S3-compatible `S3RemoteStorage`. This is a production backend. It
     /// works with AWS S3, `MinIO`, Cloudflare R2, and GCS through S3
     /// compatibility.
-    S3(crabka_remote_storage::S3Config),
+    S3(krabka_remote_storage::S3Config),
     /// Native Google Cloud Storage `S3RemoteStorage` engine. This is the
     /// production backend for GKE deployments. It supports keyless Workload
     /// Identity and ADC auth; leave all credential fields unset for that.
-    Gcs(crabka_remote_storage::GcsConfig),
+    Gcs(krabka_remote_storage::GcsConfig),
 }
 
 /// Default broker→controller `BrokerHeartbeat` cadence.
@@ -1102,7 +1102,7 @@ pub const DEFAULT_RLMM_TOPIC_NUM_PARTITIONS: i32 = 50;
 pub const DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR: i32 = 3;
 
 /// Default internal topic name for `FedRAMP` MLA audit records.
-pub const DEFAULT_AUDIT_TOPIC: &str = "__crabka_audit";
+pub const DEFAULT_AUDIT_TOPIC: &str = "__krabka_audit";
 
 /// Default number of audit records between signed checkpoints.
 pub const DEFAULT_AUDIT_CHECKPOINT_EVERY_N: u64 = 1000;
@@ -1146,8 +1146,8 @@ impl BrokerConfig {
         let record_decompression = RecordDecompressionPolicy::default();
         Self {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             startup_leader_wait_timeout: minutes(2),
             self_registration_backoff_min: millis(100),
             self_registration_backoff_max: secs(5),
@@ -1278,7 +1278,7 @@ impl BrokerConfig {
             replica_selector: crate::replica_selector::ReplicaSelectorKind::Leader,
             stretch: None,
             listeners: vec![],
-            controller_listener_protocol: crabka_security::ListenerProtocol::Plaintext,
+            controller_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_listener_name: "PLAINTEXT".to_string(),
             inter_broker_credentials: None,
             plain_credentials: HashMap::new(),
@@ -1287,7 +1287,7 @@ impl BrokerConfig {
             schema_validator: None,
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
-            oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
+            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             gssapi: None,
             oauthbearer_jwks_endpoint: None,
             oauthbearer_jwks_refresh_interval: DEFAULT_JWKS_REFRESH_INTERVAL,
@@ -1327,9 +1327,9 @@ impl BrokerConfig {
             // setting this to `Some(127.0.0.1:0)`; sharing a default
             // port would race in parallel test runs.
             metrics_listen_addr: None,
-            profiling: crabka_telemetry::profiling::ProfilingConfig::default(),
+            profiling: krabka_telemetry::profiling::ProfilingConfig::default(),
             client_metrics_otlp_endpoint: None,
-            client_metrics_otlp_protocol: crabka_telemetry::OtlpProtocol::Grpc,
+            client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol::Grpc,
             // Disable the disk scanner by default in tests so the
             // background task doesn't tick during short-lived fixtures.
             // Integration tests enable this explicitly when needed.
@@ -1370,12 +1370,12 @@ impl BrokerConfig {
     }
 
     fn validate_log_io_policy(&self) -> Result<(), BrokerError> {
-        if self.log_config.read_buffer_cap <= crabka_units::bytes(0) {
+        if self.log_config.read_buffer_cap <= krabka_units::bytes(0) {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "log_read_buffer_cap must be positive".into(),
             ));
         }
-        if self.log_config.timestamp_scan_window <= crabka_units::bytes(0) {
+        if self.log_config.timestamp_scan_window <= krabka_units::bytes(0) {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "log_timestamp_scan_window must be positive".into(),
             ));
@@ -1453,7 +1453,7 @@ impl BrokerConfig {
             return Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() });
         }
 
-        if !crabka_verified::stretch::min_insync_is_site_loss_safe(
+        if !krabka_verified::stretch::min_insync_is_site_loss_safe(
             i64::from(self.offsets_topic_replication_factor),
             site_count,
             i64::from(self.default_min_insync_replicas),
@@ -2031,7 +2031,7 @@ impl BrokerConfig {
                 "metadata_snapshot_interval_records must be positive".into(),
             ));
         }
-        crabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
+        krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
             self.metadata_snapshot_fetch_max,
         )
         .map_err(|error| {
@@ -2304,8 +2304,8 @@ impl Default for BrokerConfig {
         let record_decompression = RecordDecompressionPolicy::default();
         Self {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             startup_leader_wait_timeout: minutes(2),
             self_registration_backoff_min: millis(100),
             self_registration_backoff_max: secs(5),
@@ -2397,7 +2397,7 @@ impl Default for BrokerConfig {
             roles: vec![NodeRole::Controller, NodeRole::Broker],
             listen_addr: addr,
             advertised_listener: addr.to_string(),
-            log_dir: PathBuf::from("./crabka-data"),
+            log_dir: PathBuf::from("./krabka-data"),
             extra_log_dirs: Vec::new(),
             log_config: LogConfig::default(),
             stamp_source: None,
@@ -2429,7 +2429,7 @@ impl Default for BrokerConfig {
             replica_selector: crate::replica_selector::ReplicaSelectorKind::Leader,
             stretch: None,
             listeners: vec![],
-            controller_listener_protocol: crabka_security::ListenerProtocol::Plaintext,
+            controller_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_listener_name: "PLAINTEXT".to_string(),
             inter_broker_credentials: None,
             plain_credentials: HashMap::new(),
@@ -2438,7 +2438,7 @@ impl Default for BrokerConfig {
             schema_validator: None,
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
-            oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
+            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             gssapi: None,
             oauthbearer_jwks_endpoint: None,
             oauthbearer_jwks_refresh_interval: DEFAULT_JWKS_REFRESH_INTERVAL,
@@ -2475,14 +2475,14 @@ impl Default for BrokerConfig {
             tls_reload_interval: DEFAULT_TLS_RELOAD_INTERVAL,
             // Default to `None` so multi-broker library users (and
             // multi-broker tests) don't race on a fixed port. The
-            // `crabka-broker` binary opts in to `Some(0.0.0.0:9404)`
+            // `krabka-broker` binary opts in to `Some(0.0.0.0:9404)`
             // via its `--metrics-listen-addr` CLI flag — the operator
             // sets that via env, so production deployments still get
             // metrics by default.
             metrics_listen_addr: None,
-            profiling: crabka_telemetry::profiling::ProfilingConfig::default(),
+            profiling: krabka_telemetry::profiling::ProfilingConfig::default(),
             client_metrics_otlp_endpoint: None,
-            client_metrics_otlp_protocol: crabka_telemetry::OtlpProtocol::Grpc,
+            client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol::Grpc,
             partition_disk_scan_interval: secs(60),
             max_incremental_fetch_session_cache_slots:
                 DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
@@ -2491,7 +2491,7 @@ impl Default for BrokerConfig {
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
             // Master key off by default. Operators flip this on
-            // via `CRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
+            // via `KRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
             // `[delegation_token] secret_key` TOML stanza.
             delegation_token_secret_key: None,
             delegation_token_max_lifetime: DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME,
@@ -2559,7 +2559,7 @@ const fn default_feature_flags() -> BrokerFeatureFlags {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::nanos;
+    use krabka_units::nanos;
 
     use super::*;
     use crate::BrokerError as BrokerStartError;
@@ -3202,7 +3202,7 @@ mod tests {
             fetch_max_wait: millis(750),
             fetch_max_bytes: mebibytes(2),
             fetch_retry_backoff: millis(300),
-            event_queue_capacity: crabka_remote_storage_topic::MetadataEventQueueCapacity::new(
+            event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::new(
                 2048,
             )
             .unwrap(),
@@ -3409,7 +3409,7 @@ mod tests {
         let cfg = BrokerConfig::default();
         assert!(
             cfg.record_decompression_policy().unwrap()
-                == crabka_compression::RecordDecompressionPolicy::default()
+                == krabka_compression::RecordDecompressionPolicy::default()
         );
     }
 
@@ -3533,7 +3533,7 @@ mod tests {
         assert!(matches!(
             c.validate(),
             Err(BrokerError::NonControllerIsVoter {
-                node_id: crabka_raft::NodeId(1)
+                node_id: krabka_raft::NodeId(1)
             })
         ));
     }
@@ -3690,7 +3690,7 @@ mod tests {
             private_key_path: std::path::PathBuf::from("/tls/k"),
             trust_roots_path: None,
             client_ca_path: None,
-            client_auth: crabka_security::ClientAuthMode::Disabled,
+            client_auth: krabka_security::ClientAuthMode::Disabled,
         };
         let listener = ListenerSpec {
             name: "scram".into(),
@@ -3784,7 +3784,7 @@ mod tests {
             (
                 "a local storage directory cannot enforce write-once",
                 Some(RemoteStorageBackend::Local {
-                    dir: PathBuf::from("/var/lib/crabka-remote"),
+                    dir: PathBuf::from("/var/lib/krabka-remote"),
                 }),
             ),
             ("tiered storage is off entirely", None),
@@ -3792,7 +3792,7 @@ mod tests {
         for (name, backend) in cases {
             let c = BrokerConfig {
                 remote_storage_backend: backend,
-                remote_storage_worm: Some(crabka_remote_storage::WormConfig::default()),
+                remote_storage_worm: Some(krabka_remote_storage::WormConfig::default()),
                 ..BrokerConfig::default()
             };
             check!(
@@ -3806,13 +3806,13 @@ mod tests {
     fn worm_over_an_object_store_backend_is_accepted_by_validate() {
         let c = BrokerConfig {
             remote_storage_backend: Some(RemoteStorageBackend::S3(
-                crabka_remote_storage::S3Config {
+                krabka_remote_storage::S3Config {
                     bucket: "archive".into(),
                     region: "us-east-1".into(),
-                    ..crabka_remote_storage::S3Config::default()
+                    ..krabka_remote_storage::S3Config::default()
                 },
             )),
-            remote_storage_worm: Some(crabka_remote_storage::WormConfig::default()),
+            remote_storage_worm: Some(krabka_remote_storage::WormConfig::default()),
             ..BrokerConfig::default()
         };
 

@@ -20,7 +20,8 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use bytes::Bytes;
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_protocol::{
     Decode,
     owned::{
         alter_replica_log_dirs_request::AlterReplicaLogDirsRequest,
@@ -30,7 +31,6 @@ use crabka_protocol::{
         },
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{
     broker::Broker,
@@ -74,7 +74,7 @@ pub(crate) fn handle(
                         &future_logs,
                         &all_log_dirs,
                         &log_config,
-                        (&topic.name, crabka_ids::PartitionIndex(partition_index)),
+                        (&topic.name, krabka_ids::PartitionIndex(partition_index)),
                         &target_path,
                         move_policy.clone(),
                     )
@@ -134,7 +134,7 @@ pub(crate) fn handle(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_protocol::owned::alter_replica_log_dirs_request::{
+    use krabka_protocol::owned::alter_replica_log_dirs_request::{
         AlterReplicaLogDir, AlterReplicaLogDirTopic,
     };
 
@@ -153,7 +153,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let req = AlterReplicaLogDirsRequest {
             dirs: vec![AlterReplicaLogDir {
-                path: "/tmp/crabka-missing-log-dir".into(),
+                path: "/tmp/krabka-missing-log-dir".into(),
                 topics: vec![AlterReplicaLogDirTopic {
                     name: "orders".into(),
                     partitions: vec![7],
@@ -177,11 +177,11 @@ mod tests {
                 partitions: vec![AlterReplicaLogDirPartitionResult {
                     partition_index: 7,
                     error_code: codes::LOG_DIR_NOT_FOUND,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;

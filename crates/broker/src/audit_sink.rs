@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use crabka_audit::{AuditError, AuditRecord, AuditSink};
-use crabka_ids::PartitionIndex;
-use crabka_protocol::records::{Record, RecordBatch, RecordHeader};
+use krabka_audit::{AuditError, AuditRecord, AuditSink};
+use krabka_ids::PartitionIndex;
+use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
 
 use crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry};
 
@@ -100,8 +100,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_log::{Log, LogConfig, Offset};
-    use crabka_units::mebibytes;
+    use krabka_log::{Log, LogConfig, Offset};
+    use krabka_units::mebibytes;
 
     use super::*;
 
@@ -142,7 +142,7 @@ mod tests {
         );
 
         sink.write(AuditRecord {
-            class: crabka_audit::AuditEventClass::ApiActivity,
+            class: krabka_audit::AuditEventClass::ApiActivity,
             value: b"{\"ok\":true}".to_vec(),
             headers: vec![("event_class".to_string(), b"admin".to_vec())],
         })

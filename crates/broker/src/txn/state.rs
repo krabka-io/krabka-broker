@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crabka_ids::PartitionIndex;
-use crabka_log::ProducerId;
+use krabka_ids::PartitionIndex;
+use krabka_log::ProducerId;
 
 /// Transaction state machine. It mirrors Apache Kafka's classic transaction
 /// states (KIP-98), extended for KIP-1319 v2.
@@ -46,7 +46,7 @@ impl TxnState {
     /// It matches `org.apache.kafka.coordinator.transaction.TransactionState`
     /// exactly: Empty=0, Ongoing=1, PrepareCommit=2, PrepareAbort=3,
     /// CompleteCommit=4, CompleteAbort=5, and Dead=6. Kafka also has
-    /// `PrepareEpochFence`=7, a transient fencing state that Crabka does not
+    /// `PrepareEpochFence`=7, a transient fencing state that Krabka does not
     /// model.
     #[must_use]
     pub fn to_kafka_status(self) -> i8 {
@@ -62,7 +62,7 @@ impl TxnState {
     }
 
     /// The inverse of [`Self::to_kafka_status`]. It returns `None` for an id
-    /// that Crabka does not model, such as 7 for `PrepareEpochFence`, and for
+    /// that Krabka does not model, such as 7 for `PrepareEpochFence`, and for
     /// an id outside the range.
     #[must_use]
     pub fn from_kafka_status(id: i8) -> Option<TxnState> {

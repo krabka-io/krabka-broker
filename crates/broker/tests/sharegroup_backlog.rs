@@ -7,9 +7,9 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::ShareGroupLabel};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::ShareGroupLabel};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         alter_share_group_offsets_request::{
             AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
@@ -26,7 +26,7 @@ use crabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
@@ -200,7 +200,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
 
     let metrics_addr = broker.metrics_addr().unwrap();
     let expected = format!(
-        "crabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\",partition=\"0\"}} 5"
+        "krabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\",partition=\"0\"}} 5"
     );
     assert!(scrape(metrics_addr).await.contains(&expected));
 
@@ -250,7 +250,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
         })
         .await;
     let drained = format!(
-        "crabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\",partition=\"0\"}} 0"
+        "krabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\",partition=\"0\"}} 0"
     );
     assert!(scrape(metrics_addr).await.contains(&drained));
 
@@ -276,7 +276,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
         })
         .await;
     assert!(!scrape(metrics_addr).await.contains(&format!(
-        "crabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\""
+        "krabka_broker_share_group_backlog{{group_id=\"{GROUP}\",topic=\"{TOPIC}\""
     )));
 
     broker.shutdown().await;
@@ -294,7 +294,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             config.offsets_topic_num_partitions = 3;
             config.share_coordinator.state_topic_num_partitions = 1;
             config.share_group.backlog_poll_interval = Duration::from_millis(50);
-            config.replica_lag_time_max = crabka_units::secs(30);
+            config.replica_lag_time_max = krabka_units::secs(30);
         })
         .await
         {
@@ -358,9 +358,9 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .leader;
     let controller_leader = cluster[0].0.controller_leader_id();
     let nodes = [
-        crabka_broker::NodeId(1),
-        crabka_broker::NodeId(2),
-        crabka_broker::NodeId(3),
+        krabka_broker::NodeId(1),
+        krabka_broker::NodeId(2),
+        krabka_broker::NodeId(3),
     ];
     let mut candidates = Vec::new();
     for offsets_partition in 0..offsets_partitions {
@@ -573,7 +573,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     );
 
     let expected = format!(
-        "crabka_broker_share_group_backlog{{group_id=\"{group_id}\",topic=\"{TOPIC}\",partition=\"{data_partition}\"}} 0"
+        "krabka_broker_share_group_backlog{{group_id=\"{group_id}\",topic=\"{TOPIC}\",partition=\"{data_partition}\"}} 0"
     );
     assert!(
         scrape(cluster[coordinator_index].0.metrics_addr().unwrap())

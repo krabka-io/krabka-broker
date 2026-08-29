@@ -10,8 +10,8 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use crabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord};
-use crabka_raft::RaftError;
+use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord};
+use krabka_raft::RaftError;
 use uuid::Uuid;
 
 use crate::{
@@ -48,7 +48,7 @@ pub(crate) async fn ensure_topic(
 
     let records = topic_records(&sorted, num_partitions, replication_factor);
     match controller.submit_change(records).await {
-        Ok(_) | Err(RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
+        Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => Ok(()),
         Err(e) => Err(BarrierError::Bootstrap(format!(
             "submit_change failed: {e}"
         ))),
@@ -102,7 +102,7 @@ fn topic_records(
             leader: replicas[0],
             replicas: replicas.clone(),
             isr: replicas,
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -115,7 +115,7 @@ fn topic_records(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::MetadataImage;
+    use krabka_metadata::MetadataImage;
 
     use super::*;
 

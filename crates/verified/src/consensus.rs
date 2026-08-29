@@ -1,4 +1,4 @@
-//! KIP-595 consensus decision kernels, extracted from `crabka-kraft-core` so
+//! KIP-595 consensus decision kernels, extracted from `krabka-kraft-core` so
 //! Creusot can verify them (the host crate's `Instant`/async surface is
 //! untranslatable). The functions carry their Creusot preconditions,
 //! postconditions, invariants, variants, and supporting lemmas directly beside

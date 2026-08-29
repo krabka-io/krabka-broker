@@ -12,8 +12,8 @@
 //!
 //! OTLP is **off by default**. A broker with no OTLP environment behaves
 //! byte-for-byte as before. It turns on when any endpoint is set
-//! (`CRABKA_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-//! `OTEL_EXPORTER_OTLP_ENDPOINT`) or `CRABKA_OTLP_ENABLED=true`.
+//! (`KRABKA_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+//! `OTEL_EXPORTER_OTLP_ENDPOINT`) or `KRABKA_OTLP_ENABLED=true`.
 //! `OTEL_SDK_DISABLED=true` force-disables it. The operator surfaces these
 //! knobs through `Kafka.spec` and injects the env on the broker pods.
 //!
@@ -27,12 +27,12 @@
 
 use std::net::SocketAddr;
 
-// Re-export the generic OTLP pipeline from crabka-telemetry.
-pub use crabka_telemetry::{OtlpConfig, OtlpProtocol, TelemetryError, TelemetryGuard, init};
+// Re-export the generic OTLP pipeline from krabka-telemetry.
+pub use krabka_telemetry::{OtlpConfig, OtlpProtocol, TelemetryError, TelemetryGuard, init};
 
 /// `tracing` target carrying per-request server spans. The broker keeps it off
 /// the `fmt` layer's default filter so request spans only materialise for OTLP.
-pub const REQUEST_TARGET: &str = "crabka_broker::request";
+pub const REQUEST_TARGET: &str = "krabka_broker::request";
 
 /// Build the per-request server span. The span is disabled, and so costs
 /// nothing, unless the OTLP layer has enabled [`REQUEST_TARGET`] at `DEBUG`.
@@ -65,13 +65,13 @@ pub fn request_span(
 
 /// Map a Kafka request `api_key` to its canonical protocol name, used as
 /// the `OTel` span name. This function takes the name from the generated
-/// [`crabka_protocol::ApiKey`] registry, so it stays in sync with the schemas.
+/// [`krabka_protocol::ApiKey`] registry, so it stays in sync with the schemas.
 /// That registry's variant names are the canonical Kafka request names. Keys
 /// outside the registry render as `"Unknown"`, so the broker still emits a
 /// span.
 #[must_use]
 pub fn api_name(api_key: i16) -> &'static str {
-    crabka_protocol::ApiKey::from_i16(api_key).map_or("Unknown", Into::into)
+    krabka_protocol::ApiKey::from_i16(api_key).map_or("Unknown", Into::into)
 }
 
 #[cfg(test)]

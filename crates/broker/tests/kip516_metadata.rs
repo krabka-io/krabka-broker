@@ -2,7 +2,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -10,7 +10,7 @@ use crabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-async fn topic_id_for(client: &crabka_client_core::Client, name: &str) -> WireUuid {
+async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {

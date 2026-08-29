@@ -19,15 +19,15 @@
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
-use crabka_metadata::{Voter, VoterEndpoint};
-use crabka_protocol::{
+use krabka_metadata::{Voter, VoterEndpoint};
+use krabka_protocol::{
     Decode,
     owned::{
         add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,
         api_versions_request::ApiVersionsRequest,
     },
 };
-use crabka_raft::{
+use krabka_raft::{
     RaftError,
     reconfig::{AddVoter, ReconfigOutcome},
 };
@@ -97,7 +97,7 @@ pub(crate) async fn handle(
         );
     };
 
-    if req.voter_directory_id == crabka_protocol::primitives::uuid::Uuid::ZERO
+    if req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
         || req.listeners.is_empty()
         || req.listeners.iter().any(|listener| {
             listener.name.is_empty() || listener.host.is_empty() || listener.port == 0
@@ -153,7 +153,7 @@ pub(crate) async fn handle(
         }
     }
     let voter = Voter {
-        id: crabka_raft::NodeId(id),
+        id: krabka_raft::NodeId(id),
         directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
         endpoints: req
             .listeners
@@ -164,7 +164,7 @@ pub(crate) async fn handle(
                 port: l.port,
             })
             .collect(),
-        kraft_version: crabka_metadata::KRaftVersionRange::default(),
+        kraft_version: krabka_metadata::KRaftVersionRange::default(),
     };
 
     let (error_code, error_message) = outcome_to_code(
@@ -194,7 +194,7 @@ enum CandidateProbeError {
 
 async fn probe_candidate(
     broker: &Broker,
-    listeners: &[crabka_protocol::owned::add_raft_voter_request::Listener],
+    listeners: &[krabka_protocol::owned::add_raft_voter_request::Listener],
     finalized_version: u16,
 ) -> Result<(), CandidateProbeError> {
     let endpoint = listeners
@@ -214,15 +214,15 @@ async fn probe_candidate(
             endpoint.port,
             broker.config.controller_listener_protocol,
             server_name,
-            crabka_client_core::ConnectionOptions {
-                client_id: "crabka-voter-probe".into(),
+            krabka_client_core::ConnectionOptions {
+                client_id: "krabka-voter-probe".into(),
                 ..Default::default()
             },
         )
         .await
         .map_err(|error| CandidateProbeError::Unavailable(error.to_string()))?;
     let request = ApiVersionsRequest {
-        client_software_name: "crabka".into(),
+        client_software_name: "krabka".into(),
         client_software_version: env!("CARGO_PKG_VERSION").into(),
         ..Default::default()
     };
@@ -299,10 +299,10 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::add_raft_voter_request::Listener, primitives::uuid::Uuid as ProtoUuid,
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn not_leader_maps_to_not_leader_or_follower() {
         let (code, msg) = outcome_to_code(Ok(ReconfigOutcome::NotLeader {
-            leader: Some(crabka_audit::NodeId(3)),
+            leader: Some(krabka_audit::NodeId(3)),
         }));
         assert!(code == codes::NOT_LEADER_OR_FOLLOWER);
         assert!(msg.unwrap().contains('3'));
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn not_caught_up_maps_to_invalid_request() {
         let (code, _) = outcome_to_code(Err(RaftError::VoterNotCaughtUp {
-            id: crabka_audit::NodeId(7),
+            id: krabka_audit::NodeId(7),
             lag: 99,
         }));
         assert!(code == codes::INVALID_REQUEST);
@@ -375,7 +375,7 @@ mod tests {
     /// the schema declares.
     #[test]
     fn response_round_trips_at_min_and_max_versions() {
-        use crabka_protocol::owned::add_raft_voter_response::{self, AddRaftVoterResponse};
+        use krabka_protocol::owned::add_raft_voter_response::{self, AddRaftVoterResponse};
         for version in [
             add_raft_voter_response::MIN_VERSION,
             add_raft_voter_response::MAX_VERSION,

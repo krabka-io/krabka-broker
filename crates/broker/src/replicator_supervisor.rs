@@ -19,12 +19,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, LogConfig};
-use crabka_metadata::MetadataImage;
-use crabka_raft::NodeId;
-use crabka_units::Time;
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig};
+use krabka_metadata::MetadataImage;
+use krabka_raft::NodeId;
+use krabka_units::Time;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -42,14 +42,14 @@ pub(crate) type TopicPartition = (String, i32);
 struct WalFollowerSpec {
     topic: String,
     leader: NodeId,
-    leader_epoch: crabka_metadata::LeaderEpoch,
+    leader_epoch: krabka_metadata::LeaderEpoch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReplicatorTaskTarget {
     topic_id: uuid::Uuid,
     leader: NodeId,
-    leader_epoch: crabka_metadata::LeaderEpoch,
+    leader_epoch: krabka_metadata::LeaderEpoch,
 }
 
 #[derive(Debug)]
@@ -322,7 +322,7 @@ pub(crate) fn collect_changed_assignments(
 }
 
 fn resolve_leader_endpoint(
-    broker: &crabka_metadata::BrokerRegistrationRecord,
+    broker: &krabka_metadata::BrokerRegistrationRecord,
     listener_name: &str,
 ) -> (String, u16) {
     broker
@@ -341,14 +341,14 @@ trait AssignDirsReporter: Send + Sync {
         &self,
         controller: &Arc<dyn crate::metadata_source::MetadataSource>,
         client_id: &str,
-        req: crabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
     ) -> Result<(), String>;
 }
 
 #[derive(Default)]
 struct NetworkAssignDirsReporter {
-    dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    frame_max: crabka_client_core::ClientFrameMax,
+    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    frame_max: krabka_client_core::ClientFrameMax,
 }
 
 #[async_trait::async_trait]
@@ -357,7 +357,7 @@ impl AssignDirsReporter for NetworkAssignDirsReporter {
         &self,
         controller: &Arc<dyn crate::metadata_source::MetadataSource>,
         client_id: &str,
-        req: crabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
     ) -> Result<(), String> {
         crate::assign_dirs::send_assignments_with_policy(
             controller,
@@ -392,7 +392,7 @@ pub(crate) struct ReplicatorSupervisor {
     inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
     /// Listener protocol used for inter-broker dials. It decides whether
     /// the dialer runs TLS and SASL.
-    inter_broker_listener_protocol: crabka_security::ListenerProtocol,
+    inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     inter_broker_server_name: String,
     replication: ReplicationRuntimeConfig,
     /// Name of the listener whose endpoint the supervisor resolves from the
@@ -440,8 +440,8 @@ pub(crate) struct ReplicatorSupervisor {
 }
 
 pub(crate) struct ReplicatorSupervisorConfig {
-    pub client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    pub client_frame_max: crabka_client_core::ClientFrameMax,
+    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    pub client_frame_max: krabka_client_core::ClientFrameMax,
     pub node_id: NodeId,
     pub broker_id: i32,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
@@ -453,7 +453,7 @@ pub(crate) struct ReplicatorSupervisorConfig {
     pub txn_coordinator: Option<Arc<TxnCoordinator>>,
     pub share_coordinator: Option<Arc<crate::share_coordinator::coordinator::ShareCoordinator>>,
     pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub inter_broker_listener_protocol: crabka_security::ListenerProtocol,
+    pub inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
     pub inter_broker_listener_name: String,
     pub replication: ReplicationRuntimeConfig,
@@ -549,9 +549,9 @@ impl ReplicatorSupervisor {
     fn replicator_config(
         &self,
         key: TopicPartition,
-        topic: &crabka_metadata::TopicRecord,
-        partition: &crabka_metadata::PartitionRecord,
-        broker: &crabka_metadata::BrokerRegistrationRecord,
+        topic: &krabka_metadata::TopicRecord,
+        partition: &krabka_metadata::PartitionRecord,
+        broker: &krabka_metadata::BrokerRegistrationRecord,
         shutdown: CancellationToken,
     ) -> replicator::Config {
         let (leader_host, leader_port) =
@@ -559,8 +559,8 @@ impl ReplicatorSupervisor {
         replicator::Config {
             node_id: self.node_id,
             topic: key.0,
-            topic_id: crabka_protocol::primitives::uuid::Uuid(topic.topic_id.into_bytes()),
-            partition: crabka_ids::PartitionIndex(key.1),
+            topic_id: krabka_protocol::primitives::uuid::Uuid(topic.topic_id.into_bytes()),
+            partition: krabka_ids::PartitionIndex(key.1),
             leader_node_id: partition.leader,
             leader_epoch: partition.leader_epoch,
             leader_host,
@@ -1276,15 +1276,15 @@ mod tests {
     };
 
     use assert2::{assert, check};
-    use crabka_metadata::{
+    use krabka_metadata::{
         BrokerEndpoint, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
         TopicRecord,
     };
-    use crabka_raft::{
+    use krabka_raft::{
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         UpdateVoter,
     };
-    use crabka_units::{bytes, hours, millis};
+    use krabka_units::{bytes, hours, millis};
     use tokio::sync::watch;
     use uuid::Uuid;
 
@@ -1293,7 +1293,7 @@ mod tests {
     #[derive(Debug)]
     struct TestStampSource(AtomicU64);
 
-    impl crabka_log::StampSource for TestStampSource {
+    impl krabka_log::StampSource for TestStampSource {
         fn next_stamp(&self) -> u64 {
             self.0.fetch_add(1, Ordering::Relaxed)
         }
@@ -1325,8 +1325,8 @@ mod tests {
         .expect("materialize partition");
     }
 
-    fn append_one(partition: &crate::partition::Partition) -> crabka_log::Offset {
-        use crabka_protocol::records::{Record, RecordBatch};
+    fn append_one(partition: &crate::partition::Partition) -> krabka_log::Offset {
+        use krabka_protocol::records::{Record, RecordBatch};
 
         let mut batch = RecordBatch {
             records: vec![Record::default()],
@@ -1383,7 +1383,7 @@ mod tests {
             leader,
             replicas: replicas.clone(),
             isr: replicas,
-            leader_epoch: crabka_metadata::LeaderEpoch(leader_epoch),
+            leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -1404,7 +1404,7 @@ mod tests {
                 name: "INTERNAL".into(),
                 host: "internal-host".into(),
                 port: 19092,
-                protocol: crabka_security::ListenerProtocol::Plaintext,
+                protocol: krabka_security::ListenerProtocol::Plaintext,
             }],
             features: std::collections::BTreeMap::new(),
         }
@@ -1469,7 +1469,7 @@ mod tests {
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
             panic!("unused in replicator supervisor tests")
         }
 
@@ -1519,7 +1519,7 @@ mod tests {
             &self,
             _controller: &Arc<dyn crate::metadata_source::MetadataSource>,
             _client_id: &str,
-            req: crabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+            req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
         ) -> Result<(), String> {
             assert!(!req.directories.is_empty());
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -1540,8 +1540,8 @@ mod tests {
         let reporter = Arc::new(CountingAssignDirsReporter::default());
         let mut supervisor = ReplicatorSupervisor::new(ReplicatorSupervisorConfig {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             node_id: NodeId(2),
             broker_id: 2,
             controller: Arc::new(StaticMetadataSource::new(image)),
@@ -1555,7 +1555,7 @@ mod tests {
             inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
                 None, None,
             )),
-            inter_broker_listener_protocol: crabka_security::ListenerProtocol::Plaintext,
+            inter_broker_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_server_name: "localhost".into(),
             inter_broker_listener_name: "INTERNAL".into(),
             replication: ReplicationRuntimeConfig::default(),
@@ -1570,7 +1570,7 @@ mod tests {
             log_dir_ids: crate::log_dir_id::LogDirIds::resolve(&[dir.path().to_path_buf()]),
             hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::default()),
             wal_shards: Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-                crabka_raft::NodeId(2),
+                krabka_raft::NodeId(2),
             )),
         });
         supervisor.assign_dirs_reporter = reporter.clone();
@@ -1587,7 +1587,7 @@ mod tests {
             .send(
                 &source,
                 "test",
-                crabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest::default(),
+                krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest::default(),
             )
             .await
             .expect_err("no controller leader must fail");
@@ -1617,18 +1617,18 @@ mod tests {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "t".into(),
                 partition: 0,
-                leader: crabka_audit::NodeId(1),
+                leader: krabka_audit::NodeId(1),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -1682,7 +1682,7 @@ mod tests {
 
         let topic_id = Uuid::from_u128(17);
         let mut overrides = BTreeMap::new();
-        overrides.insert("crabka.diskless".into(), "true".into());
+        overrides.insert("krabka.diskless".into(), "true".into());
         let mut broker1 = broker_record(NodeId(1));
         broker1.rack = Some("a".into());
         let mut broker2 = broker_record(NodeId(2));
@@ -1709,7 +1709,7 @@ mod tests {
                 vec![NodeId(1), NodeId(2), NodeId(3)],
                 0,
             ),
-            MetadataRecord::V1TopicConfig(crabka_metadata::TopicConfigRecord {
+            MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides,
             }),
@@ -1734,7 +1734,7 @@ mod tests {
 
         let topic_id = Uuid::from_u128(18);
         let mut overrides = BTreeMap::new();
-        overrides.insert("crabka.diskless".into(), "true".into());
+        overrides.insert("krabka.diskless".into(), "true".into());
         let image = image_with(&[
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(1))),
             MetadataRecord::V1BrokerRegistration(broker_record(NodeId(2))),
@@ -1746,7 +1746,7 @@ mod tests {
                 replication_factor: 1,
             }),
             partition_record("diskless", 0, NodeId(1), vec![NodeId(1)], 7),
-            MetadataRecord::V1TopicConfig(crabka_metadata::TopicConfigRecord {
+            MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides,
             }),
@@ -1765,7 +1765,7 @@ mod tests {
                 == Some(&WalFollowerSpec {
                     topic: "diskless".into(),
                     leader: NodeId(1),
-                    leader_epoch: crabka_metadata::LeaderEpoch(7),
+                    leader_epoch: krabka_metadata::LeaderEpoch(7),
                 })
         );
         let short = HashMap::from([(shard, vec![NodeId(1), NodeId(2)])]);
@@ -1779,7 +1779,7 @@ mod tests {
         let topic_id = Uuid::from_u128(19);
         let image_at_epoch = |leader_epoch| {
             let mut overrides = BTreeMap::new();
-            overrides.insert("crabka.diskless".into(), "true".into());
+            overrides.insert("krabka.diskless".into(), "true".into());
             image_with(&[
                 MetadataRecord::V1Topic(TopicRecord {
                     name: "diskless".into(),
@@ -1788,7 +1788,7 @@ mod tests {
                     replication_factor: 1,
                 }),
                 partition_record("diskless", 0, NodeId(1), vec![NodeId(1)], leader_epoch),
-                MetadataRecord::V1TopicConfig(crabka_metadata::TopicConfigRecord {
+                MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                     topic: "diskless".into(),
                     overrides,
                 }),
@@ -1804,7 +1804,7 @@ mod tests {
         let target = WalFollowerSpec {
             topic: "diskless".into(),
             leader: NodeId(1),
-            leader_epoch: crabka_metadata::LeaderEpoch(7),
+            leader_epoch: krabka_metadata::LeaderEpoch(7),
         };
         let current = CancellationToken::new();
         let current_task = current.clone();
@@ -1848,7 +1848,7 @@ mod tests {
             WalFollowerSpec {
                 topic: "diskless".into(),
                 leader: NodeId(1),
-                leader_epoch: crabka_metadata::LeaderEpoch(8),
+                leader_epoch: krabka_metadata::LeaderEpoch(8),
             },
         );
         let follower_shard = crate::wal::quorum::shard_dir(
@@ -1873,7 +1873,7 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_partition_helper_supports_isr_install() {
-        use crabka_log::LogConfig;
+        use krabka_log::LogConfig;
         use tempfile::tempdir;
 
         let dir = tempdir().expect("tempdir");
@@ -1901,16 +1901,16 @@ mod tests {
         // Mirror what reconcile does for leader partitions.
         part.install_isr(
             &[
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
             &[
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
         )
         .await;
         let st = part.replica_state.lock().await;
@@ -1926,14 +1926,14 @@ mod tests {
             .get("disabled", PartitionIndex(0))
             .expect("disabled partition");
         let disabled_offset = append_one(&disabled_part);
-        assert!(disabled_offset == crabka_log::Offset(0));
+        assert!(disabled_offset == krabka_log::Offset(0));
         assert!(
             disabled_part.stamp_for_offset(disabled_offset).is_none(),
             "Kafka-only partitions must not create internal stamps"
         );
 
         let enabled_dir = tempfile::tempdir().expect("enabled tempdir");
-        let source: Arc<dyn crabka_log::StampSource> =
+        let source: Arc<dyn krabka_log::StampSource> =
             Arc::new(TestStampSource(AtomicU64::new(100)));
         let enabled = Arc::new(PartitionRegistry::with_stamp_source(Some(source)));
         materialize_test_partition(&enabled, enabled_dir.path(), "enabled");
@@ -1941,13 +1941,13 @@ mod tests {
             .get("enabled", PartitionIndex(0))
             .expect("enabled partition");
         let enabled_offset = append_one(&enabled_part);
-        assert!(enabled_offset == crabka_log::Offset(0));
+        assert!(enabled_offset == krabka_log::Offset(0));
         assert!(enabled_part.stamp_for_offset(enabled_offset) == Some(100));
     }
 
     #[tokio::test]
     async fn recovered_partition_installs_source_before_new_appends() {
-        use crabka_protocol::records::{Record, RecordBatch};
+        use krabka_protocol::records::{Record, RecordBatch};
 
         let dir = tempfile::tempdir().expect("tempdir");
         let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
@@ -1961,7 +1961,7 @@ mod tests {
             .expect("append existing");
         drop(existing);
 
-        let source: Arc<dyn crabka_log::StampSource> =
+        let source: Arc<dyn krabka_log::StampSource> =
             Arc::new(TestStampSource(AtomicU64::new(500)));
         let partitions = Arc::new(PartitionRegistry::with_stamp_source(Some(source)));
         materialize_test_partition(&partitions, dir.path(), "recovered");
@@ -1970,14 +1970,14 @@ mod tests {
             .expect("recovered partition");
 
         let new_offset = append_one(&partition);
-        assert!(new_offset == crabka_log::Offset(1));
-        assert!(partition.stamp_for_offset(crabka_log::Offset(0)).is_none());
+        assert!(new_offset == krabka_log::Offset(1));
+        assert!(partition.stamp_for_offset(krabka_log::Offset(0)).is_none());
         assert!(partition.stamp_for_offset(new_offset) == Some(500));
     }
 
     #[tokio::test]
     async fn materialize_diskless_partition_registers_wal_shard() {
-        use crabka_log::LogConfig;
+        use krabka_log::LogConfig;
         use tempfile::tempdir;
 
         let dir = tempdir().expect("tempdir");
@@ -1985,7 +1985,7 @@ mod tests {
         let topic_id = uuid::Uuid::from_u128(0xD15C);
         let hot_tail = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
         let wal_shards = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-            crabka_raft::NodeId(0),
+            krabka_raft::NodeId(0),
         ));
 
         materialize_partition(MaterializePartitionConfig {
@@ -2030,18 +2030,18 @@ mod tests {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "a".into(),
                 partition: 0,
-                leader: crabka_audit::NodeId(1),
+                leader: krabka_audit::NodeId(1),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -2056,18 +2056,18 @@ mod tests {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "b".into(),
                 partition: 0,
-                leader: crabka_audit::NodeId(3),
+                leader: krabka_audit::NodeId(3),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -2076,18 +2076,18 @@ mod tests {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "b".into(),
                 partition: 1,
-                leader: crabka_audit::NodeId(2),
+                leader: krabka_audit::NodeId(2),
                 replicas: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 isr: vec![
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -2170,14 +2170,14 @@ mod tests {
     async fn reconcile_does_not_treat_reserved_diskless_offset_as_durable() {
         use std::collections::BTreeMap;
 
-        use crabka_metadata::PartitionOffsetAdvanceRecord;
+        use krabka_metadata::PartitionOffsetAdvanceRecord;
 
         let mut overrides = BTreeMap::new();
-        overrides.insert("crabka.diskless".into(), "true".into());
+        overrides.insert("krabka.diskless".into(), "true".into());
         let img = image_with(&[
             topic_record("diskless", 1),
             partition_record("diskless", 0, NodeId(2), vec![NodeId(2)], 0),
-            MetadataRecord::V1TopicConfig(crabka_metadata::TopicConfigRecord {
+            MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides,
             }),
@@ -2194,7 +2194,7 @@ mod tests {
         let partition = partitions
             .get("diskless", PartitionIndex(0))
             .expect("diskless leader materialized");
-        assert!(partition.high_watermark().await == crabka_log::Offset(0));
+        assert!(partition.high_watermark().await == krabka_log::Offset(0));
     }
 
     #[tokio::test]
@@ -2403,7 +2403,7 @@ mod tests {
                 ReplicatorTaskTarget {
                     topic_id: Uuid::new_v4(),
                     leader: NodeId(1),
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                 },
                 token.clone(),
             ),
@@ -2429,7 +2429,7 @@ mod tests {
                 ReplicatorTaskTarget {
                     topic_id: img.topic("t").expect("topic").topic_id,
                     leader: NodeId(9),
-                    leader_epoch: crabka_metadata::LeaderEpoch(7),
+                    leader_epoch: krabka_metadata::LeaderEpoch(7),
                 },
                 token.clone(),
             ),
@@ -2461,7 +2461,7 @@ mod tests {
                 ReplicatorTaskTarget {
                     topic_id: Uuid::new_v4(),
                     leader: NodeId(1),
-                    leader_epoch: crabka_metadata::LeaderEpoch(8),
+                    leader_epoch: krabka_metadata::LeaderEpoch(8),
                 },
                 token.clone(),
             ),
@@ -2489,7 +2489,7 @@ mod tests {
                 target: ReplicatorTaskTarget {
                     topic_id: img.topic("t").expect("topic").topic_id,
                     leader: NodeId(1),
-                    leader_epoch: crabka_metadata::LeaderEpoch(8),
+                    leader_epoch: krabka_metadata::LeaderEpoch(8),
                 },
                 handle: tokio::spawn(async {}),
             },
@@ -2584,13 +2584,13 @@ mod tests {
         let expected = crate::partition::ReplicationTarget {
             topic_id: Some(topic_id),
             leader_node_id: NodeId(2),
-            leader_epoch: crabka_metadata::LeaderEpoch(7),
+            leader_epoch: krabka_metadata::LeaderEpoch(7),
         };
         assert!(*partition.replication_target.read().await == expected);
         assert!(partition.current_leader.load(Ordering::Acquire) == 2);
         assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 7);
         assert!(
-            partition.replica_state.lock().await.current_leader_epoch == crabka_ids::LeaderEpoch(7)
+            partition.replica_state.lock().await.current_leader_epoch == krabka_ids::LeaderEpoch(7)
         );
     }
 
@@ -2605,10 +2605,10 @@ mod tests {
                 replication_factor: 1,
             }),
             partition_record("diskless", 0, NodeId(2), vec![NodeId(2)], 7),
-            MetadataRecord::V1TopicConfig(crabka_metadata::TopicConfigRecord {
+            MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
                 overrides: std::collections::BTreeMap::from([(
-                    "crabka.diskless".into(),
+                    "krabka.diskless".into(),
                     "true".into(),
                 )]),
             }),
@@ -2628,7 +2628,7 @@ mod tests {
                 == crate::partition::ReplicationTarget {
                     topic_id: Some(topic_id),
                     leader_node_id: NodeId(0),
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                 }
         );
         assert!(partition.current_leader.load(Ordering::Acquire) == 0);
@@ -2653,8 +2653,8 @@ mod tests {
     async fn push_topic_configs_pushes_overrides_to_local_partition() {
         use std::collections::BTreeMap;
 
-        use crabka_log::LogConfig;
-        use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        use krabka_log::LogConfig;
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
         use tempfile::tempdir;
         use uuid::Uuid;
 
@@ -2669,10 +2669,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1)],
-            isr: vec![crabka_audit::NodeId(1)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1)],
+            isr: vec![krabka_audit::NodeId(1)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -2681,7 +2681,7 @@ mod tests {
         let mut overrides = BTreeMap::new();
         overrides.insert("retention.ms".to_string(), "60000".to_string());
         img.apply(&MetadataRecord::V1TopicConfig(
-            crabka_metadata::TopicConfigRecord {
+            krabka_metadata::TopicConfigRecord {
                 topic: "t".into(),
                 overrides,
             },
@@ -2691,7 +2691,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
         let base = LogConfig {
-            segment_size: crabka_units::mebibytes(1),
+            segment_size: krabka_units::mebibytes(1),
             ..LogConfig::default()
         };
         materialize_partition(MaterializePartitionConfig {
@@ -2730,18 +2730,18 @@ mod tests {
                 .expect("log lock")
                 .config_snapshot()
                 .retention
-                == Some(crabka_units::minutes(1))
+                == Some(krabka_units::minutes(1))
         })
         .await;
         let snap = part.log.lock().expect("log lock").config_snapshot();
-        assert!(snap.retention == Some(crabka_units::minutes(1)));
-        assert!(snap.segment_size == crabka_units::mebibytes(1));
+        assert!(snap.retention == Some(krabka_units::minutes(1)));
+        assert!(snap.segment_size == krabka_units::mebibytes(1));
     }
 
     #[tokio::test]
     async fn push_topic_configs_with_no_overrides_uses_defaults() {
-        use crabka_log::LogConfig;
-        use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        use krabka_log::LogConfig;
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
         use tempfile::tempdir;
         use uuid::Uuid;
 
@@ -2755,10 +2755,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1)],
-            isr: vec![crabka_audit::NodeId(1)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1)],
+            isr: vec![krabka_audit::NodeId(1)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -2810,8 +2810,8 @@ mod tests {
 
     #[tokio::test]
     async fn collect_changed_assignments_reports_new_then_skips_unchanged() {
-        use crabka_log::LogConfig;
-        use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        use krabka_log::LogConfig;
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
         use tempfile::tempdir;
         use uuid::Uuid;
 
@@ -2827,10 +2827,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1)],
-            isr: vec![crabka_audit::NodeId(1)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1)],
+            isr: vec![krabka_audit::NodeId(1)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],

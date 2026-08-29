@@ -10,7 +10,7 @@
 //! records flow from every leader whatever broker the consumer bootstrapped at.
 //!
 //! **Why rf=1 matters for test validity:** with rf=3, the bootstrap broker holds
-//! a follower replica of every partition, and Crabka serves consumer fetches
+//! a follower replica of every partition, and Krabka serves consumer fetches
 //! from any local replica up to the high-watermark. There is no leadership gate.
 //! A bootstrap-only consumer would still succeed in that setup, and the test
 //! would be hollow. With rf=1 each partition lives on exactly ONE broker. If the
@@ -26,9 +26,9 @@ use std::{
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_client_consumer::{AutoOffsetReset, Consumer};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_consumer::{AutoOffsetReset, Consumer};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
@@ -60,7 +60,7 @@ fn cluster_lock() -> &'static Mutex<()> {
 async fn produce_one(
     client: &Client,
     topic: &str,
-    topic_id: crabka_protocol::primitives::uuid::Uuid,
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
     partition: i32,
     value: &str,
 ) {
@@ -238,9 +238,9 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
         .bootstrap(bootstrap.clone())
         .client_id("routing-consumer-rf1")
         .group_id("routing-grp-rf1")
-        .session_timeout(crabka_units::secs(30))
-        .rebalance_timeout(crabka_units::secs(2))
-        .heartbeat_interval(crabka_units::secs(1))
+        .session_timeout(krabka_units::secs(30))
+        .rebalance_timeout(krabka_units::secs(2))
+        .heartbeat_interval(krabka_units::secs(1))
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .subscribe([topic.to_string()])
         .build()
@@ -250,7 +250,7 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     let mut seen: HashSet<String> = HashSet::new();
     let deadline = Instant::now() + Duration::from_secs(30);
     while seen.len() < expected.len() && Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(300)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(300)).await.unwrap() {
             seen.insert(String::from_utf8_lossy(r.value.as_deref().unwrap_or(&[])).into_owned());
         }
     }

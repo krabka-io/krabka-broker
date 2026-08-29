@@ -1,8 +1,8 @@
 //! The tool driven end to end against a real broker.
 //!
-//! Every case calls [`crabka_barrier::run_from_args`] in process rather than
+//! Every case calls [`krabka_barrier::run_from_args`] in process rather than
 //! spawning the binary. A subprocess needs a Cargo working tree to build from
-//! and a Bazel test sandbox has none, which is the same reason `crabka-format`
+//! and a Bazel test sandbox has none, which is the same reason `krabka-format`
 //! is a library as well as a binary.
 //!
 //! What these cover that the unit tests cannot: that each subcommand's request
@@ -10,7 +10,7 @@
 //! what happened.
 
 use assert2::{assert, check};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 
 /// The exit code for a request the broker refused.
 const REFUSED: i32 = 1;
@@ -59,26 +59,26 @@ async fn wait_for_coordinator(bootstrap: &str) {
 
 /// Run the tool, returning its exit code.
 async fn cli(bootstrap: &str, args: &[&str]) -> i32 {
-    let mut line = vec!["crabka-barrier", "--bootstrap-server", bootstrap];
+    let mut line = vec!["krabka-barrier", "--bootstrap-server", bootstrap];
     line.extend_from_slice(args);
-    crabka_barrier::run_from_args(line).await
+    krabka_barrier::run_from_args(line).await
 }
 
 /// Create the topic the barrier group cuts across.
 async fn create_topic(bootstrap: &str, partitions: i32) {
     let mut admin =
-        crabka_client_admin::AdminClient::connect(std::slice::from_ref(&bootstrap.to_owned()))
+        krabka_client_admin::AdminClient::connect(std::slice::from_ref(&bootstrap.to_owned()))
             .await
             .expect("admin connect");
     admin
         .create_topics(
-            &[crabka_client_admin::CreateTopicSpec {
+            &[krabka_client_admin::CreateTopicSpec {
                 name: TOPIC.to_string(),
                 partitions,
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            crabka_units::secs(10),
+            krabka_units::secs(10),
         )
         .await
         .expect("create topic");

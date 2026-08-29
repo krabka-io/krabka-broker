@@ -42,12 +42,12 @@ use std::{
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, LeaderEpoch, MetadataRecord, PartitionRecord, PatternType,
     PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -60,7 +60,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -105,7 +105,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-elect-test";
+    let client_id = "krabka-elect-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -209,7 +209,7 @@ async fn wait_isr_contains(handle: &BrokerHandle, topic: &str, partition: i32, n
     handle
         .wait_for_image(|img| {
             img.partition(topic, partition)
-                .is_some_and(|p| p.isr.contains(&crabka_broker::NodeId(node)))
+                .is_some_and(|p| p.isr.contains(&krabka_broker::NodeId(node)))
         })
         .await;
 }
@@ -247,7 +247,7 @@ async fn wait_partition_isr_contains(
     handle
         .wait_for_image(|img| {
             img.partition(topic, partition)
-                .is_some_and(|p| p.isr.contains(&crabka_broker::NodeId(member)))
+                .is_some_and(|p| p.isr.contains(&krabka_broker::NodeId(member)))
         })
         .await;
 }
@@ -299,7 +299,7 @@ async fn preferred_election_via_wire_returns_success() {
     // (i.e., not broker 1).
     cluster[0]
         .0
-        .wait_until_partition_leader_changed("foo-preferred", 0, crabka_broker::NodeId(1))
+        .wait_until_partition_leader_changed("foo-preferred", 0, krabka_broker::NodeId(1))
         .await;
     let new_leader = cluster[0]
         .0
@@ -311,8 +311,8 @@ async fn preferred_election_via_wire_returns_success() {
     // Revive broker 1 (Rejoin reads the existing raft log).
     // The surviving 2/3 quorum continues committing.
     let mut revived_cfg = dead_cfg.clone();
-    revived_cfg.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
-    let revived_h = crabka_broker::Broker::start(revived_cfg)
+    revived_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let revived_h = krabka_broker::Broker::start(revived_cfg)
         .await
         .expect("rejoin broker 1");
 
@@ -419,9 +419,9 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     let forged = MetadataRecord::V1Partition(PartitionRecord {
         topic: "foo-unclean".to_string(),
         partition: 0,
-        leader: crabka_broker::NodeId(99),
+        leader: krabka_broker::NodeId(99),
         replicas: pr_before.replicas.clone(),
-        isr: vec![crabka_broker::NodeId(99)],
+        isr: vec![krabka_broker::NodeId(99)],
         leader_epoch: pr_before.leader_epoch.next(),
         adding_replicas: vec![],
         removing_replicas: vec![],
@@ -474,7 +474,7 @@ async fn create_topic_plaintext(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -526,14 +526,14 @@ async fn wait_partition_record_known(
     PartitionRecord {
         topic: topic.to_string(),
         partition,
-        leader: crabka_broker::NodeId(leader),
+        leader: krabka_broker::NodeId(leader),
         // We don't have a direct `replicas` accessor, but the
         // ISR is enough for our purposes (replicas=[1,2] is
         // well-known from the CreateTopics call with rf=2 on a
         // 3-broker cluster where the first two brokers are the
         // natural assignment).
-        replicas: vec![crabka_broker::NodeId(1), crabka_broker::NodeId(2)],
-        isr: isr.into_iter().map(crabka_broker::NodeId).collect(),
+        replicas: vec![krabka_broker::NodeId(1), krabka_broker::NodeId(2)],
+        isr: isr.into_iter().map(krabka_broker::NodeId).collect(),
         leader_epoch: LeaderEpoch(0), // bumped by the forged record, not critical
         adding_replicas: vec![],
         removing_replicas: vec![],
@@ -560,7 +560,7 @@ async fn non_super_user_without_acl_denied() {
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -661,7 +661,7 @@ async fn non_super_user_without_acl_denied() {
 /// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
 ///
 /// The cluster sets `auto_leader_rebalance_enable = true`,
-/// `leader_imbalance_check_interval = crabka_units::secs(1)`, and `leader_imbalance_per_broker = crabka_units::percent(0)`.
+/// `leader_imbalance_check_interval = krabka_units::secs(1)`, and `leader_imbalance_per_broker = krabka_units::percent(0)`.
 ///
 /// Scenario:
 /// 1. Create an rf=2 topic over the wire. With 3 registered brokers,
@@ -701,11 +701,11 @@ async fn auto_rebalance_restores_preferred_leader() {
         &controller_addrs,
         &voters,
         dir0.path(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     cfg0.features.auto_leader_rebalance_enable = true;
-    cfg0.leader_imbalance_check_interval = crabka_units::secs(1);
-    cfg0.leader_imbalance_per_broker = crabka_units::percent(0);
+    cfg0.leader_imbalance_check_interval = krabka_units::secs(1);
+    cfg0.leader_imbalance_per_broker = krabka_units::percent(0);
 
     let mut cfg1 = support::broker_config(
         1,
@@ -713,11 +713,11 @@ async fn auto_rebalance_restores_preferred_leader() {
         &controller_addrs,
         &voters,
         dir1.path(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     cfg1.features.auto_leader_rebalance_enable = true;
-    cfg1.leader_imbalance_check_interval = crabka_units::secs(1);
-    cfg1.leader_imbalance_per_broker = crabka_units::percent(0);
+    cfg1.leader_imbalance_check_interval = krabka_units::secs(1);
+    cfg1.leader_imbalance_per_broker = krabka_units::percent(0);
 
     let mut cfg2 = support::broker_config(
         2,
@@ -725,11 +725,11 @@ async fn auto_rebalance_restores_preferred_leader() {
         &controller_addrs,
         &voters,
         dir2.path(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     cfg2.features.auto_leader_rebalance_enable = true;
-    cfg2.leader_imbalance_check_interval = crabka_units::secs(1);
-    cfg2.leader_imbalance_per_broker = crabka_units::percent(0);
+    cfg2.leader_imbalance_check_interval = krabka_units::secs(1);
+    cfg2.leader_imbalance_per_broker = krabka_units::percent(0);
 
     // Start all three statically; they elect among themselves over the wire.
     let mut client_ls = client_listeners.into_iter();
@@ -775,7 +775,7 @@ async fn auto_rebalance_restores_preferred_leader() {
     eprintln!("broker 1 shut down; waiting for failover");
 
     // Wait for broker 2 or 3 to report a new leader (not broker 1).
-    h1.wait_until_partition_leader_changed(topic, 0, crabka_broker::NodeId(1))
+    h1.wait_until_partition_leader_changed(topic, 0, krabka_broker::NodeId(1))
         .await;
     eprintln!(
         "new leader after broker 1 death: {:?}",
@@ -784,7 +784,7 @@ async fn auto_rebalance_restores_preferred_leader() {
 
     // ── Phase 4: revive broker 1 (Rejoin). ───────────────────────────────
     let mut rejoin_cfg = cfg0.clone();
-    rejoin_cfg.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
+    rejoin_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let h0_new = Broker::start(rejoin_cfg).await.expect("rejoin broker 1");
     eprintln!("broker 1 rejoined; waiting for ISR expansion");
 
@@ -823,7 +823,7 @@ async fn create_topic_sasl_plain(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };

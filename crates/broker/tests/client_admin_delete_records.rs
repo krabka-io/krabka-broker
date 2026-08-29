@@ -1,9 +1,9 @@
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_admin::{AdminClient, CreateTopicSpec, DeleteRecordsOp};
-use crabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_partition};
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::primitives::uuid::Uuid as WireUuid;
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_admin::{AdminClient, CreateTopicSpec, DeleteRecordsOp};
+use krabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_partition};
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_records_truncates_wal_and_maps_outcome() {
@@ -24,7 +24,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            crabka_units::secs(5),
+            krabka_units::secs(5),
         )
         .await
         .unwrap();
@@ -58,14 +58,14 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
                 partition: 0,
                 offset: 50,
             }],
-            crabka_units::secs(5),
+            krabka_units::secs(5),
         )
         .await
         .unwrap();
 
     assert!(
         outcomes
-            == vec![crabka_client_admin::DeleteRecordsOutcome {
+            == vec![krabka_client_admin::DeleteRecordsOutcome {
                 topic: "wal".to_string(),
                 partition: 0,
                 error_code: 0,
@@ -90,8 +90,8 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
         topic_id,
         0,
         0,
-        crabka_units::millis(500),
-        crabka_units::mebibytes(1),
+        krabka_units::millis(500),
+        krabka_units::mebibytes(1),
     )
     .await
     .unwrap_err();

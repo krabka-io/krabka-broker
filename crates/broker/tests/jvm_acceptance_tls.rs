@@ -1,4 +1,4 @@
-//! TLS listeners: a plain SSL handshake, the SASL_SSL stack, and inter-broker
+//! TLS listeners: a plain SSL handshake, the `SASL_SSL` stack, and inter-broker
 //! replication over authenticated and TLS-encrypted connections.
 //!
 //! The shared harness lives in [`jvm_acceptance`]; see it for the container
@@ -23,7 +23,7 @@ use jvm_acceptance::*;
 ///
 /// The test turns off hostname verification with
 /// `ssl.endpoint.identification.algorithm=`, because the CN of the dev cert
-/// is `crabka-dev`, not `host.docker.internal`. The dev cert is a
+/// is `krabka-dev`, not `host.docker.internal`. The dev cert is a
 /// self-signed ECDSA P-256 end-entity, regenerated from the original
 /// ED25519 + CA:TRUE fixture. cp-kafka:6.1.1 ships Java 11, whose
 /// `SunJSSE` does not advertise `ed25519` signature schemes during the TLS
@@ -65,7 +65,7 @@ async fn jvm_ssl_handshake_succeeds() {
         .output()
         .expect("spawn kafka-broker-api-versions");
     eprintln!(
-        "CRABKA[test] ssl api-versions status={} stdout={} stderr={}",
+        "KRABKA[test] ssl api-versions status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -93,7 +93,7 @@ async fn jvm_ssl_handshake_succeeds() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_sasl_ssl_full_stack() {
-    const TOPIC: &str = "crabka-sasl-ssl-itest";
+    const TOPIC: &str = "krabka-sasl-ssl-itest";
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
@@ -303,7 +303,7 @@ async fn jvm_sasl_ssl_full_stack() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_inter_broker_replication_authed() {
-    const TOPIC: &str = "crabka-jvm-inter-broker-itest";
+    const TOPIC: &str = "krabka-jvm-inter-broker-itest";
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
 
@@ -429,13 +429,13 @@ async fn jvm_inter_broker_replication_authed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_inter_broker_sasl_ssl_raft_replication() {
-    use crabka_security::ListenerProtocol;
+    use krabka_security::ListenerProtocol;
 
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
     const ALICE_PASS: &str = "alice-secret";
-    const TOPIC: &str = "crabka-sasl-ssl-raft-rf2";
+    const TOPIC: &str = "krabka-sasl-ssl-raft-rf2";
 
     let (broker0, broker1, _dir0, _dir1) = start_two_sasl_ssl_brokers_with_controller_protocol(
         ListenerProtocol::SaslSsl,

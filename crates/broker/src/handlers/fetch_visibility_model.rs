@@ -20,7 +20,7 @@
 //! KIP-227 monotonicity: the reported HW/LSO never regress as the log
 //! progresses, and the delivery watermark does not enter those two formulas at
 //! all. See the design spec
-//! `docs/superpowers/specs/2026-06-14-crabka-fetch-hwm-visibility-model-design.md`.
+//! `docs/superpowers/specs/2026-06-14-krabka-fetch-hwm-visibility-model-design.md`.
 
 use std::time::Duration;
 

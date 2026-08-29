@@ -13,16 +13,16 @@ use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use crabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use crabka_client_core::security::{ClientSecurity, SaslCredentials};
-use crabka_client_producer::{ConsumerGroupMetadata, Producer, ProducerRecord};
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
+use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
+use krabka_client_core::security::{ClientSecurity, SaslCredentials};
+use krabka_client_producer::{ConsumerGroupMetadata, Producer, ProducerRecord};
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     find_coordinator_request::FindCoordinatorRequest,
     init_producer_id_request::InitProducerIdRequest,
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
 }
 
 async fn create_topic(bootstrap: &str, name: &str) {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await
@@ -63,7 +63,7 @@ async fn create_topic(bootstrap: &str, name: &str) {
 }
 
 async fn init_transaction(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     transactional_id: &str,
 ) -> (i64, i16) {
     let coordinator = client
@@ -154,7 +154,7 @@ fn sasl_plain_security(user: &str, pass: &str) -> ClientSecurity {
 /// Creates the topic `name` with 1 partition over a SASL-authenticated admin
 /// connection.
 async fn create_topic_sasl(bootstrap: &str, name: &str, security: ClientSecurity) {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .maybe_security(Some(security))
         .build()
@@ -233,7 +233,7 @@ async fn commit_then_read_committed_sees_records() {
     let mut seen: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while seen.len() < 3 && std::time::Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
             seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }
@@ -279,7 +279,7 @@ async fn abort_then_read_committed_skips_records() {
     let mut seen = 0usize;
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while std::time::Instant::now() < deadline {
-        let records = consumer.poll(crabka_units::millis(200)).await.unwrap();
+        let records = consumer.poll(krabka_units::millis(200)).await.unwrap();
         seen += records.len();
         if !records.is_empty() {
             break;
@@ -301,7 +301,7 @@ async fn abort_then_read_committed_skips_records() {
     let mut seen2: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while seen2.len() < 3 && std::time::Instant::now() < deadline {
-        for r in consumer_uc.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer_uc.poll(krabka_units::millis(200)).await.unwrap() {
             seen2.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }
@@ -374,7 +374,7 @@ async fn interleaved_commit_and_abort() {
     let mut seen: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while seen.len() < 7 && std::time::Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
             seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }
@@ -422,7 +422,7 @@ async fn fenced_producer_cannot_commit() {
     assert!(
         matches!(
             err.source,
-            crabka_client_producer::ProducerError::FencedProducer
+            krabka_client_producer::ProducerError::FencedProducer
         ),
         "expected FencedProducer, got: {err:?}"
     );
@@ -487,7 +487,7 @@ async fn send_offsets_to_transaction_atomic_with_records() {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while read < 5 && std::time::Instant::now() < deadline {
             for r in input_consumer
-                .poll(crabka_units::millis(200))
+                .poll(krabka_units::millis(200))
                 .await
                 .unwrap()
             {
@@ -533,7 +533,7 @@ async fn send_offsets_to_transaction_atomic_with_records() {
     let mut seen = 0usize;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while seen < 5 && std::time::Instant::now() < deadline {
-        seen += c2.poll(crabka_units::millis(200)).await.unwrap().len();
+        seen += c2.poll(krabka_units::millis(200)).await.unwrap().len();
     }
     assert!(seen == 5, "expected 5 records on output topic");
 
@@ -620,7 +620,7 @@ async fn sasl_authenticated_transactional_flow_commits() {
     let mut seen: Vec<String> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while seen.len() < 3 && std::time::Instant::now() < deadline {
-        for r in consumer.poll(crabka_units::millis(200)).await.unwrap() {
+        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
             seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
         }
     }
@@ -640,7 +640,7 @@ async fn sasl_authenticated_transactional_flow_commits() {
 /// precise control over the metadata.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_classic_generation_and_member() {
-    use crabka_protocol::owned::txn_offset_commit_request::{
+    use krabka_protocol::owned::txn_offset_commit_request::{
         TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
     };
 
@@ -666,7 +666,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         "consumer should have a member id: {meta:?}"
     );
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await
@@ -732,7 +732,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
 /// field.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_next_gen_member_epoch() {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         txn_offset_commit_request::{
             TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
@@ -742,7 +742,7 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&bootstrap, "ng-in").await;
 
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap.clone())
         .build()
         .await

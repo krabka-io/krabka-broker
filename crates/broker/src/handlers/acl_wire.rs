@@ -4,7 +4,7 @@
 //! conversions and a small error type. The error type covers an unknown
 //! discriminant and an ANY value where a concrete value is necessary.
 
-use crabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
+use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
 
 /// Kafka's singleton cluster resource name (`Resource.CLUSTER_NAME`).
 /// Every cluster-scoped ACL and authorization check targets this name.
@@ -326,7 +326,7 @@ mod tests {
     /// guard delegation tokens.
     #[test]
     fn delegation_token_resource_type_now_accepted() {
-        use crabka_metadata::AclEntry;
+        use krabka_metadata::AclEntry;
 
         // Concrete (CreateAcls) codec.
         check!(resource_type_concrete(6) == Ok(ResourceType::DelegationToken));

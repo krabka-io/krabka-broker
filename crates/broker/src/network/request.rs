@@ -1,7 +1,7 @@
 //! Borrowed Kafka request-header parsing for the broker dispatch loop.
 
 use bytes::Buf;
-use crabka_protocol::primitives::string_bytes_borrowed::get_nullable_string_borrowed;
+use krabka_protocol::primitives::string_bytes_borrowed::get_nullable_string_borrowed;
 
 use crate::{
     error::BrokerError,
@@ -38,7 +38,7 @@ where
     let client_id = get_nullable_string_borrowed(&mut cur)?;
 
     if body_flexible {
-        crabka_protocol::tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
+        krabka_protocol::tagged_fields::read_tagged_fields(&mut cur, |_tag, _payload| Ok(false))?;
     }
 
     Ok(ParsedRequest {
@@ -59,7 +59,7 @@ pub(crate) fn peek_api_key(frame: &[u8]) -> Result<ApiKeyCode, BrokerError> {
 }
 
 fn protocol_invalid(message: &'static str) -> BrokerError {
-    BrokerError::Protocol(crabka_protocol::ProtocolError::InvalidValue(message))
+    BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(message))
 }
 
 #[cfg(test)]
@@ -161,7 +161,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            BrokerError::Protocol(crabka_protocol::ProtocolError::InvalidUtf8(_))
+            BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidUtf8(_))
         ));
     }
 

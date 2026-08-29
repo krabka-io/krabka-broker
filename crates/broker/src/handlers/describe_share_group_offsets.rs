@@ -8,8 +8,8 @@
 //! ACL gate.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_share_group_offsets_request::{
@@ -151,7 +151,7 @@ fn requested_topics(
     metadata: Option<
         &crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue,
     >,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Vec<DescribeShareGroupOffsetsRequestTopic> {
     let Some(metadata) = metadata else {
         return requested.unwrap_or_default();
@@ -183,12 +183,12 @@ fn requested_topics(
 async fn describe_topic(
     broker: &Broker,
     persister: &crate::share_coordinator::persister_client::SharePersister,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     metadata: Option<
         &crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue,
     >,
     gid: &str,
-    rt: crabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic,
+    rt: krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic,
 ) -> DescribeShareGroupOffsetsResponseTopic {
     let topic_name = rt.topic_name;
     let Some(topic_id) = image.topic(&topic_name).map(|t| t.topic_id) else {
@@ -260,7 +260,7 @@ async fn describe_partition(
     };
     let (leader_epoch, lag) = if let Some(part) = broker
         .partitions
-        .get(topic_name, crabka_ids::PartitionIndex(p))
+        .get(topic_name, krabka_ids::PartitionIndex(p))
     {
         let hwm = part.high_watermark().await;
         let le = part
@@ -290,9 +290,9 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_log::Offset;
-    use crabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-    use crabka_protocol::{
+    use krabka_log::Offset;
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             describe_share_group_offsets_request::{
@@ -301,7 +301,7 @@ mod tests {
             describe_share_group_offsets_response,
         },
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{authorizer::Authorizer, test_support::DenyAll};

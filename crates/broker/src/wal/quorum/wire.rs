@@ -1,16 +1,16 @@
 //! Shard-addressed WAL RPC descriptors.
 
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_protocol::{Decode, Encode, owned::fetch_request::FetchRequest};
-use crabka_units::{ByteSize, convert::ByteSizeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_protocol::{Decode, Encode, owned::fetch_request::FetchRequest};
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
-const KRAFT_METADATA_TOPIC_ID: crabka_protocol::primitives::uuid::Uuid =
-    crabka_protocol::primitives::uuid::Uuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+const KRAFT_METADATA_TOPIC_ID: krabka_protocol::primitives::uuid::Uuid =
+    krabka_protocol::primitives::uuid::Uuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 pub(crate) const KIP_595_FETCH_VERSION: i16 = 17;
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
-const WAL_FETCH_RACK_ID: &str = "__crabka_diskless_wal";
+const WAL_FETCH_RACK_ID: &str = "__krabka_diskless_wal";
 
 /// Group discriminator for KIP-595 traffic carried by the broker listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,7 +27,7 @@ pub(crate) enum QuorumGroup {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WalFetchRequest {
     pub(crate) group: QuorumGroup,
-    pub(crate) from: crabka_raft::NodeId,
+    pub(crate) from: krabka_raft::NodeId,
     pub(crate) fetch_offset: i64,
     pub(crate) max_size: ByteSize,
 }
@@ -77,7 +77,7 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
     };
     Some(WalFetchRequest {
         group,
-        from: crabka_raft::NodeId(u64::try_from(request.replica_state.replica_id).ok()?),
+        from: krabka_raft::NodeId(u64::try_from(request.replica_state.replica_id).ok()?),
         fetch_offset: partition.fetch_offset,
         max_size: ByteSize::from_bytes(u64::from(max_bytes.get())),
     })
@@ -90,8 +90,8 @@ pub(crate) fn fetch_response(
     log_start_offset: i64,
     records: Bytes,
     error_code: i16,
-) -> crabka_protocol::owned::fetch_response::FetchResponse {
-    use crabka_protocol::{owned::fetch_response as fetch_resp, records::RecordsPayload};
+) -> krabka_protocol::owned::fetch_response::FetchResponse {
+    use krabka_protocol::{owned::fetch_response as fetch_resp, records::RecordsPayload};
 
     let (topic, topic_id, partition) = match group {
         QuorumGroup::Metadata => ("__cluster_metadata".to_string(), KRAFT_METADATA_TOPIC_ID, 0),
@@ -100,7 +100,7 @@ pub(crate) fn fetch_response(
             partition,
         } => (
             String::new(),
-            crabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+            krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
             partition.0,
         ),
     };
@@ -128,12 +128,12 @@ pub(crate) fn fetch_response(
 
 pub(crate) fn unknown_shard_fetch_response(
     group: QuorumGroup,
-) -> crabka_protocol::owned::fetch_response::FetchResponse {
+) -> krabka_protocol::owned::fetch_response::FetchResponse {
     fetch_response(group, 0, 0, 0, Bytes::new(), UNKNOWN_TOPIC_OR_PARTITION)
 }
 
 pub(crate) fn encode_fetch_response_struct(
-    response: &crabka_protocol::owned::fetch_response::FetchResponse,
+    response: &krabka_protocol::owned::fetch_response::FetchResponse,
 ) -> Bytes {
     let mut out = bytes::BytesMut::new();
     let _ = response.encode(&mut out, KIP_595_FETCH_VERSION);
@@ -142,12 +142,12 @@ pub(crate) fn encode_fetch_response_struct(
 
 pub(crate) fn fetch_request(
     group: QuorumGroup,
-    from: crabka_raft::NodeId,
+    from: krabka_raft::NodeId,
     fetch_epoch: i32,
     fetch_offset: i64,
     max_size: ByteSize,
 ) -> FetchRequest {
-    use crabka_protocol::owned::fetch_request as fetch_req;
+    use krabka_protocol::owned::fetch_request as fetch_req;
 
     let (topic, topic_id, partition) = match group {
         QuorumGroup::Metadata => ("__cluster_metadata".to_string(), KRAFT_METADATA_TOPIC_ID, 0),
@@ -156,7 +156,7 @@ pub(crate) fn fetch_request(
             partition,
         } => (
             String::new(),
-            crabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+            krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
             partition.0,
         ),
     };
@@ -190,7 +190,7 @@ pub(crate) fn fetch_request(
 #[cfg(test)]
 pub(crate) fn encode_fetch_for_group(
     group: QuorumGroup,
-    from: crabka_raft::NodeId,
+    from: krabka_raft::NodeId,
     fetch_epoch: i32,
     fetch_offset: i64,
 ) -> Bytes {
@@ -208,7 +208,7 @@ pub(crate) fn encode_fetch_for_group(
 
 #[cfg(test)]
 mod tests {
-    use crabka_raft::NodeId;
+    use krabka_raft::NodeId;
 
     use super::*;
 

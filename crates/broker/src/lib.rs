@@ -1,6 +1,6 @@
-//! Apache Kafka-compatible broker for Crabka.
+//! Apache Kafka-compatible broker for Krabka.
 //!
-//! `crabka-broker` ships a library and a binary that unmodified JVM Kafka
+//! `krabka-broker` ships a library and a binary that unmodified JVM Kafka
 //! clients can produce to and consume from. It is the runtime that connects the
 //! wire protocol, `KRaft` metadata controller, log storage, replication, security,
 //! quotas, compaction, tiered storage, transactions, and observability.
@@ -11,9 +11,9 @@
 //! - Handles topic metadata and administration, `Produce`, `Fetch`,
 //!   `ListOffsets`, configs, group coordination, offset commits, share groups,
 //!   transactions, producer-state inspection, quotas, and client telemetry.
-//! - Runs an embedded [`crabka_raft`] `KRaft` metadata quorum, registers brokers,
+//! - Runs an embedded [`krabka_raft`] `KRaft` metadata quorum, registers brokers,
 //!   tracks broker liveness, and drives partition leadership and reassignment.
-//! - Persists partition data through [`crabka_log`], including leader-epoch
+//! - Persists partition data through [`krabka_log`], including leader-epoch
 //!   checkpoints, transaction indexes, retention, and log compaction.
 //! - Supports idempotent and transactional producers, read-committed fetches,
 //!   high-watermark enforcement for `acks=all`, follower replication, ISR
@@ -27,7 +27,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use crabka_broker::{Broker, BrokerConfig};
+//! use krabka_broker::{Broker, BrokerConfig};
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let handle = Broker::start(BrokerConfig::default()).await?;
@@ -44,7 +44,7 @@
 //! - [`BrokerHandle`] — lifecycle handle returned by
 //!   [`Broker::start`]; call [`BrokerHandle::shutdown`] to drain.
 //! - [`BrokerConfig`] — listen address, advertised listener, log dir,
-//!   broker id, per-log [`LogConfig`](crabka_log::LogConfig).
+//!   broker id, per-log [`LogConfig`](krabka_log::LogConfig).
 //! - [`BrokerError`] — error returned by [`Broker::start`].
 //!
 //! ## Replication
@@ -54,7 +54,7 @@
 //! `replicator_supervisor` subscribes to controller metadata changes
 //! and spawns a `replicator` task per partition where this broker is
 //! a non-leader replica. Each replicator opens a
-//! `crabka_client_core::Client` to its partition's leader, loops
+//! `krabka_client_core::Client` to its partition's leader, loops
 //! on `Fetch` with `replica_id` set, and appends every returned
 //! `RecordBatch` to the local log.
 //!
@@ -117,7 +117,7 @@
 //! `acks=all` produces survive arbitrary single-broker failures with
 //! no data loss and no zombie writes.
 
-#![doc(html_root_url = "https://docs.rs/crabka-broker/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-broker/0.4.0")]
 
 /// Emit the wrapped item(s) only on platforms with a usable file→socket
 /// `sendfile(2)` for the zero-copy fetch path: Linux, the Apple targets, and
@@ -158,7 +158,7 @@ pub mod audit_sink;
 pub mod authorizer;
 pub(crate) mod auto_join;
 pub(crate) mod barrier;
-// The barrier marker's read half is public: `crabka-barrier verify` and any
+// The barrier marker's read half is public: `krabka-barrier verify` and any
 // recovery tool has to read a marker back out of the log, and a second decoder
 // beside this one would be a second thing to drift.
 pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
@@ -252,5 +252,5 @@ mod wal;
 pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
-pub use crabka_raft::NodeId;
 pub use error::BrokerError;
+pub use krabka_raft::NodeId;

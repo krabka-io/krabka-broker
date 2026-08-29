@@ -34,7 +34,7 @@ use jvm_acceptance::*;
 async fn jvm_kafka_leader_election_preferred() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
-    const TOPIC: &str = "crabka-elect-preferred-itest";
+    const TOPIC: &str = "krabka-elect-preferred-itest";
 
     let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
         start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
@@ -77,7 +77,7 @@ async fn jvm_kafka_leader_election_preferred() {
 
     // Record the initial leader (should be broker 1 as preferred replica).
     let initial_leader = wait_jvm_partition_any_leader(&h1, TOPIC, 0).await;
-    eprintln!("CRABKA[test] initial partition leader: {initial_leader}");
+    eprintln!("KRABKA[test] initial partition leader: {initial_leader}");
 
     // For the preferred election to do anything interesting we need broker 1
     // to be the preferred (replicas[0]). The scheduler should assign [1, 2]
@@ -107,16 +107,16 @@ async fn jvm_kafka_leader_election_preferred() {
     //
     // Metadata injection bypasses both limitations and matches the technique
     // used by `tests/elect_leaders.rs::unclean_election_via_wire_picks_alive_replica`.
-    h1.submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1Partition(
-        crabka_metadata::PartitionRecord {
+    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
+        krabka_metadata::PartitionRecord {
             topic: TOPIC.to_string(),
             partition: 0,
             // Make broker 2 the current leader — so broker 1 (replicas[0])
             // is no longer the leader but is still alive and in the ISR.
-            leader: crabka_broker::NodeId(2),
-            replicas: vec![crabka_broker::NodeId(1), crabka_broker::NodeId(2)],
-            isr: vec![crabka_broker::NodeId(2), crabka_broker::NodeId(1)],
-            leader_epoch: crabka_metadata::LeaderEpoch(1),
+            leader: krabka_broker::NodeId(2),
+            replicas: vec![krabka_broker::NodeId(1), krabka_broker::NodeId(2)],
+            isr: vec![krabka_broker::NodeId(2), krabka_broker::NodeId(1)],
+            leader_epoch: krabka_metadata::LeaderEpoch(1),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -131,7 +131,7 @@ async fn jvm_kafka_leader_election_preferred() {
     wait_jvm_partition_leader(&h2, TOPIC, 0, 2).await;
     wait_jvm_isr_contains(&h2, TOPIC, 0, 1).await;
     eprintln!(
-        "CRABKA[test] broker 2 is current leader; broker 1 is in ISR — running preferred election"
+        "KRABKA[test] broker 2 is current leader; broker 1 is in ISR — running preferred election"
     );
 
     // Run kafka-leader-election via the 7.5 JVM image.
@@ -164,7 +164,7 @@ async fn jvm_kafka_leader_election_preferred() {
     let election_stdout = String::from_utf8_lossy(&out.stdout);
     let election_stderr = String::from_utf8_lossy(&out.stderr);
     eprintln!(
-        "CRABKA[test] kafka-leader-election status={} stdout={election_stdout} stderr={election_stderr}",
+        "KRABKA[test] kafka-leader-election status={} stdout={election_stdout} stderr={election_stderr}",
         out.status
     );
     assert!(
@@ -174,7 +174,7 @@ async fn jvm_kafka_leader_election_preferred() {
 
     // Poll until broker 1 is the leader again on broker 2's view.
     wait_jvm_partition_leader(&h2, TOPIC, 0, 1).await;
-    eprintln!("CRABKA[test] preferred election confirmed: broker 1 is leader again");
+    eprintln!("KRABKA[test] preferred election confirmed: broker 1 is leader again");
 
     h1.shutdown().await;
     h2.shutdown().await;
@@ -190,7 +190,7 @@ async fn jvm_kafka_leader_election_preferred() {
 async fn jvm_kafka_reassign_partitions_end_to_end() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
-    const TOPIC: &str = "crabka-reassign-itest";
+    const TOPIC: &str = "krabka-reassign-itest";
 
     let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
         start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
@@ -238,10 +238,10 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     let initial = pr.replicas.clone();
     // node IDs are 1-3; find the one not in the initial replica set.
     let new_node: u64 = (1u64..=3)
-        .find(|n| !initial.contains(&crabka_metadata::NodeId(*n)))
+        .find(|n| !initial.contains(&krabka_metadata::NodeId(*n)))
         .expect("free broker");
     let staying: u64 = initial.first().unwrap().0;
-    eprintln!("CRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
+    eprintln!("KRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
 
     // Write reassignment JSON: move partition 0 to [staying, new_node].
     let json = format!(
@@ -273,7 +273,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         .output()
         .expect("spawn kafka-reassign-partitions --execute");
     eprintln!(
-        "CRABKA[test] --execute status={} stdout={} stderr={}",
+        "KRABKA[test] --execute status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -299,17 +299,17 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             initial
                 .last()
                 .copied()
-                .unwrap_or(crabka_metadata::NodeId(0))
+                .unwrap_or(krabka_metadata::NodeId(0))
         });
-    let injected = crabka_metadata::PartitionRecord {
+    let injected = krabka_metadata::PartitionRecord {
         isr: vec![
-            crabka_metadata::NodeId(staying),
-            crabka_metadata::NodeId(new_node),
+            krabka_metadata::NodeId(staying),
+            krabka_metadata::NodeId(new_node),
             removing_replica,
         ],
         ..pr_after.clone()
     };
-    h1.submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1Partition(injected))
+    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
         .await
         .expect("inject ISR for reassignment completion");
 
@@ -330,7 +330,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
     );
-    eprintln!("CRABKA[test] reassignment completed; running --verify");
+    eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify should report completion.
     let verify_out = std::process::Command::new("docker")
@@ -355,7 +355,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         .output()
         .expect("spawn kafka-reassign-partitions --verify");
     eprintln!(
-        "CRABKA[test] --verify status={} stdout={} stderr={}",
+        "KRABKA[test] --verify status={} stdout={} stderr={}",
         verify_out.status,
         String::from_utf8_lossy(&verify_out.stdout),
         String::from_utf8_lossy(&verify_out.stderr),
@@ -382,7 +382,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
 async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
-    const TOPIC: &str = "crabka-throttle-reassign-itest";
+    const TOPIC: &str = "krabka-throttle-reassign-itest";
 
     let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
         start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
@@ -428,10 +428,10 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         .expect("partition record");
     let initial = pr.replicas.clone();
     let new_node: u64 = (1u64..=3)
-        .find(|n| !initial.contains(&crabka_metadata::NodeId(*n)))
+        .find(|n| !initial.contains(&krabka_metadata::NodeId(*n)))
         .expect("free broker");
     let staying: u64 = initial.first().unwrap().0;
-    eprintln!("CRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
+    eprintln!("KRABKA[test] initial replicas={initial:?} staying={staying} new_node={new_node}");
 
     // Write reassignment JSON.
     let json = format!(
@@ -465,7 +465,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         .output()
         .expect("spawn kafka-reassign-partitions --execute --throttle");
     eprintln!(
-        "CRABKA[test] --execute --throttle status={} stdout={} stderr={}",
+        "KRABKA[test] --execute --throttle status={} stdout={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -499,7 +499,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         .output()
         .expect("spawn kafka-configs --describe");
     eprintln!(
-        "CRABKA[test] kafka-configs describe status={} stdout={} stderr={}",
+        "KRABKA[test] kafka-configs describe status={} stdout={} stderr={}",
         desc.status,
         String::from_utf8_lossy(&desc.stdout),
         String::from_utf8_lossy(&desc.stderr),
@@ -525,17 +525,17 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
             initial
                 .last()
                 .copied()
-                .unwrap_or(crabka_metadata::NodeId(0))
+                .unwrap_or(krabka_metadata::NodeId(0))
         });
-    let injected = crabka_metadata::PartitionRecord {
+    let injected = krabka_metadata::PartitionRecord {
         isr: vec![
-            crabka_metadata::NodeId(staying),
-            crabka_metadata::NodeId(new_node),
+            krabka_metadata::NodeId(staying),
+            krabka_metadata::NodeId(new_node),
             removing_replica,
         ],
         ..pr_after.clone()
     };
-    h1.submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1Partition(injected))
+    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(injected))
         .await
         .expect("inject ISR for reassignment completion");
 
@@ -556,7 +556,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
     );
-    eprintln!("CRABKA[test] reassignment completed; running --verify");
+    eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify clears throttle configs and exits 0 (broker-scoped
     // IncrementalAlterConfigs is supported).
@@ -582,7 +582,7 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
         .output()
         .expect("spawn kafka-reassign-partitions --verify");
     eprintln!(
-        "CRABKA[test] --verify status={} stdout={} stderr={}",
+        "KRABKA[test] --verify status={} stdout={} stderr={}",
         verify_out.status,
         String::from_utf8_lossy(&verify_out.stdout),
         String::from_utf8_lossy(&verify_out.stderr),
@@ -596,8 +596,8 @@ async fn jvm_kafka_reassign_partitions_with_throttle_end_to_end() {
     // Confirm throttle configs were cleared from the metadata image after --verify.
     h1.wait_for_image(|img| {
         img.broker_throttle_rate(
-            crabka_metadata::NodeId(1),
-            crabka_metadata::ThrottleKind::Leader,
+            krabka_metadata::NodeId(1),
+            krabka_metadata::ThrottleKind::Leader,
         )
         .is_none()
     })

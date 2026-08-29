@@ -7,7 +7,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_protocol::primitives::uuid::Uuid;
+use krabka_protocol::primitives::uuid::Uuid;
 use regex::Regex;
 
 use super::{expired_member_ids, persistence_next_gen::MemberAssignmentState};

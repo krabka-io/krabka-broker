@@ -1,7 +1,7 @@
 //! Shared harness for the `jvm_acceptance_*` suites.
 //!
 //! These tests drive the official Apache Kafka command-line tools against a
-//! `crabka-broker` running on the host, with the tools inside cp-kafka
+//! `krabka-broker` running on the host, with the tools inside cp-kafka
 //! containers. They are split across several `tests/jvm_acceptance_*.rs` files
 //! so Bazel runs them as separate targets concurrently; as one binary the set
 //! took roughly nine minutes, serialised by a single shared port allocation.
@@ -29,8 +29,8 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_log::LogConfig;
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_log::LogConfig;
 
 /// Ports for this test process, allocated once rather than fixed at 9092-9097.
 ///
@@ -146,7 +146,7 @@ pub(crate) const KAFKA_IMAGE_LEGACY: &str = "mirror.gcr.io/confluentinc/cp-kafka
 /// Spawn the broker on `broker0_listen()`. The advertised listener is
 /// an allocated port. Inside the cp-kafka containers, the test
 /// adds a hosts entry that points that name at the bridge gateway.
-pub(crate) async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     start_host_broker_with(|_| {}).await
 }
 
@@ -158,11 +158,11 @@ pub(crate) async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfil
 /// open.
 pub(crate) async fn start_host_broker_with(
     adjust: impl FnOnce(&mut BrokerConfig),
-) -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -176,22 +176,22 @@ pub(crate) async fn start_host_broker_with(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let mut config = config;
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
-        "CRABKA[test] broker started listen={listen} advertised={bootstrap}",
+        "KRABKA[test] broker started listen={listen} advertised={bootstrap}",
         bootstrap = broker0_advertised(),
         listen = broker0_listen()
     );
@@ -247,7 +247,7 @@ pub(crate) fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> st
         .output()
         .expect("spawn docker run");
     eprintln!(
-        "CRABKA[test] docker_run image={image} {args:?} status={} stderr_len={}",
+        "KRABKA[test] docker_run image={image} {args:?} status={} stderr_len={}",
         out.status,
         out.stderr.len(),
     );
@@ -328,14 +328,14 @@ pub(crate) fn scram_jaas(user: &str, pass: &str) -> String {
 /// [`start_host_broker`] otherwise.
 pub(crate) fn start_sasl_plaintext_broker(
     users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (crabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -349,15 +349,15 @@ pub(crate) fn start_sasl_plaintext_broker(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
@@ -378,7 +378,7 @@ pub(crate) fn start_sasl_plaintext_broker(
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start sasl broker");
         eprintln!(
-            "CRABKA[test] sasl broker started listen={listen} advertised={bootstrap}",
+            "KRABKA[test] sasl broker started listen={listen} advertised={bootstrap}",
             bootstrap = broker0_advertised(),
             listen = broker0_listen()
         );
@@ -404,14 +404,14 @@ pub(crate) fn start_sasl_plaintext_broker(
 pub(crate) fn start_dual_mech_broker(
     admin: &str,
     admin_pass: &str,
-) -> impl std::future::Future<Output = (crabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -425,15 +425,15 @@ pub(crate) fn start_dual_mech_broker(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
@@ -451,7 +451,7 @@ pub(crate) fn start_dual_mech_broker(
         super_users: std::collections::HashSet::from([admin.to_string()]),
         ..BrokerConfig::default()
     };
-    config.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));
     config
@@ -460,7 +460,7 @@ pub(crate) fn start_dual_mech_broker(
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start dual-mech broker");
         eprintln!(
-            "CRABKA[test] dual-mech broker started listen={listen} advertised={bootstrap}",
+            "KRABKA[test] dual-mech broker started listen={listen} advertised={bootstrap}",
             bootstrap = broker0_advertised(),
             listen = broker0_listen()
         );
@@ -536,7 +536,7 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mount(
         .output()
         .expect("spawn docker run");
     eprintln!(
-        "CRABKA[test] docker_run image={image} mount={mount} {args:?} status={} stderr_len={}",
+        "KRABKA[test] docker_run image={image} mount={mount} {args:?} status={} stderr_len={}",
         out.status,
         out.stderr.len(),
     );
@@ -552,8 +552,8 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mount(
 /// JAAS config for the JVM `OAuthBearerLoginModule` built-in *unsecured*
 /// token issuer. `unsecuredLoginStringClaim_sub` mints an
 /// `alg:none` JWS with `sub=<user>`, `iat=now`, `exp=now+3600s`. That is
-/// exactly the token shape Crabka's
-/// [`crabka_security::UnsecuredJwsValidator`] accepts. It pairs with
+/// exactly the token shape Krabka's
+/// [`krabka_security::UnsecuredJwsValidator`] accepts. It pairs with
 /// `OAuthBearerUnsecuredLoginCallbackHandler` on the client.
 pub(crate) fn oauthbearer_jaas(sub: &str) -> String {
     format!(
@@ -565,14 +565,14 @@ pub(crate) fn oauthbearer_jaas(sub: &str) -> String {
 /// Spawn a single `SASL_PLAINTEXT` broker that enables **only** OAUTHBEARER.
 /// The broker validates the JVM client's unsecured JWS with the default
 /// validator (principal claim `sub`). Mirrors [`start_sasl_plaintext_broker`].
-pub(crate) async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+pub(crate) async fn start_oauthbearer_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -586,15 +586,15 @@ pub(crate) async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, 
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
@@ -611,7 +611,7 @@ pub(crate) async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, 
         .await
         .expect("start oauthbearer broker");
     eprintln!(
-        "CRABKA[test] oauthbearer broker started listen={listen} advertised={bootstrap}",
+        "KRABKA[test] oauthbearer broker started listen={listen} advertised={bootstrap}",
         bootstrap = broker0_advertised(),
         listen = broker0_listen()
     );
@@ -623,14 +623,14 @@ pub(crate) async fn start_oauthbearer_broker() -> (crabka_broker::BrokerHandle, 
 /// `crates/broker/tests/fixtures/security/`. No SASL. Mirrors
 /// [`start_host_broker`] otherwise, but flips the protocol to `Ssl` and
 /// supplies a [`TlsConfig`].
-pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, TlsConfig};
+pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, TlsConfig};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -640,7 +640,7 @@ pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile
         controller_addr_0().parse().expect("allocated addr");
 
     // Resolve the on-disk paths of the dev fixture certs, which live under this
-    // crate's own tests/fixtures/security since crabka-security moved to the
+    // crate's own tests/fixtures/security since krabka-security moved to the
     // krabka-protocol repository.
     let manifest_dir = crate::support::manifest_dir();
     let cert_path = manifest_dir
@@ -670,15 +670,15 @@ pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SSL".to_string(),
             bind_addr: listen_addr,
@@ -693,13 +693,13 @@ pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile
             private_key_path: key_path,
             trust_roots_path: None,
             client_ca_path: None,
-            client_auth: crabka_security::ClientAuthMode::Disabled,
+            client_auth: krabka_security::ClientAuthMode::Disabled,
         }),
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start ssl broker");
     eprintln!(
-        "CRABKA[test] ssl broker started listen={listen} advertised={bootstrap}",
+        "KRABKA[test] ssl broker started listen={listen} advertised={bootstrap}",
         bootstrap = broker0_advertised(),
         listen = broker0_listen()
     );
@@ -716,7 +716,7 @@ pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile
 /// path to a `ts.jks` file, chmod `0644` so the non-root user of the
 /// cp-kafka container can read it once it is bind-mounted.
 ///
-/// The result is cached under `<tmp>/crabka-jvm-truststore/ts.jks`, so later
+/// The result is cached under `<tmp>/krabka-jvm-truststore/ts.jks`, so later
 /// calls from this test and from the `SASL_SSL` test skip the keytool
 /// round-trip.
 ///
@@ -725,7 +725,7 @@ pub(crate) async fn start_ssl_broker() -> (crabka_broker::BrokerHandle, tempfile
 /// `openjdk:17`. The image is always on disk, because the SSL test itself
 /// runs `kafka-broker-api-versions` from the same image.
 pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
-    let cache_dir = std::env::temp_dir().join("crabka-jvm-truststore");
+    let cache_dir = std::env::temp_dir().join("krabka-jvm-truststore");
     std::fs::create_dir_all(&cache_dir).expect("mkdir truststore cache");
     let ts_path = cache_dir.join("ts.jks");
 
@@ -750,7 +750,7 @@ pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
         // by root on the host once keytool runs as root, so the host-side
         // runner user can't chmod it later.
         let inner = "set -e; \
-             keytool -import -alias crabka -file /work/dev_cert.pem \
+             keytool -import -alias krabka -file /work/dev_cert.pem \
                  -keystore /work/ts.jks -storepass changeit -noprompt && \
              chmod 0644 /work/ts.jks";
         let out = Command::new("docker")
@@ -809,7 +809,7 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mounts(
         .stdout(Stdio::piped());
     let out = cmd.output().expect("spawn docker run");
     eprintln!(
-        "CRABKA[test] docker_run image={image} mounts={mounts:?} {args:?} status={} stderr_len={}",
+        "KRABKA[test] docker_run image={image} mounts={mounts:?} {args:?} status={} stderr_len={}",
         out.status,
         out.stderr.len(),
     );
@@ -833,14 +833,14 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mounts(
 pub(crate) fn start_sasl_ssl_broker(
     admin: &str,
     admin_pass: &str,
-) -> impl std::future::Future<Output = (crabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
+) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -867,15 +867,15 @@ pub(crate) fn start_sasl_ssl_broker(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SASL_SSL".to_string(),
             bind_addr: listen_addr,
@@ -890,13 +890,13 @@ pub(crate) fn start_sasl_ssl_broker(
             private_key_path: key_path,
             trust_roots_path: None,
             client_ca_path: None,
-            client_auth: crabka_security::ClientAuthMode::Disabled,
+            client_auth: krabka_security::ClientAuthMode::Disabled,
         }),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
         super_users: std::collections::HashSet::from([admin.to_string()]),
         ..BrokerConfig::default()
     };
-    config.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));
     config
@@ -905,7 +905,7 @@ pub(crate) fn start_sasl_ssl_broker(
     Box::pin(async move {
         let handle = Broker::start(config).await.expect("start sasl_ssl broker");
         eprintln!(
-            "CRABKA[test] sasl_ssl broker started listen={listen} advertised={bootstrap}",
+            "KRABKA[test] sasl_ssl broker started listen={listen} advertised={bootstrap}",
             bootstrap = broker0_advertised(),
             listen = broker0_listen()
         );
@@ -935,18 +935,18 @@ pub(crate) async fn start_two_sasl_brokers(
     admin: &str,
     admin_pass: &str,
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
         )
         .with_test_writer()
         .try_init();
@@ -965,7 +965,7 @@ pub(crate) async fn start_two_sasl_brokers(
                   ctrl: std::net::SocketAddr,
                   advertised: &str,
                   log_dir: std::path::PathBuf,
-                  mode: crabka_broker::BootstrapMode|
+                  mode: krabka_broker::BootstrapMode|
      -> BrokerConfig {
         let mut cfg = BrokerConfig {
             broker_id: i32::try_from(idx).unwrap(),
@@ -973,17 +973,17 @@ pub(crate) async fn start_two_sasl_brokers(
             advertised_listener: advertised.to_string(),
             log_dir,
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(idx),
+            node_id: krabka_broker::NodeId(idx),
             controller_listen_addr: ctrl,
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: mode,
             listeners: vec![ListenerSpec {
                 name: "SASL_PLAINTEXT".to_string(),
@@ -1002,7 +1002,7 @@ pub(crate) async fn start_two_sasl_brokers(
             }),
             ..BrokerConfig::default()
         };
-        cfg.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
         ));
         cfg.plain_credentials
@@ -1016,7 +1016,7 @@ pub(crate) async fn start_two_sasl_brokers(
         ctrl0,
         broker0_advertised(),
         dir0.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     // Static cold-boot (KIP-595): every voter is seeded with the full static
     // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
@@ -1032,7 +1032,7 @@ pub(crate) async fn start_two_sasl_brokers(
         ctrl1,
         broker1_advertised(),
         dir1.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let h0 = tokio::spawn(async move { Broker::start(cfg0).await });
     let h1 = tokio::spawn(async move { Broker::start(cfg1).await });
@@ -1046,7 +1046,7 @@ pub(crate) async fn start_two_sasl_brokers(
         .expect("broker 1 start");
 
     eprintln!(
-        "CRABKA[test] two-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1}",
+        "KRABKA[test] two-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1}",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),
         listen = broker0_listen(),
@@ -1064,22 +1064,22 @@ pub(crate) async fn start_two_sasl_brokers(
 /// `--add-host=host.docker.internal:host-gateway` AND so each broker can
 /// dial its peer with the same host name.
 pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
-    ctrl_protocol: crabka_security::ListenerProtocol,
+    ctrl_protocol: krabka_security::ListenerProtocol,
     admin: &str,
     admin_pass: &str,
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
         )
         .with_test_writer()
         .try_init();
@@ -1110,7 +1110,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
                   ctrl: std::net::SocketAddr,
                   advertised: &str,
                   log_dir: std::path::PathBuf,
-                  mode: crabka_broker::BootstrapMode|
+                  mode: krabka_broker::BootstrapMode|
      -> BrokerConfig {
         let mut cfg = BrokerConfig {
             broker_id: i32::try_from(idx).unwrap(),
@@ -1118,21 +1118,21 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
             advertised_listener: advertised.to_string(),
             log_dir,
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(idx),
+            node_id: krabka_broker::NodeId(idx),
             controller_listen_addr: ctrl,
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
             // Slightly more generous than the SASL_PLAINTEXT helper because
             // both data-plane and controller-plane handshakes now include
             // a TLS handshake on top of SASL; on a busy WSL/CI runner the
             // extra round trips can push past 5s.
-            controller_election_timeout: crabka_units::secs(8),
-            controller_heartbeat_interval: crabka_units::millis(500),
+            controller_election_timeout: krabka_units::secs(8),
+            controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: mode,
             listeners: vec![ListenerSpec {
                 name: "SASL_SSL".to_string(),
@@ -1154,7 +1154,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
                 // self-signed cert as `UnknownIssuer`.
                 trust_roots_path: Some(cert_path.clone()),
                 client_ca_path: None,
-                client_auth: crabka_security::ClientAuthMode::Disabled,
+                client_auth: krabka_security::ClientAuthMode::Disabled,
             }),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
             super_users: std::collections::HashSet::from([admin.to_string()]),
@@ -1164,7 +1164,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
             }),
             ..BrokerConfig::default()
         };
-        cfg.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
         ));
         cfg.plain_credentials
@@ -1178,7 +1178,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         ctrl0,
         broker0_advertised(),
         dir0.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     // Static cold-boot (KIP-595): every voter is seeded with the full static
     // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
@@ -1194,7 +1194,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         ctrl1,
         broker1_advertised(),
         dir1.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let h0 = tokio::spawn(async move { Broker::start(cfg0).await });
     let h1 = tokio::spawn(async move { Broker::start(cfg1).await });
@@ -1208,7 +1208,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         .expect("broker 1 start");
 
     eprintln!(
-        "CRABKA[test] two-broker sasl_ssl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} ctrl_protocol={ctrl_protocol:?}",
+        "KRABKA[test] two-broker sasl_ssl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} ctrl_protocol={ctrl_protocol:?}",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),
         listen = broker0_listen(),
@@ -1228,14 +1228,14 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
 pub(crate) fn start_sasl_plaintext_broker_with_super_user(
     super_user: &str,
     users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (crabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use crabka_broker::config::ListenerSpec;
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -1250,15 +1250,15 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SASL_PLAINTEXT".to_string(),
             bind_addr: listen_addr,
@@ -1272,7 +1272,7 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
         super_users: std::collections::HashSet::from([super_user.clone()]),
         ..BrokerConfig::default()
     };
-    config.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         config.super_users.clone(),
     ));
     for (u, p) in users {
@@ -1285,7 +1285,7 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
             .await
             .expect("start sasl broker with super-user");
         eprintln!(
-            "CRABKA[test] sasl super-user broker started listen={listen} advertised={bootstrap} super_user={super_user}",
+            "KRABKA[test] sasl super-user broker started listen={listen} advertised={bootstrap} super_user={super_user}",
             bootstrap = broker0_advertised(),
             listen = broker0_listen()
         );
@@ -1312,9 +1312,9 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
     admin: &str,
     admin_pass: &str,
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     BrokerConfig,
     BrokerConfig,
     BrokerConfig,
@@ -1322,13 +1322,13 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
         )
         .with_test_writer()
         .try_init();
@@ -1353,7 +1353,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
                   ctrl: std::net::SocketAddr,
                   advertised: &str,
                   log_dir: std::path::PathBuf,
-                  mode: crabka_broker::BootstrapMode|
+                  mode: krabka_broker::BootstrapMode|
      -> BrokerConfig {
         let mut cfg = BrokerConfig {
             broker_id: i32::try_from(idx).unwrap(),
@@ -1361,17 +1361,17 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
             advertised_listener: advertised.to_string(),
             log_dir,
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(idx),
+            node_id: krabka_broker::NodeId(idx),
             controller_listen_addr: ctrl,
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: mode,
             listeners: vec![ListenerSpec {
                 name: "SASL_PLAINTEXT".to_string(),
@@ -1390,7 +1390,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
             }),
             ..BrokerConfig::default()
         };
-        cfg.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
         ));
         cfg.plain_credentials
@@ -1404,7 +1404,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
         ctrl0,
         broker0_advertised(),
         dir0.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     // Static cold-boot (KIP-595): every voter is seeded with the full static
     // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
@@ -1420,7 +1420,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
         ctrl1,
         broker1_advertised(),
         dir1.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let cfg2 = mk_cfg(
         3,
@@ -1428,7 +1428,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
         ctrl2,
         broker2_advertised(),
         dir2.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let h0 = tokio::spawn({
         let c = cfg0.clone();
@@ -1456,7 +1456,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        "KRABKA[test] three-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),
         bootstrap_b2 = broker2_advertised(),
@@ -1471,7 +1471,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
 
 /// Poll until `handle` reports `leader` as the leader for `(topic, partition)`.
 pub(crate) async fn wait_jvm_partition_leader(
-    handle: &crabka_broker::BrokerHandle,
+    handle: &krabka_broker::BrokerHandle,
     topic: &str,
     partition: i32,
     leader: u64,
@@ -1486,7 +1486,7 @@ pub(crate) async fn wait_jvm_partition_leader(
 
 /// Poll until the ISR for `(topic, partition)` contains `node`.
 pub(crate) async fn wait_jvm_isr_contains(
-    handle: &crabka_broker::BrokerHandle,
+    handle: &krabka_broker::BrokerHandle,
     topic: &str,
     partition: i32,
     node: u64,
@@ -1494,7 +1494,7 @@ pub(crate) async fn wait_jvm_isr_contains(
     handle
         .wait_for_image(|img| {
             img.partition(topic, partition)
-                .is_some_and(|p| p.isr.contains(&crabka_metadata::NodeId(node)))
+                .is_some_and(|p| p.isr.contains(&krabka_metadata::NodeId(node)))
         })
         .await;
 }
@@ -1502,7 +1502,7 @@ pub(crate) async fn wait_jvm_isr_contains(
 /// Poll until `handle` reports any non-zero leader for `(topic, partition)`.
 /// Returns the leader node id.
 pub(crate) async fn wait_jvm_partition_any_leader(
-    handle: &crabka_broker::BrokerHandle,
+    handle: &krabka_broker::BrokerHandle,
     topic: &str,
     partition: i32,
 ) -> u64 {
@@ -1519,9 +1519,9 @@ pub(crate) async fn wait_jvm_partition_any_leader(
 
 /// Poll until all three brokers have seen `n_brokers` registered brokers.
 pub(crate) async fn wait_three_brokers_registered(
-    h1: &crabka_broker::BrokerHandle,
-    h2: &crabka_broker::BrokerHandle,
-    h3: &crabka_broker::BrokerHandle,
+    h1: &krabka_broker::BrokerHandle,
+    h2: &krabka_broker::BrokerHandle,
+    h3: &krabka_broker::BrokerHandle,
     n_brokers: usize,
 ) {
     h1.wait_until_brokers_registered(n_brokers).await;
@@ -1571,9 +1571,9 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
     admin_pass: &str,
     extra_users: &[(&str, &str)],
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     BrokerConfig,
     BrokerConfig,
     BrokerConfig,
@@ -1581,13 +1581,13 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
         )
         .with_test_writer()
         .try_init();
@@ -1612,7 +1612,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
                   ctrl: std::net::SocketAddr,
                   advertised: &str,
                   log_dir: std::path::PathBuf,
-                  mode: crabka_broker::BootstrapMode|
+                  mode: krabka_broker::BootstrapMode|
      -> BrokerConfig {
         let mut cfg = BrokerConfig {
             broker_id: i32::try_from(idx).unwrap(),
@@ -1620,17 +1620,17 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
             advertised_listener: advertised.to_string(),
             log_dir,
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(idx),
+            node_id: krabka_broker::NodeId(idx),
             controller_listen_addr: ctrl,
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: mode,
             listeners: vec![ListenerSpec {
                 name: "SASL_PLAINTEXT".to_string(),
@@ -1649,7 +1649,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
             }),
             ..BrokerConfig::default()
         };
-        cfg.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
         ));
         cfg.plain_credentials
@@ -1667,7 +1667,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         ctrl0,
         broker0_advertised(),
         dir0.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     // Static cold-boot (KIP-595): every voter is seeded with the full static
     // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
@@ -1683,7 +1683,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         ctrl1,
         broker1_advertised(),
         dir1.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let cfg2 = mk_cfg(
         3,
@@ -1691,7 +1691,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         ctrl2,
         broker2_advertised(),
         dir2.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let h0 = tokio::spawn({
         let c = cfg0.clone();
@@ -1719,7 +1719,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl (with_users): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        "KRABKA[test] three-broker sasl (with_users): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),
         bootstrap_b2 = broker2_advertised(),
@@ -1736,14 +1736,14 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
 /// (KIP-113). Returns the two host-side log dirs with the handle, so
 /// the test can assert which absolute paths `DescribeLogDirs` reports.
 pub(crate) async fn start_host_broker_jbod() -> (
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -1759,15 +1759,15 @@ pub(crate) async fn start_host_broker_jbod() -> (
         log_dir: primary.path().to_path_buf(),
         extra_log_dirs: vec![extra.path().to_path_buf()],
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
@@ -1794,9 +1794,9 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
     admin_pass: &str,
     secret_key: &[u8],
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     BrokerConfig,
     BrokerConfig,
     BrokerConfig,
@@ -1804,13 +1804,13 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use crabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use crabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
+    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
+    use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
         )
         .with_test_writer()
         .try_init();
@@ -1835,7 +1835,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
                   ctrl: std::net::SocketAddr,
                   advertised: &str,
                   log_dir: std::path::PathBuf,
-                  mode: crabka_broker::BootstrapMode|
+                  mode: krabka_broker::BootstrapMode|
      -> BrokerConfig {
         let mut cfg = BrokerConfig {
             broker_id: i32::try_from(idx).unwrap(),
@@ -1843,17 +1843,17 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
             advertised_listener: advertised.to_string(),
             log_dir,
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(idx),
+            node_id: krabka_broker::NodeId(idx),
             controller_listen_addr: ctrl,
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: mode,
             listeners: vec![ListenerSpec {
                 name: "SASL_PLAINTEXT".to_string(),
@@ -1876,7 +1876,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
             delegation_token_secret_key: Some(SecretBytes::new(secret_key.to_vec())),
             ..BrokerConfig::default()
         };
-        cfg.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
         ));
         cfg.plain_credentials
@@ -1890,7 +1890,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
         ctrl0,
         broker0_advertised(),
         dir0.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     // Static cold-boot (KIP-595): every voter is seeded with the full static
     // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
@@ -1906,7 +1906,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
         ctrl1,
         broker1_advertised(),
         dir1.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let cfg2 = mk_cfg(
         3,
@@ -1914,7 +1914,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
         ctrl2,
         broker2_advertised(),
         dir2.path().to_path_buf(),
-        crabka_broker::BootstrapMode::Bootstrap,
+        krabka_broker::BootstrapMode::Bootstrap,
     );
     let h0 = tokio::spawn({
         let c = cfg0.clone();
@@ -1942,7 +1942,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
         .expect("broker 2 start");
 
     eprintln!(
-        "CRABKA[test] three-broker sasl (delegation tokens): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
+        "KRABKA[test] three-broker sasl (delegation tokens): b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} b2={listen_b2} adv={bootstrap_b2}",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),
         bootstrap_b2 = broker2_advertised(),
@@ -2036,7 +2036,7 @@ pub(crate) const MINIO_ACCESS_KEY: &str = "minioadmin";
 
 pub(crate) const MINIO_SECRET_KEY: &str = "minioadmin";
 
-pub(crate) const MINIO_BUCKET: &str = "crabka-tiered";
+pub(crate) const MINIO_BUCKET: &str = "krabka-tiered";
 
 /// `KIP-405` topic configs (`remote.storage.enable`, `local.retention.bytes`)
 /// landed in Apache Kafka 3.6 / Confluent Platform 7.6. The default
@@ -2060,7 +2060,7 @@ impl MinioContainer {
         // Unique name per test invocation so back-to-back runs don't see a
         // stale container squatting on port 9000.
         let minio_port = minio_port();
-        let name = format!("crabka-minio-test-{}", uuid::Uuid::new_v4().simple());
+        let name = format!("krabka-minio-test-{}", uuid::Uuid::new_v4().simple());
         // Best-effort orphan reap from a prior aborted run.
         let _ = Command::new("docker")
             .args(["rm", "-f", &name])
@@ -2111,7 +2111,7 @@ pub(crate) fn wait_for_minio_ready() {
             return;
         }
         // intentional: bounded readiness poll of the external MinIO process;
-        // no crabka metric reflects its TCP/S3 listener coming up.
+        // no krabka metric reflects its TCP/S3 listener coming up.
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     panic!("MinIO never accepted TCP on 127.0.0.1:{minio_port}");
@@ -2235,7 +2235,7 @@ impl Drop for MinioContainer {
 /// backend wired in and a lower `RemoteLogManager` tick, so the acceptance
 /// loop completes in seconds rather than at the 30s production default.
 ///
-/// `rlmm` selects the [`crabka_broker::RlmmKind`]. Pass
+/// `rlmm` selects the [`krabka_broker::RlmmKind`]. Pass
 /// `RlmmKind::InMemory` for tests that only need a single-run round-trip.
 /// Pass `RlmmKind::TopicBacked(…)` when the test needs durable metadata that
 /// survives a broker restart.
@@ -2244,19 +2244,19 @@ impl Drop for MinioContainer {
 /// caller can reuse it for a restart. The caller must keep the temp dir
 /// alive.
 pub(crate) fn start_host_broker_with_minio_tier(
-    s3: crabka_remote_storage::S3Config,
-    rlmm: crabka_broker::RlmmKind,
+    s3: krabka_remote_storage::S3Config,
+    rlmm: krabka_broker::RlmmKind,
 ) -> impl std::future::Future<
     Output = (
-        crabka_broker::BrokerHandle,
+        krabka_broker::BrokerHandle,
         tempfile::TempDir,
-        crabka_broker::BrokerConfig,
+        krabka_broker::BrokerConfig,
     ),
 > {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -2270,26 +2270,26 @@ pub(crate) fn start_host_broker_with_minio_tier(
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        remote_storage_backend: Some(crabka_broker::RemoteStorageBackend::S3(s3)),
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3)),
         // 1s tick so the producer's sealed segments reach S3 (and the
         // local-retention pass evicts them) within the test's wall clock.
-        remote_log_manager_interval: crabka_units::secs(1),
+        remote_log_manager_interval: krabka_units::secs(1),
         remote_log_metadata: rlmm,
         ..BrokerConfig::default()
     };
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");
         eprintln!(
-            "CRABKA[test] broker started listen={listen} advertised={bootstrap} (tiered S3 backend)",
+            "KRABKA[test] broker started listen={listen} advertised={bootstrap} (tiered S3 backend)",
             bootstrap = broker0_advertised(),
             listen = broker0_listen()
         );
@@ -2314,7 +2314,7 @@ pub(crate) fn start_host_broker_with_minio_tier(
 /// first batches land in a default-config `Log` with 1 GiB segments and
 /// `remote_storage_enable=false`, and nothing triggers the tier-copy path.
 /// See `compact_log_cleaner_round_trip` for the same pattern.
-pub(crate) async fn create_tiered_topic(broker: &crabka_broker::BrokerHandle, topic: &str) {
+pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, topic: &str) {
     // Uses the KIP-405-aware `cp-kafka:7.8.8` image — older clients' `TopicCommand`
     // validates `--config` keys client-side and rejects `remote.storage.enable` /
     // `local.retention.bytes` before the request leaves the container.
@@ -2349,8 +2349,8 @@ pub(crate) async fn create_tiered_topic(broker: &crabka_broker::BrokerHandle, to
     loop {
         if let Some(cfg) = broker.partition_log_config_for_test(topic, 0)
             && cfg.remote_storage_enable
-            && cfg.segment_size == crabka_units::bytes(2048)
-            && cfg.local_retention_size == Some(crabka_units::bytes(1))
+            && cfg.segment_size == krabka_units::bytes(2048)
+            && cfg.local_retention_size == Some(krabka_units::bytes(1))
         {
             break;
         }
@@ -2429,7 +2429,7 @@ pub(crate) async fn wait_for_minio_segments(bucket: &str, min_log_objects: usize
     let mut copied_log_objects = 0usize;
     for _ in 0..40 {
         // intentional: bounded poll of an external process (MinIO via `mc ls`);
-        // no crabka metric reflects object arrival in the bucket.
+        // no krabka metric reflects object arrival in the bucket.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         bucket_listing = minio_list_objects(bucket);
         copied_log_objects = bucket_listing
@@ -2503,7 +2503,7 @@ pub(crate) fn consume_records(
 // advertise `host.docker.internal:PORT` in Metadata responses, the RLMM
 // client cannot reach them.
 //
-// Additionally, the Crabka producer does not yet implement leader-redirect
+// Additionally, the Krabka producer does not yet implement leader-redirect
 // retry on NOT_LEADER_OR_FOLLOWER (error_code 19): when the target
 // `__remote_log_metadata` partition is led by a different broker, the produce
 // fails instead of transparently re-routing to the actual leader.
@@ -2542,17 +2542,17 @@ pub(crate) fn consume_records(
 /// election needs both voters up. See [`start_two_sasl_brokers`] for the
 /// full explanation.
 pub(crate) async fn start_two_brokers_with_minio_tier(
-    s3: crabka_remote_storage::S3Config,
+    s3: krabka_remote_storage::S3Config,
 ) -> (
-    crabka_broker::BrokerHandle,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -2575,14 +2575,14 @@ pub(crate) async fn start_two_brokers_with_minio_tier(
     // producer always writes to the same partition that broker 2's consumer reads.
     // `replication=1` keeps that partition exclusively on broker 1, so both
     // RLMM clients reach it by going directly to 127.0.0.1:9092.
-    let rlmm_cfg = crabka_broker::KafkaRlmmConfig {
+    let rlmm_cfg = krabka_broker::KafkaRlmmConfig {
         bootstrap: rlmm_broker0_advertised().to_string(),
         num_partitions: 1,
         replication: 1,
-        snapshot_interval: crabka_units::secs(2),
+        snapshot_interval: krabka_units::secs(2),
         snapshot_dir: std::path::PathBuf::new(), // derived from log.dir
         security: None,
-        ..crabka_broker::KafkaRlmmConfig::default()
+        ..krabka_broker::KafkaRlmmConfig::default()
     };
 
     let s3_b0 = s3.clone();
@@ -2596,22 +2596,22 @@ pub(crate) async fn start_two_brokers_with_minio_tier(
         advertised_listener: broker0_advertised().to_string(),
         log_dir: dir0.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: ctrl0,
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
         // Accelerated timers for fast failover — matches acks_all_survives_leader_crash.
-        heartbeat_interval: crabka_units::millis(200),
-        heartbeat_timeout: crabka_units::millis(2_000),
-        replica_lag_time_max: crabka_units::millis(2_000),
-        controller_election_timeout: crabka_units::millis(500),
-        controller_heartbeat_interval: crabka_units::millis(100),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        remote_storage_backend: Some(crabka_broker::RemoteStorageBackend::S3(s3_b0)),
-        remote_log_manager_interval: crabka_units::secs(1),
-        remote_log_metadata: crabka_broker::RlmmKind::TopicBacked(rlmm_b0),
+        heartbeat_interval: krabka_units::millis(200),
+        heartbeat_timeout: krabka_units::millis(2_000),
+        replica_lag_time_max: krabka_units::millis(2_000),
+        controller_election_timeout: krabka_units::millis(500),
+        controller_heartbeat_interval: krabka_units::millis(100),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3_b0)),
+        remote_log_manager_interval: krabka_units::secs(1),
+        remote_log_metadata: krabka_broker::RlmmKind::TopicBacked(rlmm_b0),
         ..BrokerConfig::default()
     };
 
@@ -2621,21 +2621,21 @@ pub(crate) async fn start_two_brokers_with_minio_tier(
         advertised_listener: broker1_advertised().to_string(),
         log_dir: dir1.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(2),
+        node_id: krabka_broker::NodeId(2),
         controller_listen_addr: ctrl1,
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
-        heartbeat_interval: crabka_units::millis(200),
-        heartbeat_timeout: crabka_units::millis(2_000),
-        replica_lag_time_max: crabka_units::millis(2_000),
-        controller_election_timeout: crabka_units::millis(500),
-        controller_heartbeat_interval: crabka_units::millis(100),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        remote_storage_backend: Some(crabka_broker::RemoteStorageBackend::S3(s3_b1)),
-        remote_log_manager_interval: crabka_units::secs(1),
-        remote_log_metadata: crabka_broker::RlmmKind::TopicBacked(rlmm_b1),
+        heartbeat_interval: krabka_units::millis(200),
+        heartbeat_timeout: krabka_units::millis(2_000),
+        replica_lag_time_max: krabka_units::millis(2_000),
+        controller_election_timeout: krabka_units::millis(500),
+        controller_heartbeat_interval: krabka_units::millis(100),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3_b1)),
+        remote_log_manager_interval: krabka_units::secs(1),
+        remote_log_metadata: krabka_broker::RlmmKind::TopicBacked(rlmm_b1),
         ..BrokerConfig::default()
     };
 
@@ -2657,7 +2657,7 @@ pub(crate) async fn start_two_brokers_with_minio_tier(
         .expect("start broker 1");
 
     eprintln!(
-        "CRABKA[test] two-broker tiered: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} \
+        "KRABKA[test] two-broker tiered: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} \
          (MinIO S3 + topic-backed RLMM num_partitions=1 replication=1 bootstrap={rlmm_bootstrap})",
         bootstrap = broker0_advertised(),
         bootstrap_b1 = broker1_advertised(),

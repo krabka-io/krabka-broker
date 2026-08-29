@@ -10,8 +10,8 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use crabka_log::ProducerId;
-use crabka_metadata::{MetadataRecord, NodeId, ProducerIdsRecord};
+use krabka_log::ProducerId;
+use krabka_metadata::{MetadataRecord, NodeId, ProducerIdsRecord};
 use tokio::sync::Mutex;
 
 use crate::metadata_source::MetadataSource;

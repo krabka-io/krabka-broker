@@ -10,11 +10,11 @@
 //! earlier `JoinGroup` exchange.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse},
 };
-use crabka_units::convert::TimeExt as _;
+use krabka_units::convert::TimeExt as _;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -113,13 +113,13 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
         join_group_response::{self, JoinGroupResponse},
         sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
         sync_group_response::{self, SyncGroupResponse},
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use crate::{
         authorizer::Authorizer,
@@ -217,10 +217,10 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -257,7 +257,7 @@ mod tests {
             protocol_type: Some(PROTOCOL_TYPE.into()),
             protocol_name: Some(PROTOCOL_NAME.into()),
             assignment: Bytes::new(),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
     }
@@ -290,7 +290,7 @@ mod tests {
             protocol_type: None,
             protocol_name: None,
             assignment: Bytes::new(),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -332,7 +332,7 @@ mod tests {
             protocol_type: Some(PROTOCOL_TYPE.into()),
             protocol_name: Some(PROTOCOL_NAME.into()),
             assignment,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;

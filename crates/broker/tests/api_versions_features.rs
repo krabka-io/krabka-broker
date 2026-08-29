@@ -29,7 +29,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::owned::api_versions_request::ApiVersionsRequest;
+use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
 #[tokio::test]
 async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() {
@@ -38,7 +38,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
     let resp = p
         .client
         .send(ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })

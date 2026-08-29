@@ -8,7 +8,7 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},

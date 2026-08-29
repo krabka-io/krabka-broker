@@ -7,7 +7,7 @@
 //! `INVALID_REQUEST` if either one is empty or malformed. This mirrors
 //! `ApiVersionsRequest.isValid` on the JVM. Each accepted v3+ handshake
 //! increments a Prometheus counter for that (name, version) pair,
-//! `crabka_broker_client_software_versions_total`, so operators can see which
+//! `krabka_broker_client_software_versions_total`, so operators can see which
 //! client libraries connect.
 //!
 //! From v5, KIP-1242 lets a client include the cluster and node it intended to
@@ -15,14 +15,14 @@
 //! returns `REBOOTSTRAP_REQUIRED` so the client discards stale metadata.
 
 use bytes::{Bytes, BytesMut};
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
         api_versions_response::{ApiVersionsResponse, FinalizedFeatureKey, SupportedFeatureKey},
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -38,11 +38,11 @@ const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 
 // KIP-584 feature surface. `supported_features` advertises `metadata.version`
 // over the full Kafka-faithful range MIN=7 (3.3-IV3) .. MAX=25 (4.0-IV3),
-// sourced from the `crabka_metadata::metadata_version` table via
+// sourced from the `krabka_metadata::metadata_version` table via
 // `crate::features`. `finalized_features` + the epoch are read from the live
 // metadata image: a fresh (unformatted) broker surfaces no finalized features
 // and epoch `-1` (`MetadataVersion.UNKNOWN` to JVM clients) until a
-// `V1FeatureLevel` is seeded by `crabka format --release-version` or
+// `V1FeatureLevel` is seeded by `krabka format --release-version` or
 // `UpdateFeatures` (api_key 57) lands one.
 
 fn supported_feature_keys(api_version: i16) -> Vec<SupportedFeatureKey> {
@@ -53,7 +53,7 @@ fn supported_feature_keys(api_version: i16) -> Vec<SupportedFeatureKey> {
             // `kraft.version` is the KIP-853 exception whose supported range
             // includes level zero. Other disable-at-zero features keep the
             // legacy JVM-compatible clamp.
-            min_version: if f.name == crabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
+            min_version: if f.name == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
                 && api_version >= KRAFT_ZERO_MIN_API_VERSION
             {
                 f.min_version
@@ -66,7 +66,7 @@ fn supported_feature_keys(api_version: i16) -> Vec<SupportedFeatureKey> {
         .collect()
 }
 
-fn finalized_feature_keys(image: &crabka_metadata::MetadataImage) -> Vec<FinalizedFeatureKey> {
+fn finalized_feature_keys(image: &krabka_metadata::MetadataImage) -> Vec<FinalizedFeatureKey> {
     let mut features: Vec<_> = image
         .finalized_features()
         .iter()
@@ -81,7 +81,7 @@ fn finalized_feature_keys(image: &crabka_metadata::MetadataImage) -> Vec<Finaliz
         .collect();
     let kraft_version = i16::try_from(image.kraft_version()).unwrap_or(i16::MAX);
     features.push(FinalizedFeatureKey {
-        name: crabka_metadata::metadata_version::KRAFT_VERSION_FEATURE.into(),
+        name: krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE.into(),
         max_version_level: kraft_version,
         min_version_level: kraft_version,
         ..Default::default()
@@ -195,8 +195,8 @@ pub(crate) fn handle(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use crabka_protocol::owned::api_versions_request::ApiVersionsRequest;
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
     use super::*;
     use crate::broker::Broker;
@@ -218,7 +218,7 @@ mod tests {
 
     fn routing_request(cluster_id: Option<String>, node_id: i32) -> Bytes {
         let req = ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "1.0.0".into(),
             cluster_id,
             node_id,
@@ -286,7 +286,7 @@ mod tests {
         // A fresh metadata image (no `UpdateFeatures` ever applied) has no
         // finalized features and the schema sentinel epoch `-1`, which JVM
         // clients consume as `MetadataVersion.UNKNOWN`.
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let features = finalized_feature_keys(&image);
         assert!(features.len() == 1);
         assert!(features[0].name == "kraft.version");
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn finalized_feature_keys_preserve_names_and_levels() {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: "metadata.version".into(),
             level: 24,
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
-        use crabka_protocol::owned;
+        use krabka_protocol::owned;
         let table = crate::api_catalog::supported_apis();
         let by_key = |k: i16| table.iter().find(|v| v.api_key == k);
 
@@ -369,7 +369,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
 
-        for (name, version) in [("", "1.0.0"), ("crabka-test", "")] {
+        for (name, version) in [("", "1.0.0"), ("krabka-test", "")] {
             let req = request(name, version);
             let bytes = handle(&broker, API_VERSIONS_V3, 7, &req)
                 .await
@@ -418,7 +418,7 @@ mod tests {
         let image = broker.controller.current_image();
         assert!(image.finalized_features_epoch() > 0);
 
-        let req = request("crabka-test", "1.0.0");
+        let req = request("krabka-test", "1.0.0");
         let bytes = handle(&broker, API_VERSIONS_V3, 7, &req)
             .await
             .expect("ApiVersions handler");
@@ -496,7 +496,7 @@ mod tests {
     fn valid_client_info_accepts_typical_names() {
         for s in [
             "apache-kafka-java",
-            "crabka-client-core",
+            "krabka-client-core",
             "librdkafka",
             "kafka-python",
             "node-rdkafka",

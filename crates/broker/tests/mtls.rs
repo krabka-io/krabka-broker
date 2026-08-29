@@ -22,15 +22,15 @@ use std::{io, sync::Arc};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     },
 };
-use crabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -53,7 +53,7 @@ const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem"
 /// Subject DN of the fixture client cert as rendered by `x509-parser`.
 /// It must match `extract_principal_from_cert` exactly, because operators pin
 /// this string in ACLs and `super_users`.
-const CLIENT_PRINCIPAL: &str = "CN=test-client,OU=integration,O=crabka";
+const CLIENT_PRINCIPAL: &str = "CN=test-client,OU=integration,O=krabka";
 
 fn write_fixture(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
     let p = dir.join(name);
@@ -197,7 +197,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     let connector = TlsConnector::from(client_cfg);
 
     let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
     let mut tls = connector
         .connect(server_name, tcp)
         .await
@@ -251,7 +251,7 @@ where
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-mtls-test";
+    let client_id = "krabka-mtls-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     if flexible {

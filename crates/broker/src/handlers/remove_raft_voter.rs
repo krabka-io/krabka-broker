@@ -11,14 +11,14 @@
 //! [`super::add_raft_voter`] shares the map from an outcome to an error code.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         remove_raft_voter_request::RemoveRaftVoterRequest,
         remove_raft_voter_response::RemoveRaftVoterResponse,
     },
 };
-use crabka_raft::reconfig::RemoveVoter;
+use krabka_raft::reconfig::RemoveVoter;
 
 use crate::{
     broker::Broker,
@@ -62,7 +62,7 @@ pub(crate) async fn handle(
         .cluster_id
         .as_deref()
         .is_some_and(|request_cluster| request_cluster != cluster_id)
-        || req.voter_directory_id == crabka_protocol::primitives::uuid::Uuid::ZERO
+        || req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
     {
         return encode_resp(
             version,
@@ -92,7 +92,7 @@ pub(crate) async fn handle(
         broker
             .controller
             .remove_voter(RemoveVoter {
-                id: crabka_raft::NodeId(id),
+                id: krabka_raft::NodeId(id),
                 directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
             })
             .await,
@@ -117,8 +117,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::primitives::uuid::Uuid as ProtoUuid;
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_protocol::primitives::uuid::Uuid as ProtoUuid;
+    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -143,7 +143,7 @@ mod tests {
     /// Decode and encode round trip at the minimum and maximum versions.
     #[test]
     fn response_round_trips_at_min_and_max_versions() {
-        use crabka_protocol::owned::remove_raft_voter_response::{self, RemoveRaftVoterResponse};
+        use krabka_protocol::owned::remove_raft_voter_response::{self, RemoveRaftVoterResponse};
         for version in [
             remove_raft_voter_response::MIN_VERSION,
             remove_raft_voter_response::MAX_VERSION,
@@ -173,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_denies_cluster_alter_without_calling_reconfig() {
-        let version = crabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
+        let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = Principal {
@@ -197,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_negative_voter_id_before_reconfig() {
-        let version = crabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
+        let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();

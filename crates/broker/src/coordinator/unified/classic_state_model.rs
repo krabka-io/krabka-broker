@@ -7,7 +7,7 @@
 //! leave, rebalance completion, sync, and session-timeout expiry. It asserts
 //! the static-index coherence, single-owner, and static-never-expired
 //! invariants. See the design spec at
-//! `docs/superpowers/specs/2026-06-14-crabka-classic-group-fencing-model-design.md`.
+//! `docs/superpowers/specs/2026-06-14-krabka-classic-group-fencing-model-design.md`.
 
 use std::{
     hash::{Hash, Hasher},

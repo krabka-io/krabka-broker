@@ -18,8 +18,8 @@ use std::{io, net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::BrokerHandle;
-use crabka_protocol::{
+use krabka_broker::BrokerHandle;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -50,7 +50,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-controlled-shutdown-test";
+    let client_id = "krabka-controlled-shutdown-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -129,7 +129,7 @@ async fn force_leadership_for_test(
     target: u64,
     replicas: &[u64],
 ) {
-    use crabka_metadata::{MetadataRecord, PartitionRecord};
+    use krabka_metadata::{MetadataRecord, PartitionRecord};
 
     let image = leader_handle.controller_image_for_test();
     for p in 0..partitions {
@@ -139,16 +139,16 @@ async fn force_leadership_for_test(
         let record = MetadataRecord::V1Partition(PartitionRecord {
             topic: topic.to_string(),
             partition: p,
-            leader: crabka_metadata::NodeId(target),
+            leader: krabka_metadata::NodeId(target),
             replicas: replicas
                 .iter()
                 .copied()
-                .map(crabka_metadata::NodeId)
+                .map(krabka_metadata::NodeId)
                 .collect(),
             isr: replicas
                 .iter()
                 .copied()
-                .map(crabka_metadata::NodeId)
+                .map(krabka_metadata::NodeId)
                 .collect(),
             leader_epoch: pr.leader_epoch.next(),
             adding_replicas: vec![],

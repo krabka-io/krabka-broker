@@ -31,12 +31,12 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_object_store::{
+use krabka_object_store::{
     DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, ObjectOps, ObjectStoreClient,
     ObjectStoreConfig, ObjectStoreError, PutMode, PutOutcome, PutRequest, S3Config,
     build_object_store,
 };
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use object_store::{GetRange, ObjectStore, path::Path as ObjectPath};
 use tracing::instrument;
 
@@ -56,7 +56,7 @@ use crate::{
 pub struct S3RemoteStorage {
     ops: ObjectStoreClient,
     /// Optional key prefix. The store joins it to every object key with
-    /// `/`. This lets multiple Crabka clusters share a bucket safely.
+    /// `/`. This lets multiple Krabka clusters share a bucket safely.
     prefix: Option<String>,
     /// File-size threshold above which uploads switch to S3 multipart.
     multipart_threshold: ByteSize,
@@ -111,11 +111,11 @@ fn object_entry(
     })
 }
 
-/// Lifts a raw byte count from [`crabka_object_store`]'s config layer into
+/// Lifts a raw byte count from [`krabka_object_store`]'s config layer into
 /// the dimensioned domain. That config layer still uses primitive types.
 ///
 /// The conversion saturates and does not wrap. A `usize` above `u64::MAX`
-/// cannot occur on any target Crabka builds for.
+/// cannot occur on any target Krabka builds for.
 pub(crate) fn size_from_usize(bytes: usize) -> ByteSize {
     ByteSize::from_bytes(u64::try_from(bytes).unwrap_or(u64::MAX))
 }
@@ -218,7 +218,7 @@ impl S3RemoteStorage {
         self.segment_key(metadata, index_type.suffix())
     }
 
-    /// Crabka 0.3.8 and earlier used UUID directories and extensionless
+    /// Krabka 0.3.8 and earlier used UUID directories and extensionless
     /// artifact names. New writes use Kafka's layout; reads and deletes keep
     /// the old keys reachable during upgrades.
     fn legacy_segment_key(&self, metadata: &RemoteLogSegmentMetadata, name: &str) -> ObjectPath {
@@ -545,8 +545,8 @@ mod tests {
     use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
     use assert2::{assert, check};
-    use crabka_ids::LeaderEpoch;
-    use crabka_units::prelude::{kibibytes, mebibytes};
+    use krabka_ids::LeaderEpoch;
+    use krabka_units::prelude::{kibibytes, mebibytes};
     use object_store::memory::InMemory;
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
     use tempfile::TempDir;
@@ -568,7 +568,7 @@ mod tests {
     }
 
     /// The multipart tunables cross two seams: in from
-    /// [`crabka_object_store`]'s primitive config, and back out to the
+    /// [`krabka_object_store`]'s primitive config, and back out to the
     /// primitive-typed `ObjectOps` substrate. Both must be lossless for every
     /// size the config can express, so a mis-scaled conversion, such as a
     /// stray `* 1024`, cannot silently change when a segment switches to
@@ -958,7 +958,7 @@ mod tests {
     }
 
     /// A [`WormConfig`] naming a throwaway PKCS#8 Ed25519 key written into
-    /// `dir`. `ring` mints it because `crabka-audit` exposes no key generator.
+    /// `dir`. `ring` mints it because `krabka-audit` exposes no key generator.
     fn worm_config(dir: &std::path::Path, write_only: bool) -> WormConfig {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let path = dir.join("worm.pk8");

@@ -284,7 +284,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::check;
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use proptest::prelude::*;
 
     use super::*;

@@ -7,10 +7,10 @@
 //! `assignments` field still wins, as it does in Kafka.
 
 use bytes::Bytes;
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -18,8 +18,8 @@ use crabka_protocol::{
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
-use crabka_raft::RaftError;
-use crabka_units::{Time, convert::TimeExt};
+use krabka_raft::RaftError;
+use krabka_units::{Time, convert::TimeExt};
 use uuid::Uuid;
 
 use crate::{
@@ -48,10 +48,10 @@ const INITIAL_LEADER_EPOCH: i32 = 0;
 /// This is the placement of a cluster that declares no site. The site-aware
 /// [`stretch_replicas`] calls it for such a cluster, so the two agree there.
 pub(crate) fn round_robin_replicas(
-    sorted_brokers: &[crabka_raft::NodeId],
+    sorted_brokers: &[krabka_raft::NodeId],
     num_partitions: i32,
     replication_factor: i16,
-) -> Vec<Vec<crabka_raft::NodeId>> {
+) -> Vec<Vec<krabka_raft::NodeId>> {
     let k = sorted_brokers.len();
     let r = usize::try_from(replication_factor).unwrap_or(0);
     if r == 0 || r > k {
@@ -69,8 +69,8 @@ pub(crate) fn round_robin_replicas(
 
 fn manual_replicas(
     topic: &CreatableTopic,
-    brokers: &[crabka_raft::NodeId],
-) -> Result<Vec<Vec<crabka_raft::NodeId>>, i16> {
+    brokers: &[krabka_raft::NodeId],
+) -> Result<Vec<Vec<krabka_raft::NodeId>>, i16> {
     if topic.num_partitions != -1 || topic.replication_factor != -1 {
         return Err(codes::INVALID_REQUEST);
     }
@@ -87,7 +87,7 @@ fn manual_replicas(
             let Ok(broker_id) = u64::try_from(broker_id) else {
                 return Err(codes::INVALID_REPLICA_ASSIGNMENT);
             };
-            let broker_id = crabka_raft::NodeId(broker_id);
+            let broker_id = krabka_raft::NodeId(broker_id);
             if !brokers.contains(&broker_id) || replicas.contains(&broker_id) {
                 return Err(codes::INVALID_REPLICA_ASSIGNMENT);
             }
@@ -117,8 +117,8 @@ fn manual_replicas(
 /// yet. The list then holds this broker alone. That entry declares no site,
 /// so the placement stays the plain Kafka round-robin.
 pub(crate) fn site_broker_views(
-    image: &crabka_metadata::MetadataImage,
-    node_id: crabka_raft::NodeId,
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_raft::NodeId,
 ) -> Vec<SiteBrokerView> {
     let mut views = image
         .brokers()
@@ -153,7 +153,7 @@ fn resolve_assignments(
     topic: &CreatableTopic,
     brokers: &[SiteBrokerView],
     preferred_site: Option<&str>,
-) -> Result<Vec<Vec<crabka_raft::NodeId>>, i16> {
+) -> Result<Vec<Vec<krabka_raft::NodeId>>, i16> {
     if topic.assignments.is_empty() {
         return Ok(stretch_replicas(
             brokers,
@@ -193,11 +193,11 @@ fn create_topics_response(
     }
 }
 
-fn created_topic_resources(results: &[CreatableTopicResult]) -> Vec<crabka_audit::AuditResource> {
+fn created_topic_resources(results: &[CreatableTopicResult]) -> Vec<krabka_audit::AuditResource> {
     results
         .iter()
         .filter(|t| t.error_code == codes::NONE)
-        .map(|t| crabka_audit::AuditResource {
+        .map(|t| krabka_audit::AuditResource {
             resource_type: "Topic".to_string(),
             name: t.name.clone(),
         })
@@ -205,16 +205,16 @@ fn created_topic_resources(results: &[CreatableTopicResult]) -> Vec<crabka_audit
 }
 
 fn audit_created_topics(
-    audit_log: &crabka_audit::AuditLog,
+    audit_log: &krabka_audit::AuditLog,
     ctx: &crate::handlers::RequestContext<'_>,
-    created: Vec<crabka_audit::AuditResource>,
+    created: Vec<krabka_audit::AuditResource>,
 ) {
     if !created.is_empty() {
         crate::handlers::audit_admin(
             audit_log,
             ctx,
             "CreateTopics",
-            crabka_audit::AuditOutcome::Success,
+            krabka_audit::AuditOutcome::Success,
             created,
         );
     }
@@ -225,13 +225,13 @@ fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes, BrokerErr
 }
 
 fn should_materialize_locally(
-    replicas: &[crabka_raft::NodeId],
-    node_id: crabka_raft::NodeId,
+    replicas: &[krabka_raft::NodeId],
+    node_id: krabka_raft::NodeId,
 ) -> bool {
     replicas.contains(&node_id)
 }
 
-fn is_local_leader(leader: crabka_raft::NodeId, node_id: crabka_raft::NodeId) -> bool {
+fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) -> bool {
     leader == node_id
 }
 
@@ -397,10 +397,10 @@ pub(crate) async fn handle(
                 .await;
                 codes::NONE
             }
-            Err(RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))) => {
+            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
                 codes::TOPIC_ALREADY_EXISTS
             }
-            Err(RaftError::Metadata(crabka_metadata::MetadataError::InvalidRecord(_))) => {
+            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
                 // E.g., `partitions <= 0` rejected by image::validate.
                 codes::INVALID_PARTITIONS
             }
@@ -411,7 +411,7 @@ pub(crate) async fn handle(
             }
         };
 
-        // Convert uuid::Uuid → crabka_protocol::primitives::uuid::Uuid.
+        // Convert uuid::Uuid → krabka_protocol::primitives::uuid::Uuid.
         let proto_uuid = ProtoUuid(topic_id.into_bytes());
 
         let mut result = CreatableTopicResult {
@@ -472,7 +472,7 @@ async fn finish_response(
 
 fn cluster_create_denied(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
 ) -> bool {
     broker.config.authorizer.authorize(
@@ -480,7 +480,7 @@ fn cluster_create_denied(
         &AuthorizationRequest {
             principal: context.principal,
             host: context.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Create,
         },
@@ -491,14 +491,14 @@ fn cluster_create_denied(
 struct TopicMaterialization<'a> {
     partitions: &'a std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     log_dirs: &'a [std::path::PathBuf],
-    log_config: &'a crabka_log::LogConfig,
+    log_config: &'a krabka_log::LogConfig,
     log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     producer_state: &'a std::sync::Arc<crate::producer_state::ProducerState>,
     producer_id_expiration: Time,
     max_produce_group: usize,
     partition_writer_queue_depth: usize,
     diskless_wal_local_replica_count: usize,
-    node_id: crabka_raft::NodeId,
+    node_id: krabka_raft::NodeId,
     diskless: bool,
     topic_id: uuid::Uuid,
     hot_tail: &'a std::sync::Arc<crate::diskless::hot_tail::HotTailCache>,
@@ -509,7 +509,7 @@ struct TopicMaterialization<'a> {
 async fn materialize_topic(
     context: TopicMaterialization<'_>,
     topic: &str,
-    assignments: &[Vec<crabka_raft::NodeId>],
+    assignments: &[Vec<krabka_raft::NodeId>],
 ) {
     for (index, replicas) in assignments.iter().enumerate() {
         if !should_materialize_locally(replicas, context.node_id) {
@@ -546,7 +546,7 @@ async fn materialize_topic(
         }
         let Some(partition) = context
             .partitions
-            .get(topic, crabka_ids::PartitionIndex(index))
+            .get(topic, krabka_ids::PartitionIndex(index))
         else {
             continue;
         };
@@ -578,7 +578,7 @@ fn topic_config_overrides(request: &CreatableTopic) -> std::collections::BTreeMa
 fn topic_records(
     request: &CreatableTopic,
     topic_id: Uuid,
-    assignments: &[Vec<crabka_raft::NodeId>],
+    assignments: &[Vec<krabka_raft::NodeId>],
     overrides: &std::collections::BTreeMap<String, String>,
 ) -> Vec<MetadataRecord> {
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
@@ -597,7 +597,7 @@ fn topic_records(
             leader: replicas[0],
             replicas: replicas.clone(),
             isr: replicas.clone(),
-            leader_epoch: crabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
+            leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -616,11 +616,11 @@ fn topic_records(
 #[cfg(test)]
 mod replica_assignment_tests {
     use assert2::assert;
-    use crabka_protocol::owned::create_topics_request::{
+    use krabka_protocol::owned::create_topics_request::{
         CreatableReplicaAssignment, CreatableTopic,
     };
-    use crabka_raft::NodeId;
-    use crabka_units::{Time, convert::TimeExt, secs};
+    use krabka_raft::NodeId;
+    use krabka_units::{Time, convert::TimeExt, secs};
 
     use super::{
         MetadataRecord, codes, manual_replicas, resolve_assignments, resolve_preferred_leader_site,
@@ -647,11 +647,11 @@ mod replica_assignment_tests {
         brokers: &[(u64, Option<&str>)],
         witnesses: &[u64],
         preferred_site: Option<&str>,
-    ) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    ) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         for (node_id, rack) in brokers {
             image.apply(&MetadataRecord::V1BrokerRegistration(
-                crabka_metadata::BrokerRegistrationRecord {
+                krabka_metadata::BrokerRegistrationRecord {
                     node_id: NodeId(*node_id),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(*node_id)),
@@ -666,7 +666,7 @@ mod replica_assignment_tests {
         }
         for node_id in witnesses {
             image.apply(&MetadataRecord::V1BrokerConfig(
-                crabka_metadata::BrokerConfigRecord {
+                krabka_metadata::BrokerConfigRecord {
                     node_id: NodeId(*node_id),
                     config_name: crate::config_keys::BROKER_WITNESS.into(),
                     config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
@@ -675,8 +675,8 @@ mod replica_assignment_tests {
         }
         if let Some(site) = preferred_site {
             image.apply(&MetadataRecord::V1BrokerConfig(
-                crabka_metadata::BrokerConfigRecord {
-                    node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                krabka_metadata::BrokerConfigRecord {
+                    node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                     config_name: crate::config_keys::STRETCH_PREFERRED_LEADER_SITE.into(),
                     config_value: Some(site.into()),
                 },
@@ -971,7 +971,7 @@ mod replica_assignment_tests {
 
     #[test]
     fn consume_controller_mutation_quota_tuple_match_overage_throttles() {
-        use crabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
         let mut img = MetadataImage::new(uuid::Uuid::nil());
         img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
             entity: vec![
@@ -1016,12 +1016,12 @@ mod handler_tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
     };
-    use crabka_raft::NodeId;
-    use crabka_security::Principal;
+    use krabka_raft::NodeId;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -1101,13 +1101,13 @@ mod handler_tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1ClientQuota(
-                crabka_metadata::ClientQuotaRecord {
+                krabka_metadata::ClientQuotaRecord {
                     entity: vec![
-                        crabka_metadata::QuotaEntity {
+                        krabka_metadata::QuotaEntity {
                             entity_type: "user".into(),
                             entity_name: Some("admin".into()),
                         },
-                        crabka_metadata::QuotaEntity {
+                        krabka_metadata::QuotaEntity {
                             entity_type: "client-id".into(),
                             entity_name: Some("admin-client".into()),
                         },
@@ -1137,7 +1137,7 @@ mod handler_tests {
 
         let resources = created_topic_resources(&results);
 
-        let expected = vec![crabka_audit::AuditResource {
+        let expected = vec![krabka_audit::AuditResource {
             resource_type: "Topic".into(),
             name: "ok".into(),
         }];
@@ -1146,7 +1146,7 @@ mod handler_tests {
 
     #[test]
     fn audit_created_topics_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
@@ -1160,14 +1160,14 @@ mod handler_tests {
         audit_created_topics(
             log.as_ref(),
             &ctx,
-            vec![crabka_audit::AuditResource {
+            vec![krabka_audit::AuditResource {
                 resource_type: "Topic".into(),
                 name: "orders".into(),
             }],
         );
 
         let event = rx.try_recv().expect("admin audit event");
-        let crabka_audit::AuditEvent::AdminOperation {
+        let krabka_audit::AuditEvent::AdminOperation {
             outcome,
             principal,
             operation,
@@ -1177,10 +1177,10 @@ mod handler_tests {
         else {
             panic!("expected AdminOperation");
         };
-        check!(outcome == crabka_audit::AuditOutcome::Success);
+        check!(outcome == krabka_audit::AuditOutcome::Success);
         check!(principal.name.as_str() == "admin");
         check!(operation.as_str() == "CreateTopics");
-        let expected_resources = vec![crabka_audit::AuditResource {
+        let expected_resources = vec![krabka_audit::AuditResource {
             resource_type: "Topic".into(),
             name: "orders".into(),
         }];
@@ -1189,7 +1189,7 @@ mod handler_tests {
 
     #[test]
     fn local_materialization_predicates_track_replica_membership_and_leader() {
-        let materialize_cases: [(&[crabka_raft::NodeId], crabka_raft::NodeId, bool); 3] = [
+        let materialize_cases: [(&[krabka_raft::NodeId], krabka_raft::NodeId, bool); 3] = [
             (&[NodeId(1), NodeId(2)], NodeId(1), true),
             (&[NodeId(1), NodeId(2)], NodeId(2), true),
             (&[NodeId(1), NodeId(2)], NodeId(3), false),
@@ -1201,7 +1201,7 @@ mod handler_tests {
             );
         }
 
-        let leader_cases: [(crabka_raft::NodeId, crabka_raft::NodeId, bool); 2] =
+        let leader_cases: [(krabka_raft::NodeId, krabka_raft::NodeId, bool); 2] =
             [(NodeId(1), NodeId(1), true), (NodeId(2), NodeId(1), false)];
         for (leader, node_id, want) in leader_cases {
             assert!(

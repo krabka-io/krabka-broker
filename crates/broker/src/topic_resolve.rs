@@ -4,8 +4,8 @@
 //! to a `TopicRecord` under the KIP-516 strictness rules. The `Err` carries
 //! the wire error code to report for the offending topic or partition.
 
-use crabka_metadata::{MetadataImage, TopicRecord};
-use crabka_protocol::primitives::uuid::Uuid as WireUuid;
+use krabka_metadata::{MetadataImage, TopicRecord};
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 use crate::codes;
 
@@ -36,7 +36,7 @@ pub(crate) fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, TopicRecord};
 
     use super::*;
 

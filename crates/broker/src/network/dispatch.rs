@@ -16,12 +16,12 @@
 use std::net::SocketAddr;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_protocol::{Decode as _, api_key::ApiKey};
-use crabka_units::{
+use futures_util::{SinkExt, StreamExt};
+use krabka_protocol::{Decode as _, api_key::ApiKey};
+use krabka_units::{
     Time,
     convert::{ByteSizeExt as _, TimeExt},
 };
-use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -57,10 +57,10 @@ const SASL_AUTHENTICATE_KEY: ApiKeyCode = ApiKey::SaslAuthenticate as i16;
 /// `Vec` for each Produce or Fetch. That fallback covers SASL pre-auth, where
 /// `auth.principal()` is `None`. `Principal` carries a `Vec<String>`, so it
 /// cannot be a `const`; `LazyLock` builds it once on first use.
-static ANONYMOUS_PRINCIPAL: std::sync::LazyLock<crabka_security::Principal> =
-    std::sync::LazyLock::new(|| crabka_security::Principal {
+static ANONYMOUS_PRINCIPAL: std::sync::LazyLock<krabka_security::Principal> =
+    std::sync::LazyLock::new(|| krabka_security::Principal {
         name: "ANONYMOUS".to_string(),
-        auth_method: crabka_security::AuthMethod::Anonymous,
+        auth_method: krabka_security::AuthMethod::Anonymous,
         groups: vec![],
     });
 
@@ -71,7 +71,7 @@ static ANONYMOUS_PRINCIPAL: std::sync::LazyLock<crabka_security::Principal> =
 /// This avoids a `Principal` clone for each request.
 fn principal_or_anonymous(
     auth: &crate::network::auth::ConnectionAuth,
-) -> &crabka_security::Principal {
+) -> &krabka_security::Principal {
     auth.principal().unwrap_or(&ANONYMOUS_PRINCIPAL)
 }
 
@@ -234,16 +234,16 @@ pub async fn serve_connection_on_listener(
 
 /// Inspects the post-handshake TLS stream for a peer certificate. If one is
 /// present, this derives the principal name, the Subject DN, with
-/// [`crabka_security::extract_principal_from_cert`].
+/// [`krabka_security::extract_principal_from_cert`].
 fn peer_cert_principal<S>(
     stream: &tokio_rustls::server::TlsStream<S>,
-) -> Option<crabka_security::Principal> {
+) -> Option<krabka_security::Principal> {
     let (_, server_conn) = stream.get_ref();
     let cert = server_conn.peer_certificates()?.first()?;
-    let name = crabka_security::extract_principal_from_cert(cert.as_ref())?;
-    Some(crabka_security::Principal {
+    let name = krabka_security::extract_principal_from_cert(cert.as_ref())?;
+    Some(krabka_security::Principal {
         name,
-        auth_method: crabka_security::AuthMethod::MTls,
+        auth_method: krabka_security::AuthMethod::MTls,
         groups: vec![],
     })
 }
@@ -262,19 +262,19 @@ async fn serve_connection_plaintext(
 
 fn initial_connection_auth(
     is_sasl_listener: bool,
-    mtls_principal: Option<crabka_security::Principal>,
+    mtls_principal: Option<krabka_security::Principal>,
 ) -> crate::network::auth::ConnectionAuth {
     if is_sasl_listener {
         return crate::network::auth::ConnectionAuth::Anonymous;
     }
-    let principal = mtls_principal.unwrap_or_else(|| crabka_security::Principal {
+    let principal = mtls_principal.unwrap_or_else(|| krabka_security::Principal {
         name: "ANONYMOUS".to_string(),
-        auth_method: crabka_security::AuthMethod::Anonymous,
+        auth_method: krabka_security::AuthMethod::Anonymous,
         groups: vec![],
     });
     crate::network::auth::ConnectionAuth::Authenticated {
         principal,
-        mechanism: crabka_security::SaslMechanism::Plain,
+        mechanism: krabka_security::SaslMechanism::Plain,
         expires_at_ms: None,
         authenticated_via_token: false,
     }
@@ -330,7 +330,7 @@ fn capture_client_software(
         return;
     }
     let mut body = parsed.body;
-    if let Ok(request) = crabka_protocol::owned::api_versions_request::ApiVersionsRequest::decode(
+    if let Ok(request) = krabka_protocol::owned::api_versions_request::ApiVersionsRequest::decode(
         &mut body,
         parsed.api_version,
     ) && crate::handlers::api_versions::is_valid_client_info(&request.client_software_name)
@@ -531,7 +531,7 @@ async fn serve_connection_stream<S>(
     stream: S,
     spec: crate::config::ListenerSpec,
     peer: SocketAddr,
-    mtls_principal: Option<crabka_security::Principal>,
+    mtls_principal: Option<krabka_security::Principal>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static + crate::network::fetch_writer::SendfileSink,
 {
@@ -698,7 +698,7 @@ async fn try_handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[crabka_security::SaslMechanism],
+    sasl_mechanisms: &[krabka_security::SaslMechanism],
 ) -> Option<Result<SaslFrameOutcome, BrokerError>> {
     let api_key = parsed.api_key;
     if api_key != SASL_HANDSHAKE_KEY && api_key != SASL_AUTHENTICATE_KEY {
@@ -711,16 +711,16 @@ async fn handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[crabka_security::SaslMechanism],
+    sasl_mechanisms: &[krabka_security::SaslMechanism],
 ) -> Result<SaslFrameOutcome, BrokerError> {
-    use crabka_protocol::{Decode, Encode};
+    use krabka_protocol::{Decode, Encode};
 
     let (resp_body, close_after) = match parsed.api_key {
         SASL_HANDSHAKE_KEY => (handle_sasl_handshake(parsed, auth, sasl_mechanisms)?, false),
         SASL_AUTHENTICATE_KEY => {
             let mut cur: &[u8] = parsed.body;
             let req =
-                crabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest::decode(
+                krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest::decode(
                     &mut cur,
                     parsed.api_version,
                 )?;
@@ -740,22 +740,22 @@ async fn handle_sasl_frame(
             };
             let resp = if let Some(mech) = mech_opt {
                 match mech {
-                    crabka_security::SaslMechanism::Plain => {
+                    krabka_security::SaslMechanism::Plain => {
                         crate::network::auth::handle_authenticate_plain(
                             &req,
                             auth,
                             &broker.config.plain_credentials,
                         )
                     }
-                    crabka_security::SaslMechanism::ScramSha256
-                    | crabka_security::SaslMechanism::ScramSha512 => {
+                    krabka_security::SaslMechanism::ScramSha256
+                    | krabka_security::SaslMechanism::ScramSha512 => {
                         crate::network::auth::handle_authenticate_scram(
                             &req,
                             auth,
                             &*broker.controller,
                         )
                     }
-                    crabka_security::SaslMechanism::OAuthBearer => {
+                    krabka_security::SaslMechanism::OAuthBearer => {
                         let now_ms = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
@@ -768,7 +768,7 @@ async fn handle_sasl_frame(
                         )
                         .await
                     }
-                    crabka_security::SaslMechanism::Gssapi => {
+                    krabka_security::SaslMechanism::Gssapi => {
                         let cfg = broker
                             .config
                             .gssapi
@@ -778,7 +778,7 @@ async fn handle_sasl_frame(
                     }
                 }
             } else {
-                crabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
                     error_code: codes::ILLEGAL_SASL_STATE,
                     error_message: Some("SaslAuthenticate without prior SaslHandshake".into()),
                     auth_bytes: Bytes::new(),
@@ -794,7 +794,7 @@ async fn handle_sasl_frame(
             // bounded.
             let mech_label = mech_opt.map_or(
                 crate::metrics::UNKNOWN_LABEL,
-                crabka_security::SaslMechanism::wire_name,
+                krabka_security::SaslMechanism::wire_name,
             );
             broker
                 .metrics
@@ -823,12 +823,12 @@ async fn handle_sasl_frame(
 fn handle_sasl_handshake(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[crabka_security::SaslMechanism],
+    sasl_mechanisms: &[krabka_security::SaslMechanism],
 ) -> Result<Bytes, BrokerError> {
-    use crabka_protocol::{Decode, Encode};
+    use krabka_protocol::{Decode, Encode};
 
     let mut body = parsed.body;
-    let request = crabka_protocol::owned::sasl_handshake_request::SaslHandshakeRequest::decode(
+    let request = krabka_protocol::owned::sasl_handshake_request::SaslHandshakeRequest::decode(
         &mut body,
         parsed.api_version,
     )?;
@@ -1350,23 +1350,23 @@ mod tests {
     #[test]
     fn auth_principal_name_reads_authenticated_and_reauth_previous_only() {
         let authenticated = crate::network::auth::ConnectionAuth::Authenticated {
-            principal: crabka_security::Principal {
+            principal: krabka_security::Principal {
                 name: "alice".to_string(),
-                auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                 groups: vec![],
             },
-            mechanism: crabka_security::SaslMechanism::OAuthBearer,
+            mechanism: krabka_security::SaslMechanism::OAuthBearer,
             expires_at_ms: Some(123),
             authenticated_via_token: false,
         };
         let reauth = crate::network::auth::ConnectionAuth::Reauthenticating {
             previous: crate::network::auth::AuthenticatedSnapshot {
-                principal: crabka_security::Principal {
+                principal: krabka_security::Principal {
                     name: "bob".to_string(),
-                    auth_method: crabka_security::AuthMethod::SaslOAuthBearer,
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
                     groups: vec![],
                 },
-                mechanism: crabka_security::SaslMechanism::OAuthBearer,
+                mechanism: krabka_security::SaslMechanism::OAuthBearer,
                 expires_at_ms: Some(456),
             },
             exchange: crate::network::auth::SaslExchange::OAuthBearer,
@@ -1562,7 +1562,7 @@ mod tests {
     /// unsupported path's 35.
     #[tokio::test]
     async fn raft_voter_registry_routes_to_real_handlers() {
-        use crabka_protocol::{
+        use krabka_protocol::{
             Decode, Encode,
             owned::{
                 add_raft_voter_request as add_req, add_raft_voter_response as add_resp,
@@ -1614,7 +1614,7 @@ mod tests {
                 name: "PLAINTEXT".to_string(),
                 bind_addr: addr,
                 advertised: "127.0.0.1:9092".to_string(),
-                protocol: crabka_security::ListenerProtocol::Plaintext,
+                protocol: krabka_security::ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
             };

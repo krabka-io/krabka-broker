@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Versioned domain-separation prefix for checkpoint signatures.
-pub const CHECKPOINT_DOMAIN: &[u8] = b"crabka-audit-ckpt-v1\0";
+pub const CHECKPOINT_DOMAIN: &[u8] = b"krabka-audit-ckpt-v1\0";
 
 /// File-backed Ed25519 signer that reads a PKCS#8 v2 DER key.
 pub struct FileEd25519Signer {

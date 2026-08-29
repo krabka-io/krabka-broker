@@ -4,11 +4,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crabka_ids::PartitionIndex;
-use crabka_log::ProducerId;
-use crabka_protocol::records::{decrement_sequence, increment_sequence};
-use crabka_units::{Time, convert::TimeExt as _};
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::ProducerId;
+use krabka_protocol::records::{decrement_sequence, increment_sequence};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
 use crate::partition::LogOffset;
@@ -139,8 +139,8 @@ impl ProducerState {
         &self,
         topic: &str,
         partition: PartitionIndex,
-        log: &crabka_log::Log,
-    ) -> Result<(), crabka_log::LogError> {
+        log: &krabka_log::Log,
+    ) -> Result<(), krabka_log::LogError> {
         self.rebuild_from_snapshot(topic, partition, log.producer_state_snapshot())
             .await;
         Ok(())
@@ -150,7 +150,7 @@ impl ProducerState {
         &self,
         topic: &str,
         partition: PartitionIndex,
-        snapshot: Vec<crabka_log::ProducerSnapshotEntry>,
+        snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
     ) {
         self.handle(topic, partition).lock().await.entries = entries_from_snapshot(snapshot);
     }
@@ -168,7 +168,7 @@ impl ProducerState {
         &self,
         topic: &str,
         partition: PartitionIndex,
-        snapshot: Vec<crabka_log::ProducerSnapshotEntry>,
+        snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
     ) {
         let parts = if let Some(existing) = self.by_topic.get(topic) {
             existing.value().clone()
@@ -438,7 +438,7 @@ impl ProducerState {
 }
 
 fn entries_from_snapshot(
-    snapshot: Vec<crabka_log::ProducerSnapshotEntry>,
+    snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
 ) -> HashMap<ProducerId, ProducerEntry> {
     let recovered_at = crate::txn::util::now_millis();
     snapshot
@@ -472,7 +472,7 @@ mod producer_state_model;
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::{millis, secs};
+    use krabka_units::{millis, secs};
 
     use super::*;
 

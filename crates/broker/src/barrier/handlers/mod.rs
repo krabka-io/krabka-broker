@@ -35,11 +35,11 @@ pub(crate) mod transport;
 pub(crate) mod trigger;
 pub(crate) mod write_markers;
 
-use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use crabka_protocol::krabka::barrier::{
+use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+use krabka_protocol::krabka::barrier::{
     BarrierCutPartition, BarrierCutTopic, BarrierMissingPartition,
 };
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::{
     authorizer::Authorizer,
@@ -182,9 +182,9 @@ pub(crate) fn cluster_action_denied(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_ids::PartitionIndex;
-    use crabka_log::Offset;
-    use crabka_units::millis;
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_units::millis;
 
     use super::*;
     use crate::{

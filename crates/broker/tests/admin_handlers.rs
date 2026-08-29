@@ -5,7 +5,7 @@
 //! Broker-side integration tests for the admin handlers.
 //!
 //! Each test starts a 1-broker cluster with [`support::start_n_node`] and
-//! dispatches the relevant request through `crabka-client-core`. The test
+//! dispatches the relevant request through `krabka-client-core`. The test
 //! then asserts on the response, or on observable broker state that the
 //! `BrokerHandle` test-helper methods expose.
 
@@ -15,7 +15,7 @@ mod support;
 use std::time::Duration;
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
         create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
@@ -43,8 +43,8 @@ const RESOURCE_TYPE_TOPIC: i8 = 2;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async fn build_client(addr: std::net::SocketAddr) -> crabka_client_core::Client {
-    crabka_client_core::Client::builder()
+async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
+    krabka_client_core::Client::builder()
         .bootstrap(format!("127.0.0.1:{}", addr.port()))
         .client_id("admin-handlers-test")
         .build()
@@ -52,7 +52,7 @@ async fn build_client(addr: std::net::SocketAddr) -> crabka_client_core::Client 
         .expect("client build")
 }
 
-async fn create_topic_helper(client: &crabka_client_core::Client, name: &str, partitions: i32) {
+async fn create_topic_helper(client: &krabka_client_core::Client, name: &str, partitions: i32) {
     let req = CreateTopicsRequest {
         topics: vec![CreatableTopic {
             name: name.into(),
@@ -348,7 +348,7 @@ async fn create_partitions_extends_topic() {
 /// return `INVALID_REPLICA_ASSIGNMENT` (39).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_partitions_honors_explicit_assignments() {
-    use crabka_protocol::owned::create_partitions_request::CreatePartitionsAssignment;
+    use krabka_protocol::owned::create_partitions_request::CreatePartitionsAssignment;
 
     let cluster = start_n_node(1).await.expect("start_n_node");
     let (broker, cfg, _dir) = &cluster[0];
@@ -519,7 +519,7 @@ async fn describe_cluster_endpoint_type_controllers_is_rejected() {
         .await
         .expect("describe_cluster controllers");
     check!(
-        resp.error_code == crabka_broker::codes::MISMATCHED_ENDPOINT_TYPE,
+        resp.error_code == krabka_broker::codes::MISMATCHED_ENDPOINT_TYPE,
         "describe_cluster error_code"
     );
     check!(
@@ -588,7 +588,7 @@ async fn describe_quorum_reports_cluster_metadata_voter_set() {
     );
     check!(
         pd.observers.is_empty(),
-        "Crabka has no observer-role concept"
+        "Krabka has no observer-role concept"
     );
 }
 

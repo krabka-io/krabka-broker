@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_protocol::records::{RecordBatch, RecordsPayload};
+use krabka_protocol::records::{RecordBatch, RecordsPayload};
 use object_store::{GetOptions, GetRange, ObjectStore, path::Path};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
@@ -65,7 +65,7 @@ pub(crate) async fn try_diskless_read(
     p: &mut PendingRead,
     part: &Partition,
 ) -> Option<usize> {
-    if !part.diskless || p.topic_id == crabka_protocol::primitives::uuid::Uuid::ZERO {
+    if !part.diskless || p.topic_id == krabka_protocol::primitives::uuid::Uuid::ZERO {
         return None;
     }
     let remote_storage_enable = {
@@ -112,7 +112,7 @@ fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64) -> Option<Bytes> {
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;

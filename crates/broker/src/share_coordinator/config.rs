@@ -1,6 +1,6 @@
 //! KIP-932 share-coordinator (persister) configuration.
 
-use crabka_units::{ByteSize, mebibytes};
+use krabka_units::{ByteSize, mebibytes};
 
 /// This struct is not `Eq`. The recovery read budget is a quantity, and its
 /// `f64` storage is only `PartialEq`.

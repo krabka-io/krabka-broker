@@ -1,9 +1,9 @@
 //! Docker-gated proof that Kafka 4.0's real `LocalTieredStorage` reads a
-//! Crabka-offloaded segment and that its `ProducerStateManager` accepts the
+//! Krabka-offloaded segment and that its `ProducerStateManager` accepts the
 //! uploaded producer snapshot.
 //!
 //! ```text
-//! cargo test -p crabka-remote-storage --test jvm_tiered_storage -- --ignored --nocapture
+//! cargo test -p krabka-remote-storage --test jvm_tiered_storage -- --ignored --nocapture
 //! ```
 
 use std::{
@@ -16,14 +16,14 @@ use std::{
 use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
-use crabka_ids::LeaderEpoch;
-use crabka_log::{Log, LogConfig, Offset};
-use crabka_protocol::records::{Attributes, Record, RecordBatch};
-use crabka_remote_storage::{
+use krabka_ids::LeaderEpoch;
+use krabka_log::{Log, LogConfig, Offset};
+use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_remote_storage::{
     LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
 };
-use crabka_units::prelude::bytes;
+use krabka_units::prelude::bytes;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -130,7 +130,7 @@ public class JvmTieredStorageProbe {
             java.util.Arrays.equals(snapshot, Files.readAllBytes(localSnapshot)),
             "JVM LocalTieredStorage read different producer-snapshot bytes"
         );
-        Path snapshotCopy = Files.createTempFile("crabka-producer-", ".snapshot");
+        Path snapshotCopy = Files.createTempFile("krabka-producer-", ".snapshot");
         Files.write(snapshotCopy, snapshot);
         List<ProducerStateEntry> entries = ProducerStateManager.readSnapshot(
             snapshotCopy.toFile()
@@ -150,7 +150,7 @@ public class JvmTieredStorageProbe {
         );
         Files.delete(snapshotCopy);
         storage.close();
-        System.out.println("JVM LocalTieredStorage and ProducerStateManager accepted Crabka data");
+        System.out.println("JVM LocalTieredStorage and ProducerStateManager accepted Krabka data");
     }
 }
 "#;
@@ -259,7 +259,7 @@ fn ordinary_batch() -> RecordBatch {
 
 #[test]
 #[ignore = "requires Docker, a JDK, and Maven Central"]
-fn kafka_reads_crabka_local_tiered_segment_and_producer_snapshot() {
+fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let local = tempfile::tempdir().expect("local log tempdir");
     let mut log = Log::open(
         local.path(),
@@ -317,7 +317,7 @@ fn kafka_reads_crabka_local_tiered_segment_and_producer_snapshot() {
                 leader_epoch_index: Bytes::from_static(b"0\n1\n0 0\n"),
             },
         )
-        .expect("Crabka local-tier copy");
+        .expect("Krabka local-tier copy");
 
     let work = tempfile::tempdir().expect("JVM work tempdir");
     let libs = work.path().join("libs");

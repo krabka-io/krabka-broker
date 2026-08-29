@@ -13,8 +13,8 @@
 //! space.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_log::Offset;
-use crabka_protocol::ProtocolError;
+use krabka_log::Offset;
+use krabka_protocol::ProtocolError;
 use uuid::Uuid;
 
 use crate::{

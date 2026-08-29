@@ -10,8 +10,8 @@
 //!   `coordinator_epoch`: i32 (big-endian)
 
 use bytes::Bytes;
-use crabka_log::{Offset, ProducerId};
-use crabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_log::{Offset, ProducerId};
+use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerType {

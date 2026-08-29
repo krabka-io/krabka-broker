@@ -1,10 +1,10 @@
-//! Property-based round-trip and truncation tests for [`crabka_log::Log`].
+//! Property-based round-trip and truncation tests for [`krabka_log::Log`].
 
 mod support;
 
-use crabka_ids::Offset;
-use crabka_log::{Log, LogConfig};
-use crabka_units::prelude::{ByteSize, gibibytes};
+use krabka_ids::Offset;
+use krabka_log::{Log, LogConfig};
+use krabka_units::prelude::{ByteSize, gibibytes};
 use proptest::prelude::*;
 use support::strategies::arb_batches;
 use tempfile::tempdir;

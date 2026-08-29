@@ -8,9 +8,9 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::{LeaderEpoch, Offset, ProducerId};
-use crabka_protocol::records::{HEADER_LEN, RecordBatch, increment_sequence};
-use crabka_units::prelude::{ByteSize, ByteSizeExt, TimeExt as _, bytes};
+use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_protocol::records::{HEADER_LEN, RecordBatch, increment_sequence};
+use krabka_units::prelude::{ByteSize, ByteSizeExt, TimeExt as _, bytes};
 use tracing::instrument;
 
 use crate::{
@@ -179,7 +179,7 @@ mod sync_observer {
     #[cfg(unix)]
     use std::path::PathBuf;
 
-    use crabka_ids::Offset;
+    use krabka_ids::Offset;
 
     #[cfg(unix)]
     thread_local! {
@@ -213,7 +213,7 @@ crate::sendfile_cfg! {
     /// Descriptor form of [`Log::read_raw`] for the zero-copy `sendfile` fetch
     /// path, Increments D + E.
     ///
-    /// One [`crabka_protocol::records::FileRegion`] describes the records run
+    /// One [`krabka_protocol::records::FileRegion`] describes the records run
     /// for each contributing segment. A multi-segment fetch therefore goes
     /// out as several `sendfile` regions with **no** coalescing copy.
     /// `read_raw` instead concatenates cross-segment chunks into a fresh
@@ -225,7 +225,7 @@ crate::sendfile_cfg! {
         /// offset when no bytes were returned.
         pub start_offset: Offset,
         /// One file-backed region per contributing segment, in wire order.
-        pub regions: Vec<crabka_protocol::records::FileRegion>,
+        pub regions: Vec<krabka_protocol::records::FileRegion>,
         /// Total byte length across all regions.
         pub total: usize,
     }
@@ -472,7 +472,7 @@ impl Log {
         let mut boundaries = boundaries.split_off(&next);
         let _ = boundaries.remove(&next);
         while next < end {
-            let read = self.read(next, crabka_units::mebibytes(1))?;
+            let read = self.read(next, krabka_units::mebibytes(1))?;
             if read.batches.is_empty() {
                 return Err(LogError::Corrupt(format!(
                     "producer-state recovery made no progress at offset {next}"
@@ -542,7 +542,7 @@ impl Log {
         let mut next = self.log_start_offset();
         let end = self.log_end_offset();
         while next < end {
-            let read = self.read(next, crabka_units::mebibytes(1))?;
+            let read = self.read(next, krabka_units::mebibytes(1))?;
             if read.batches.is_empty() {
                 return Err(LogError::Corrupt(format!(
                     "transaction-stamp recovery made no progress at offset {next}"
@@ -1855,7 +1855,7 @@ impl Log {
     /// fetch path.
     ///
     /// This method walks sealed segments and then the active segment exactly
-    /// as `read_raw` does. It collects one [`crabka_protocol::records::FileRegion`] for each contributing segment
+    /// as `read_raw` does. It collects one [`krabka_protocol::records::FileRegion`] for each contributing segment
     /// through [`Segment::read_raw_desc`], instead of owned `Bytes`.
     /// Multi-segment fetches are **not** coalesced. Each region goes out in
     /// its own `sendfile` call, so the cross-segment copy disappears.
@@ -1887,7 +1887,7 @@ impl Log {
             return Ok(RawReadDesc::empty(fetch_offset));
         }
 
-        let mut regions: Vec<crabka_protocol::records::FileRegion> = Vec::new();
+        let mut regions: Vec<krabka_protocol::records::FileRegion> = Vec::new();
         let mut start_offset = fetch_offset;
         let mut current = fetch_offset;
         let mut remaining = max_size;
@@ -2788,7 +2788,7 @@ fn epochs_for_range(
 /// Kafka assigns the control-record types 0 to 6: `ABORT`, `COMMIT`,
 /// `LEADER_CHANGE`, `SNAPSHOT_HEADER`, `SNAPSHOT_FOOTER`, `KRAFT_VERSION`, and
 /// `VOTERS`. The value 1000 starts a krabka-private range that Kafka cannot
-/// reach by normal growth. `crabka-raft` uses the same convention for its
+/// reach by normal growth. `krabka-raft` uses the same convention for its
 /// private api keys at 1003 and 1004.
 ///
 /// A barrier marker is a control batch with one record. The record key holds
@@ -2875,9 +2875,9 @@ fn parse_control_marker_coordinator_epoch(value: &[u8]) -> Option<i32> {
 mod tests {
     use assert2::check;
     use bytes::Bytes;
-    use crabka_ids::Offset;
-    use crabka_protocol::records::{Attributes, Record};
-    use crabka_units::prelude::{gibibytes, kibibytes, mebibytes, millis, minutes, secs};
+    use krabka_ids::Offset;
+    use krabka_protocol::records::{Attributes, Record};
+    use krabka_units::prelude::{gibibytes, kibibytes, mebibytes, millis, minutes, secs};
     use tempfile::tempdir;
 
     use super::*;
@@ -3432,7 +3432,7 @@ mod tests {
         let mut cur: &[u8] = &r.bytes;
         let mut bases = Vec::new();
         while !cur.is_empty() {
-            let b = crabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
+            let b = krabka_protocol::records::RecordBatch::decode(&mut cur).unwrap();
             bases.push(Offset(b.base_offset));
         }
         assert2::assert!(bases == expected_bases);

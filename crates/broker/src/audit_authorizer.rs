@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditPrincipal};
+use krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditPrincipal};
 
 use crate::authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer};
 
@@ -25,7 +25,7 @@ impl AuditingAuthorizer {
 impl Authorizer for AuditingAuthorizer {
     fn authorize(
         &self,
-        source: &dyn crabka_authz::AclSource,
+        source: &dyn krabka_authz::AclSource,
         req: &AuthorizationRequest<'_>,
     ) -> AuthorizationResult {
         let result = self.inner.authorize(source, req);
@@ -54,8 +54,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::check;
-    use crabka_metadata::{AclOperation, ResourceType};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_metadata::{AclOperation, ResourceType};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
     use crate::{
@@ -65,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn deny_decision_emits_audit_record() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log);
 
         let principal = Principal {
@@ -74,7 +74,7 @@ mod tests {
             groups: vec![],
         };
         let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
-        let image = crabka_metadata::MetadataImage::default();
+        let image = krabka_metadata::MetadataImage::default();
         let result = authz.authorize(
             &image,
             &AuthorizationRequest {
@@ -89,7 +89,7 @@ mod tests {
 
         let ev = rx.try_recv().expect("an audit event was emitted");
         match ev {
-            crabka_audit::AuditEvent::AuthorizationDenied {
+            krabka_audit::AuditEvent::AuthorizationDenied {
                 resource_name,
                 operation,
                 ..

@@ -2,8 +2,8 @@
 //! `CreatePartitions`, and `DeleteTopics` handlers call it after they assemble
 //! the response.
 
-use crabka_metadata::MetadataImage;
-use crabka_units::{Time, convert::TimeExt, secs};
+use krabka_metadata::MetadataImage;
+use krabka_units::{Time, convert::TimeExt, secs};
 
 use super::buckets::QuotaBuckets;
 
@@ -128,7 +128,7 @@ pub(crate) fn apply_controller_mutation_quota_mode(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::{millis, secs};
+    use krabka_units::{millis, secs};
 
     use super::*;
     use crate::quota::test_support::image_with_quota as quota_image;

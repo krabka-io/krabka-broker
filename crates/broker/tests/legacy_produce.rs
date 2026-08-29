@@ -7,8 +7,8 @@ use assert2::assert;
 mod support;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_ids::Offset;
-use crabka_protocol::{
+use krabka_ids::Offset;
+use krabka_protocol::{
     Decode, Encode,
     kafka_3_6_2::owned::{
         produce_request::{
@@ -24,7 +24,7 @@ use crabka_protocol::{
     },
     records::RecordsPayload,
 };
-use crabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
+use krabka_records_legacy::{Magic, ParsedRecord, encode_flat_message_set};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -33,7 +33,7 @@ use tokio::{
 // ── Raw TCP wire helpers ──────────────────────────────────────────────────────
 
 /// Build a v0 `MessageSet` that contains one record per `(key, value)` pair.
-/// It uses `crabka_records_legacy::encode_flat_message_set`, so this file does
+/// It uses `krabka_records_legacy::encode_flat_message_set`, so this file does
 /// not hand-roll the CRC logic.
 fn build_v0_messageset(pairs: &[(&str, &str)]) -> Bytes {
     let records: Vec<ParsedRecord> = pairs
@@ -98,9 +98,9 @@ async fn round_trip_v0(
 /// Send a Metadata request to learn the topic's UUID. Fetch needs it at the
 /// high versions that use `topic_id`.
 async fn topic_id_for(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     name: &str,
-) -> crabka_protocol::primitives::uuid::Uuid {
+) -> krabka_protocol::primitives::uuid::Uuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {

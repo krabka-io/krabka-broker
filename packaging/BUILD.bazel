@@ -20,14 +20,14 @@ package(default_visibility = ["//visibility:public"])
 
 pkg_tar(
     name = "broker_layer",
-    srcs = ["//crates/broker:crabka-broker"],
+    srcs = ["//crates/broker:krabka-broker"],
     package_dir = "/usr/bin",
 )
 
 oci_image(
     name = "image",
     base = "@distroless_cc",
-    entrypoint = ["/usr/bin/crabka-broker"],
+    entrypoint = ["/usr/bin/krabka-broker"],
     tars = [":broker_layer"],
     # 65532 is distroless' `nonroot`. The broker needs no privilege: it binds
     # 9092/9093, both above 1024, and writes only its data directory.
@@ -37,7 +37,7 @@ oci_image(
 oci_load(
     name = "image_load",
     image = ":image",
-    repo_tags = ["krabka-io/crabka-broker:dev"],
+    repo_tags = ["krabka-io/krabka-broker:dev"],
 )
 
 # `remote_tags` takes a file rather than a list; CI adds the commit SHA on the
@@ -52,5 +52,5 @@ oci_push(
     name = "push",
     image = ":image",
     remote_tags = ":remote_tags",
-    repository = "ghcr.io/krabka-io/crabka-broker",
+    repository = "ghcr.io/krabka-io/krabka-broker",
 )

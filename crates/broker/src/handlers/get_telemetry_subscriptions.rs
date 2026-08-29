@@ -6,7 +6,7 @@
 //! and the id. See `client_metrics::manager`.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest,
@@ -83,7 +83,7 @@ pub(crate) fn handle(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_protocol::owned::get_telemetry_subscriptions_response;
+    use krabka_protocol::owned::get_telemetry_subscriptions_response;
 
     use super::*;
     use crate::codes;

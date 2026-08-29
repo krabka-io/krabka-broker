@@ -7,9 +7,9 @@ use std::{
     time::Duration,
 };
 
-use crabka_log::Offset;
-use crabka_metadata::{MetadataImage, NodeId};
-use crabka_units::{
+use krabka_log::Offset;
+use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{
     ByteSize,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
@@ -307,9 +307,9 @@ mod tests {
     use std::path::Path as FsPath;
 
     use assert2::assert;
-    use crabka_log::{Log, LogConfig};
-    use crabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-    use crabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_log::{Log, LogConfig};
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_protocol::records::{Attributes, Record, RecordBatch};
     use object_store::memory::InMemory;
     use tempfile::tempdir;
 
@@ -353,7 +353,7 @@ mod tests {
         log.append(&mut batch(3)).unwrap();
         let handle = crate::broker::spawn_partition(
             topic.to_owned(),
-            crabka_ids::PartitionIndex(partition),
+            krabka_ids::PartitionIndex(partition),
             root.to_path_buf(),
             log,
             crate::log_dir_status::LogDirRegistry::default(),
@@ -369,7 +369,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let event_log = crabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
         let index = DisklessIndexLog::start(event_log);
         let topic_id = Uuid::from_u128(11);
         let cache = index.cache();
@@ -411,7 +411,7 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         );
         let cache = index.cache();
         let topic_id = Uuid::from_u128(11);
@@ -473,7 +473,7 @@ mod tests {
         let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         );
         let cache = index.cache();
         let config = FlushConfig {
@@ -515,8 +515,8 @@ mod tests {
         let first = test_partition(dir.path(), "orders", 0, true, NodeId(1));
         let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
         let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(0), first);
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(1), second);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), first);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), second);
 
         let topic_id = Uuid::from_u128(11);
         let mut image = MetadataImage::new(Uuid::nil());
@@ -528,7 +528,7 @@ mod tests {
         }));
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let index = DisklessIndexLog::start(
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         );
         let cache = index.cache();
         let context = FlusherContext {
@@ -563,8 +563,8 @@ mod tests {
         let first = test_partition(dir.path(), "orders", 0, true, NodeId(1));
         let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
         let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(0), first);
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(1), second);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), first);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), second);
 
         let topic_id = Uuid::from_u128(11);
         let mut image = MetadataImage::new(Uuid::nil());
@@ -576,7 +576,7 @@ mod tests {
         }));
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let index = DisklessIndexLog::start(
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         );
         let cache = index.cache();
         let shutdown = CancellationToken::new();
@@ -623,9 +623,9 @@ mod tests {
         let follower = test_partition(dir.path(), "orders", 1, true, NodeId(2));
         let local = test_partition(dir.path(), "orders", 2, false, NodeId(1));
         let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(0), led);
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(1), follower);
-        partitions.insert("orders".into(), crabka_ids::PartitionIndex(2), local);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), led);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), follower);
+        partitions.insert("orders".into(), krabka_ids::PartitionIndex(2), local);
 
         let topic_id = Uuid::from_u128(11);
         let mut image = MetadataImage::new(Uuid::nil());
@@ -638,7 +638,7 @@ mod tests {
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         );
         let cache = index.cache();
         let shutdown = CancellationToken::new();
@@ -692,17 +692,17 @@ mod tests {
     #[test]
     fn broker_config_controls_every_flusher_policy() {
         let broker = crate::config::BrokerConfig {
-            diskless_wal_flush_interval: crabka_units::millis(125),
-            diskless_wal_flush_max_size: crabka_units::mebibytes(4),
+            diskless_wal_flush_interval: krabka_units::millis(125),
+            diskless_wal_flush_max_size: krabka_units::mebibytes(4),
             diskless_wal_trim_safety_lag: 0,
-            diskless_wal_index_projection_timeout: crabka_units::secs(3),
+            diskless_wal_index_projection_timeout: krabka_units::secs(3),
             ..crate::config::BrokerConfig::default()
         };
 
         let config = FlushConfig::from_broker(&broker);
 
         assert!(config.interval == Duration::from_millis(125));
-        assert!(config.max_size == crabka_units::mebibytes(4));
+        assert!(config.max_size == krabka_units::mebibytes(4));
         assert!(config.trim_safety_lag == Some(0));
         assert!(config.index_projection_timeout == Duration::from_secs(3));
     }

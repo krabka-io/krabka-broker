@@ -19,15 +19,15 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         init_producer_id_request::InitProducerIdRequest,
         init_producer_id_response::InitProducerIdResponse,
     },
 };
-use crabka_units::convert::TimeExt as _;
+use krabka_units::convert::TimeExt as _;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -340,7 +340,7 @@ async fn handle_transactional(
                     }
                     e2.producer_id = completed_pid;
                     e2.producer_epoch = completed_epoch;
-                    e2.next_producer_id = crabka_log::ProducerId(-1);
+                    e2.next_producer_id = krabka_log::ProducerId(-1);
                     e2.next_producer_epoch = -1;
                     e2.partitions.clear();
                     let snap = e2.clone();
@@ -383,7 +383,7 @@ async fn next_init_producer_identity(
     entry: &TxnEntry,
     txnv: crate::txn::version::TxnVersion,
     producer_ids: &crate::producer_id_manager::ProducerIdManager,
-) -> Result<(crabka_log::ProducerId, i16), BrokerError> {
+) -> Result<(krabka_log::ProducerId, i16), BrokerError> {
     let (pid, epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
     if txnv.verified() {
         crate::txn::handlers::end_txn::next_producer_identity(txnv, pid, epoch, producer_ids).await
@@ -398,7 +398,7 @@ async fn next_init_producer_identity(
 async fn stage_recovery_identity(
     entry: &mut TxnEntry,
     producer_ids: &crate::producer_id_manager::ProducerIdManager,
-) -> Result<(crabka_log::ProducerId, i16), BrokerError> {
+) -> Result<(krabka_log::ProducerId, i16), BrokerError> {
     let already_staged = entry.has_staged_producer_identity();
     let (client_pid, client_epoch) = crate::txn::handlers::end_txn::client_producer_identity(entry);
     let (next_pid, next_epoch) = if already_staged {
@@ -436,10 +436,10 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_ids::PartitionIndex;
-    use crabka_log::{Log, LogConfig, ProducerId};
-    use crabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use crabka_units::secs;
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig, ProducerId};
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_units::secs;
 
     use super::*;
     use crate::{
@@ -471,14 +471,14 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
+                name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
                 level: 3,
             })])
             .await
             .expect("enable transaction.version 3");
         assert!(
             broker.controller.current_image().finalized_feature(
-                crabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE
+                krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE
             ) == Some(3)
         );
     }
@@ -492,11 +492,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let coord = TxnCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         );
 
         // Materialize a local partition for `__transaction_state`-style data.
@@ -541,11 +541,11 @@ mod tests {
     async fn dispatch_abort_markers_rejects_missing_remote_transport() {
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let coord = TxnCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             partitions,
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         );
         let mut entry = TxnEntry::new_empty("tx-2".to_string(), ProducerId(2000), 0, 60_000, 0);
         entry.partitions.insert(TopicPartition {
@@ -602,12 +602,12 @@ mod tests {
         let context = crate::test_support::request_context(&principal, &peer, "txn-client");
         let tids = ["txn-below-min", "txn-above-max", "txn-2pc"];
 
-        let version = crabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
         enable_transaction_version_3(&broker).await;
 
-        let find_version = crabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+        let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
         let find_request =
-            crabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+            krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
                 key_type: 1,
                 coordinator_keys: tids.iter().map(ToString::to_string).collect(),
                 ..Default::default()
@@ -621,7 +621,7 @@ mod tests {
         )
         .await
         .expect("find transaction coordinators");
-        let find_response: crabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
+        let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
             crate::test_support::decode_response(&find_response, find_version);
         assert!(
             find_response
@@ -715,8 +715,8 @@ mod tests {
         assert!(second_recovery_response.ongoing_txn_producer_id == ongoing_pid.get());
         assert!(second_recovery_response.ongoing_txn_producer_epoch == ongoing_epoch);
 
-        let end_version = crabka_protocol::owned::end_txn_response::MAX_VERSION;
-        let fenced_end_request = crabka_protocol::owned::end_txn_request::EndTxnRequest {
+        let end_version = krabka_protocol::owned::end_txn_response::MAX_VERSION;
+        let fenced_end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
             transactional_id: tids[2].to_string(),
             producer_id: recovery_response.producer_id,
             producer_epoch: recovery_response.producer_epoch,
@@ -732,11 +732,11 @@ mod tests {
         )
         .await
         .expect("reject fenced recovery client");
-        let fenced_end_response: crabka_protocol::owned::end_txn_response::EndTxnResponse =
+        let fenced_end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
             crate::test_support::decode_response(&fenced_end_response, end_version);
         assert!(fenced_end_response.error_code == codes::INVALID_PRODUCER_EPOCH);
 
-        let end_request = crabka_protocol::owned::end_txn_request::EndTxnRequest {
+        let end_request = krabka_protocol::owned::end_txn_request::EndTxnRequest {
             transactional_id: tids[2].to_string(),
             producer_id: second_recovery_response.producer_id,
             producer_epoch: second_recovery_response.producer_epoch,
@@ -752,7 +752,7 @@ mod tests {
         )
         .await
         .expect("complete recovered transaction");
-        let end_response: crabka_protocol::owned::end_txn_response::EndTxnResponse =
+        let end_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
             crate::test_support::decode_response(&end_response, end_version);
         assert!(end_response.error_code == codes::NONE);
         assert!(end_response.producer_id == second_recovery_response.producer_id);
@@ -767,7 +767,7 @@ mod tests {
         )
         .await
         .expect("retry recovered transaction completion");
-        let retry_response: crabka_protocol::owned::end_txn_response::EndTxnResponse =
+        let retry_response: krabka_protocol::owned::end_txn_response::EndTxnResponse =
             crate::test_support::decode_response(&retry_response, end_version);
         assert!(retry_response == end_response);
         let completed = broker
@@ -792,7 +792,7 @@ mod tests {
         let principal = principal("admin");
         let peer = peer();
         let context = crate::test_support::request_context(&principal, &peer, "txn-client");
-        let version = crabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
 
         for (enable_2pc, keep_prepared_txn) in [(true, false), (false, true)] {
             let request = InitProducerIdRequest {
@@ -838,9 +838,9 @@ mod tests {
         let context = crate::test_support::request_context(&principal, &peer, "txn-client");
         let tid = "txn-recover-finite";
 
-        let find_version = crabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+        let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
         let find_request =
-            crabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+            krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
                 key_type: 1,
                 coordinator_keys: vec![tid.to_string()],
                 ..Default::default()
@@ -854,11 +854,11 @@ mod tests {
         )
         .await
         .expect("find transaction coordinator");
-        let response: crabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
+        let response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
             crate::test_support::decode_response(&response, find_version);
         assert!(response.coordinators[0].error_code == codes::NONE);
 
-        let version = crabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
         let request = InitProducerIdRequest {
             transactional_id: Some(tid.to_string()),
             transaction_timeout_ms: 500,

@@ -233,7 +233,7 @@ fn plural(count: u64) -> &'static str {
 }
 
 /// Group `n`'s digits with `,` every three places, for a human scanning a
-/// terminal. `crabka-restore` has no formatting-number dependency in its
+/// terminal. `krabka-restore` has no formatting-number dependency in its
 /// `Cargo.toml`, and this is a handful of lines, so it is hand-rolled rather
 /// than pulling one in.
 fn format_thousands(n: u64) -> String {

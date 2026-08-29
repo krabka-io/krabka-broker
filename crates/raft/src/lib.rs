@@ -1,22 +1,22 @@
-//! Metadata Raft quorum for Crabka.
+//! Metadata Raft quorum for Krabka.
 //!
-//! `crabka-raft` runs a hand-rolled KIP-595 `KRaft` consensus engine, the
-//! [`kraft::KraftController`], over Crabka's storage ([`crabka_log`]) and
-//! transport ([`crabka_client_core`]). The public entry point is
+//! `krabka-raft` runs a hand-rolled KIP-595 `KRaft` consensus engine, the
+//! [`kraft::KraftController`], over Krabka's storage ([`krabka_log`]) and
+//! transport ([`krabka_client_core`]). The public entry point is
 //! [`Controller::start`]. It spawns the engine and opens a TCP listener. That
 //! listener serves the real KIP-595 RPCs (Fetch=1, Vote=52,
-//! BeginQuorumEpoch=53, EndQuorumEpoch=54) and the Crabka-private observer and
+//! BeginQuorumEpoch=53, EndQuorumEpoch=54) and the Krabka-private observer and
 //! forward RPCs. [`Controller::start`] returns a [`ControllerHandle`], which
 //! submits metadata changes and reads the current
-//! [`crabka_metadata::MetadataImage`].
+//! [`krabka_metadata::MetadataImage`].
 //!
 //! ## Quick start
 //!
 //! ```no_run
 //! use std::time::Duration;
 //!
-//! use crabka_metadata::{MetadataRecord, TopicRecord};
-//! use crabka_raft::{Controller, ControllerConfig, NodeId};
+//! use krabka_metadata::{MetadataRecord, TopicRecord};
+//! use krabka_raft::{Controller, ControllerConfig, NodeId};
 //! use uuid::Uuid;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,16 +43,16 @@
 //!
 //! The controller persists and recovers `KRaft` metadata records, and it serves
 //! and installs KIP-630 snapshots through `FetchSnapshot`. It also publishes
-//! the current metadata image to broker tasks and exposes Crabka-private submit
+//! the current metadata image to broker tasks and exposes Krabka-private submit
 //! and fetch RPCs for broker and observer integration.
 //!
 //! KIP-853-style observer bootstrap and auto-join are wired through the broker
 //! and controller configuration. The older handle-level `add_learner` and
 //! `change_membership` compatibility methods still return
-//! [`RaftError::Unsupported`]. Mixed JVM and Crabka controller quorums are
+//! [`RaftError::Unsupported`]. Mixed JVM and Krabka controller quorums are
 //! outside this crate's compatibility target.
 
-#![doc(html_root_url = "https://docs.rs/crabka-raft/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-raft/0.4.0")]
 
 mod config;
 mod controller;
@@ -62,11 +62,11 @@ pub mod kraft;
 mod network;
 pub mod reconfig;
 /// The deterministic `KRaft` failure-scenario simulator with trace recording,
-/// re-exported from the leaf [`crabka_kraft_core::sim`] module. `crabka-docgen`
+/// re-exported from the leaf [`krabka_kraft_core::sim`] module. `crabka-docgen`
 /// runs [`scenarios::scenarios`] in-process to render the failure-scenario
 /// slideshow.
 #[cfg(feature = "scenarios")]
-pub use crabka_kraft_core::sim as scenarios;
+pub use krabka_kraft_core::sim as scenarios;
 mod server;
 mod snapshot;
 mod types;
@@ -92,12 +92,12 @@ pub use types::{AppData, AppDataResponse, Node, NodeId, OffsetReservation, Submi
 /// # Errors
 /// Returns an error if a metadata or control record cannot be encoded.
 pub fn serialize_metadata_snapshot(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     last_contained_log_timestamp: i64,
 ) -> Result<bytes::Bytes, RaftError> {
     snapshot::SnapshotWriter::serialize(image, last_contained_log_timestamp)
 }
 pub use wire::{
-    API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE, CrabkaMetadataFetchRequest,
-    CrabkaMetadataFetchResponse, CrabkaSubmitChangeRequest, CrabkaSubmitChangeResponse,
+    API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE, KrabkaMetadataFetchRequest,
+    KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,
 };
