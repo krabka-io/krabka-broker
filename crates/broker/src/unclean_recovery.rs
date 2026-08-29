@@ -911,7 +911,7 @@ mod run_recovery_tests {
         manager_with(
             source,
             liveness,
-            gated(BackgroundUncleanRecovery::Off),
+            &gated(BackgroundUncleanRecovery::Off),
             AuditLog::disabled(),
         )
     }
@@ -930,7 +930,7 @@ mod run_recovery_tests {
     fn manager_with(
         source: MockSource,
         liveness: Arc<ControllerLivenessState>,
-        break_glass: BreakGlassConfig,
+        break_glass: &BreakGlassConfig,
         audit_log: Arc<AuditLog>,
     ) -> UncleanRecoveryManager {
         UncleanRecoveryManager {
@@ -946,7 +946,7 @@ mod run_recovery_tests {
                 queue_capacity: 256,
                 listener_protocol: krabka_security::ListenerProtocol::Plaintext,
                 inter_broker_server_name: "localhost".to_string(),
-                background: BackgroundRecovery::new(&break_glass, audit_log),
+                background: BackgroundRecovery::new(break_glass, audit_log),
             },
             in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -1036,7 +1036,7 @@ mod run_recovery_tests {
         let mgr = manager_with(
             MockSource::new(Some(NODE), dead_leader_with_a_survivor()),
             liveness_with_alive(&[2]).await,
-            break_glass,
+            &break_glass,
             AuditLog::disabled(),
         );
         mgr.run_recovery(job).await
@@ -1099,7 +1099,7 @@ mod run_recovery_tests {
         let mgr = manager_with(
             source,
             liveness_with_alive(&[2]).await,
-            gated(BackgroundUncleanRecovery::Require),
+            &gated(BackgroundUncleanRecovery::Require),
             audit_log,
         );
 
@@ -1128,7 +1128,7 @@ mod run_recovery_tests {
         let mgr = manager_with(
             source,
             liveness_with_alive(&[2]).await,
-            gated(BackgroundUncleanRecovery::AuditOnly),
+            &gated(BackgroundUncleanRecovery::AuditOnly),
             audit_log,
         );
         let pr = image
@@ -1174,7 +1174,7 @@ mod run_recovery_tests {
             let mgr = manager_with(
                 source,
                 liveness_with_alive(&[2]).await,
-                gated(mode),
+                &gated(mode),
                 audit_log,
             );
             let pr = image

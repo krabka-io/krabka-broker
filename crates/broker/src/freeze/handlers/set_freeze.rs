@@ -857,7 +857,7 @@ mod tests {
             config
                 .operator_keys
                 .get(ALICE_KEY)
-                .map(|key| key.principal())
+                .map(crate::operator_keys::OperatorKey::principal)
                 == Some(accepted.record.set_by.as_str())
         );
     }

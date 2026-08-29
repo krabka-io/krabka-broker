@@ -5426,10 +5426,10 @@ signature_max_skew = "5m"
 
     #[test]
     fn freeze_section_rejects_a_misspelled_key() {
-        let toml = r#"
+        let toml = r"
 [freeze]
 require_signatures = true
-"#;
+";
         assert!(toml::from_str::<FileConfig>(toml).is_err());
     }
 
@@ -5437,10 +5437,10 @@ require_signatures = true
     fn freeze_signature_max_skew_rejects_a_bare_number() {
         // The human duration serde is what keeps `5` from meaning
         // five of whatever unit the reader assumed.
-        let toml = r#"
+        let toml = r"
 [freeze]
 signature_max_skew = 300
-"#;
+";
         assert!(toml::from_str::<FileConfig>(toml).is_err());
     }
 
