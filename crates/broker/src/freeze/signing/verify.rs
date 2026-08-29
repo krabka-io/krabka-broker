@@ -9,7 +9,7 @@
 use krabka_metadata::TopicFreezeRecord;
 use krabka_units::{Time, convert::TimeExt as _};
 
-use super::{canonical_bytes::freeze_signing_bytes, refusal::SignatureRefusal};
+use super::{SignatureRefusal, freeze_signing_bytes};
 use crate::operator_keys::OperatorKeys;
 
 /// Everything outside the record that a signature check reads.
