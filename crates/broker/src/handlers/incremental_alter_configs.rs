@@ -28,6 +28,17 @@ use krabka_protocol::{
 };
 use krabka_raft::RaftError;
 
+mod broker_scope;
+mod client_metrics_scope;
+mod group_scope;
+#[cfg(test)]
+mod test_support;
+mod topic_scope;
+
+pub(super) use self::broker_scope::{
+    broker_config_node_id, is_cluster_default_topic_config, is_known_broker_config,
+    validate_broker_config_value,
+};
 use self::{
     broker_scope::handle_broker_scoped, client_metrics_scope::handle_client_metrics_scoped,
     group_scope::handle_group_scoped, topic_scope::topic_config_record,
@@ -37,19 +48,6 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-};
-
-mod broker_scope;
-mod client_metrics_scope;
-mod group_scope;
-mod topic_scope;
-
-#[cfg(test)]
-mod test_support;
-
-pub(super) use self::broker_scope::{
-    broker_config_node_id, is_cluster_default_topic_config, is_known_broker_config,
-    validate_broker_config_value,
 };
 
 const RESOURCE_TYPE_TOPIC: i8 = 2;
