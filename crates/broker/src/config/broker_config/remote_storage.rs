@@ -3,11 +3,11 @@
 //! remote-log metadata manager serves it, and whether the object store is a
 //! WORM archive.
 
-// Link 8 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `audit_fields`.
+// Link 8 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `audit_fields`.
 macro_rules! remote_storage_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::audit::audit_fields! {
+        audit_fields! {
             $($collected)*
             /// KIP-405: tiered-storage backend selection. `Some(_)` enables tiered
             /// storage broker-wide and spawns the `RemoteLogManager` copy task. This
@@ -56,5 +56,3 @@ macro_rules! remote_storage_fields {
         }
     };
 }
-
-pub(crate) use remote_storage_fields;

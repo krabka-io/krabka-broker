@@ -3,11 +3,11 @@
 //! one is cut, and the durable spool that holds records the broker could not
 //! append yet.
 
-// Link 9 of the `BrokerConfig` field chain, and its end: it appends
-// this group and hands the whole set to `define_broker_config`.
+// Link 9 of the `BrokerConfig` field chain, and its last: it adds this
+// group and hands the whole set to `define_broker_config`.
 macro_rules! audit_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::define_broker_config! {
+        define_broker_config! {
             $($collected)*
             /// Whether the audit subsystem is active (`FedRAMP` MLA).
             pub audit_enabled: bool,
@@ -30,5 +30,3 @@ macro_rules! audit_fields {
         }
     };
 }
-
-pub(crate) use audit_fields;

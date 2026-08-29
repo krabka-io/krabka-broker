@@ -1,12 +1,13 @@
 //! Which node this is and where its data lives: the broker id and the roles
 //! it registers with the controller, the endpoint it advertises to clients,
-//! and the directories that hold the metadata log and the partition logs.
+//! the directories that hold the metadata log and the partition logs, and the
+//! per-log settings every partition on this broker inherits.
 
-// Link 2 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `quorum_fields`.
+// Link 2 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `quorum_fields`.
 macro_rules! identity_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::quorum::quorum_fields! {
+        quorum_fields! {
             $($collected)*
             /// Broker id reported in `Metadata` responses. Default: 1.
             pub broker_id: i32,
@@ -49,5 +50,3 @@ macro_rules! identity_fields {
         }
     };
 }
-
-pub(crate) use identity_fields;

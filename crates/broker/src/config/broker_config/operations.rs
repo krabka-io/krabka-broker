@@ -4,11 +4,11 @@
 //! fetch sessions, and the partition disk-usage scan that feeds the
 //! rebalancer.
 
-// Link 6 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `delegation_tokens_fields`.
+// Link 6 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `delegation_tokens_fields`.
 macro_rules! operations_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::delegation_tokens::delegation_tokens_fields! {
+        delegation_tokens_fields! {
             $($collected)*
             /// How often the auto-rebalance ticker fires. Default 5 minutes.
             /// Matches Kafka's `leader.imbalance.check.interval.seconds`.
@@ -82,5 +82,3 @@ macro_rules! operations_fields {
         }
     };
 }
-
-pub(crate) use operations_fields;

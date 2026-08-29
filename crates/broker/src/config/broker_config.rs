@@ -2,9 +2,9 @@
 //! time.
 //!
 //! A struct is one item, so it cannot be cut across modules the way a set of
-//! functions can. Each child module holds one contiguous run of the fields
-//! inside a `macro_rules!` that appends its run to the fields collected so
-//! far and forwards them to the next child. The last child calls
+//! functions can. Each child module instead holds one contiguous run of the
+//! fields inside a `macro_rules!` that appends its run to the fields
+//! collected so far and hands them on; the last child hands the whole set to
 //! `define_broker_config`, which emits the struct here. The order of the
 //! chain is the declaration order of the struct, so every field keeps the
 //! position it has always had.
@@ -27,18 +27,9 @@ use crate::{
     operator_keys::OperatorKeys,
 };
 
-mod audit;
-mod coordinators;
-mod delegation_tokens;
-mod identity;
-mod operations;
-mod quorum;
-mod remote_storage;
-mod security;
-mod tuning;
-
-// The terminal link of the field chain: it emits the struct from every
-// field group the chain collected.
+// The end of the field chain: it emits the struct from the fields the chain
+// collected. `macro_rules!` scope is textual, so it is defined ahead of the
+// group modules, the last of which expands it.
 macro_rules! define_broker_config {
     ($($field:tt)*) => {
         #[derive(Debug, Clone)]
@@ -49,8 +40,27 @@ macro_rules! define_broker_config {
     };
 }
 
-pub(crate) use define_broker_config;
+// The field groups, declared `#[macro_use]` and in reverse chain order, so
+// that each link is already in scope where the link before it names it.
+#[macro_use]
+mod audit;
+#[macro_use]
+mod remote_storage;
+#[macro_use]
+mod delegation_tokens;
+#[macro_use]
+mod operations;
+#[macro_use]
+mod coordinators;
+#[macro_use]
+mod security;
+#[macro_use]
+mod quorum;
+#[macro_use]
+mod identity;
+#[macro_use]
+mod tuning;
 
-// Head of the field chain. It runs through every child module in turn and
-// ends in `define_broker_config`.
-self::tuning::tuning_fields! {}
+// The head of the chain. It expands one group after another and ends in
+// `define_broker_config`.
+tuning_fields! {}

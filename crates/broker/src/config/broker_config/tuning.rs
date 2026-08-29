@@ -1,14 +1,15 @@
-//! The scalar tuning knobs: how often each background loop runs, how long
-//! the broker waits for a peer or a partition, how deep its queues are, and
-//! how many bytes it reads or accepts in one step. They sit together because
-//! they are all plain numbers an operator retunes, not policies that carry a
-//! type of their own.
+//! The scalar tuning knobs: how often each background loop runs, how long the
+//! broker waits for a peer or a partition, how deep its queues are, how many
+//! bytes it reads or accepts in one step, and the partition count and
+//! replication factor of each internal topic. They sit together because they
+//! are all plain numbers an operator retunes, not policies that carry a type
+//! of their own.
 
-// Link 1 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `identity_fields`.
+// Link 1 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `identity_fields`.
 macro_rules! tuning_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::identity::identity_fields! {
+        identity_fields! {
             $($collected)*
             /// Capacity used by every outbound Kafka client connection owned by this
             /// broker process.
@@ -193,5 +194,3 @@ macro_rules! tuning_fields {
         }
     };
 }
-
-pub(crate) use tuning_fields;

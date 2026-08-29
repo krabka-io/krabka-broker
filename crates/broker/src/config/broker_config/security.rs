@@ -4,11 +4,11 @@
 //! and SASL settings, including the OAUTHBEARER validator and its JWKS
 //! refresh plumbing.
 
-// Link 4 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `coordinators_fields`.
+// Link 4 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `coordinators_fields`.
 macro_rules! security_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::coordinators::coordinators_fields! {
+        coordinators_fields! {
             $($collected)*
             // ── Auth / listener registry ─────────────────────────────────────────
             /// Named listener definitions. When this list is empty,
@@ -149,5 +149,3 @@ macro_rules! security_fields {
         }
     };
 }
-
-pub(crate) use security_fields;

@@ -3,11 +3,11 @@
 //! consumer-group (KIP-848), share-group (KIP-932), streams-group (KIP-1071),
 //! and share-coordinator subsystems.
 
-// Link 5 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `operations_fields`.
+// Link 5 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `operations_fields`.
 macro_rules! coordinators_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::operations::operations_fields! {
+        operations_fields! {
             $($collected)*
             /// Independent compatibility and protocol feature gates.
             pub features: BrokerFeatureFlags,
@@ -40,5 +40,3 @@ macro_rules! coordinators_fields {
         }
     };
 }
-
-pub(crate) use coordinators_fields;

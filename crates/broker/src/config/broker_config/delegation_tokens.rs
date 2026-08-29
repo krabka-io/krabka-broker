@@ -2,11 +2,11 @@
 //! them, and the lifetime, renew period, and expiry sweep that bound how long
 //! an issued token stays usable.
 
-// Link 7 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `remote_storage_fields`.
+// Link 7 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `remote_storage_fields`.
 macro_rules! delegation_tokens_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::remote_storage::remote_storage_fields! {
+        remote_storage_fields! {
             $($collected)*
             /// KIP-48: HMAC-SHA-256 master key that mints and verifies delegation
             /// tokens. When `None`, the broker rejects all four delegation-token RPCs
@@ -43,5 +43,3 @@ macro_rules! delegation_tokens_fields {
         }
     };
 }
-
-pub(crate) use delegation_tokens_fields;

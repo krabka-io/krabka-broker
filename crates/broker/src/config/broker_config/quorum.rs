@@ -3,11 +3,11 @@
 //! metadata snapshot policy, and the rack and stretch site it reports to the
 //! controller.
 
-// Link 3 of the `BrokerConfig` field chain: it appends this group to
-// the fields collected so far and forwards them to `security_fields`.
+// Link 3 of the `BrokerConfig` field chain: it adds this group to the
+// fields collected so far and hands them to `security_fields`.
 macro_rules! quorum_fields {
     ($($collected:tt)*) => {
-        $crate::config::broker_config::security::security_fields! {
+        security_fields! {
             $($collected)*
             /// Raft node id. Conventionally equal to `broker_id as NodeId`.
             pub node_id: NodeId,
@@ -133,5 +133,3 @@ macro_rules! quorum_fields {
         }
     };
 }
-
-pub(crate) use quorum_fields;
