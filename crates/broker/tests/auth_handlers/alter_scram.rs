@@ -1,4 +1,4 @@
-//! `AlterUserScramCredentials` (api_key 51, KIP-554) provisioning.
+//! `AlterUserScramCredentials` (`api_key` 51, KIP-554) provisioning.
 //!
 //! A super-user upserts a SCRAM-SHA-256 or SCRAM-SHA-512 credential and the
 //! named user then authenticates with it, while a non-super-user is refused
