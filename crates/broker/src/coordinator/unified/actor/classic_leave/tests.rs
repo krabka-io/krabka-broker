@@ -141,7 +141,7 @@ async fn classic_delete_append_failure_keeps_group_registered() {
 
     check!(coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::Internal));
     check!(coord.describe_group("g").await.is_some());
-    check!(coord.group_type("g") == Some(super::super::GroupType::Classic));
+    check!(coord.group_type("g") == Some(crate::coordinator::unified::GroupType::Classic));
     check!(!log.has_classic_group_metadata_tombstone("g").await);
 }
 

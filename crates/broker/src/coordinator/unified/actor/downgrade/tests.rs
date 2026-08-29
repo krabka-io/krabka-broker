@@ -7,7 +7,6 @@ use assert2::{assert, check};
 use krabka_log::Offset;
 use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
-use super::*;
 use crate::{
     codes,
     coordinator::unified::{

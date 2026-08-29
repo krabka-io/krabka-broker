@@ -27,5 +27,5 @@ pub use self::{
     oauthbearer::handle_authenticate_oauthbearer,
     plain::handle_authenticate_plain,
     scram::handle_authenticate_scram,
-    state::{ConnectionAuth, SaslExchange, is_pre_auth_allowed},
+    state::{AuthenticatedSnapshot, ConnectionAuth, SaslExchange, is_pre_auth_allowed},
 };

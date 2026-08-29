@@ -157,7 +157,6 @@ impl BrokerHandle {
 mod tests {
     use assert2::{assert, check};
 
-    use super::*;
     use crate::{
         broker::{Broker, test_support::local_partition_with_records},
         config::BrokerConfig,

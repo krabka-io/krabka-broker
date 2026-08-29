@@ -30,7 +30,7 @@ impl BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{ByteSize, fraction, gibibytes, mebibytes};
+    use krabka_units::{ByteSize, convert::ByteSizeExt, fraction, gibibytes, mebibytes};
 
     use super::*;
 

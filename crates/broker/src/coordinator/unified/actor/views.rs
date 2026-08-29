@@ -206,7 +206,6 @@ pub(super) fn build_describe(state: &GroupState) -> DescribeView {
 mod tests {
     use assert2::{assert, check};
 
-    use super::*;
     use crate::{
         codes,
         coordinator::unified::actor::{

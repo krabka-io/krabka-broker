@@ -41,10 +41,11 @@ mod writer_macros;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    append::{run_produce_append_batch, run_produce_append_batch_at},
-    storage::storage_failure_error,
-};
+// Only crate::wal's test modules reach the append helper through this path, so
+// the re-export is test-gated: in a normal build it would be dead.
+#[cfg(test)]
+pub(crate) use self::append::run_produce_append_batch;
+pub(crate) use self::storage::storage_failure_error;
 use self::{
     compaction::handle_compact,
     mutations::{handle_replicate, handle_reset, handle_trim, handle_truncate},
