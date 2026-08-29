@@ -15,6 +15,13 @@
 //! `krabka-guard`, targeted at `"<topic>-<partition>"` or at the bare topic
 //! name, and then runs `kafka-delete-records`.
 //!
+//! # KFC-9: a frozen partition is never trimmed
+//!
+//! A write freeze refuses every operation that removes data from the topic it
+//! covers, so a frozen partition answers `POLICY_VIOLATION (44)` here whatever
+//! the caller holds. The check runs ahead of the two-person rule, because an
+//! approval to trim does not defeat a freeze and a refusal must not spend one.
+//!
 //! A refused partition answers `POLICY_VIOLATION (44)` on its own row. No
 //! version of the `DeleteRecords` response carries an `error_message`, so the
 //! refusal text reaches the operator through the audit log and the broker's own
@@ -239,6 +246,27 @@ async fn trim_one(
         .load(std::sync::atomic::Ordering::Acquire);
     if cur_leader != env.broker.config.node_id {
         return error_partition_result(index, codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // KFC-9: a write freeze refuses every operation that removes data from the
+    // topic it covers, and it answers ahead of the two-person rule. That order
+    // is the rule: a break-glass approval to trim does not defeat a freeze, and
+    // a trim the freeze refuses must not spend an approval on its way to being
+    // refused.
+    //
+    // No version of the `DeleteRecords` response carries an `error_message`, so
+    // the reason reaches the operator through the broker's log alone. Like the
+    // produce gate, this refusal emits no privileged-action audit event: a
+    // freeze is not a break-glass act, and the registry entry that caused it is
+    // already in the metadata log.
+    if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(env.image, topic) {
+        tracing::warn!(
+            %topic,
+            partition = index,
+            refusal = %verdict.removal_message(),
+            "DeleteRecords refused by a freeze"
+        );
+        return error_partition_result(index, codes::POLICY_VIOLATION);
     }
 
     // KFC-9: the two-person rule answers here, before the broker reads a single

@@ -11,6 +11,14 @@
 //! `krabka-guard`, targeted at the topic name, and then runs
 //! `kafka-topics --delete`.
 //!
+//! # KFC-9: a frozen topic is never deleted
+//!
+//! A write freeze refuses every operation that removes data from the topic it
+//! covers, so a frozen topic answers `POLICY_VIOLATION (44)` here whatever the
+//! caller holds. The check runs ahead of the two-person rule, because an
+//! approval to delete does not defeat a freeze and a refusal must not spend
+//! one.
+//!
 //! A refused topic answers `POLICY_VIOLATION (44)` on its own row, which is the
 //! code Apache Kafka already returns from `CreateTopicPolicy` and
 //! `AlterConfigPolicy`, so `AdminClient` surfaces a `PolicyViolationException`
@@ -225,6 +233,23 @@ pub(crate) async fn handle(
                 WireUuid::ZERO,
                 codes::TOPIC_AUTHORIZATION_FAILED,
             ));
+            continue;
+        }
+
+        // KFC-9: a write freeze refuses every operation that removes data
+        // from the topic it covers, and it answers ahead of the two-person
+        // rule. That order is the rule: a break-glass approval to delete does
+        // not defeat a freeze, and a deletion the freeze refuses must not
+        // spend an approval on its way to being refused.
+        //
+        // Like the produce gate, this refusal emits no privileged-action audit
+        // event. A freeze is not a break-glass act, and the registry entry that
+        // caused the refusal is already in the metadata log and in the audit
+        // record of the freeze that set it.
+        if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(&image, &name) {
+            let message = verdict.removal_message();
+            tracing::warn!(topic = %name, refusal = %message, "DeleteTopics refused by a freeze");
+            results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
             continue;
         }
 

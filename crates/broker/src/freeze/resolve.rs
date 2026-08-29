@@ -55,10 +55,29 @@ impl FreezeVerdict {
     /// misconfigured principal. The operator's reason follows when there is
     /// one.
     pub(crate) fn error_message(&self) -> String {
+        self.refusal("this write")
+    }
+
+    /// The `error_message` for an operation that would take data *out* of the
+    /// frozen topic, which `DeleteRecords` and `DeleteTopics` both do.
+    ///
+    /// The wording differs from [`Self::error_message`] because the operator is
+    /// not producing. Telling someone who ran `kafka-topics --delete` that
+    /// their write was refused sends them looking for a producer that does not
+    /// exist.
+    pub(crate) fn removal_message(&self) -> String {
+        self.refusal("this deletion")
+    }
+
+    /// The refusal text, with `refused` naming what the freeze turned away.
+    ///
+    /// It names the freeze and the scope that matched, so the caller's on-call
+    /// reads the state of the cluster rather than guessing at a misconfigured
+    /// principal. The operator's reason follows when there is one.
+    fn refusal(&self, refused: &str) -> String {
         let kind = pattern_type_name(self.pattern_type);
         let scope = &self.scope;
-        let mut message =
-            format!("a write freeze on the {kind} scope {scope:?} refuses this write");
+        let mut message = format!("a write freeze on the {kind} scope {scope:?} refuses {refused}");
         if !self.reason.is_empty() {
             message.push_str(": ");
             message.push_str(&self.reason);
@@ -269,6 +288,36 @@ mod tests {
                 reason: reason.to_owned(),
             };
             check!(verdict.error_message() == expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_removal_message_says_deletion_rather_than_write() {
+        for (label, reason, expected) in [
+            (
+                "with a reason",
+                "DR cutover",
+                "a write freeze on the literal scope \"orders\" refuses this deletion: DR cutover",
+            ),
+            (
+                "with no reason",
+                "",
+                "a write freeze on the literal scope \"orders\" refuses this deletion",
+            ),
+        ] {
+            let verdict = FreezeVerdict {
+                scope: "orders".to_owned(),
+                pattern_type: PatternType::Literal,
+                reason: reason.to_owned(),
+            };
+            check!(verdict.removal_message() == expected, "{label}");
+            // The two messages differ only in what they name as refused. A
+            // `DeleteTopics` caller told their *write* was refused goes looking
+            // for a producer that is not there.
+            check!(
+                verdict.removal_message() != verdict.error_message(),
+                "{label}"
+            );
         }
     }
 }
