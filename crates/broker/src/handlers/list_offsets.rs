@@ -15,15 +15,22 @@
 //!
 //! KFC-1 changes one sentinel and no other: on a topic that schedules
 //! delivery, LATEST reports the partition's delivery watermark instead of its
-//! log end offset. See [`latest_offset`]. Note that krabka's LATEST answers the
-//! log end offset and not the high watermark, which is a divergence from Apache
-//! Kafka that predates KFC-1 and that KFC-1 leaves alone.
+//! log end offset. See [`latest_offset`].
 //!
-//! LATEST is also the one sentinel the request's `isolation_level` (KIP-98)
-//! moves. A `read_committed` client is answered with the partition's last
-//! stable offset, so a consumer that seeks to end stops in front of the records
-//! of a transaction that is still open instead of stepping over them. See
-//! [`latest_offset`] and [`read_committed_client`].
+//! Every other answer is decided by one bound, Kafka's `lastFetchableOffset`:
+//! the log end offset for a request that is not a client's, the high watermark
+//! for a `read_uncommitted` client, and the last stable offset (KIP-98) for a
+//! `read_committed` one. `Partition.fetchOffsetForTimestamp` chooses it once
+//! and then uses it twice over. LATEST *is* the bound, so a `read_committed`
+//! consumer that seeks to end stops in front of the records of a transaction
+//! that is still open instead of stepping over them. Every sentinel that
+//! resolves against record data -- `MAX_TIMESTAMP`, the two tiered sentinels,
+//! and a positive timestamp -- is refused with `UNKNOWN_OFFSET` when it lands
+//! at or above the bound, so no client can read an offset past its own end of
+//! partition by asking for it a different way. EARLIEST and
+//! `EARLIEST_LOCAL_TIMESTAMP` are the exceptions Kafka leaves unmeasured:
+//! both resolve from the start of the log, which is never above the bound. See
+//! [`FetchBound`], [`fetch_bound`] and [`last_fetchable_offset`].
 
 use std::{future::Future, time::Duration};
 
@@ -66,6 +73,9 @@ const UNKNOWN_TIMESTAMP: i64 = -1;
 /// Response placeholder (-1) meaning "no offset was resolved".
 /// Kafka's `ListOffsetsResponse.UNKNOWN_OFFSET`.
 const UNKNOWN_OFFSET: i64 = -1;
+/// Response placeholder (-1) meaning "no leader epoch is being reported".
+/// Kafka's `ListOffsetsResponse.UNKNOWN_EPOCH`.
+const UNKNOWN_EPOCH: i32 = -1;
 /// Request `replica_id` (-1) that marks an ordinary client. Kafka's
 /// `ListOffsetsRequest.CONSUMER_REPLICA_ID`. A follower sends its own node id
 /// and the offset-debugging path sends -2.
@@ -75,20 +85,71 @@ const CONSUMER_REPLICA_ID: i32 = -1;
 /// same field the same way.
 const READ_COMMITTED: i8 = 1;
 
-/// Whether the request is a `read_committed` *client* request, the only shape
-/// whose answer the last stable offset bounds.
+/// Which of the log's three offsets bounds this request's answers.
 ///
-/// Kafka's `ReplicaManager.fetchOffset` passes the request's isolation level
-/// down only when `replicaId == ListOffsetsRequest.CONSUMER_REPLICA_ID` (-1),
-/// and passes `None` for every other `replicaId`. A follower probing its leader
-/// must not be fenced at the last stable offset: it replicates committed and
-/// uncommitted records alike, so fencing it would stall replication behind an
-/// open transaction until that transaction resolved. A `None` isolation level
-/// resolves LATEST from the unfenced log end offset, which is the answer this
-/// broker already gives a `read_uncommitted` request, so both non-client cases
-/// only have to stay out of the `read_committed` branch.
-const fn read_committed_client(replica_id: i32, isolation_level: i8) -> bool {
-    replica_id == CONSUMER_REPLICA_ID && isolation_level == READ_COMMITTED
+/// Kafka's `Partition.fetchOffsetForTimestamp` opens by choosing one of these
+/// and names it `lastFetchableOffset`. Every answer it goes on to give either
+/// is that offset or is measured against it, so the choice made here decides
+/// every sentinel's answer and not only LATEST's. The three variants are the
+/// three arms of its `isolationLevel match`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FetchBound {
+    /// The log end offset, for a request that is not a client's. Kafka's
+    /// `case None`, reached whenever it passed no isolation level down.
+    LogEnd,
+    /// The high watermark, for a `read_uncommitted` client.
+    HighWatermark,
+    /// The last stable offset, for a `read_committed` client.
+    LastStable,
+}
+
+/// The bound a request's `replica_id` and `isolation_level` select, one arm per
+/// line of `ReplicaManager.fetchOffset`'s `isolationLevelOpt`.
+///
+/// Kafka passes the isolation level down only when `replicaId ==
+/// ListOffsetsRequest.CONSUMER_REPLICA_ID` (-1), and passes `None` for every
+/// other `replicaId`. A follower probing its leader must not be bounded by
+/// either watermark: it replicates committed and uncommitted records alike, so
+/// bounding it would stall replication behind an open transaction until that
+/// transaction resolved. `ListOffsetsRequest.DEBUGGING_REPLICA_ID` (-2) is not
+/// -1 either, so it files with the replicas even though no follower sends it.
+const fn fetch_bound(replica_id: i32, isolation_level: i8) -> FetchBound {
+    if replica_id != CONSUMER_REPLICA_ID {
+        FetchBound::LogEnd
+    } else if isolation_level == READ_COMMITTED {
+        FetchBound::LastStable
+    } else {
+        FetchBound::HighWatermark
+    }
+}
+
+/// Reads the offset a [`FetchBound`] names.
+///
+/// The high watermark keeps a client's answer inside what the ISR has
+/// acknowledged, and the last stable offset additionally pins a
+/// `read_committed` client in front of the oldest transaction that has not
+/// resolved. Kafka's `UnifiedLog.lastStableOffset` is itself
+/// `min(first offset of the oldest open transaction, high watermark)`, so the
+/// minimum below is what makes [`FetchBound::LastStable`] that same value
+/// rather than a first-offset that could sit above the watermark.
+///
+/// Both accessors are the ones [`krabka_verified::fetch_visibility`] uses to
+/// compute a `Fetch` response's `last_stable_offset`, so a consumer that seeks
+/// to end and then fetches from there sees one consistent end of partition by
+/// construction rather than by coincidence.
+///
+/// The high watermark lives behind an async mutex of its own, so this is called
+/// before the log mutex is taken and never under it.
+async fn last_fetchable_offset(
+    partition: &crate::partition::Partition,
+    bound: FetchBound,
+    local_end: i64,
+) -> i64 {
+    match bound {
+        FetchBound::LogEnd => local_end,
+        FetchBound::HighWatermark => partition.high_watermark().await.0,
+        FetchBound::LastStable => partition.lso().0.min(partition.high_watermark().await.0),
+    }
 }
 
 async fn concurrently<F>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
@@ -173,7 +234,7 @@ pub(crate) async fn handle(
         let req = ListOffsetsRequest::decode(&mut cur, version)?;
         // `isolation_level` decodes only from v2 up; v1 leaves it at 0, which
         // is `read_uncommitted`, exactly as Kafka treats a v1 request.
-        let read_committed = read_committed_client(req.replica_id, req.isolation_level);
+        let bound = fetch_bound(req.replica_id, req.isolation_level);
 
         // ── ACL preamble ────────────────────────────────────────────
         // Per-topic `Describe` on `Topic(name)`. A denied topic gets
@@ -210,7 +271,7 @@ pub(crate) async fn handle(
                         .collect()
                 } else {
                     concurrently(topic.partitions.into_iter().map(|part| {
-                        resolve_partition(broker, &name, part, version, timeout, read_committed)
+                        resolve_partition(broker, &name, part, version, timeout, bound)
                     }))
                     .await
                 };
@@ -238,7 +299,7 @@ async fn resolve_partition(
     request: krabka_protocol::owned::list_offsets_request::ListOffsetsPartition,
     version: i16,
     remote_timeout: Duration,
-    read_committed: bool,
+    bound: FetchBound,
 ) -> ListOffsetsPartitionResponse {
     let index = request.partition_index;
     let mut response = ListOffsetsPartitionResponse {
@@ -279,6 +340,20 @@ async fn resolve_partition(
         None
     };
     let remote_topic_id = if remote_enabled { topic_id } else { None };
+    // Kafka reads `lastFetchableOffset` for every request but EARLIEST and
+    // `EARLIEST_LOCAL`, which it answers from the start of the log without
+    // measuring them. Skipping the read for those two also skips the high
+    // watermark's async mutex. It is read here, ahead of the match, because
+    // several arms below hold the log mutex and the watermark must not be
+    // awaited under it.
+    let last_fetchable = if matches!(
+        request.timestamp,
+        EARLIEST_TIMESTAMP | EARLIEST_LOCAL_TIMESTAMP
+    ) {
+        None
+    } else {
+        Some(last_fetchable_offset(&partition, bound, local_end).await)
+    };
     let (offset, timestamp) = match request.timestamp {
         EARLIEST_TIMESTAMP => {
             let mut earliest = local_start;
@@ -303,13 +378,7 @@ async fn resolve_partition(
             (earliest, UNKNOWN_TIMESTAMP)
         }
         LATEST_TIMESTAMP => (
-            latest_offset(
-                &partition,
-                log_config.delivery_policy,
-                local_end,
-                read_committed,
-            )
-            .await,
+            latest_offset(&partition, log_config.delivery_policy, local_end),
             UNKNOWN_TIMESTAMP,
         ),
         EARLIEST_LOCAL_TIMESTAMP => {
@@ -408,13 +477,39 @@ async fn resolve_partition(
         }
         _ => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
     };
+    // One bound, applied the two ways `Partition.fetchOffsetForTimestamp`
+    // applies it. EARLIEST and `EARLIEST_LOCAL` are absent from both arms
+    // because they resolve from the start of the log, which is never above the
+    // bound, and Kafka returns them unmeasured.
+    let (offset, timestamp) = match (request.timestamp, last_fetchable) {
+        // LATEST *is* the bound: Kafka answers it with `lastFetchableOffset`
+        // and never consults the log. KFC-1's delivery watermark is an
+        // independent cap on the same answer, so a scheduled topic takes the
+        // lower of the two. On a topic that delivers immediately `latest_offset`
+        // returned the log end offset, which is at or above every bound, and
+        // this collapses to the value Kafka returns.
+        (LATEST_TIMESTAMP, Some(last_fetchable)) => (offset.min(last_fetchable), timestamp),
+        // Every other sentinel resolves against record data, and Kafka refuses
+        // the answer when it lands at or above the bound -- the test in
+        // `ReplicaManager.fetchOffset` is `offset >= lastFetchableOffset`, so
+        // the bound itself is already out of reach. The refusal is not an
+        // error: `buildErrorResponse(Errors.NONE, partition)` reports no error
+        // with `UNKNOWN_OFFSET`, `UNKNOWN_TIMESTAMP`, and the leader epoch left
+        // at `UNKNOWN_EPOCH`, so an arm above that set an epoch gives it back.
+        (_, Some(last_fetchable)) if offset >= last_fetchable => {
+            response.leader_epoch = UNKNOWN_EPOCH;
+            (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
+        }
+        _ => (offset, timestamp),
+    };
     response.error_code = codes::NONE;
     response.offset = offset;
     response.timestamp = timestamp;
     response
 }
 
-/// The offset the `LATEST` sentinel reports for one partition.
+/// The offset the `LATEST` sentinel reports for one partition, before the
+/// fetchable bound is applied to it.
 ///
 /// A topic that delivers immediately answers the local log end offset. A topic
 /// that schedules delivery (KFC-1) answers its delivery watermark instead,
@@ -438,46 +533,23 @@ async fn resolve_partition(
 /// delivery between the config snapshot and the recompute, where the log end
 /// offset is again the right answer.
 ///
-/// A `read_committed` client (KIP-98) is fenced at the partition's last stable
-/// offset on top of whichever of those two bounds applies. Kafka's
-/// `Partition.fetchOffsetForTimestamp` answers LATEST with
-/// `UnifiedLog.lastStableOffset` for such a request. That value is the high
-/// watermark while no transaction is open, and
-/// `min(first offset of the oldest open transaction, high watermark)` while one
-/// is. Both halves of the minimum matter: the first pins the answer in front of
-/// a transaction that has not resolved, and the high watermark keeps the answer
-/// inside what the ISR has acknowledged. The same minimum is what a
-/// `read_committed` Fetch reports as its `last_stable_offset`, so a consumer
-/// that seeks to end and then fetches from there sees one consistent end of
-/// partition.
-///
-/// The delivery watermark of KFC-1 and the last stable offset are independent
-/// caps on the same answer, so a scheduled topic takes the lower of the two. On
-/// a topic that delivers immediately the first cap is the log end offset, which
-/// is at or above both halves of the minimum, and the expression collapses to
-/// the value Kafka returns.
-///
-/// The high watermark is read before the log mutex, and never under it, because
-/// it lives behind an async mutex of its own.
-async fn latest_offset(
+/// Kafka has no counterpart to this function: it answers LATEST with
+/// `lastFetchableOffset` outright. The delivery watermark is the one cap KFC-1
+/// adds, and [`resolve_partition`] takes the lower of the two, so on every
+/// topic that does not schedule delivery the answer is Kafka's.
+fn latest_offset(
     partition: &crate::partition::Partition,
     policy: DeliveryPolicy,
     local_end: i64,
-    read_committed: bool,
 ) -> i64 {
-    let latest = if policy == DeliveryPolicy::Scheduled {
+    if policy == DeliveryPolicy::Scheduled {
         partition
             .delivery
             .publish_now(&partition.log)
             .map_or(local_end, |delivery| delivery.watermark.0)
     } else {
         local_end
-    };
-    if !read_committed {
-        return latest;
     }
-    let high_watermark = partition.high_watermark().await.0;
-    latest.min(partition.lso().0.min(high_watermark))
 }
 
 fn leader_epoch_for_offset(partition: &crate::partition::Partition, offset: i64) -> i32 {
@@ -837,12 +909,13 @@ mod tests {
     }
 
     /// Kafka reads a `ListOffsets` request's `isolation_level` only when the
-    /// request came from a client, so the flag that fences LATEST at the last
-    /// stable offset has to read `replica_id` as well as `isolation_level`.
-    /// Every row here is one line of `ReplicaManager.fetchOffset`'s
-    /// `isolationLevelOpt`.
+    /// request came from a client, so choosing the bound that decides every
+    /// answer has to read `replica_id` as well as `isolation_level`. Every row
+    /// here is one line of `ReplicaManager.fetchOffset`'s `isolationLevelOpt`
+    /// paired with the arm of `Partition.fetchOffsetForTimestamp`'s
+    /// `isolationLevel match` it lands in.
     #[test]
-    fn only_a_read_committed_client_request_reads_the_last_stable_offset() {
+    fn the_bound_follows_the_replica_id_before_the_isolation_level() {
         let cases = [
             // The transactional consumer this whole path exists for. It is the
             // one shape that must stop in front of an open transaction.
@@ -850,24 +923,40 @@ mod tests {
                 "read_committed consumer",
                 CONSUMER_REPLICA_ID,
                 READ_COMMITTED,
-                true,
+                FetchBound::LastStable,
             ),
-            // The same client asking for everything. It keeps the unfenced
-            // answer, which is what a `read_uncommitted` seek to end means.
-            ("read_uncommitted consumer", CONSUMER_REPLICA_ID, 0, false),
+            // The same client asking for everything. It still cannot see past
+            // what the ISR acknowledged, which is the divergence this bound
+            // closed: the log end offset would have handed it records no
+            // fetch would serve.
+            (
+                "read_uncommitted consumer",
+                CONSUMER_REPLICA_ID,
+                0,
+                FetchBound::HighWatermark,
+            ),
             // A follower probing its leader. Kafka discards the byte for any
             // replica id, and it has to: a replica copies uncommitted records
-            // too, so fencing it would stall replication behind an open
+            // too, so bounding it would stall replication behind an open
             // transaction until that transaction resolved.
-            ("follower replica", 3, READ_COMMITTED, false),
+            ("follower replica", 3, READ_COMMITTED, FetchBound::LogEnd),
+            // The same follower with the byte it actually sends. `None` is
+            // chosen by the replica id alone, so the isolation level cannot
+            // reach the answer either way.
+            (
+                "follower replica, read_uncommitted",
+                3,
+                0,
+                FetchBound::LogEnd,
+            ),
             // `ListOffsetsRequest.DEBUGGING_REPLICA_ID`. It is not -1, so Kafka
             // files it with the replicas rather than with the clients even
             // though no follower sends it.
-            ("debugging replica", -2, READ_COMMITTED, false),
+            ("debugging replica", -2, READ_COMMITTED, FetchBound::LogEnd),
         ];
         for (label, replica_id, isolation_level, expected) in cases {
             check!(
-                read_committed_client(replica_id, isolation_level) == expected,
+                fetch_bound(replica_id, isolation_level) == expected,
                 "{label}"
             );
         }
@@ -1308,6 +1397,20 @@ mod tests {
                 broker_id: 1,
             })
             .expect("finish segment");
+
+        // The tier now describes offsets 0..6, so the partition committed them
+        // before they were uploaded: a segment is only ever copied out of a log
+        // that already acknowledged it. `ListOffsets` bounds a client's answer
+        // at the high watermark, and writing the segment straight into remote
+        // storage above skipped the produce path that would have advanced it.
+        broker_arc
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition")
+            .replica_state
+            .lock()
+            .await
+            .hw = krabka_log::Offset(6);
 
         assert!(
             list_one(&client, TOPIC, 1_500).await

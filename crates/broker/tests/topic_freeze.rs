@@ -71,6 +71,7 @@ use krabka_protocol::{
             AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
             IncrementalAlterConfigsRequest,
         },
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
@@ -1520,43 +1521,44 @@ async fn a_thaw_restores_writes() {
 
 // ── the transaction that was already in flight ──────────────────────────────
 
-/// The `read_committed` last stable offset of one partition.
+/// The `read_committed` end of one partition.
 ///
-/// It is read from a `read_committed` Fetch rather than from `ListOffsets`,
-/// because this broker's `ListOffsets` answers the high watermark whatever the
-/// request's `isolation_level` says. The Fetch response carries the last stable
-/// offset as its own field, so it reports the value an open transaction pins.
-async fn stable_offset(client: &Client, topic: &str, topic_id: WireUuid) -> i64 {
+/// This is `ListOffsets(LATEST)` at `isolation_level=1`, which is what a
+/// `read_committed` consumer calling `endOffsets` sends. The broker answers it
+/// with the partition's last stable offset, so an open transaction pins the
+/// value and a resolved one releases it -- which is the whole reading this
+/// suite takes.
+async fn stable_offset(client: &Client, topic: &str) -> i64 {
     let response = client
-        .send(FetchRequest {
-            max_wait_ms: 500,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
+        .send(ListOffsetsRequest {
+            // -1 is `CONSUMER_REPLICA_ID`; the isolation level is read only for
+            // a client, so a request that forgot it would be answered from the
+            // unbounded log end offset instead.
+            replica_id: -1,
             // 1 is `read_committed`, the isolation level an open transaction
             // holds back.
             isolation_level: 1,
-            topics: vec![FetchTopic {
-                topic: topic.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
+            topics: vec![ListOffsetsTopic {
+                name: topic.into(),
+                partitions: vec![ListOffsetsPartition {
+                    partition_index: 0,
+                    // -1 is `LATEST_TIMESTAMP`, the end of the partition.
+                    timestamp: -1,
                     ..Default::default()
                 }],
                 ..Default::default()
             }],
+            timeout_ms: 5_000,
             ..Default::default()
         })
         .await
-        .expect("Fetch");
-    assert!(response.error_code == codes::NONE, "Fetch: {response:?}");
-    let partition = &response.responses[0].partitions[0];
+        .expect("ListOffsets");
+    let partition = &response.topics[0].partitions[0];
     assert!(
         partition.error_code == codes::NONE,
-        "Fetch({topic}): {partition:?}"
+        "ListOffsets({topic}): {partition:?}"
     );
-    partition.last_stable_offset
+    partition.offset
 }
 
 /// A transaction that enlisted the partition before the freeze still commits,
@@ -1610,7 +1612,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
         .await;
     // The transaction is open, so `read_committed` cannot see past its first
     // record yet.
-    check!(stable_offset(&p.client, "orders", frozen).await == 0);
+    check!(stable_offset(&p.client, "orders").await == 0);
 
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
 
@@ -1631,7 +1633,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
     p.broker
         .wait_until_local_log_end_offset("orders", 0, 2)
         .await;
-    check!(stable_offset(&p.client, "orders", frozen).await == 2);
+    check!(stable_offset(&p.client, "orders").await == 2);
 
     check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
     producer.close().await.expect("producer close");

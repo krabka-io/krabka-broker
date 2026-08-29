@@ -1,4 +1,4 @@
-//! `ListOffsets(LATEST)` and the request's `isolation_level` (KIP-98), proved
+//! Every `ListOffsets` answer against the bound Kafka measures it by, proved
 //! over the wire against a live broker with a real transaction open.
 //!
 //! # Why this suite exists
@@ -22,6 +22,21 @@
 //! them only after the commit would pass against a broker that ignored
 //! `isolation_level` entirely, because a resolved transaction pins nothing --
 //! the disagreement while the transaction is open is the whole assertion.
+//!
+//! # One bound, three sentinels
+//!
+//! `Partition.fetchOffsetForTimestamp` picks `lastFetchableOffset` once per
+//! request -- the last stable offset for a `read_committed` client, the high
+//! watermark for a `read_uncommitted` one -- and then uses it twice over.
+//! LATEST *is* that offset. `MAX_TIMESTAMP` and a positive-timestamp lookup
+//! resolve against record data and are refused with `UNKNOWN_OFFSET` when the
+//! record they matched sits at or above it. The refusal carries no error code,
+//! which is what separates it from a partition that is unavailable.
+//!
+//! The cases below drive all three through one open transaction, because a
+//! bound that is right for LATEST and ignored by the other two would let a
+//! `read_committed` consumer read past its own end of partition simply by
+//! asking a different way.
 //!
 //! # Records precede the transaction
 //!
@@ -78,6 +93,32 @@ struct EndOfPartition {
     read_committed: ListOffsetsPartitionResponse,
 }
 
+/// The whole row a partition 0 answers with for a sentinel that matched a
+/// record: the offset it matched and that record's timestamp.
+fn matched_row(offset: i64, timestamp: i64) -> ListOffsetsPartitionResponse {
+    ListOffsetsPartitionResponse {
+        partition_index: 0,
+        error_code: codes::NONE,
+        timestamp,
+        offset,
+        leader_epoch: -1,
+        ..Default::default()
+    }
+}
+
+/// The whole row a partition 0 answers with when the record a sentinel matched
+/// sits at or above the request's bound.
+///
+/// `ReplicaManager.fetchOffset` builds this with
+/// `buildErrorResponse(Errors.NONE, partition)`, so the refusal reports *no
+/// error*: a client is told the partition has no answer for it, not that the
+/// partition is unavailable. Asserting the error code is `NONE` here is what
+/// keeps a future implementation from turning a fence into a retryable failure
+/// that would spin a consumer forever.
+fn refused_row() -> ListOffsetsPartitionResponse {
+    matched_row(-1, -1)
+}
+
 /// The whole `LATEST` row a healthy partition 0 answers with.
 ///
 /// `LATEST` matches no record, so the response echoes Kafka's
@@ -85,14 +126,7 @@ struct EndOfPartition {
 /// same sentinel. Spelling the full row out is what makes an isolation level
 /// that quietly changed the error code or the timestamp fail here too.
 fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
-    ListOffsetsPartitionResponse {
-        partition_index: 0,
-        error_code: codes::NONE,
-        timestamp: -1,
-        offset,
-        leader_epoch: -1,
-        ..Default::default()
-    }
+    matched_row(offset, -1)
 }
 
 async fn create_topic(client: &Client, name: &str) {
@@ -115,8 +149,14 @@ async fn create_topic(client: &Client, name: &str) {
     );
 }
 
-/// One `ListOffsets(LATEST)` for partition 0 of `topic` at `isolation_level`.
-async fn latest(client: &Client, topic: &str, isolation_level: i8) -> ListOffsetsPartitionResponse {
+/// One `ListOffsets` for partition 0 of `topic` at one sentinel and one
+/// isolation level.
+async fn list_offset(
+    client: &Client,
+    topic: &str,
+    timestamp: i64,
+    isolation_level: i8,
+) -> ListOffsetsPartitionResponse {
     let mut response = client
         .send(ListOffsetsRequest {
             replica_id: CONSUMER_REPLICA_ID,
@@ -125,7 +165,7 @@ async fn latest(client: &Client, topic: &str, isolation_level: i8) -> ListOffset
                 name: topic.into(),
                 partitions: vec![ListOffsetsPartition {
                     partition_index: 0,
-                    timestamp: LATEST_TIMESTAMP,
+                    timestamp,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -138,12 +178,17 @@ async fn latest(client: &Client, topic: &str, isolation_level: i8) -> ListOffset
     response.topics.remove(0).partitions.remove(0)
 }
 
+/// Ask one sentinel of `topic` at both isolation levels.
+async fn both_levels(client: &Client, topic: &str, timestamp: i64) -> EndOfPartition {
+    EndOfPartition {
+        read_uncommitted: list_offset(client, topic, timestamp, READ_UNCOMMITTED).await,
+        read_committed: list_offset(client, topic, timestamp, READ_COMMITTED).await,
+    }
+}
+
 /// Ask for the end of `topic` at both isolation levels.
 async fn end_of_partition(client: &Client, topic: &str) -> EndOfPartition {
-    EndOfPartition {
-        read_uncommitted: latest(client, topic, READ_UNCOMMITTED).await,
-        read_committed: latest(client, topic, READ_COMMITTED).await,
-    }
+    both_levels(client, topic, LATEST_TIMESTAMP).await
 }
 
 /// Wait until partition 0 of `topic` holds `offset` records and has committed
@@ -172,6 +217,24 @@ fn record(topic: &str, value: &'static str) -> ProducerRecord {
 async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {
     producer
         .send(record(topic, value))
+        .await
+        .await
+        .expect("producer delivery channel open")
+        .expect("produce acknowledged");
+}
+
+/// Produce one record carrying an explicit `timestamp_ms`.
+///
+/// The timestamp cases need to know what they are looking up, and a record left
+/// to the producer's wall clock cannot be named in an assertion. Fixed
+/// timestamps also keep the ordinary records far below the transactional ones,
+/// so a lookup can aim either side of the bound on purpose.
+async fn send_at(producer: &Producer, topic: &str, value: &'static str, timestamp_ms: i64) {
+    producer
+        .send(ProducerRecord {
+            timestamp_ms: Some(timestamp_ms),
+            ..record(topic, value)
+        })
         .await
         .await
         .expect("producer delivery channel open")
@@ -281,5 +344,204 @@ async fn read_committed_latest_stops_at_an_open_transaction() {
         plain.close().await.expect("plain producer close");
     }
 
+    p.broker.shutdown().await;
+}
+
+/// `LATEST` under `read_uncommitted` answers the high watermark, not the log
+/// end offset, so a consumer cannot seek past what the ISR acknowledged.
+///
+/// This is the older of the two divergences the bound closed, and the one with
+/// the wider reach: it applies to every consumer on every topic, transactions
+/// or not. A leader whose follower is behind holds records that are durable
+/// locally and that no `Fetch` will serve. Answering `LATEST` from the log end
+/// offset hands a plain `read_uncommitted` consumer a position inside that
+/// unreplicated tail, where it waits for records that may yet be truncated away
+/// by a leader election.
+///
+/// Both isolation levels are asked, because the last stable offset is capped at
+/// the high watermark too -- a `read_committed` client must not read past it
+/// either, and a bound that fenced only the transactional path would leave the
+/// larger hole open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
+    const TOPIC: &str = "list-offsets-isolation-unreplicated";
+
+    let p = support::start().await;
+    let producer = Producer::builder()
+        .bootstrap(p.broker.listen_addr().to_string())
+        .build()
+        .await
+        .expect("producer build");
+
+    create_topic(&p.client, TOPIC).await;
+    p.broker.wait_until_partition_present(TOPIC, 0).await;
+    for value in ["a", "b", "c", "d"] {
+        send_ok(&producer, TOPIC, value).await;
+    }
+    wait_for_settled_log(&p.broker, TOPIC, 4).await;
+
+    // The control. Every record is acknowledged, so the high watermark and the
+    // log end offset are the same number and no bound can be told from the
+    // other. Without this reading a broker that answered a constant 2 below
+    // would look correct.
+    check!(
+        end_of_partition(&p.client, TOPIC).await
+            == EndOfPartition {
+                read_uncommitted: latest_row(4),
+                read_committed: latest_row(4),
+            },
+        "a fully replicated partition ends at its log end offset"
+    );
+
+    // Now the last two records are unreplicated: durable on the leader, not yet
+    // acknowledged by the ISR, exactly as they are while a follower catches up.
+    check!(
+        p.broker.hold_high_watermark_for_test(TOPIC, 0, 2).await,
+        "the partition is hosted here"
+    );
+
+    check!(
+        end_of_partition(&p.client, TOPIC).await
+            == EndOfPartition {
+                read_uncommitted: latest_row(2),
+                read_committed: latest_row(2),
+            },
+        "neither isolation level may seek into the unreplicated tail"
+    );
+
+    producer.close().await.expect("producer close");
+    p.broker.shutdown().await;
+}
+
+/// An open transaction fences `MAX_TIMESTAMP` and a by-timestamp lookup for a
+/// `read_committed` client, while a `read_uncommitted` client still resolves
+/// them, and a lookup that lands below the bound is answered for both.
+///
+/// LATEST is not the only way to ask where a partition ends. A record written
+/// inside an open transaction has a timestamp like any other, so a
+/// `read_committed` consumer that asked `MAX_TIMESTAMP` -- or offered the
+/// transaction's own timestamp to `offsetsForTimes` -- would be handed the
+/// offset of a record it is not allowed to read, and would seek straight into
+/// the open transaction that LATEST was careful to keep it out of. Kafka
+/// refuses both with `UNKNOWN_OFFSET` and no error code.
+///
+/// The unfenced control matters as much as the fenced readings: a lookup
+/// matching one of the settled records must still be answered normally at both
+/// isolation levels. Without it, a broker that answered -1 to every timestamp
+/// request would pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {
+    const TOPIC: &str = "list-offsets-isolation-timestamps";
+    /// Request timestamp sentinel (-3, KIP-734) asking for the offset of the
+    /// record with the highest timestamp. Kafka's
+    /// `ListOffsetsRequest.MAX_TIMESTAMP`.
+    const MAX_TIMESTAMP: i64 = -3;
+    /// The two settled records' timestamps, far below the transactional ones.
+    const SETTLED: [i64; 2] = [1_000, 1_100];
+    /// The two transactional records' timestamps. The higher of them is the
+    /// partition's maximum while the transaction is open, which is what makes
+    /// `MAX_TIMESTAMP` land above the bound.
+    const IN_TXN: [i64; 2] = [5_000, 5_100];
+
+    let p = support::start().await;
+    let bootstrap = p.broker.listen_addr().to_string();
+
+    create_topic(&p.client, TOPIC).await;
+    p.broker.wait_until_partition_present(TOPIC, 0).await;
+
+    let plain = Producer::builder()
+        .bootstrap(bootstrap.clone())
+        .build()
+        .await
+        .expect("plain producer build");
+    send_at(&plain, TOPIC, "settled-a", SETTLED[0]).await;
+    send_at(&plain, TOPIC, "settled-b", SETTLED[1]).await;
+    wait_for_settled_log(&p.broker, TOPIC, 2).await;
+
+    let producer = Producer::builder()
+        .bootstrap(bootstrap.clone())
+        .transactional_id("list-offsets-isolation-timestamps-tid")
+        .build()
+        .await
+        .expect("transactional producer build");
+    producer
+        .init_transactions()
+        .await
+        .expect("init_transactions");
+    let txn = producer
+        .begin_transaction()
+        .await
+        .expect("begin_transaction");
+    send_at(&producer, TOPIC, "open-c", IN_TXN[0]).await;
+    send_at(&producer, TOPIC, "open-d", IN_TXN[1]).await;
+    wait_for_settled_log(&p.broker, TOPIC, 4).await;
+
+    // The highest timestamp on the partition belongs to the last transactional
+    // record, at offset 3. The `read_committed` bound is offset 2, so 3 is out
+    // of reach and the answer is refused; `read_uncommitted` is bounded at the
+    // high watermark, 4, and gets the record.
+    check!(
+        both_levels(&p.client, TOPIC, MAX_TIMESTAMP).await
+            == EndOfPartition {
+                read_uncommitted: matched_row(3, IN_TXN[1]),
+                read_committed: refused_row(),
+            },
+        "MAX_TIMESTAMP inside an open transaction is refused to read_committed"
+    );
+
+    // The same shape by timestamp. The transaction's first record is the
+    // earliest at or after its own timestamp, and it sits exactly *on* the
+    // bound -- Kafka's test is `offset >= lastFetchableOffset`, so the bound
+    // itself is already out of reach.
+    check!(
+        both_levels(&p.client, TOPIC, IN_TXN[0]).await
+            == EndOfPartition {
+                read_uncommitted: matched_row(2, IN_TXN[0]),
+                read_committed: refused_row(),
+            },
+        "a lookup landing on the bound is refused to read_committed"
+    );
+
+    // The control: a timestamp matching a settled record is below the bound at
+    // both isolation levels, so both are answered normally. A broker that
+    // refused every timestamp request would fail here.
+    check!(
+        both_levels(&p.client, TOPIC, SETTLED[0]).await
+            == EndOfPartition {
+                read_uncommitted: matched_row(0, SETTLED[0]),
+                read_committed: matched_row(0, SETTLED[0]),
+            },
+        "a lookup below the bound is answered to both isolation levels"
+    );
+
+    txn.commit().await.expect("commit");
+    wait_for_settled_log(&p.broker, TOPIC, 5).await;
+
+    // The commit marker releases the last stable offset to 5, so the bound is
+    // the same for both isolation levels and every sentinel answers alike. The
+    // rows are compared to each other rather than to a literal because the
+    // marker carries a wall-clock timestamp, which makes it the partition's
+    // maximum and unnameable here.
+    for (label, timestamp) in [
+        ("MAX_TIMESTAMP", MAX_TIMESTAMP),
+        ("the transaction's own timestamp", IN_TXN[0]),
+        ("a settled record's timestamp", SETTLED[0]),
+    ] {
+        let answers = both_levels(&p.client, TOPIC, timestamp).await;
+        check!(
+            answers.read_committed == answers.read_uncommitted,
+            "{label}: a resolved transaction leaves one answer"
+        );
+        check!(
+            answers.read_committed != refused_row(),
+            "{label}: and it is a real answer rather than a refusal"
+        );
+    }
+
+    producer
+        .close()
+        .await
+        .expect("transactional producer close");
+    plain.close().await.expect("plain producer close");
     p.broker.shutdown().await;
 }
