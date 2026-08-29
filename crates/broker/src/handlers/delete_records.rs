@@ -6,25 +6,64 @@
 //!
 //! KFC-1 adds one bound: on a topic that schedules delivery, the trim stops at
 //! the partition's delivery watermark. See [`delivery_capped`].
+//!
+//! # KFC-9: trimming a partition needs two people
+//!
+//! A trim destroys committed records, so it is one of the transitions the
+//! break-glass two-person rule gates. KIP-107 defines the request and it gains
+//! no field for this: an operator gets an approval out of band through
+//! `krabka-guard`, targeted at `"<topic>-<partition>"` or at the bare topic
+//! name, and then runs `kafka-delete-records`.
+//!
+//! # KFC-9: a frozen partition is never trimmed
+//!
+//! A write freeze refuses every operation that removes data from the topic it
+//! covers, so a frozen partition answers `POLICY_VIOLATION (44)` here whatever
+//! the caller holds. The check runs ahead of the two-person rule, because an
+//! approval to trim does not defeat a freeze and a refusal must not spend one.
+//!
+//! A refused partition answers `POLICY_VIOLATION (44)` on its own row. No
+//! version of the `DeleteRecords` response carries an `error_message`, so the
+//! refusal text reaches the operator through the audit log and the broker's own
+//! log rather than the wire.
+//!
+//! This trim writes no metadata record, so there is nothing for the consumed
+//! proposal to ride beside. The broker appends the consume on its own and only
+//! then trims. Consume-then-transition is the safe order of the two: a crash
+//! between them loses the approval, where the reverse order would leave an
+//! approval that a second trim could spend again. The gate is active only when
+//! `[break_glass]` names an approver set.
+
+use std::collections::HashSet;
 
 use bytes::Bytes;
+use krabka_audit::PrivilegedPhase;
 use krabka_log::Offset;
-use krabka_metadata::AclOperation;
+use krabka_metadata::{AclOperation, BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::{
     Decode,
     owned::{
-        delete_records_request::DeleteRecordsRequest,
+        delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest},
         delete_records_response::{
             DeleteRecordsPartitionResult, DeleteRecordsResponse, DeleteRecordsTopicResult,
         },
     },
 };
+use uuid::Uuid;
 
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
+    break_glass::{
+        gate::{self, BreakGlassDenial},
+        handlers::audit::{GatedTransition, audit_transition},
+        metrics as break_glass_metrics,
+    },
     broker::Broker,
     codes,
+    config::BreakGlassConfig,
     error::BrokerError,
+    handlers::RequestContext,
+    time_util::now_ms,
 };
 
 fn denied_topic_names(
@@ -114,13 +153,12 @@ pub(crate) async fn handle(
     version: i16,
     _correlation_id: i32,
     req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let req = DeleteRecordsRequest::decode(&mut cur, version)?;
 
     let partitions = broker.partitions.clone();
-    let node_id = broker.config.node_id;
 
     let image = broker.controller.current_image();
 
@@ -139,6 +177,15 @@ pub(crate) async fn handle(
     );
     let denied_topics = denied_topic_names(&acl_results);
 
+    let env = TrimEnv {
+        broker,
+        image: &image,
+        ctx,
+        partitions: &partitions,
+    };
+    // KFC-9: the proposals this request already spent. One proposal on a bare
+    // topic name covers every partition of it, and it is spent once.
+    let mut spent: HashSet<Uuid> = HashSet::new();
     let mut topic_results: Vec<DeleteRecordsTopicResult> = Vec::with_capacity(req.topics.len());
 
     for topic in req.topics {
@@ -159,79 +206,7 @@ pub(crate) async fn handle(
             Vec::with_capacity(topic.partitions.len());
 
         for fp in topic.partitions {
-            let part_opt =
-                partitions.get(&topic.name, krabka_ids::PartitionIndex(fp.partition_index));
-            let Some(part) = part_opt else {
-                part_results.push(error_partition_result(
-                    fp.partition_index,
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                ));
-                continue;
-            };
-
-            let cur_leader = part
-                .current_leader
-                .load(std::sync::atomic::Ordering::Acquire);
-            if cur_leader != node_id {
-                part_results.push(error_partition_result(
-                    fp.partition_index,
-                    codes::NOT_LEADER_OR_FOLLOWER,
-                ));
-                continue;
-            }
-
-            // Translate offset == -1 → high_watermark per Kafka semantics.
-            let leo = part.log_end_offset();
-            let hw = part.high_watermark().await;
-            // `hw`/`leo` are `Offset`; the boundary helpers work in raw
-            // `i64`, so unwrap at the seam and re-wrap `requested` for the
-            // `Offset`-typed `trim_to_offset` call below.
-            let requested = Offset(target_offset(fp.offset, hw.0));
-
-            // The range check reads the offset the admin asked for. A target
-            // above the log end is still out of range, and the KFC-1 cap
-            // below must not turn that mistake into a silent partial trim.
-            if offset_out_of_range(requested.0, leo.0) {
-                part_results.push(error_partition_result(
-                    fp.partition_index,
-                    codes::OFFSET_OUT_OF_RANGE,
-                ));
-                continue;
-            }
-
-            // KFC-1: hold the trim at the delivery watermark. The recompute
-            // runs under the log mutex against the partition's own clock, so
-            // it agrees with the cap a fetch at this instant would apply,
-            // rather than with whatever the last scheduler sweep published.
-            // It answers `None` on a topic that delivers immediately, where
-            // the target stands.
-            let target = delivery_capped(
-                requested,
-                part.delivery
-                    .publish_now(&part.log)
-                    .map(|delivery| delivery.watermark),
-            );
-
-            match part.trim_to_offset(target).await {
-                Ok(new_start) => {
-                    // Unwrap the `Offset` into the wire `i64` `low_watermark`.
-                    part_results.push(partition_result(
-                        fp.partition_index,
-                        new_start.0,
-                        codes::NONE,
-                    ));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        topic = %topic.name, partition = fp.partition_index, error = %e,
-                        "DeleteRecords: trim_to_offset failed"
-                    );
-                    part_results.push(error_partition_result(
-                        fp.partition_index,
-                        codes::UNKNOWN_SERVER_ERROR,
-                    ));
-                }
-            }
+            part_results.push(trim_one(&env, &mut spent, &topic.name, &fp).await);
         }
 
         topic_results.push(topic_result(topic.name, part_results));
@@ -239,6 +214,246 @@ pub(crate) async fn handle(
 
     let resp = delete_records_response(topic_results);
     crate::handlers::encode_response(&resp, version)
+}
+
+/// Everything one partition's trim reads, and nothing it writes.
+struct TrimEnv<'a> {
+    broker: &'a Broker,
+    image: &'a MetadataImage,
+    ctx: &'a RequestContext<'a>,
+    partitions: &'a crate::partition_registry::PartitionRegistry,
+}
+
+/// Trim one partition, and answer the row the response carries for it.
+///
+/// `spent` carries the proposals this request already consumed, so one approval
+/// that covers a whole topic is spent once however many partitions the request
+/// names.
+async fn trim_one(
+    env: &TrimEnv<'_>,
+    spent: &mut HashSet<Uuid>,
+    topic: &str,
+    fp: &DeleteRecordsPartition,
+) -> DeleteRecordsPartitionResult {
+    let index = fp.partition_index;
+    let part_opt = env.partitions.get(topic, krabka_ids::PartitionIndex(index));
+    let Some(part) = part_opt else {
+        return error_partition_result(index, codes::UNKNOWN_TOPIC_OR_PARTITION);
+    };
+
+    let cur_leader = part
+        .current_leader
+        .load(std::sync::atomic::Ordering::Acquire);
+    if cur_leader != env.broker.config.node_id {
+        return error_partition_result(index, codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // KFC-9: a write freeze refuses every operation that removes data from the
+    // topic it covers, and it answers ahead of the two-person rule. That order
+    // is the rule: a break-glass approval to trim does not defeat a freeze, and
+    // a trim the freeze refuses must not spend an approval on its way to being
+    // refused.
+    //
+    // No version of the `DeleteRecords` response carries an `error_message`, so
+    // the reason reaches the operator through the broker's log alone. Like the
+    // produce gate, this refusal emits no privileged-action audit event: a
+    // freeze is not a break-glass act, and the registry entry that caused it is
+    // already in the metadata log.
+    if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(env.image, topic) {
+        tracing::warn!(
+            %topic,
+            partition = index,
+            refusal = %verdict.removal_message(),
+            "DeleteRecords refused by a freeze"
+        );
+        return error_partition_result(index, codes::POLICY_VIOLATION);
+    }
+
+    // KFC-9: the two-person rule answers here, before the broker reads a single
+    // offset. The approval is not spent yet: a request that then fails its
+    // range check leaves the proposal usable, so an operator does not have to
+    // gather two signatures again over a typo.
+    let consumed = match authorize_trim(env.image, &env.broker.config.break_glass, topic, index) {
+        Ok(consumed) => consumed,
+        Err(denial) => return refuse_trim(env, topic, index, &denial),
+    };
+
+    // Translate offset == -1 → high_watermark per Kafka semantics.
+    let leo = part.log_end_offset();
+    let hw = part.high_watermark().await;
+    // `hw`/`leo` are `Offset`; the boundary helpers work in raw `i64`, so
+    // unwrap at the seam and re-wrap `requested` for the `Offset`-typed
+    // `trim_to_offset` call below.
+    let requested = Offset(target_offset(fp.offset, hw.0));
+
+    // The range check reads the offset the admin asked for. A target above the
+    // log end is still out of range, and the KFC-1 cap below must not turn that
+    // mistake into a silent partial trim.
+    if offset_out_of_range(requested.0, leo.0) {
+        return error_partition_result(index, codes::OFFSET_OUT_OF_RANGE);
+    }
+
+    // KFC-1: hold the trim at the delivery watermark. The recompute runs under
+    // the log mutex against the partition's own clock, so it agrees with the
+    // cap a fetch at this instant would apply, rather than with whatever the
+    // last scheduler sweep published. It answers `None` on a topic that
+    // delivers immediately, where the target stands.
+    let target = delivery_capped(
+        requested,
+        part.delivery
+            .publish_now(&part.log)
+            .map(|delivery| delivery.watermark),
+    );
+
+    // KFC-9: spend the approval before the trim removes anything.
+    let proposal_id = match spend_approval(env.broker, spent, consumed).await {
+        Ok(proposal_id) => proposal_id,
+        Err(error) => {
+            tracing::warn!(
+                %topic, partition = index, %error,
+                "DeleteRecords could not spend the break-glass approval"
+            );
+            return error_partition_result(index, codes::COORDINATOR_NOT_AVAILABLE);
+        }
+    };
+
+    match part.trim_to_offset(target).await {
+        Ok(new_start) => {
+            audit_transition(
+                &env.broker.audit_log,
+                &env.broker.config.break_glass,
+                env.ctx,
+                &GatedTransition {
+                    action: BreakGlassAction::DeleteRecords,
+                    target: &trim_target(topic, index),
+                    phase: PrivilegedPhase::Applied,
+                    proposal_id,
+                    reason: "records deleted below the trim point",
+                },
+            );
+            // Unwrap the `Offset` into the wire `i64` `low_watermark`.
+            partition_result(index, new_start.0, codes::NONE)
+        }
+        Err(e) => {
+            tracing::warn!(
+                %topic, partition = index, error = %e,
+                "DeleteRecords: trim_to_offset failed"
+            );
+            error_partition_result(index, codes::UNKNOWN_SERVER_ERROR)
+        }
+    }
+}
+
+/// KFC-9: find the approved proposal that authorizes a trim of one partition,
+/// and stamp it consumed.
+///
+/// `Ok(None)` is a broker that gates nothing, where `[break_glass]` names no
+/// approver. A trim then behaves as it does on a cluster with no such section.
+fn authorize_trim(
+    image: &MetadataImage,
+    config: &BreakGlassConfig,
+    topic: &str,
+    partition: i32,
+) -> Result<Option<MetadataRecord>, BreakGlassDenial> {
+    if !gate::is_gated(config) {
+        return Ok(None);
+    }
+    gate::authorize(
+        image,
+        config,
+        BreakGlassAction::DeleteRecords,
+        &trim_target(topic, partition),
+        now_ms(),
+    )
+    .map(Some)
+}
+
+/// The records that spending this approval appends, and the proposal they name.
+///
+/// A trim writes no metadata record, so the append carries the consume alone.
+/// The record list is empty when there is nothing to append: the broker gates
+/// nothing, or this request already spent the proposal on another partition
+/// that one topic-wide approval covers.
+fn consume_records(
+    spent: &mut HashSet<Uuid>,
+    consumed: Option<MetadataRecord>,
+) -> (Option<Uuid>, Vec<MetadataRecord>) {
+    let Some(consumed) = consumed else {
+        return (None, Vec::new());
+    };
+    let Some(proposal_id) = consumed_proposal_id(&consumed) else {
+        return (None, Vec::new());
+    };
+    if spent.insert(proposal_id) {
+        (Some(proposal_id), vec![consumed])
+    } else {
+        (Some(proposal_id), Vec::new())
+    }
+}
+
+/// Append the consumed proposal, and answer the proposal it names.
+///
+/// # Errors
+///
+/// Returns the submit failure when the quorum did not take the consume. No trim
+/// runs in that case, so the approval stays unspent.
+async fn spend_approval(
+    broker: &Broker,
+    spent: &mut HashSet<Uuid>,
+    consumed: Option<MetadataRecord>,
+) -> Result<Option<Uuid>, krabka_raft::RaftError> {
+    let (proposal_id, records) = consume_records(spent, consumed);
+    if !records.is_empty() {
+        broker.controller.submit_change(records).await?;
+    }
+    Ok(proposal_id)
+}
+
+/// Refuse one partition: count it, audit it, and build its error row.
+///
+/// The row carries the code alone, because no `DeleteRecords` response version
+/// has an `error_message` field to put the reason in.
+fn refuse_trim(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    partition: i32,
+    denial: &BreakGlassDenial,
+) -> DeleteRecordsPartitionResult {
+    let message = denial.to_string();
+    tracing::warn!(%topic, partition, refusal = %message, "DeleteRecords refused");
+    break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
+    audit_transition(
+        &env.broker.audit_log,
+        &env.broker.config.break_glass,
+        env.ctx,
+        &GatedTransition {
+            action: BreakGlassAction::DeleteRecords,
+            target: &trim_target(topic, partition),
+            phase: PrivilegedPhase::Refused,
+            proposal_id: denial.proposal_id(),
+            reason: &message,
+        },
+    );
+    error_partition_result(partition, codes::POLICY_VIOLATION)
+}
+
+/// The break-glass target of one partition.
+///
+/// A proposal on the bare topic name covers every partition of it, which
+/// `gate::authorize` resolves from this spelling.
+fn trim_target(topic: &str, partition: i32) -> String {
+    format!("{topic}-{partition}")
+}
+
+/// The proposal that a consumed record names.
+///
+/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
+/// arm costs one match rather than a panic.
+fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
+    match record {
+        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -585,6 +800,147 @@ mod tests {
             check!(resp == expected, "{topic}");
         }
 
+        broker_handle.shutdown().await;
+    }
+
+    // ── KFC-9: the break-glass gate over a trim ─────────────────────────
+
+    const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+    const NOW_MS: i64 = 60_000;
+
+    fn gated_config() -> BreakGlassConfig {
+        BreakGlassConfig {
+            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
+            ..BreakGlassConfig::default()
+        }
+    }
+
+    /// A proposal that two people approved, and that has not expired against
+    /// the wall clock the gate reads.
+    fn approved_proposal(target: &str) -> krabka_metadata::BreakGlassProposalRecord {
+        let now = now_ms();
+        krabka_metadata::BreakGlassProposalRecord {
+            proposal_id: PROPOSAL,
+            action: BreakGlassAction::DeleteRecords,
+            target: target.to_owned(),
+            proposer: "User:carol".to_owned(),
+            reason: "the tail is poison".to_owned(),
+            created_at_ms: now - 1_000,
+            expires_at_ms: now + 600_000,
+            approvals: vec![
+                crate::break_glass::gate::tests::approval("User:alice"),
+                crate::break_glass::gate::tests::approval("User:bob"),
+            ],
+            consumed_at_ms: 0,
+            withdrawn: false,
+        }
+    }
+
+    fn image_of(proposals: &[krabka_metadata::BreakGlassProposalRecord]) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::nil());
+        for proposal in proposals {
+            image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
+        }
+        image
+    }
+
+    #[test]
+    fn the_trim_gate_answers_from_the_proposal_registry() {
+        let cases: [(&'static str, MetadataImage, BreakGlassConfig, bool); 5] = [
+            (
+                "an approved proposal on the partition",
+                image_of(&[approved_proposal("orders-3")]),
+                gated_config(),
+                true,
+            ),
+            (
+                "an approved proposal on the whole topic",
+                image_of(&[approved_proposal("orders")]),
+                gated_config(),
+                true,
+            ),
+            (
+                "a proposal for another partition",
+                image_of(&[approved_proposal("orders-4")]),
+                gated_config(),
+                false,
+            ),
+            ("no proposal at all", image_of(&[]), gated_config(), false),
+            (
+                "no approver set, so nothing is gated",
+                image_of(&[]),
+                BreakGlassConfig::default(),
+                true,
+            ),
+        ];
+        for (label, image, config, expected) in cases {
+            let authorized = authorize_trim(&image, &config, "orders", 3).is_ok();
+            check!(authorized == expected, "case {label}");
+        }
+    }
+
+    #[test]
+    fn a_refused_trim_names_the_partition_it_refused() {
+        let denial = authorize_trim(&image_of(&[]), &gated_config(), "orders", 3)
+            .expect_err("no proposal covers orders-3");
+
+        check!(denial.action == BreakGlassAction::DeleteRecords);
+        check!(denial.target == "orders-3");
+    }
+
+    #[test]
+    fn the_append_carries_the_consume_alone_and_spends_it_once() {
+        let consumed =
+            MetadataRecord::V1BreakGlassProposal(krabka_metadata::BreakGlassProposalRecord {
+                consumed_at_ms: NOW_MS,
+                ..approved_proposal("orders")
+            });
+        let mut spent = HashSet::new();
+
+        let first = consume_records(&mut spent, Some(consumed.clone()));
+        let second = consume_records(&mut spent, Some(consumed.clone()));
+        let ungated = consume_records(&mut spent, None);
+
+        // A trim writes no metadata record, so the consume is the whole append.
+        assert!(first == (Some(PROPOSAL), vec![consumed]));
+        assert!(second == (Some(PROPOSAL), vec![]));
+        assert!(ungated == (None, vec![]));
+    }
+
+    #[tokio::test]
+    async fn a_refused_trim_deletes_nothing() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.break_glass = gated_config();
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&principal, &peer);
+        topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
+        let part = broker
+            .partitions
+            .get("orders", krabka_ids::PartitionIndex(0))
+            .expect("the partition is local");
+        let before = part.log_start_offset();
+
+        let resp = drive(&broker, &request("orders", &[(0, -1)]), &principal, &peer).await;
+
+        let expected = vec![DeleteRecordsTopicResult {
+            name: "orders".to_owned(),
+            partitions: vec![DeleteRecordsPartitionResult {
+                partition_index: 0,
+                low_watermark: -1,
+                error_code: codes::POLICY_VIOLATION,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }];
+        assert!(resp.topics == expected, "{resp:?}");
+        // The refusal refused: the log start offset did not move.
+        check!(part.log_start_offset() == before);
         broker_handle.shutdown().await;
     }
 }

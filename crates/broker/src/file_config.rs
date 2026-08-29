@@ -16,7 +16,10 @@ use krabka_units::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::ListenerSpec;
+use crate::{
+    config::{BackgroundUncleanRecovery, ListenerSpec},
+    operator_keys::{OperatorKeyEntry, OperatorKeys},
+};
 
 /// Failures surfaced by [`FileConfig::apply_to`]. Each variant
 /// corresponds to a specific misconfiguration the broker can diagnose
@@ -42,6 +45,18 @@ pub enum FileConfigError {
     /// binary entry point can log a single string.
     #[error("schema registry configuration error: {0}")]
     SchemaRegistryConfig(String),
+    /// The `[[operator_keys]]` trust set could not be loaded, or a section
+    /// demands a signature it has no key to verify. The payload is the
+    /// underlying [`OperatorKeyError`][crate::operator_keys::OperatorKeyError]
+    /// message, or a description of the cross-section rule that failed —
+    /// formatted here rather than at the call site so the binary entry point
+    /// can log a single string.
+    ///
+    /// Every case is a startup error, never a downgrade to unsigned
+    /// operation: a broker that quietly stopped checking signatures is the
+    /// failure this variant exists to prevent.
+    #[error("operator key configuration error: {0}")]
+    OperatorKeys(String),
     /// A TOML section's contents conflict in a way only the apply step
     /// can diagnose — e.g. `[remote_storage]` carrying both `storage_dir`
     /// (local backend) and `[remote_storage.s3]` (object-store backend).
@@ -213,6 +228,24 @@ pub struct FileConfig {
     /// supplies the schemas for KFC-7 broker-side validation. `None` means no
     /// topic can turn schema validation on.
     pub schema_registry: Option<FileSchemaRegistryConfig>,
+
+    /// `[[operator_keys]]` — the shared operator key trust set.
+    ///
+    /// Top-level rather than nested under `[break_glass]`, because two
+    /// subsystems verify against it: a freeze record's detached signature and
+    /// a break-glass approval's. One provisioning step covers both. Empty is
+    /// the default and means no operator key is configured.
+    #[serde(default)]
+    pub operator_keys: Vec<FileOperatorKey>,
+
+    /// `[freeze]` section — the topic write-freeze registry's bounds and its
+    /// signature requirement. Absent leaves the `BrokerConfig` defaults.
+    pub freeze: Option<FileFreezeConfig>,
+
+    /// `[break_glass]` section — the two-person rule over the privileged
+    /// transitions. Absent leaves the `BrokerConfig` defaults, which run no
+    /// break-glass workflow.
+    pub break_glass: Option<FileBreakGlassConfig>,
 }
 
 /// Validated operational policy loaded from `[runtime]`.
@@ -960,6 +993,102 @@ fn default_schema_registry_maximum_cache_size() -> usize {
 
 fn default_schema_registry_expire_after_ms() -> i64 {
     DEFAULT_SCHEMA_REGISTRY_EXPIRE_AFTER_MS
+}
+
+/// TOML shape of one `[[operator_keys]]` entry. Maps to
+/// [`crate::operator_keys::OperatorKeyEntry`].
+///
+/// `deny_unknown_fields` so a misspelled key is rejected at parse time. An
+/// ignored `principal` typo would leave a key bound to nobody, and the
+/// principal binding is what stops one operator's key signing in another
+/// operator's name.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FileOperatorKey {
+    /// Stable identifier that a signed freeze record or break-glass approval
+    /// names. Must be unique across the array.
+    pub key_id: String,
+    /// The principal this key speaks for, e.g. `"User:alice"`. Must be unique
+    /// across the array. The broker refuses a signed record whose claimed
+    /// author is not this principal.
+    pub principal: String,
+    /// Path to the raw 32-byte Ed25519 public key, the bytes an
+    /// [`krabka_audit::FileEd25519Signer`] reports as its public key. It is
+    /// read at startup, so a bad path stops the broker at boot and not in the
+    /// middle of an incident.
+    pub public_key_path: String,
+}
+
+impl From<&FileOperatorKey> for OperatorKeyEntry {
+    fn from(file: &FileOperatorKey) -> Self {
+        Self {
+            key_id: file.key_id.clone(),
+            principal: file.principal.clone(),
+            public_key_path: std::path::PathBuf::from(&file.public_key_path),
+        }
+    }
+}
+
+/// TOML shape of `[freeze]`. Maps to [`crate::config::FreezeConfig`].
+///
+/// Every field is `Option`: a present value replaces the current broker value,
+/// an absent one retains it. `deny_unknown_fields` so a misspelled
+/// `require_signature` is rejected at parse time rather than leaving the
+/// broker on the opposite policy to the one the operator wrote.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FileFreezeConfig {
+    /// Ceiling on live freeze registry entries. Default
+    /// [`crate::config::DEFAULT_FREEZE_MAX_ENTRIES`]. Must be at least 1.
+    pub max_entries: Option<usize>,
+    /// **Security-sensitive.** Demand a detached operator signature on a
+    /// freeze as well as on a thaw. Default `false`, which keeps a freeze
+    /// available in one command during an incident on a cluster with no key
+    /// material yet. A thaw is signed either way.
+    ///
+    /// Setting this to `true` with no `[[operator_keys]]` entry is a startup
+    /// error: there would be no key to verify the demanded signature against.
+    pub require_signature: Option<bool>,
+    /// How far a signed freeze record's timestamp may sit from the
+    /// controller's clock. Default
+    /// [`crate::config::DEFAULT_FREEZE_SIGNATURE_MAX_SKEW`].
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub signature_max_skew: Option<Time>,
+}
+
+/// TOML shape of `[break_glass]`. Maps to
+/// [`crate::config::BreakGlassConfig`].
+///
+/// Every field is `Option`, so `approvers = []` and `signed_actions = []` are
+/// each a written choice and are distinct from omitting the key.
+/// `deny_unknown_fields` so a misspelled key is rejected at parse time.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FileBreakGlassConfig {
+    /// Principals that may approve a proposal. Omitted leaves the
+    /// `BrokerConfig` value, which is empty.
+    pub approvers: Option<Vec<String>>,
+    /// Distinct approving principals a proposal needs. Default
+    /// [`crate::config::DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS`]. Values below
+    /// [`crate::config::MIN_BREAK_GLASS_REQUIRED_APPROVALS`] are a startup
+    /// error: a two-person rule with one approval is one person.
+    pub required_approvals: Option<usize>,
+    /// How long a proposal stays usable. Default
+    /// [`crate::config::DEFAULT_BREAK_GLASS_PROPOSAL_TTL`].
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub proposal_ttl: Option<Time>,
+    /// Actions whose approvals must also carry a detached operator signature.
+    /// Omitted inside a present `[break_glass]` section selects
+    /// [`crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS`], the irreversible
+    /// set. Naming any action with no `[[operator_keys]]` entry is a startup
+    /// error; write `signed_actions = []` to demand no signature.
+    pub signed_actions: Option<Vec<String>>,
+    /// What the background unclean-recovery path does, where there is no
+    /// caller to ask for an approval. Default
+    /// [`BackgroundUncleanRecovery::AuditOnly`].
+    pub background_unclean_recovery: Option<BackgroundUncleanRecovery>,
 }
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
@@ -2011,6 +2140,114 @@ fn apply_config_tail(
 
 fn invalid_runtime_value(name: &str, error: impl std::fmt::Display) -> FileConfigError {
     FileConfigError::InvalidConfig(format!("{name}: {error}"))
+}
+
+/// Every break-glass action name, comma separated, for an error message.
+///
+/// An operator who misspells one needs the list in front of them, because the
+/// names are not the wire spellings and not the CLI subcommands.
+fn known_break_glass_action_names() -> String {
+    crate::break_glass::ALL_ACTIONS
+        .into_iter()
+        .map(crate::break_glass::action_name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Apply `[[operator_keys]]`, `[freeze]` and `[break_glass]`, then check the
+/// two rules that cross those sections.
+///
+/// Both cross-section rules are startup errors. A broker that boots with a
+/// demanded signature and no key to verify it against refuses every such
+/// request at run time, with nothing said at boot to explain why.
+fn apply_privileged_action_policy(
+    operator_keys: &[FileOperatorKey],
+    freeze: Option<FileFreezeConfig>,
+    break_glass: Option<FileBreakGlassConfig>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    if !operator_keys.is_empty() {
+        let entries: Vec<OperatorKeyEntry> =
+            operator_keys.iter().map(OperatorKeyEntry::from).collect();
+        cfg.operator_keys = OperatorKeys::load(&entries)
+            .map_err(|error| FileConfigError::OperatorKeys(error.to_string()))?;
+    }
+
+    if let Some(freeze) = freeze {
+        if let Some(max_entries) = freeze.max_entries {
+            if max_entries == 0 {
+                return Err(invalid_runtime_value(
+                    "freeze.max_entries",
+                    "must be at least 1; a registry that holds nothing can never freeze a topic",
+                ));
+            }
+            cfg.freeze.max_entries = max_entries;
+        }
+        if let Some(require_signature) = freeze.require_signature {
+            cfg.freeze.require_signature = require_signature;
+        }
+        if let Some(skew) = freeze.signature_max_skew {
+            cfg.freeze.signature_max_skew = positive_time("freeze.signature_max_skew", skew)?;
+        }
+    }
+
+    if let Some(break_glass) = break_glass {
+        if let Some(approvers) = break_glass.approvers {
+            cfg.break_glass.approvers = approvers;
+        }
+        if let Some(required) = break_glass.required_approvals {
+            if required < crate::config::MIN_BREAK_GLASS_REQUIRED_APPROVALS {
+                return Err(invalid_runtime_value(
+                    "break_glass.required_approvals",
+                    "must be at least 2; a two-person rule with one approval is one person",
+                ));
+            }
+            cfg.break_glass.required_approvals = required;
+        }
+        if let Some(ttl) = break_glass.proposal_ttl {
+            cfg.break_glass.proposal_ttl = positive_time("break_glass.proposal_ttl", ttl)?;
+        }
+        cfg.break_glass.signed_actions = break_glass.signed_actions.unwrap_or_else(|| {
+            crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS
+                .iter()
+                .map(|action| (*action).to_owned())
+                .collect()
+        });
+        for action in &cfg.break_glass.signed_actions {
+            if crate::break_glass::action_from_name(action).is_none() {
+                return Err(invalid_runtime_value(
+                    "break_glass.signed_actions",
+                    format!(
+                        "{action:?} names no break-glass action. A name that matches no action \
+                         demands a signature for nothing, so the action the name was meant to \
+                         protect would be approved unsigned. The names are: {}",
+                        known_break_glass_action_names()
+                    ),
+                ));
+            }
+        }
+        if let Some(mode) = break_glass.background_unclean_recovery {
+            cfg.break_glass.background_unclean_recovery = mode;
+        }
+    }
+
+    if cfg.operator_keys.is_empty() {
+        if let Some(action) = cfg.break_glass.signed_actions.first() {
+            return Err(FileConfigError::OperatorKeys(format!(
+                "break_glass.signed_actions names {action:?} but no [[operator_keys]] entry is \
+                 configured; every approval of that action would be refused. Provision an \
+                 operator key, or write `signed_actions = []`"
+            )));
+        }
+        if cfg.freeze.require_signature {
+            return Err(FileConfigError::OperatorKeys(
+                "freeze.require_signature is true but no [[operator_keys]] entry is configured; \
+                 every freeze and every thaw would be refused"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn positive_u64(name: &str, value: u64) -> Result<u64, FileConfigError> {
@@ -3136,6 +3373,9 @@ impl FileConfig {
     // * [`FileConfigError::SchemaRegistryConfig`] when
     //   [`crate::schema_validation::SchemaValidator::new`] rejects the resolved
     //   `[schema_registry]` knobs (zero cache size).
+    // * [`FileConfigError::OperatorKeys`] when an `[[operator_keys]]` entry is
+    //   unloadable, or when `[freeze]` / `[break_glass]` demands a signature
+    //   that no configured key can verify.
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn apply_to(self, cfg: &mut crate::config::BrokerConfig) -> Result<(), FileConfigError> {
@@ -3280,6 +3520,11 @@ impl FileConfig {
             },
             cfg,
         )?;
+
+        // `[[operator_keys]]`, `[freeze]` and `[break_glass]`: one trust set
+        // shared by the freeze signature path and the break-glass approval
+        // path, plus the two rules that cross those sections.
+        apply_privileged_action_policy(&self.operator_keys, self.freeze, self.break_glass, cfg)?;
 
         if has_runtime && validate_runtime {
             cfg.validate()
@@ -3460,6 +3705,7 @@ mod tests {
         convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _},
         days, hours, mebibytes, millis, minutes, secs,
     };
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -3531,6 +3777,9 @@ protocol = "Plaintext"
         let cfg: FileConfig = toml::from_str(src).unwrap();
         let expected = FileConfig {
             schema_registry: None,
+            operator_keys: vec![],
+            freeze: None,
+            break_glass: None,
             runtime: None,
             broker_id: Some(0),
             log_dir: Some("/var/lib/krabka/data".to_string()),
@@ -5098,6 +5347,469 @@ schema_registry_http_timeout = "2500ms"
         file.apply_to(&mut cfg).expect("apply runtime config");
 
         assert!(cfg.schema_registry_http_timeout == millis(2_500));
+    }
+
+    // A well-formed 32-byte Ed25519 public key file plus the TOML
+    // `[[operator_keys]]` entry that points at it. The bytes never verify a
+    // signature here; only the length is checked at load.
+    fn operator_key_fixture(dir: &TempDir, key_id: &str, principal: &str) -> String {
+        let path = dir.path().join(format!("{key_id}.pub"));
+        std::fs::write(&path, [7u8; 32]).expect("write operator key file");
+        format!(
+            "[[operator_keys]]\nkey_id = {key_id:?}\nprincipal = {principal:?}\n\
+             public_key_path = {:?}\n",
+            path.display().to_string()
+        )
+    }
+
+    #[test]
+    fn operator_keys_section_round_trips_every_key() {
+        let toml = r#"
+[[operator_keys]]
+key_id = "alice-yubi"
+principal = "User:alice"
+public_key_path = "/etc/krabka/operator-keys/alice.pub"
+
+[[operator_keys]]
+key_id = "bob-yubi"
+principal = "User:bob"
+public_key_path = "/etc/krabka/operator-keys/bob.pub"
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse operator_keys section");
+
+        let expected = vec![
+            FileOperatorKey {
+                key_id: "alice-yubi".to_owned(),
+                principal: "User:alice".to_owned(),
+                public_key_path: "/etc/krabka/operator-keys/alice.pub".to_owned(),
+            },
+            FileOperatorKey {
+                key_id: "bob-yubi".to_owned(),
+                principal: "User:bob".to_owned(),
+                public_key_path: "/etc/krabka/operator-keys/bob.pub".to_owned(),
+            },
+        ];
+        assert!(file.operator_keys == expected);
+    }
+
+    #[test]
+    fn operator_keys_section_rejects_a_misspelled_key() {
+        // `deny_unknown_fields`: an ignored `principal` typo would leave the
+        // key bound to nobody, and the binding is what stops one operator's
+        // key signing in another operator's name.
+        let toml = r#"
+[[operator_keys]]
+key_id = "alice-yubi"
+principle = "User:alice"
+public_key_path = "/etc/krabka/operator-keys/alice.pub"
+"#;
+        assert!(toml::from_str::<FileConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn freeze_section_round_trips_every_key() {
+        let toml = r#"
+[freeze]
+max_entries = 1000
+require_signature = false
+signature_max_skew = "5m"
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse freeze section");
+
+        let expected = FileFreezeConfig {
+            max_entries: Some(1_000),
+            require_signature: Some(false),
+            signature_max_skew: Some(minutes(5)),
+        };
+        assert!(file.freeze == Some(expected));
+    }
+
+    #[test]
+    fn freeze_section_rejects_a_misspelled_key() {
+        let toml = r"
+[freeze]
+require_signatures = true
+";
+        assert!(toml::from_str::<FileConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn freeze_signature_max_skew_rejects_a_bare_number() {
+        // The human duration serde is what keeps `5` from meaning
+        // five of whatever unit the reader assumed.
+        let toml = r"
+[freeze]
+signature_max_skew = 300
+";
+        assert!(toml::from_str::<FileConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn break_glass_section_round_trips_every_key() {
+        let toml = r#"
+[break_glass]
+approvers = ["User:alice", "User:bob", "User:carol"]
+required_approvals = 2
+proposal_ttl = "30m"
+signed_actions = ["unclean_elect_leaders", "unclean_recovery", "delete_topic"]
+background_unclean_recovery = "audit-only"
+"#;
+        let file: FileConfig = toml::from_str(toml).expect("parse break_glass section");
+
+        let expected = FileBreakGlassConfig {
+            approvers: Some(vec![
+                "User:alice".to_owned(),
+                "User:bob".to_owned(),
+                "User:carol".to_owned(),
+            ]),
+            required_approvals: Some(2),
+            proposal_ttl: Some(minutes(30)),
+            signed_actions: Some(vec![
+                "unclean_elect_leaders".to_owned(),
+                "unclean_recovery".to_owned(),
+                "delete_topic".to_owned(),
+            ]),
+            background_unclean_recovery: Some(BackgroundUncleanRecovery::AuditOnly),
+        };
+        assert!(file.break_glass == Some(expected));
+    }
+
+    #[test]
+    fn break_glass_section_rejects_a_misspelled_key() {
+        let toml = r#"
+[break_glass]
+approvers = ["User:alice"]
+required_approval = 2
+"#;
+        assert!(toml::from_str::<FileConfig>(toml).is_err());
+    }
+
+    #[test]
+    fn background_unclean_recovery_accepts_exactly_three_spellings() {
+        for (name, spelling, expected) in [
+            ("off", "off", Some(BackgroundUncleanRecovery::Off)),
+            (
+                "audit-only",
+                "audit-only",
+                Some(BackgroundUncleanRecovery::AuditOnly),
+            ),
+            (
+                "require",
+                "require",
+                Some(BackgroundUncleanRecovery::Require),
+            ),
+            ("a fourth spelling", "audit_only", None),
+            ("a mode that does not exist", "warn", None),
+        ] {
+            let toml = format!(
+                "[break_glass]\nsigned_actions = []\nbackground_unclean_recovery = {spelling:?}\n"
+            );
+            let parsed = toml::from_str::<FileConfig>(&toml)
+                .ok()
+                .and_then(|file| file.break_glass)
+                .and_then(|section| section.background_unclean_recovery);
+            check!(parsed == expected, "case {name}");
+        }
+    }
+
+    #[test]
+    fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
+        let dir = TempDir::new().expect("tempdir");
+        let toml = format!(
+            "{}\n[freeze]\n[break_glass]\napprovers = [\"User:alice\", \"User:bob\"]\n",
+            operator_key_fixture(&dir, "alice-yubi", "User:alice")
+        );
+        let file: FileConfig = toml::from_str(&toml).expect("parse config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply config");
+
+        check!(cfg.freeze == crate::config::FreezeConfig::default());
+        check!(
+            cfg.break_glass
+                == crate::config::BreakGlassConfig {
+                    approvers: vec!["User:alice".to_owned(), "User:bob".to_owned()],
+                    signed_actions: vec![
+                        "unclean_elect_leaders".to_owned(),
+                        "unclean_recovery".to_owned(),
+                        "delete_topic".to_owned(),
+                    ],
+                    ..crate::config::BreakGlassConfig::default()
+                }
+        );
+        check!(cfg.operator_keys.len() == 1);
+        check!(
+            cfg.operator_keys
+                .get("alice-yubi")
+                .map(crate::operator_keys::OperatorKey::principal)
+                == Some("User:alice")
+        );
+    }
+
+    #[test]
+    fn absent_privileged_action_sections_retain_the_broker_defaults() {
+        let file: FileConfig = toml::from_str("").expect("parse empty config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply empty config");
+
+        check!(cfg.operator_keys.is_empty());
+        check!(cfg.freeze == crate::config::FreezeConfig::default());
+        check!(cfg.break_glass == crate::config::BreakGlassConfig::default());
+        check!(cfg.break_glass.signed_actions.is_empty());
+    }
+
+    #[test]
+    fn freeze_and_break_glass_values_replace_the_broker_defaults() {
+        let dir = TempDir::new().expect("tempdir");
+        let toml = format!(
+            "{}\n[freeze]\nmax_entries = 25\nrequire_signature = true\n\
+             signature_max_skew = \"90s\"\n\
+             [break_glass]\napprovers = [\"User:alice\", \"User:bob\", \"User:carol\"]\n\
+             required_approvals = 3\nproposal_ttl = \"2h\"\n\
+             signed_actions = [\"delete_topic\"]\nbackground_unclean_recovery = \"require\"\n",
+            operator_key_fixture(&dir, "alice-yubi", "User:alice")
+        );
+        let file: FileConfig = toml::from_str(&toml).expect("parse config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply config");
+
+        check!(
+            cfg.freeze
+                == crate::config::FreezeConfig {
+                    max_entries: 25,
+                    require_signature: true,
+                    signature_max_skew: secs(90),
+                }
+        );
+        check!(
+            cfg.break_glass
+                == crate::config::BreakGlassConfig {
+                    approvers: vec![
+                        "User:alice".to_owned(),
+                        "User:bob".to_owned(),
+                        "User:carol".to_owned(),
+                    ],
+                    required_approvals: 3,
+                    proposal_ttl: hours(2),
+                    signed_actions: vec!["delete_topic".to_owned()],
+                    background_unclean_recovery: BackgroundUncleanRecovery::Require,
+                }
+        );
+    }
+
+    #[test]
+    fn break_glass_required_approvals_below_two_is_a_config_error() {
+        let dir = TempDir::new().expect("tempdir");
+        let keys = operator_key_fixture(&dir, "alice-yubi", "User:alice");
+        for (name, required, accepted) in [
+            ("no approvals at all", 0_usize, false),
+            ("a one-person two-person rule", 1, false),
+            ("the documented minimum", 2, true),
+            ("three of five", 3, true),
+        ] {
+            let toml = format!(
+                "{keys}\n[break_glass]\napprovers = [\"User:alice\"]\n\
+                 required_approvals = {required}\n"
+            );
+            let file: FileConfig = toml::from_str(&toml).expect("parse config");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            let outcome = file.apply_to(&mut cfg);
+
+            check!(outcome.is_ok() == accepted, "case {name}");
+            if accepted {
+                check!(
+                    cfg.break_glass.required_approvals == required,
+                    "case {name}"
+                );
+            } else {
+                assert!(let Err(error) = outcome, "case {name}");
+                check!(
+                    matches!(error, FileConfigError::InvalidConfig(_)),
+                    "case {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freeze_max_entries_of_zero_is_a_config_error() {
+        let file: FileConfig =
+            toml::from_str("[freeze]\nmax_entries = 0\n").expect("parse freeze section");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("a registry that holds nothing must be rejected");
+
+        assert!(matches!(error, FileConfigError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn demanding_a_signature_with_no_operator_key_is_a_startup_error() {
+        // Both rules exist so the refusal happens at boot with an explanation,
+        // not at run time on every request with none.
+        for (name, toml) in [
+            (
+                "signed_actions names an action",
+                "[break_glass]\napprovers = [\"User:alice\"]\n\
+                 signed_actions = [\"delete_topic\"]\n",
+            ),
+            (
+                "signed_actions defaults to the irreversible set",
+                "[break_glass]\napprovers = [\"User:alice\"]\n",
+            ),
+            (
+                "freeze.require_signature is on",
+                "[freeze]\nrequire_signature = true\n",
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(toml).expect("parse config");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            assert!(let Err(error) = file.apply_to(&mut cfg), "case {name}");
+            check!(
+                matches!(error, FileConfigError::OperatorKeys(_)),
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_signed_actions_list_needs_no_operator_key() {
+        // The explicit opt-out. It is distinct from omitting the key, which
+        // selects the irreversible set.
+        let file: FileConfig =
+            toml::from_str("[break_glass]\napprovers = [\"User:alice\"]\nsigned_actions = []\n")
+                .expect("parse break_glass section");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply break_glass section");
+
+        check!(cfg.break_glass.signed_actions.is_empty());
+        check!(cfg.operator_keys.is_empty());
+    }
+
+    #[test]
+    fn a_signed_action_that_names_no_action_is_a_startup_error() {
+        // A name that matches no action demands a signature for nothing. The
+        // operator believes the action is protected and it is not, so the
+        // broker refuses to boot rather than run the downgrade silently.
+        for (label, spelling) in [
+            ("a plural misspelling", "delete_topics"),
+            ("a hyphenated spelling", "delete-topic"),
+            ("a capitalised spelling", "Delete_Topic"),
+            ("the wire spelling", "DeleteTopic"),
+            ("an invented action", "reformat_cluster"),
+        ] {
+            // No `[[operator_keys]]`. The name check runs inside the
+            // `[break_glass]` block, ahead of the rule that a demanded
+            // signature needs a key to verify it, so the refusal here is the
+            // name one and the assertions below can say so.
+            let file: FileConfig =
+                toml::from_str(&format!("[break_glass]\nsigned_actions = [{spelling:?}]\n"))
+                    .expect("parse break_glass section");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            let result = file.apply_to(&mut cfg);
+
+            assert!(let Err(_) = &result, "case {label}");
+            let message = result.expect_err("refusal").to_string();
+            check!(message.contains("signed_actions"), "case {label}");
+            check!(message.contains(spelling), "case {label}");
+            check!(message.contains("delete_topic"), "case {label}");
+        }
+    }
+
+    #[test]
+    fn every_signed_action_spelling_the_broker_accepts_is_a_real_action() {
+        // The default set and each name in turn. This is the positive half of
+        // the check above: the validation must not refuse a correct spelling.
+        let mut names = vec![crate::config::DEFAULT_BREAK_GLASS_SIGNED_ACTIONS.join(",")];
+        names.extend(
+            crate::break_glass::ALL_ACTIONS
+                .into_iter()
+                .map(|action| crate::break_glass::action_name(action).to_owned()),
+        );
+        for name in names {
+            let list = name
+                .split(',')
+                .map(|one| format!("{one:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let file: FileConfig =
+                toml::from_str(&format!("[break_glass]\nsigned_actions = [{list}]\n"))
+                    .expect("parse break_glass section");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            let result = file.apply_to(&mut cfg);
+
+            // With no operator key configured, a correct spelling still
+            // refuses, because a demanded signature needs a key to verify it.
+            // That refusal is fine here; the name refusal is not.
+            if let Err(error) = result {
+                check!(
+                    !error.to_string().contains("names no break-glass action"),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unloadable_operator_key_is_a_startup_error() {
+        let dir = TempDir::new().expect("tempdir");
+        let good = dir.path().join("alice.pub");
+        std::fs::write(&good, [7u8; 32]).expect("write good key");
+        let short = dir.path().join("short.pub");
+        std::fs::write(&short, [7u8; 31]).expect("write short key");
+        let missing = dir.path().join("absent.pub");
+        let entry = |key_id: &str, principal: &str, path: &std::path::Path| {
+            format!(
+                "[[operator_keys]]\nkey_id = {key_id:?}\nprincipal = {principal:?}\n\
+                 public_key_path = {:?}\n",
+                path.display().to_string()
+            )
+        };
+
+        for (name, toml) in [
+            (
+                "an unreadable public_key_path",
+                entry("alice-yubi", "User:alice", &missing),
+            ),
+            (
+                "an ill-formed Ed25519 public key",
+                entry("alice-yubi", "User:alice", &short),
+            ),
+            (
+                "a duplicate key_id",
+                format!(
+                    "{}{}",
+                    entry("alice-yubi", "User:alice", &good),
+                    entry("alice-yubi", "User:bob", &good)
+                ),
+            ),
+            (
+                "a duplicate principal",
+                format!(
+                    "{}{}",
+                    entry("alice-yubi", "User:alice", &good),
+                    entry("alice-backup", "User:alice", &good)
+                ),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(&toml).expect("parse operator_keys section");
+            let mut cfg = crate::config::BrokerConfig::default();
+
+            assert!(let Err(error) = file.apply_to(&mut cfg), "case {name}");
+            check!(
+                matches!(error, FileConfigError::OperatorKeys(_)),
+                "case {name}"
+            );
+            check!(cfg.operator_keys.is_empty(), "case {name}");
+        }
     }
 
     #[test]

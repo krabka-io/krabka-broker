@@ -4,6 +4,16 @@
 //! Unclean Recovery Manager (URM) task. The URM polls surviving replicas for
 //! their log-end-offset and last-written leader epoch with `GetReplicaLogInfo`
 //! (`api_key` 93), and elects the most complete log.
+//!
+//! # KFC-9: the path with no caller to refuse
+//!
+//! An unclean recovery loses committed data, and the break-glass two-person
+//! rule gates every other transition that can. It cannot gate this one. Leader
+//! election and the broker-heartbeat path start a recovery with no request and
+//! no principal, so there is nobody to ask for a second signature and nobody to
+//! send a refusal to. [`BackgroundRecovery`] holds the three-valued rule that
+//! answers that, and [`RecoveryJob::proposal`] is what separates a recovery an
+//! operator asked for from one the controller started on its own.
 
 use krabka_raft::NodeId;
 use krabka_units::{Time, convert::TimeExt as _};
@@ -51,14 +61,23 @@ pub(crate) fn has_newer_leader(responses: &[ReplicaLogInfo], known_leader_epoch:
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures_util::FutureExt as _;
-use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_audit::{
+    AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal, PrivilegedPhase,
+};
+use krabka_metadata::{BreakGlassAction, MetadataRecord, PartitionRecord};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::{
-    config_keys::RecoveryStrategy, heartbeat::controller_state::ControllerLivenessState,
+    break_glass::{action_name, metrics as break_glass_metrics},
+    config::{BackgroundUncleanRecovery, BreakGlassConfig},
+    config_keys::RecoveryStrategy,
+    heartbeat::controller_state::ControllerLivenessState,
     network::client::InterBrokerClient,
+    operator_keys::approver_set_fingerprint,
+    time_util::now_ms,
 };
 
 #[derive(Debug, Clone)]
@@ -68,6 +87,8 @@ pub(crate) struct RecoveryPolicy {
     pub queue_capacity: usize,
     pub listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
+    /// KFC-9: what the URM does for a job that no operator approved.
+    pub background: BackgroundRecovery,
 }
 
 impl RecoveryPolicy {
@@ -76,6 +97,154 @@ impl RecoveryPolicy {
             RecoveryStrategy::Aggressive | RecoveryStrategy::None => self.aggressive_deadline,
             RecoveryStrategy::Balanced => self.balanced_deadline,
         }
+    }
+}
+
+/// KFC-9: the break-glass rule for a recovery that nobody asked for.
+///
+/// # This path has no caller to refuse
+///
+/// Unclean recovery loses committed data exactly as an operator-typed unclean
+/// election does, so the two-person rule looks as if it belongs on both. It
+/// cannot be here. Leader election and the broker-heartbeat path start a
+/// recovery with no request, no connection, and no principal, so a refusal has
+/// no recipient and an approval has nobody to ask. An operator who types an
+/// unclean election can be asked for a second signature, and a controller that
+/// reacts to a dead broker at 03:00 cannot.
+///
+/// [`BackgroundUncleanRecovery`] is the three-valued answer to that, and
+/// `audit-only` is the default for the reason the split states.
+/// [`BackgroundUncleanRecovery::Require`] is the fail-closed option, and it
+/// costs every partition whose leader dies at 03:00 its availability, and not
+/// only the ones an incident touches.
+///
+/// A job that carries a proposal took the operator path, where the handler
+/// already spent an approved proposal. None of this applies to it.
+#[derive(Debug, Clone)]
+pub(crate) struct BackgroundRecovery {
+    /// Whether this broker runs the two-person rule at all.
+    ///
+    /// An empty `break_glass.approvers` turns the workflow off, and nobody can
+    /// approve anything. Every recovery would then be unapproved, so `require`
+    /// would make unclean recovery impossible and `audit-only` would count
+    /// every failover as a bypass of a rule that does not exist. A cluster with
+    /// no `[break_glass]` section behaves exactly as it does today, which is
+    /// the rule the whole feature follows.
+    enabled: bool,
+    /// The configured `break_glass.background_unclean_recovery`.
+    mode: BackgroundUncleanRecovery,
+    /// Where the bypass and the refusal events go.
+    audit_log: Arc<AuditLog>,
+    /// A fingerprint of the sorted approver set, as every other break-glass
+    /// event carries. Two brokers that disagree about `break_glass.approvers`
+    /// are then visible after the fact.
+    approver_set_fingerprint: String,
+}
+
+impl BackgroundRecovery {
+    /// Read the rule out of `[break_glass]`.
+    pub(crate) fn new(config: &BreakGlassConfig, audit_log: Arc<AuditLog>) -> Self {
+        Self {
+            enabled: crate::break_glass::gate::is_gated(config),
+            mode: config.background_unclean_recovery,
+            audit_log,
+            approver_set_fingerprint: approver_set_fingerprint(&config.approvers),
+        }
+    }
+
+    /// Whether this job must not run at all.
+    ///
+    /// Only [`BackgroundUncleanRecovery::Require`] refuses, and only a job that
+    /// no operator approved on a broker that runs the two-person rule.
+    fn refuses(&self, job: &RecoveryJob) -> bool {
+        self.enabled && job.proposal.is_none() && self.mode == BackgroundUncleanRecovery::Require
+    }
+
+    /// Audit a recovery this rule refused. The partition stays leaderless and
+    /// visibly offline, so the audit log is the only place that says why.
+    fn audit_refusal(&self, job: &RecoveryJob, node_id: NodeId) {
+        self.emit(
+            PrivilegedPhase::Refused,
+            AuditOutcome::Failure,
+            job,
+            node_id,
+            format!(
+                "break_glass.background_unclean_recovery is require, and no proposal approved \
+                 this recovery; the partition stays offline (strategy {:?})",
+                job.strategy
+            ),
+        );
+    }
+
+    /// Account one recovery that elected a leader with no approval behind it.
+    ///
+    /// `audit-only` is the default, so this is the ordinary path on a cluster
+    /// that turned the two-person rule on. The counter is the series to alert
+    /// on, and the event is the after-the-fact proof that a data-losing
+    /// election happened that no second person agreed to.
+    fn audit_bypass(
+        &self,
+        job: &RecoveryJob,
+        node_id: NodeId,
+        winner: NodeId,
+        metrics: &crate::metrics::BrokerMetrics,
+    ) {
+        if !self.enabled
+            || job.proposal.is_some()
+            || self.mode != BackgroundUncleanRecovery::AuditOnly
+        {
+            return;
+        }
+        break_glass_metrics::record_bypass(metrics, BreakGlassAction::UncleanRecovery);
+        self.emit(
+            PrivilegedPhase::Bypassed,
+            AuditOutcome::Success,
+            job,
+            node_id,
+            format!(
+                "unclean recovery elected broker {} with no break-glass approval (strategy {:?})",
+                winner.0, job.strategy
+            ),
+        );
+    }
+
+    /// Emit one `PrivilegedAction` event for this path.
+    ///
+    /// The event names the controller that acted rather than a person, and its
+    /// source endpoint is empty, because no connection carried this recovery.
+    /// That absence is the whole reason the path cannot have a gate.
+    fn emit(
+        &self,
+        phase: PrivilegedPhase,
+        outcome: AuditOutcome,
+        job: &RecoveryJob,
+        node_id: NodeId,
+        reason: String,
+    ) {
+        self.audit_log.emit(AuditEvent::PrivilegedAction {
+            outcome,
+            phase,
+            action: action_name(BreakGlassAction::UncleanRecovery).to_owned(),
+            target: format!("{}-{}", job.topic, job.partition),
+            proposal_id: String::new(),
+            principal: AuditPrincipal {
+                name: format!("Controller:{}", node_id.0),
+                auth_method: "Internal".to_owned(),
+            },
+            counterparties: Vec::new(),
+            approver_set_fingerprint: self.approver_set_fingerprint.clone(),
+            key_id: String::new(),
+            signature: Vec::new(),
+            signature_verified: false,
+            // The controller runs this with no caller and no signature.
+            signed_at_ms: 0,
+            source: AuditEndpoint {
+                ip: String::new(),
+                port: 0,
+            },
+            reason,
+            time_ms: now_ms(),
+        });
     }
 }
 
@@ -90,6 +259,15 @@ pub(crate) struct RecoveryJob {
     /// the outcome. The background failover path sends the job and does not
     /// wait for a reply.
     pub reply: Option<oneshot::Sender<RecoveryOutcome>>,
+    /// KFC-9: the break-glass proposal that authorized this recovery, and
+    /// `None` when the controller started it on its own.
+    ///
+    /// The `ElectLeaders` handler spends the approval before it enqueues the
+    /// job, so this id is evidence and not an authorization: it says that a
+    /// person asked for this recovery, which is what takes the job out of
+    /// [`BackgroundRecovery`]'s reach. The two background sites have no caller
+    /// to ask, so they send `None`.
+    pub proposal: Option<Uuid>,
 }
 
 /// Result of attempting unclean recovery for a single partition.
@@ -108,6 +286,10 @@ pub(crate) enum RecoveryOutcome {
     Stale,
     /// Another recovery for the same `(topic, partition)` is already running.
     InProgress,
+    /// KFC-9: `break_glass.background_unclean_recovery` is `require`, and no
+    /// proposal approved this recovery. The partition keeps no leader and
+    /// stays visibly offline.
+    BreakGlassRequired,
 }
 
 /// Cloneable handle that enqueues [`RecoveryJob`] values onto the URM task.
@@ -231,6 +413,20 @@ impl UncleanRecoveryManager {
         if self.liveness.is_alive(pr.leader.0).await {
             return RecoveryOutcome::NotNeeded;
         }
+        // KFC-9: the recovery is needed from here on, so this is where the
+        // fail-closed rule bites. It runs before the replica poll, because a
+        // recovery the broker will not commit has no reason to spend a round
+        // trip to every surviving replica.
+        if self.policy.background.refuses(job) {
+            self.policy.background.audit_refusal(job, self.node_id);
+            warn!(
+                topic = %job.topic,
+                partition = job.partition,
+                "unclean recovery refused: break_glass.background_unclean_recovery is require \
+                 and no proposal approved it; the partition stays offline"
+            );
+            return RecoveryOutcome::BreakGlassRequired;
+        }
         let known_epoch = pr.leader_epoch;
         let topic_id = image
             .topic(&job.topic)
@@ -337,6 +533,13 @@ impl UncleanRecoveryManager {
             return RecoveryOutcome::NoEligibleReplica;
         }
         self.metrics.record_unclean_leader_election();
+        // KFC-9: the data-losing election is durable now, so a bypass is a
+        // fact rather than an intention. A job that carries a proposal took
+        // the operator path, and its handler already audited the approval it
+        // spent.
+        self.policy
+            .background
+            .audit_bypass(job, self.node_id, winner, &self.metrics);
         RecoveryOutcome::Elected(winner)
     }
 }
@@ -478,6 +681,7 @@ mod tests {
             queue_capacity: 3,
             listener_protocol: krabka_security::ListenerProtocol::Ssl,
             inter_broker_server_name: "broker.internal".to_string(),
+            background: BackgroundRecovery::new(&BreakGlassConfig::default(), AuditLog::disabled()),
         };
 
         assert!(policy.deadline(RecoveryStrategy::Aggressive) == millis(7));
@@ -557,7 +761,7 @@ mod urm_tests {
 mod run_recovery_tests {
     use std::{collections::BTreeSet, net::SocketAddr};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::{
         BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
     };
@@ -581,6 +785,9 @@ mod run_recovery_tests {
         leader_rx: watch::Receiver<Option<NodeId>>,
         _leader_tx: watch::Sender<Option<NodeId>>,
         image: Arc<MetadataImage>,
+        /// Every batch that reached `submit_change`, in order. A test that
+        /// asks what the URM appended reads this rather than a success flag.
+        submitted: Arc<std::sync::Mutex<Vec<Vec<MetadataRecord>>>>,
     }
 
     impl MockSource {
@@ -590,6 +797,7 @@ mod run_recovery_tests {
                 leader_rx: rx,
                 _leader_tx: tx,
                 image: Arc::new(image),
+                submitted: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -610,8 +818,12 @@ mod run_recovery_tests {
         }
         async fn submit_change(
             &self,
-            _records: Vec<MetadataRecord>,
+            records: Vec<MetadataRecord>,
         ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
+            self.submitted
+                .lock()
+                .expect("the submitted batches are not poisoned")
+                .push(records);
             Ok(krabka_raft::SubmitChangeResult::default())
         }
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
@@ -696,6 +908,31 @@ mod run_recovery_tests {
         source: MockSource,
         liveness: Arc<ControllerLivenessState>,
     ) -> UncleanRecoveryManager {
+        manager_with(
+            source,
+            liveness,
+            &gated(BackgroundUncleanRecovery::Off),
+            AuditLog::disabled(),
+        )
+    }
+
+    /// A broker that runs the two-person rule, with this background rule.
+    fn gated(mode: BackgroundUncleanRecovery) -> BreakGlassConfig {
+        BreakGlassConfig {
+            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
+            background_unclean_recovery: mode,
+            ..BreakGlassConfig::default()
+        }
+    }
+
+    /// A manager whose break-glass configuration and audit log the caller
+    /// picks.
+    fn manager_with(
+        source: MockSource,
+        liveness: Arc<ControllerLivenessState>,
+        break_glass: &BreakGlassConfig,
+        audit_log: Arc<AuditLog>,
+    ) -> UncleanRecoveryManager {
         UncleanRecoveryManager {
             controller: Arc::new(source),
             liveness,
@@ -709,6 +946,7 @@ mod run_recovery_tests {
                 queue_capacity: 256,
                 listener_protocol: krabka_security::ListenerProtocol::Plaintext,
                 inter_broker_server_name: "localhost".to_string(),
+                background: BackgroundRecovery::new(break_glass, audit_log),
             },
             in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -720,6 +958,16 @@ mod run_recovery_tests {
             partition: 0,
             strategy: RecoveryStrategy::None,
             reply: None,
+            proposal: None,
+        }
+    }
+
+    /// The job an operator's `ElectLeaders` request produces, which carries the
+    /// proposal that the handler already spent.
+    fn approved_job() -> RecoveryJob {
+        RecoveryJob {
+            proposal: Some(Uuid::from_u128(0x000B_ADC0_FFEE)),
+            ..job()
         }
     }
 
@@ -773,6 +1021,186 @@ mod run_recovery_tests {
         assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NoEligibleReplica);
     }
 
+    /// A partition whose leader is dead and whose one surviving replica is
+    /// registered at a port that refuses connections. The URM then reaches the
+    /// replica poll, finds no log info, and answers `NoEligibleReplica`. That
+    /// answer is the proof that the recovery ran, because a refusal never
+    /// reaches the poll.
+    fn dead_leader_with_a_survivor() -> MetadataImage {
+        let mut img = image_with_partition(1, &[1, 2]);
+        register_broker(&mut img, 2, "127.0.0.1", 1);
+        img
+    }
+
+    async fn outcome_under(break_glass: BreakGlassConfig, job: &RecoveryJob) -> RecoveryOutcome {
+        let mgr = manager_with(
+            MockSource::new(Some(NODE), dead_leader_with_a_survivor()),
+            liveness_with_alive(&[2]).await,
+            &break_glass,
+            AuditLog::disabled(),
+        );
+        mgr.run_recovery(job).await
+    }
+
+    #[tokio::test]
+    async fn a_broker_with_no_approver_set_runs_every_recovery() {
+        // Nobody can approve on such a broker, so `require` would make unclean
+        // recovery impossible rather than fail closed on the unapproved ones.
+        let ungated = BreakGlassConfig {
+            background_unclean_recovery: BackgroundUncleanRecovery::Require,
+            ..BreakGlassConfig::default()
+        };
+
+        assert!(outcome_under(ungated, &job()).await == RecoveryOutcome::NoEligibleReplica);
+    }
+
+    #[tokio::test]
+    async fn the_background_rule_decides_whether_an_unapproved_recovery_runs() {
+        let cases = [
+            (
+                "off runs it",
+                BackgroundUncleanRecovery::Off,
+                RecoveryOutcome::NoEligibleReplica,
+            ),
+            (
+                "audit-only runs it",
+                BackgroundUncleanRecovery::AuditOnly,
+                RecoveryOutcome::NoEligibleReplica,
+            ),
+            (
+                "require refuses it",
+                BackgroundUncleanRecovery::Require,
+                RecoveryOutcome::BreakGlassRequired,
+            ),
+        ];
+        for (label, mode, expected) in cases {
+            assert!(
+                outcome_under(gated(mode), &job()).await == expected,
+                "case {label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn require_still_runs_a_recovery_that_a_proposal_approved() {
+        // The `ElectLeaders` handler spent an approval before it enqueued this
+        // job, so the rule for the path with no caller does not reach it.
+        assert!(
+            outcome_under(gated(BackgroundUncleanRecovery::Require), &approved_job()).await
+                == RecoveryOutcome::NoEligibleReplica
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_recovery_appends_nothing_and_audits_why() {
+        let (audit_log, mut events) = AuditLog::new(8);
+        let source = MockSource::new(Some(NODE), dead_leader_with_a_survivor());
+        let submitted = Arc::clone(&source.submitted);
+        let mgr = manager_with(
+            source,
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::Require),
+            audit_log,
+        );
+
+        assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::BreakGlassRequired);
+
+        assert!(
+            submitted
+                .lock()
+                .expect("the submitted batches are not poisoned")
+                .is_empty()
+        );
+        let event = events.try_recv().expect("a refusal reaches the audit log");
+        assert!(let AuditEvent::PrivilegedAction { phase, action, target, outcome, .. } = &event);
+        check!(*phase == PrivilegedPhase::Refused);
+        check!(*outcome == AuditOutcome::Failure);
+        check!(action == "unclean_recovery");
+        check!(target == "t-0");
+    }
+
+    #[tokio::test]
+    async fn audit_only_elects_and_records_the_bypass() {
+        let (audit_log, mut events) = AuditLog::new(8);
+        let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+        let image = source.current_image();
+        let submitted = Arc::clone(&source.submitted);
+        let mgr = manager_with(
+            source,
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::AuditOnly),
+            audit_log,
+        );
+        let pr = image
+            .partition("t", 0)
+            .expect("the partition is in the image");
+
+        let outcome = mgr.commit_elected_leader(&job(), pr, NodeId(2)).await;
+
+        assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
+        let batches = submitted
+            .lock()
+            .expect("the submitted batches are not poisoned")
+            .clone();
+        let elected = PartitionRecord {
+            leader: NodeId(2),
+            isr: vec![NodeId(2)],
+            leader_epoch: pr.leader_epoch.next(),
+            partition_epoch: pr.partition_epoch + 1,
+            ..pr.clone()
+        };
+        assert!(batches == vec![vec![MetadataRecord::V1Partition(elected)]]);
+        check!(bypasses(&mgr.metrics) == 1);
+        let event = events.try_recv().expect("a bypass reaches the audit log");
+        assert!(let AuditEvent::PrivilegedAction { phase, target, .. } = &event);
+        check!(*phase == PrivilegedPhase::Bypassed);
+        check!(target == "t-0");
+    }
+
+    #[tokio::test]
+    async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
+        let cases = [
+            ("off writes nothing", BackgroundUncleanRecovery::Off, job()),
+            (
+                "an approved job is not a bypass",
+                BackgroundUncleanRecovery::AuditOnly,
+                approved_job(),
+            ),
+        ];
+        for (label, mode, job) in cases {
+            let (audit_log, mut events) = AuditLog::new(8);
+            let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+            let image = source.current_image();
+            let mgr = manager_with(
+                source,
+                liveness_with_alive(&[2]).await,
+                &gated(mode),
+                audit_log,
+            );
+            let pr = image
+                .partition("t", 0)
+                .expect("the partition is in the image");
+
+            let outcome = mgr.commit_elected_leader(&job, pr, NodeId(2)).await;
+
+            check!(
+                outcome == RecoveryOutcome::Elected(NodeId(2)),
+                "case {label}"
+            );
+            check!(bypasses(&mgr.metrics) == 0, "case {label}");
+            check!(events.try_recv().is_err(), "case {label}");
+        }
+    }
+
+    fn bypasses(metrics: &crate::metrics::BrokerMetrics) -> u64 {
+        metrics
+            .break_glass_bypassed
+            .get_or_create(&crate::metrics::BreakGlassActionLabel {
+                action: crate::metrics::BreakGlassAction(BreakGlassAction::UncleanRecovery),
+            })
+            .get()
+    }
+
     #[tokio::test]
     async fn recover_one_dedups_in_flight_job() {
         let mgr = Arc::new(manager(
@@ -783,10 +1211,8 @@ mod run_recovery_tests {
         mgr.in_flight.lock().await.insert(("t".to_string(), 0));
         let (tx, rx) = oneshot::channel();
         let j = RecoveryJob {
-            topic: "t".into(),
-            partition: 0,
-            strategy: RecoveryStrategy::None,
             reply: Some(tx),
+            ..job()
         };
         mgr.clone().recover_one(j).await;
         assert!(rx.await.unwrap() == RecoveryOutcome::InProgress);

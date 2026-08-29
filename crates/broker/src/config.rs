@@ -17,8 +17,10 @@ use krabka_units::{
     convert::{ByteSizeExt, RatioExt, TimeExt},
     days, fraction, gibibytes, hours, kibibytes, mebibytes, millis, minutes, percent, secs,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 
-use crate::BrokerError;
+use crate::{BrokerError, operator_keys::OperatorKeys};
 
 /// Default number of local durable copies in a diskless WAL quorum.
 pub const DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT: usize = 3;
@@ -599,6 +601,20 @@ pub struct BrokerConfig {
     /// has nothing to validate against.
     pub schema_validator: Option<std::sync::Arc<crate::schema_validation::SchemaValidator>>,
 
+    /// The operator key trust set, configured through the top-level
+    /// `[[operator_keys]]` array in `broker.toml`.
+    ///
+    /// One set serves both signature paths: a freeze record's detached
+    /// signature and a break-glass approval's. Empty is the default and means
+    /// no operator key is provisioned, so nothing may demand a signature.
+    pub operator_keys: OperatorKeys,
+
+    /// Topic write-freeze policy, configured through `[freeze]`.
+    pub freeze: FreezeConfig,
+
+    /// Break-glass two-person rule policy, configured through `[break_glass]`.
+    pub break_glass: BreakGlassConfig,
+
     /// TLS configuration. `None` means no TLS, and is the default.
     pub tls_config: Option<TlsConfig>,
 
@@ -1131,6 +1147,142 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
 
+/// Default ceiling on live entries in the topic write-freeze registry.
+///
+/// A prefix-scoped lookup walks the registry in reverse from the topic name,
+/// which is unbounded in the worst case, and that lookup is one hop from the
+/// produce path. The ceiling bounds the walk.
+pub const DEFAULT_FREEZE_MAX_ENTRIES: usize = 1_000;
+
+/// Default tolerance between a signed freeze record's timestamp and the
+/// controller's clock.
+pub const DEFAULT_FREEZE_SIGNATURE_MAX_SKEW: Time = minutes(5);
+
+/// Lowest `required_approvals` a break-glass proposal accepts.
+///
+/// A two-person rule with one approval is one person.
+pub const MIN_BREAK_GLASS_REQUIRED_APPROVALS: usize = 2;
+
+/// Default number of distinct approving principals a break-glass proposal
+/// needs before it authorizes anything.
+pub const DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS: usize = MIN_BREAK_GLASS_REQUIRED_APPROVALS;
+
+/// Default lifetime of a break-glass proposal.
+///
+/// The TTL is also the safety bound on removing an approver: wait it out and
+/// every pending approval by that principal is dead.
+pub const DEFAULT_BREAK_GLASS_PROPOSAL_TTL: Time = minutes(30);
+
+/// Actions that demand a detached operator signature when `[break_glass]` is
+/// configured and `signed_actions` is omitted: the irreversible set.
+///
+/// [`BrokerConfig::default`] leaves [`BreakGlassConfig::signed_actions`] empty
+/// instead, because a broker with no `[break_glass]` section runs no
+/// break-glass workflow at all and has no operator key to verify against.
+pub const DEFAULT_BREAK_GLASS_SIGNED_ACTIONS: &[&str] =
+    &["unclean_elect_leaders", "unclean_recovery", "delete_topic"];
+
+/// Runtime `[freeze]` policy: the topic write-freeze registry's bounds and its
+/// signature requirement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreezeConfig {
+    /// Ceiling on live registry entries. A request that would exceed it is
+    /// refused.
+    pub max_entries: usize,
+    /// Demand a detached operator signature on every freeze as well as on
+    /// every thaw.
+    ///
+    /// A thaw is signed either way. The default `false` keeps a freeze
+    /// available in one command on a cluster that has no key material
+    /// provisioned yet, because freezing is the safe direction.
+    pub require_signature: bool,
+    /// How far a signed freeze record's timestamp may sit from the
+    /// controller's clock. A record outside the window is refused, which is
+    /// what stops an old signature being replayed.
+    pub signature_max_skew: Time,
+}
+
+impl Default for FreezeConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: DEFAULT_FREEZE_MAX_ENTRIES,
+            require_signature: false,
+            signature_max_skew: DEFAULT_FREEZE_SIGNATURE_MAX_SKEW,
+        }
+    }
+}
+
+/// Runtime `[break_glass]` policy: who may approve a privileged transition,
+/// how many of them it takes, and which actions also demand a signature.
+///
+/// The approver set comes from this broker's own file, not from the metadata
+/// log, for the reason that keeps `super_users` out of the ACL store: an
+/// attacker who can write the metadata log must not be able to add themselves
+/// to the set that authorizes a data-losing operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BreakGlassConfig {
+    /// Principals that may approve a proposal. Empty is the default and means
+    /// no break-glass workflow is configured on this broker.
+    pub approvers: Vec<String>,
+    /// Distinct approving principals a proposal needs. Never below
+    /// [`MIN_BREAK_GLASS_REQUIRED_APPROVALS`].
+    pub required_approvals: usize,
+    /// How long a proposal stays usable after it is created.
+    pub proposal_ttl: Time,
+    /// Actions whose approvals must also carry a detached operator signature.
+    /// Empty is the default; see [`DEFAULT_BREAK_GLASS_SIGNED_ACTIONS`].
+    pub signed_actions: Vec<String>,
+    /// What the background unclean-recovery path does, where there is no
+    /// caller to ask for an approval.
+    pub background_unclean_recovery: BackgroundUncleanRecovery,
+}
+
+impl Default for BreakGlassConfig {
+    fn default() -> Self {
+        Self {
+            approvers: Vec::new(),
+            required_approvals: DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS,
+            proposal_ttl: DEFAULT_BREAK_GLASS_PROPOSAL_TTL,
+            signed_actions: Vec::new(),
+            background_unclean_recovery: BackgroundUncleanRecovery::default(),
+        }
+    }
+}
+
+/// What the background unclean-recovery path does when it cannot ask anybody
+/// for a break-glass approval.
+///
+/// The controller starts unclean recovery from leader election and from the
+/// broker-heartbeat path. Neither carries a request context, so neither has a
+/// caller to refuse. An operator who types an unclean election can be asked
+/// for a second signature; a controller that reacts to a dead broker at 03:00
+/// cannot.
+///
+/// The TOML spelling is `off | audit-only | require`, so the serde rename is
+/// `kebab-case`.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackgroundUncleanRecovery {
+    /// Recovery runs and writes no break-glass audit event.
+    Off,
+    /// Recovery runs and writes a bypassed break-glass audit event naming the
+    /// partition and the strategy. An operator can then prove after the fact
+    /// that a data-losing election happened with no approval.
+    #[default]
+    AuditOnly,
+    /// Recovery does not run. The partition stays leaderless and visibly
+    /// offline, and the refusal is audited.
+    Require,
+}
+
+/// A shared, zero-valued epoch-millisecond counter.
+///
+/// The OAUTHBEARER JWKS refresher stamps two of these, and the validator reads
+/// them through the same `Arc`.
+fn shared_epoch_ms() -> std::sync::Arc<std::sync::atomic::AtomicI64> {
+    std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0))
+}
+
 impl BrokerConfig {
     /// Builds a test config that listens on an OS-assigned port under a
     /// tempdir.
@@ -1285,6 +1437,9 @@ impl BrokerConfig {
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
             schema_validator: None,
+            operator_keys: OperatorKeys::default(),
+            freeze: FreezeConfig::default(),
+            break_glass: BreakGlassConfig::default(),
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
@@ -1294,12 +1449,8 @@ impl BrokerConfig {
             oauthbearer_idp_tls_trust: None,
             oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            oauthbearer_jwks_last_successful_fetch_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
-            oauthbearer_jwks_last_on_demand_refresh_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
+            oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
+            oauthbearer_jwks_last_on_demand_refresh_ms: shared_epoch_ms(),
             oauthbearer_jwks_min_on_demand_pause: DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
             features: test_feature_flags(),
             // Reaper disabled in tests; suites that exercise it set it low.
@@ -2436,6 +2587,9 @@ impl Default for BrokerConfig {
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
             schema_validator: None,
+            operator_keys: OperatorKeys::default(),
+            freeze: FreezeConfig::default(),
+            break_glass: BreakGlassConfig::default(),
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
@@ -2445,12 +2599,8 @@ impl Default for BrokerConfig {
             oauthbearer_idp_tls_trust: None,
             oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            oauthbearer_jwks_last_successful_fetch_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
-            oauthbearer_jwks_last_on_demand_refresh_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
+            oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
+            oauthbearer_jwks_last_on_demand_refresh_ms: shared_epoch_ms(),
             oauthbearer_jwks_min_on_demand_pause: DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
             features: default_feature_flags(),
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's

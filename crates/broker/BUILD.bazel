@@ -34,6 +34,7 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        "jvm_acceptance_freeze": ["cp_kafka_7_5_0"],
         "jvm_acceptance_legacy": [
             "cp_kafka_3_1_2",
             "cp_kafka_6_1_1",

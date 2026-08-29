@@ -19,6 +19,21 @@
 //!   on every partition.
 //! * For each topic, `Write` on `Topic(name)`. On a deny, that topic's
 //!   partition rows emit `TOPIC_AUTHORIZATION_FAILED (29)`.
+//!
+//! ## Write-freeze gate
+//!
+//! A topic that a KFC-9 write freeze covers never joins the transaction's
+//! partition set, and every one of its partition rows emits
+//! `POLICY_VIOLATION (44)`. This is the cheapest place to stop a transaction
+//! from ever reaching a frozen topic.
+//!
+//! A producer that enlisted the partition before the freeze landed keeps its
+//! ability to commit or abort. The gate refuses the *next* enlistment, and a
+//! freeze never stops an open transaction from completing.
+//!
+//! The gate runs after both ACL checks and after the coordinator check. A
+//! caller learns that it is unauthorized, or that it reached the wrong broker,
+//! before it learns anything about the topic's freeze state.
 
 use std::net::SocketAddr;
 
@@ -46,6 +61,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
+    freeze::resolve::resolve_topic_freeze,
     txn::state::TopicPartition,
 };
 
@@ -130,8 +146,9 @@ async fn handle_v4(
         let topic_results = if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
             topic_error(&txn.topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
         } else {
-            // Per-topic Write check.
+            // Per-topic Write check, then the per-topic freeze read.
             let denied = denied_topics(authorizer, image, principal, peer, &txn.topics);
+            let frozen = frozen_topics(image, &txn.topics);
             process_one_txn(
                 coord,
                 TransactionRequest {
@@ -140,6 +157,7 @@ async fn handle_v4(
                     producer_epoch: txn.producer_epoch,
                     topics: &txn.topics,
                     denied: &denied,
+                    frozen: &frozen,
                     txnv,
                     verify_only: txn.verify_only,
                 },
@@ -190,6 +208,7 @@ async fn handle_v3(
         )
     } else {
         let denied = denied_topics(authorizer, image, principal, peer, &req.v3_and_below_topics);
+        let frozen = frozen_topics(image, &req.v3_and_below_topics);
         process_one_txn(
             coord,
             TransactionRequest {
@@ -198,6 +217,7 @@ async fn handle_v3(
                 producer_epoch: req.v3_and_below_producer_epoch,
                 topics: &req.v3_and_below_topics,
                 denied: &denied,
+                frozen: &frozen,
                 txnv,
                 // v0-3 has no `verify_only` field (predates KIP-890); always add.
                 verify_only: false,
@@ -245,11 +265,50 @@ fn denied_topics(
         .collect()
 }
 
+/// Builds the set of topic names that a KFC-9 write freeze covers.
+///
+/// It runs once per transaction entry, beside [`denied_topics`] and for the
+/// same reason: a freeze is a property of the topic, not of a partition, so
+/// each partition row then costs one set lookup. On a cluster with no freeze
+/// the image answers every topic in two emptiness tests and the set stays
+/// empty.
+fn frozen_topics(
+    image: &MetadataImage,
+    topics: &[AddPartitionsToTxnTopic],
+) -> std::collections::HashSet<String> {
+    topics
+        .iter()
+        .filter(|t| resolve_topic_freeze(image, &t.name).is_some())
+        .map(|t| t.name.clone())
+        .collect()
+}
+
+/// The refusal that one topic's partition rows carry before the transaction
+/// state machine has any say, or `None` when the topic is free to proceed.
+///
+/// The `Write` ACL deny outranks the freeze. An unauthorized principal learns
+/// that it is unauthorized and nothing more: answering `POLICY_VIOLATION`
+/// instead would leak the topic's freeze state to a caller with no right to
+/// read it.
+fn topic_refusal(
+    name: &str,
+    denied: &std::collections::HashSet<String>,
+    frozen: &std::collections::HashSet<String>,
+) -> Option<i16> {
+    if denied.contains(name) {
+        Some(codes::TOPIC_AUTHORIZATION_FAILED)
+    } else if frozen.contains(name) {
+        Some(codes::POLICY_VIOLATION)
+    } else {
+        None
+    }
+}
+
 /// Processes one `transactional_id`, `producer_id`, and `producer_epoch`
 /// triple. It returns per-topic and per-partition result entries. A topic
-/// named in `denied` short-circuits with `TOPIC_AUTHORIZATION_FAILED`. Every
-/// other topic goes through the state-machine check and the partition
-/// registration.
+/// named in `denied` short-circuits with `TOPIC_AUTHORIZATION_FAILED`, and one
+/// named in `frozen` with `POLICY_VIOLATION`. Every other topic goes through
+/// the state-machine check and the partition registration.
 // cargo-mutants: I/O over live txn state + partition registration
 struct TransactionRequest<'a> {
     transactional_id: &'a str,
@@ -257,6 +316,7 @@ struct TransactionRequest<'a> {
     producer_epoch: i16,
     topics: &'a [AddPartitionsToTxnTopic],
     denied: &'a std::collections::HashSet<String>,
+    frozen: &'a std::collections::HashSet<String>,
     txnv: crate::txn::version::TxnVersion,
     verify_only: bool,
 }
@@ -272,34 +332,43 @@ async fn process_one_txn(
         producer_epoch,
         topics,
         denied,
+        frozen,
         txnv,
         verify_only,
     } = request;
-    // Topics allowed to proceed past the per-topic Write ACL gate.
+    // Topics allowed to proceed past the per-topic Write ACL gate and the
+    // write-freeze gate. A frozen topic never joins the partition set, which
+    // is what keeps the transaction from ever reaching its log.
     let allowed_topics: Vec<&AddPartitionsToTxnTopic> = topics
         .iter()
-        .filter(|t| !denied.contains(&t.name))
+        .filter(|t| !denied.contains(&t.name) && !frozen.contains(&t.name))
         .collect();
 
     // 1. Coordinator check (applies only to non-denied topics — for
     //    denied topics we always emit TOPIC_AUTHORIZATION_FAILED).
+    //
+    //    It runs ahead of the freeze gate, so this path passes no freeze set
+    //    down. A client that reached the wrong broker has to learn that first:
+    //    it then retries at the real coordinator, which is the broker that
+    //    owns the decision and answers the freeze.
     if !coord.is_coordinator_for(tid).await {
-        return per_topic_with_denied(topics, denied, codes::NOT_COORDINATOR);
+        let unread = std::collections::HashSet::new();
+        return per_topic_with_refusals(topics, denied, &unread, codes::NOT_COORDINATOR);
     }
 
     // 2. Look up entry for the TV_2 verify-only path.
     let Some(entry_mutex) = coord.get(tid) else {
-        return per_topic_with_denied(topics, denied, codes::INVALID_PRODUCER_ID_MAPPING);
+        return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_PRODUCER_ID_MAPPING);
     };
     if txnv.verified() && verify_only {
         let entry = entry_mutex.lock().await;
         if entry.has_staged_producer_identity() {
-            return per_topic_with_denied(topics, denied, codes::INVALID_TXN_STATE);
+            return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_TXN_STATE);
         }
         if entry.producer_id != producer_id || entry.producer_epoch != producer_epoch {
-            return per_topic_with_denied(topics, denied, codes::INVALID_PRODUCER_EPOCH);
+            return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_PRODUCER_EPOCH);
         }
-        return verify_partitions(&entry, topics, denied);
+        return verify_partitions(&entry, topics, denied, frozen);
     }
     drop(entry_mutex);
 
@@ -315,7 +384,7 @@ async fn process_one_txn(
     let code = coord
         .register_partitions(tid, producer_id, producer_epoch, partitions, txnv)
         .await;
-    per_topic_with_denied(topics, denied, code)
+    per_topic_with_refusals(topics, denied, frozen, code)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -334,27 +403,26 @@ fn verify_partition_code(entry: &crate::txn::state::TxnEntry, tp: &TopicPartitio
 }
 
 /// Builds the verify-only response. It has the same shape as
-/// `per_topic_with_denied` on the add path, but each partition carries its own
-/// verify result instead of one shared code. A denied topic still
-/// short-circuits to `TOPIC_AUTHORIZATION_FAILED` on every partition row.
+/// `per_topic_with_refusals` on the add path, but each partition carries its
+/// own verify result instead of one shared code. A denied or frozen topic
+/// still short-circuits to its refusal on every partition row.
 fn verify_partitions(
     entry: &crate::txn::state::TxnEntry,
     topics: &[AddPartitionsToTxnTopic],
     denied: &std::collections::HashSet<String>,
+    frozen: &std::collections::HashSet<String>,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
-            let topic_denied = denied.contains(&t.name);
+            let refusal = topic_refusal(&t.name, denied, frozen);
             AddPartitionsToTxnTopicResult {
                 name: t.name.clone(),
                 results_by_partition: t
                     .partitions
                     .iter()
                     .map(|&p| {
-                        let row_code = if topic_denied {
-                            codes::TOPIC_AUTHORIZATION_FAILED
-                        } else {
+                        let row_code = refusal.unwrap_or_else(|| {
                             verify_partition_code(
                                 entry,
                                 &TopicPartition {
@@ -362,7 +430,7 @@ fn verify_partitions(
                                     partition: PartitionIndex(p),
                                 },
                             )
-                        };
+                        });
                         AddPartitionsToTxnPartitionResult {
                             partition_index: p,
                             partition_error_code: row_code,
@@ -377,21 +445,19 @@ fn verify_partitions(
 }
 
 /// Builds a per-topic and per-partition result list. A topic named in `denied`
-/// gets `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row. Every other
-/// topic gets `code`.
-fn per_topic_with_denied(
+/// gets `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row, and one
+/// named in `frozen` gets `POLICY_VIOLATION (44)`. Every other topic gets
+/// `code`.
+fn per_topic_with_refusals(
     topics: &[AddPartitionsToTxnTopic],
     denied: &std::collections::HashSet<String>,
+    frozen: &std::collections::HashSet<String>,
     code: i16,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
-            let row_code = if denied.contains(&t.name) {
-                codes::TOPIC_AUTHORIZATION_FAILED
-            } else {
-                code
-            };
+            let row_code = topic_refusal(&t.name, denied, frozen).unwrap_or(code);
             AddPartitionsToTxnTopicResult {
                 name: t.name.clone(),
                 results_by_partition: t
@@ -444,9 +510,11 @@ fn encode_response(resp: &AddPartitionsToTxnResponse, version: i16) -> Result<By
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 
-    use assert2::assert;
+    use assert2::{assert, check};
+    use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
     use krabka_protocol::owned::add_partitions_to_txn_request::AddPartitionsToTxnTransaction;
     use krabka_security::Principal;
+    use uuid::Uuid;
 
     use super::*;
     use crate::{
@@ -507,7 +575,10 @@ mod tests {
         let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
         let denied = HashSet::from(["denied".to_string()]);
 
-        let rows = verify_partitions(&e, &topics, &denied);
+        let frozen = HashSet::from(["frozen".to_string()]);
+        let topics = [topics, vec![topic("frozen", &[4])]].concat();
+
+        let rows = verify_partitions(&e, &topics, &denied, &frozen);
 
         let expected = vec![
             topic_result(
@@ -515,16 +586,22 @@ mod tests {
                 &[(1, codes::NONE), (2, codes::TRANSACTION_ABORTABLE)],
             ),
             topic_result("denied", &[(3, codes::TOPIC_AUTHORIZATION_FAILED)]),
+            topic_result("frozen", &[(4, codes::POLICY_VIOLATION)]),
         ];
         assert!(rows == expected);
     }
 
     #[test]
-    fn per_topic_with_denied_preserves_rows_and_overrides_denied_topics() {
-        let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
+    fn per_topic_with_refusals_preserves_rows_and_overrides_refused_topics() {
+        let topics = vec![
+            topic("alpha", &[1, 2]),
+            topic("denied", &[3]),
+            topic("frozen", &[4]),
+        ];
         let denied = HashSet::from(["denied".to_string()]);
+        let frozen = HashSet::from(["frozen".to_string()]);
 
-        let rows = per_topic_with_denied(&topics, &denied, codes::NOT_COORDINATOR);
+        let rows = per_topic_with_refusals(&topics, &denied, &frozen, codes::NOT_COORDINATOR);
 
         let expected = vec![
             topic_result(
@@ -532,6 +609,7 @@ mod tests {
                 &[(1, codes::NOT_COORDINATOR), (2, codes::NOT_COORDINATOR)],
             ),
             topic_result("denied", &[(3, codes::TOPIC_AUTHORIZATION_FAILED)]),
+            topic_result("frozen", &[(4, codes::POLICY_VIOLATION)]),
         ];
         assert!(rows == expected);
     }
@@ -706,5 +784,346 @@ mod tests {
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
+    }
+
+    // ── KFC-9 topic write freeze ─────────────────────────────────────
+
+    /// The transactional id every freeze case drives.
+    const TID: &str = "tid-freeze";
+    /// The frozen topic in every freeze case, and the unfrozen control that
+    /// travels in the same request.
+    const FROZEN_TOPIC: &str = "tenant-a.orders";
+    const UNFROZEN_TOPIC: &str = "events";
+
+    fn freeze_record(scope: &str, pattern_type: PatternType) -> TopicFreezeRecord {
+        TopicFreezeRecord {
+            scope: scope.to_owned(),
+            pattern_type,
+            frozen: true,
+            reason: "DR cutover".to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms: 1_770_000_000_000,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn image_with_freezes(scopes: &[(&str, PatternType)]) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
+        for &(scope, pattern_type) in scopes {
+            image.apply(&MetadataRecord::V1TopicFreeze(freeze_record(
+                scope,
+                pattern_type,
+            )));
+        }
+        image
+    }
+
+    #[test]
+    fn frozen_topics_keeps_the_covered_names_and_nothing_else() {
+        let image = image_with_freezes(&[
+            ("orders", PatternType::Literal),
+            ("tenant-a.", PatternType::Prefixed),
+        ]);
+
+        // (label, the topics the request names, the names the gate keeps)
+        let cases: [(&str, &[&str], &[&str]); 5] = [
+            (
+                "a literal freeze covers the one topic it names",
+                &["orders"],
+                &["orders"],
+            ),
+            (
+                "a prefix freeze covers every topic under it",
+                &["tenant-a.billing"],
+                &["tenant-a.billing"],
+            ),
+            ("an unfrozen topic is left out", &["events"], &[]),
+            (
+                "an internal topic is never frozen",
+                &["__consumer_offsets"],
+                &[],
+            ),
+            (
+                "one request mixing all of them keeps only the covered names",
+                &["orders", "tenant-a.billing", "events"],
+                &["orders", "tenant-a.billing"],
+            ),
+        ];
+
+        for (label, names, want) in cases {
+            let topics: Vec<_> = names.iter().map(|name| topic(name, &[0])).collect();
+            let expected: HashSet<String> = want.iter().map(|name| (*name).to_owned()).collect();
+            check!(frozen_topics(&image, &topics) == expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn frozen_topics_is_empty_on_a_cluster_with_no_freeze() {
+        let image = image_with_freezes(&[]);
+        let topics = [topic("orders", &[0]), topic("tenant-a.billing", &[1])];
+
+        check!(frozen_topics(&image, &topics) == HashSet::new());
+    }
+
+    #[test]
+    fn topic_refusal_ranks_the_acl_deny_above_the_freeze() {
+        let denied = HashSet::from(["denied".to_string(), "both".to_string()]);
+        let frozen = HashSet::from(["frozen".to_string(), "both".to_string()]);
+
+        for (label, name, want) in [
+            ("a topic under neither refusal proceeds", "clean", None),
+            (
+                "a denied topic reports the ACL deny",
+                "denied",
+                Some(codes::TOPIC_AUTHORIZATION_FAILED),
+            ),
+            (
+                "a frozen topic reports the freeze",
+                "frozen",
+                Some(codes::POLICY_VIOLATION),
+            ),
+            (
+                "a denied and frozen topic never leaks the freeze state",
+                "both",
+                Some(codes::TOPIC_AUTHORIZATION_FAILED),
+            ),
+        ] {
+            check!(topic_refusal(name, &denied, &frozen) == want, "{label}");
+        }
+    }
+
+    /// Allows every operation except `Write` on a `Topic`. The
+    /// transactional-id preamble passes, so a test that installs it reaches
+    /// the per-topic gates that follow.
+    #[derive(Debug)]
+    struct DenyTopicWrites;
+
+    impl Authorizer for DenyTopicWrites {
+        fn authorize(
+            &self,
+            _source: &dyn krabka_authz::AclSource,
+            req: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            if req.resource_type == ResourceType::Topic && req.operation == AclOperation::Write {
+                AuthorizationResult::Deny
+            } else {
+                AuthorizationResult::Allow
+            }
+        }
+    }
+
+    async fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready() {
+            assert!(std::time::Instant::now() <= deadline, "timed out: {label}");
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// A broker that coordinates every transactional id, holds one open
+    /// transaction under [`TID`], and carries one live freeze in its image.
+    ///
+    /// `transaction_state_num_partitions = 1` puts every tid on partition 0,
+    /// so the coordinator check passes and the freeze gate behind it runs.
+    async fn start_frozen_coordinator(
+        authorizer: Arc<dyn crate::authorizer::Authorizer>,
+        freeze: (&str, PatternType),
+    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+        let (handle, dir) = crate::test_support::start_broker_with(move |cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = authorizer;
+            cfg.transaction_state_num_partitions = 1;
+            cfg.transaction_state_replication_factor = 1;
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        wait_until("the broker becomes controller leader", || {
+            broker
+                .controller
+                .watch_leader()
+                .borrow()
+                .is_some_and(|node| node == broker.config.node_id)
+        })
+        .await;
+        wait_until("the broker registers itself", || {
+            broker.controller.current_image().brokers().next().is_some()
+        })
+        .await;
+        crate::txn::bootstrap::ensure_topic(&broker.controller, 1, 1)
+            .await
+            .expect("bootstrap __transaction_state");
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze_record(
+                freeze.0, freeze.1,
+            ))])
+            .await
+            .expect("submit the freeze");
+        wait_until("__transaction_state-0 becomes local", || {
+            broker
+                .partitions
+                .get(crate::txn::bootstrap::TOPIC, PartitionIndex(0))
+                .is_some()
+        })
+        .await;
+        let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
+        broker
+            .txn_coordinator
+            .put(
+                TxnEntry::new_empty(TID.to_owned(), krabka_log::ProducerId(11), 2, 30_000, 0),
+                txnv,
+            )
+            .await
+            .expect("seed the open transaction");
+        (handle, dir)
+    }
+
+    /// The two-topic request every freeze case sends, in the shape the given
+    /// wire version carries it.
+    fn freeze_case_request(version: i16) -> AddPartitionsToTxnRequest {
+        let topics = vec![topic(FROZEN_TOPIC, &[0, 1]), topic(UNFROZEN_TOPIC, &[0])];
+        if version >= 4 {
+            AddPartitionsToTxnRequest {
+                transactions: vec![AddPartitionsToTxnTransaction {
+                    transactional_id: TID.into(),
+                    producer_id: 11,
+                    producer_epoch: 2,
+                    verify_only: false,
+                    topics,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+        } else {
+            AddPartitionsToTxnRequest {
+                v3_and_below_transactional_id: TID.into(),
+                v3_and_below_producer_id: 11,
+                v3_and_below_producer_epoch: 2,
+                v3_and_below_topics: topics,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// The topic rows a response carries, whichever half of the wire format
+    /// the version puts them in.
+    fn topic_rows(
+        resp: &AddPartitionsToTxnResponse,
+        version: i16,
+    ) -> Vec<AddPartitionsToTxnTopicResult> {
+        if version >= 4 {
+            resp.results_by_transaction
+                .iter()
+                .flat_map(|txn| txn.topic_results.clone())
+                .collect()
+        } else {
+            resp.results_by_topic_v3_and_below.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_refuses_every_partition_row_of_a_frozen_topic_and_adds_the_unfrozen_one() {
+        // (label, wire version, freeze scope, pattern type). A prefix scope
+        // covering the topic has to refuse exactly what a literal one does,
+        // on both the v0-3 and the v4+ path.
+        for (label, version, scope, pattern_type) in [
+            (
+                "v3, a literal freeze",
+                3,
+                FROZEN_TOPIC,
+                PatternType::Literal,
+            ),
+            ("v3, a prefix freeze", 3, "tenant-a.", PatternType::Prefixed),
+            (
+                "v4, a literal freeze",
+                4,
+                FROZEN_TOPIC,
+                PatternType::Literal,
+            ),
+            ("v4, a prefix freeze", 4, "tenant-a.", PatternType::Prefixed),
+        ] {
+            let (broker_handle, _dir) = start_frozen_coordinator(
+                Arc::new(crate::authorizer::AllowAllAuthorizer),
+                (scope, pattern_type),
+            )
+            .await;
+            let broker = broker_handle.broker_arc_for_test();
+            let principal = principal();
+            let peer = peer();
+            let ctx = test_context(&principal, &peer);
+            let req_bytes = encode_request(&freeze_case_request(version), version);
+
+            let bytes = handle(&broker, version, 123, &req_bytes, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes, version);
+
+            let expected = vec![
+                topic_result(
+                    FROZEN_TOPIC,
+                    &[(0, codes::POLICY_VIOLATION), (1, codes::POLICY_VIOLATION)],
+                ),
+                topic_result(UNFROZEN_TOPIC, &[(0, codes::NONE)]),
+            ];
+            check!(topic_rows(&resp, version) == expected, "{label}");
+
+            // The refusal is the enlistment itself and not only the code: no
+            // partition of the frozen topic joins the transaction, while the
+            // unfrozen one does.
+            let entry_mutex = broker.txn_coordinator.get(TID).expect("open transaction");
+            let enrolled: HashSet<String> = entry_mutex
+                .lock()
+                .await
+                .partitions
+                .iter()
+                .map(|tp| tp.topic.clone())
+                .collect();
+            check!(
+                enrolled == HashSet::from([UNFROZEN_TOPIC.to_string()]),
+                "{label}"
+            );
+
+            broker_handle.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_tells_an_unauthorized_principal_it_is_unauthorized_and_not_that_it_is_frozen() {
+        for (label, version) in [("v3", 3), ("v4", 4)] {
+            let (broker_handle, _dir) = start_frozen_coordinator(
+                Arc::new(DenyTopicWrites),
+                (FROZEN_TOPIC, PatternType::Literal),
+            )
+            .await;
+            let broker = broker_handle.broker_arc_for_test();
+            let principal = principal();
+            let peer = peer();
+            let ctx = test_context(&principal, &peer);
+            let req_bytes = encode_request(&freeze_case_request(version), version);
+
+            let bytes = handle(&broker, version, 123, &req_bytes, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes, version);
+
+            // Both topics report the ACL deny. The frozen one reports 29 and
+            // not 44: its freeze state never reaches a caller with no right
+            // to read it.
+            let expected = vec![
+                topic_result(
+                    FROZEN_TOPIC,
+                    &[
+                        (0, codes::TOPIC_AUTHORIZATION_FAILED),
+                        (1, codes::TOPIC_AUTHORIZATION_FAILED),
+                    ],
+                ),
+                topic_result(UNFROZEN_TOPIC, &[(0, codes::TOPIC_AUTHORIZATION_FAILED)]),
+            ];
+            check!(topic_rows(&resp, version) == expected, "{label}");
+
+            broker_handle.shutdown().await;
+        }
     }
 }

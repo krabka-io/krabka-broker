@@ -1404,13 +1404,17 @@ fn start_liveness_services(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
     listener_protocol: krabka_security::ListenerProtocol,
-    metrics: &crate::metrics::BrokerMetrics,
+    // The two places this subsystem reports to, paired the way `log_dirs`
+    // pairs the two log-dir registries: the metric families, and the audit log
+    // that a bypassed background unclean recovery writes its evidence to.
+    observability: (&crate::metrics::BrokerMetrics, &Arc<krabka_audit::AuditLog>),
     shutdown: &CancellationToken,
     log_dirs: (
         &crate::log_dir_status::LogDirRegistry,
         &crate::log_dir_id::LogDirIds,
     ),
 ) -> LivenessStartup {
+    let (metrics, audit_log) = observability;
     let liveness = Arc::new(
         crate::heartbeat::controller_state::ControllerLivenessState::new(config.heartbeat_timeout),
     );
@@ -1447,6 +1451,10 @@ fn start_liveness_services(
             queue_capacity: config.unclean_recovery_queue_capacity,
             listener_protocol,
             inter_broker_server_name: config.inter_broker_server_name.clone(),
+            background: crate::unclean_recovery::BackgroundRecovery::new(
+                &config.break_glass,
+                Arc::clone(audit_log),
+            ),
         },
         shutdown.child_token(),
     );
@@ -1676,10 +1684,17 @@ fn spawn_cluster_data_maintenance(
         config.producer_id_expiration,
         shutdown.child_token(),
     );
+    // The sweep reads the KFC-9 write-freeze registry from this authority, so
+    // compaction stops on a frozen topic. Without it the cleaner resolves no
+    // freeze and compacts every eligible partition, which would remove records
+    // from a log that a disaster-recovery promotion needs byte-identical
+    // between sites.
+    let mut cleaner = cleaner_config(config);
+    cleaner.metadata = Some(Arc::clone(controller));
     tokio::spawn(crate::cleaner::run(
         Arc::clone(partitions),
         config.node_id,
-        cleaner_config(config),
+        cleaner,
         shutdown.child_token(),
         metrics.clone(),
     ));
@@ -1891,12 +1906,47 @@ struct RuntimeCaches {
     quota_buckets: Arc<crate::quota::QuotaBuckets>,
 }
 
+/// Publish the KFC-9 gauges that only the metadata image knows.
+///
+/// One image watch feeds both families, because both read the same image and
+/// both must fall as well as rise: the freeze gauge drops when a thaw removes
+/// an entry, and a proposal that moves from `Pending` to `Consumed` lowers one
+/// series and raises another. A tick loop would hold a stale value between
+/// ticks, and two loops would read two different images.
+fn spawn_break_glass_gauges(
+    config: &BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    metrics: &crate::metrics::BrokerMetrics,
+    shutdown: CancellationToken,
+) {
+    let images = controller.watch_image();
+    let metrics = metrics.clone();
+    let break_glass = config.break_glass.clone();
+    tokio::spawn(crate::metadata_source::watch_image_loop(
+        images,
+        "break-glass and freeze gauges",
+        shutdown,
+        move |image| {
+            metrics.record_topic_freezes_active(
+                i64::try_from(image.topic_freezes().count()).unwrap_or(i64::MAX),
+            );
+            crate::break_glass::metrics::record_proposal_states(
+                &metrics,
+                image,
+                &break_glass,
+                crate::time_util::now_ms(),
+            );
+        },
+    ));
+}
+
 fn start_runtime_watchers(
     config: &BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
     txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
+    metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> RuntimeCaches {
     if let (Some(dynamic), Some(tls_config)) = (tls_dynamic.cloned(), config.tls_config.clone()) {
@@ -1935,6 +1985,19 @@ fn start_runtime_watchers(
             shutdown.child_token(),
         ));
     }
+    // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
+    // that never sweeps is still safe, so the sweep needs no config gate.
+    let break_glass_controller: Arc<dyn crate::break_glass::sweep::BreakGlassController> =
+        Arc::new(BreakGlassSweepControllerAdapter {
+            handle: Arc::clone(controller),
+        });
+    tokio::spawn(crate::break_glass::sweep::run(
+        break_glass_controller,
+        crate::break_glass::sweep::SWEEP_INTERVAL,
+        crate::break_glass::sweep::PROPOSAL_RETENTION,
+        shutdown.child_token(),
+    ));
+    spawn_break_glass_gauges(config, controller, metrics, shutdown.child_token());
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
         tokio::spawn(crate::txn::expiration::run(
             Arc::clone(txn_coordinator),
@@ -2427,7 +2490,7 @@ async fn start_broker_runtime(
         controller,
         inter_broker_client,
         inter_listener_protocol,
-        &metrics,
+        (&metrics, &audit_log),
         &supervisor_shutdown,
         (storage.2, storage.3),
     );
@@ -2468,6 +2531,7 @@ async fn start_broker_runtime(
         tls_dynamic,
         &throttle_state,
         coordinators.0,
+        &metrics,
         &supervisor_shutdown,
     );
     Ok(BrokerRuntimeStartup {
@@ -3186,6 +3250,35 @@ impl BrokerHandle {
             .get(topic, PartitionIndex(partition))?;
         // Unwrap `Offset` -> `i64` at this test-helper boundary.
         Some(part.log_start_offset().0)
+    }
+
+    /// Test-only: hold `(topic, partition)`'s high watermark at `offset`,
+    /// leaving its log end offset where it is. Returns `false` if the partition
+    /// is not hosted on this broker.
+    ///
+    /// This is the state a leader is in whenever a follower in the ISR has not
+    /// acknowledged the tail of the log: records are durable locally and
+    /// invisible to every client until the watermark catches up. Producing it
+    /// for real needs a second broker that is stopped mid-flight, and the
+    /// window before Kafka shrinks the ISR and advances the watermark anyway is
+    /// a timeout rather than a state. A test that wants to assert what a client
+    /// may see of an unreplicated tail installs the watermark instead, and gets
+    /// the same partition without the second broker or the race.
+    ///
+    /// Nothing here reopens the log or moves the log end offset, so a caller
+    /// that has already settled its writes can take a reading immediately.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn hold_high_watermark_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+    ) -> bool {
+        let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) else {
+            return false;
+        };
+        part.replica_state.lock().await.hw = krabka_log::Offset(offset);
+        true
     }
 
     /// Test-only: return the `retention.ms` override currently active in
@@ -4299,6 +4392,33 @@ struct DelegationTokenCleanupControllerAdapter {
 impl crate::delegation_token_cleanup::DelegationTokenController
     for DelegationTokenCleanupControllerAdapter
 {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
+        self.handle.current_image()
+    }
+
+    async fn submit_change(
+        &self,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<(), String> {
+        self.handle
+            .submit_change(records)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// KFC-9: wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
+/// [`crate::break_glass::sweep::BreakGlassController`] trait that the
+/// break-glass expiry sweep needs. Every broker runs the sweep, the way every
+/// broker runs the delegation-token sweep. Raft serializes duplicate
+/// tombstones, so each one after the first is a no-op on the apply path.
+struct BreakGlassSweepControllerAdapter {
+    handle: Arc<dyn crate::metadata_source::MetadataSource>,
+}
+
+#[async_trait::async_trait]
+impl crate::break_glass::sweep::BreakGlassController for BreakGlassSweepControllerAdapter {
     fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.handle.current_image()
     }

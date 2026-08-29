@@ -14,10 +14,15 @@
 //! per-second gauges to monotonic counters per Prometheus best practice
 //! — operators compute rates with `rate()` at scrape time.
 
-use std::sync::{Arc, atomic::AtomicU64};
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    sync::{Arc, atomic::AtomicU64},
+};
 
+use krabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::{
-    encoding::EncodeLabelSet,
+    encoding::{EncodeLabelSet, EncodeLabelValue, LabelValueEncoder},
     metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
     registry::Registry,
 };
@@ -149,6 +154,104 @@ pub struct SaslMechanismLabel {
 pub struct SchemaRejectionLabel {
     pub topic: String,
     pub reason: String,
+}
+
+/// KFC-9 state of a break-glass proposal.
+///
+/// The four states are the whole lifecycle of a proposal, so a closed enum
+/// bounds the `break_glass_proposals` label set at four series.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum BreakGlassState {
+    /// The proposal has fewer approvals than the broker needs.
+    Pending,
+    /// The proposal has every approval it needs and no transition used it yet.
+    Approved,
+    /// The proposal passed its expiry time and no transition used it.
+    Expired,
+    /// A privileged transition used the proposal.
+    Consumed,
+}
+
+impl BreakGlassState {
+    /// Every state, in lifecycle order.
+    pub const ALL: [Self; 4] = [Self::Pending, Self::Approved, Self::Expired, Self::Consumed];
+
+    /// The `state` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Expired => "expired",
+            Self::Consumed => "consumed",
+        }
+    }
+}
+
+impl EncodeLabelValue for BreakGlassState {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// KFC-9 privileged transition that a break-glass proposal authorizes, as a
+/// metric label.
+///
+/// [`krabka_metadata::BreakGlassAction`] is the one definition of the gated
+/// set. This newtype is only what lets that definition *be* a label value:
+/// both the enum and `EncodeLabelValue` are foreign to this crate, so the
+/// orphan rule forbids implementing the trait on the enum directly.
+///
+/// The label set stays as closed as a broker-local enum made it. The wrapped
+/// enum is itself closed, so the `break_glass_refusals` and
+/// `break_glass_bypassed` families still carry one series per gated operation
+/// and no caller can name an eighth action. What the newtype adds is that
+/// there is now one enum rather than two: an action added to the metadata
+/// definition cannot be forgotten here, and `break_glass::action_name` is the
+/// one spelling that the configuration, the audit event and the metric label
+/// all share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BreakGlassAction(pub GatedAction);
+
+impl BreakGlassAction {
+    /// The `action` label value this transition renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        crate::break_glass::action_name(self.0)
+    }
+}
+
+/// Hashing the label text rather than the wrapped enum, which carries no
+/// `Hash` of its own. Two actions are equal exactly when their names are, so
+/// the hash agrees with `Eq`.
+impl Hash for BreakGlassAction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl EncodeLabelValue for BreakGlassAction {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// KFC-9 proposal-state label set, paired with the `break_glass_proposals`
+/// gauge family. Cardinality is bounded at four, because the field is the
+/// closed [`BreakGlassState`] enum and no caller can name a fifth state.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct BreakGlassStateLabel {
+    pub state: BreakGlassState,
+}
+
+/// KFC-9 privileged-transition label set, paired with the
+/// `break_glass_refusals` and `break_glass_bypassed` counter families.
+/// Cardinality is bounded at seven, because the field wraps the closed
+/// [`krabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
+/// action.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct BreakGlassActionLabel {
+    pub action: BreakGlassAction,
 }
 
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
@@ -506,6 +609,50 @@ pub struct BrokerMetrics {
     /// this series a rule has to carry a copy of the threshold, and the copy
     /// goes stale the moment an operator retunes the broker.
     pub delivery_clock_uncertainty_seconds: Gauge<f64, AtomicU64>,
+    /// KFC-9 cumulative count of Produce partition rows the broker refused
+    /// because a freeze covers the topic.
+    ///
+    /// The gate sits before the batch is parsed, so a refused row costs no CRC
+    /// check and moves no log end offset. The broker bumps this counter once
+    /// per refused row, so one request that names three partitions of a frozen
+    /// topic adds 3.
+    ///
+    /// Cardinality is bounded by the number of topics a freeze covers, and
+    /// that is at most the number of topics the cluster holds. This is the
+    /// bound the other per-topic families here already accept. A client
+    /// cannot invent a series, because the label comes from a topic name that
+    /// resolved in the metadata image.
+    pub topic_freeze_rejections: Family<TopicLabel, Counter>,
+    /// KFC-9 live entries in the freeze registry (gauge).
+    ///
+    /// It counts registry entries and not frozen topics: one prefix entry
+    /// covers a whole namespace. The value falls when a thaw removes an entry,
+    /// and `freeze.max_entries` caps it. It carries no labels, so it is one
+    /// series per broker.
+    pub topic_freezes_active: Gauge,
+    /// KFC-9 break-glass proposals by state (gauge).
+    ///
+    /// A proposal moves through the states of [`BreakGlassState`], so a rise
+    /// in `pending` beside a flat `approved` is an incident where the second
+    /// person has not answered yet.
+    pub break_glass_proposals: Family<BreakGlassStateLabel, Gauge>,
+    /// KFC-9 cumulative count of privileged transitions the broker refused
+    /// because no approved break-glass proposal covers them, per action.
+    ///
+    /// A refusal is the expected answer when an operator runs the tool before
+    /// the approval lands, so a steady rate here is normal.
+    pub break_glass_refusals: Family<BreakGlassActionLabel, Counter>,
+    /// KFC-9 cumulative count of privileged transitions that ran **without**
+    /// an approved break-glass proposal, per action.
+    ///
+    /// This is the series to alert on. It counts data-losing transitions that
+    /// no second person approved: the background unclean-recovery path has no
+    /// caller to refuse, so `break_glass.background_unclean_recovery =
+    /// "audit-only"` lets recovery run and bumps this counter instead. Any
+    /// non-zero rate is an unclean recovery that took the cluster past the
+    /// two-person rule, and an operator should read the audit log for the
+    /// partition it names.
+    pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
 }
 
 impl BrokerMetrics {
@@ -588,6 +735,11 @@ impl BrokerMetrics {
             schema_validation_cache_hits: Counter::default(),
             schema_validation_cache_misses: Counter::default(),
             delivery_clock_uncertainty_seconds: Gauge::default(),
+            topic_freeze_rejections: Family::default(),
+            topic_freezes_active: Gauge::default(),
+            break_glass_proposals: Family::default(),
+            break_glass_refusals: Family::default(),
+            break_glass_bypassed: Family::default(),
         }
     }
 
@@ -1183,6 +1335,55 @@ impl BrokerMetrics {
         );
     }
 
+    fn register_group_7(&self, registry: &mut Registry) {
+        registry.register(
+            "topic_freeze_rejections",
+            "KFC-9 cumulative count of Produce partition rows the broker \
+             refused because a freeze covers the topic, per topic. The gate \
+             runs before the batch is parsed, so a refused row moves no log \
+             end offset.",
+            self.topic_freeze_rejections.clone(),
+        );
+
+        registry.register(
+            "topic_freezes_active",
+            "KFC-9 live entries in the freeze registry (gauge). One prefix \
+             entry covers a whole namespace, so this counts entries and not \
+             frozen topics. The freeze max_entries setting caps it.",
+            self.topic_freezes_active.clone(),
+        );
+
+        registry.register(
+            "break_glass_proposals",
+            "KFC-9 break-glass proposals by state (gauge), where state is one \
+             of pending, approved, expired, and consumed. A rise in pending \
+             beside a flat approved is an incident where the second person \
+             has not answered yet.",
+            self.break_glass_proposals.clone(),
+        );
+
+        registry.register(
+            "break_glass_refusals",
+            "KFC-9 cumulative count of privileged transitions the broker \
+             refused because no approved break-glass proposal covers them, \
+             per action. A refusal is the expected answer when an operator \
+             runs the tool before the approval lands.",
+            self.break_glass_refusals.clone(),
+        );
+
+        registry.register(
+            "break_glass_bypassed",
+            "KFC-9 cumulative count of privileged transitions that ran \
+             WITHOUT an approved break-glass proposal, per action. This is \
+             the series to alert on: it counts data-losing unclean \
+             recoveries that no second person approved, which the background \
+             policy audit-only permits because that path has no caller to \
+             refuse. Any non-zero rate needs an operator to read the audit \
+             log for the partition it names.",
+            self.break_glass_bypassed.clone(),
+        );
+    }
+
     /// Build and register every broker metric.
     #[must_use]
     /// # Panics
@@ -1201,6 +1402,7 @@ impl BrokerMetrics {
             metrics.register_group_4(&mut registry);
             metrics.register_group_5(&mut registry);
             metrics.register_group_6(&mut registry);
+            metrics.register_group_7(&mut registry);
         }
         metrics
     }
@@ -1506,6 +1708,59 @@ impl BrokerMetrics {
     pub fn record_schema_cache_miss(&self) {
         self.schema_validation_cache_misses.inc();
     }
+
+    /// KFC-9: account one Produce partition row the broker refused because a
+    /// freeze covers `topic`.
+    ///
+    /// The produce gate calls it once for each refused row, so one request
+    /// that names three partitions of a frozen topic makes three calls.
+    /// `topic` comes from a name that resolved in the metadata image, and the
+    /// series count is bounded by the number of topics a freeze covers.
+    pub fn record_topic_freeze_rejection(&self, topic: &str) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_freeze_rejections.get_or_create(&lbl).inc();
+    }
+
+    /// KFC-9: publish the number of live entries in the freeze registry.
+    ///
+    /// The metadata-image watcher calls it after an apply changes the
+    /// registry, so the gauge falls when a thaw removes an entry.
+    pub fn record_topic_freezes_active(&self, entries: i64) {
+        self.topic_freezes_active.set(entries);
+    }
+
+    /// KFC-9: publish the number of break-glass proposals in `state`.
+    ///
+    /// The caller publishes one value for each [`BreakGlassState`], so a
+    /// proposal that moves from `Pending` to `Consumed` lowers one series and
+    /// raises another.
+    pub fn record_break_glass_proposals(&self, state: BreakGlassState, count: i64) {
+        let lbl = BreakGlassStateLabel { state };
+        self.break_glass_proposals.get_or_create(&lbl).set(count);
+    }
+
+    /// KFC-9: account one privileged transition the broker refused because no
+    /// approved break-glass proposal covers `action`.
+    pub fn record_break_glass_refusal(&self, action: BreakGlassAction) {
+        let lbl = BreakGlassActionLabel { action };
+        self.break_glass_refusals.get_or_create(&lbl).inc();
+    }
+
+    /// KFC-9: account one privileged transition that ran **without** an
+    /// approved break-glass proposal.
+    ///
+    /// This is the series an operator alerts on. It counts a data-losing
+    /// transition that no second person approved: the background
+    /// unclean-recovery path has no caller to refuse, so the `audit-only`
+    /// policy lets recovery run and calls this method instead of failing
+    /// closed. A gated transition that an operator ran with an approval never
+    /// reaches here.
+    pub fn record_break_glass_bypass(&self, action: BreakGlassAction) {
+        let lbl = BreakGlassActionLabel { action };
+        self.break_glass_bypassed.get_or_create(&lbl).inc();
+    }
 }
 
 impl Default for BrokerMetrics {
@@ -1629,6 +1884,11 @@ mod tests {
         m.record_schema_validation_rejection("topic-a", "unknown_id");
         m.record_schema_cache_hit();
         m.record_schema_cache_miss();
+        m.record_topic_freeze_rejection("topic-a");
+        m.record_topic_freezes_active(1);
+        m.record_break_glass_proposals(BreakGlassState::Pending, 1);
+        m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+        m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
         m.record_authentication("PLAIN", true);
         m.record_authentication("SCRAM-SHA-512", false);
         m.record_authentication("Unknown", false);
@@ -1735,6 +1995,11 @@ mod tests {
             "krabka_broker_schema_validation_rejections_total",
             "krabka_broker_schema_validation_cache_hits_total",
             "krabka_broker_schema_validation_cache_misses_total",
+            "krabka_broker_topic_freeze_rejections_total",
+            "krabka_broker_topic_freezes_active",
+            "krabka_broker_break_glass_proposals",
+            "krabka_broker_break_glass_refusals_total",
+            "krabka_broker_break_glass_bypassed_total",
         ] {
             assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
         }
@@ -2282,6 +2547,182 @@ mod tests {
         assert!(buf.contains("api_key=\"Unknown\""), "unknown label missing");
         // Keep `produce` referenced to document the intended label.
         let _ = produce;
+    }
+
+    #[tokio::test]
+    async fn kfc9_families_scrape_under_their_names_with_their_labels() {
+        // The registered name plus the counter suffix is what an alert rule
+        // spells, and the label name is what it groups by, so both belong in
+        // the assertion. Every value here is the movement one call makes.
+        let m = BrokerMetrics::new();
+        m.record_topic_freeze_rejection("orders");
+        m.record_topic_freezes_active(2);
+        m.record_break_glass_proposals(BreakGlassState::Pending, 3);
+        m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+        m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
+
+        let mut buf = String::new();
+        let r = m.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        drop(r);
+
+        let cases = [
+            (
+                "freeze rejections",
+                "krabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
+            ),
+            ("freezes active", "krabka_broker_topic_freezes_active 2"),
+            (
+                "proposals",
+                "krabka_broker_break_glass_proposals{state=\"pending\"} 3",
+            ),
+            (
+                "refusals",
+                "krabka_broker_break_glass_refusals_total{action=\"delete_topic\"} 1",
+            ),
+            (
+                "bypassed",
+                "krabka_broker_break_glass_bypassed_total{action=\"unclean_recovery\"} 1",
+            ),
+        ];
+        for (what, needle) in cases {
+            assert!(buf.contains(needle), "{what}: missing {needle} in:\n{buf}");
+        }
+    }
+
+    #[tokio::test]
+    async fn break_glass_state_label_covers_every_state() {
+        let cases = [
+            ("pending", BreakGlassState::Pending, 1),
+            ("approved", BreakGlassState::Approved, 2),
+            ("expired", BreakGlassState::Expired, 3),
+            ("consumed", BreakGlassState::Consumed, 4),
+        ];
+        // A new state needs a row here, so the closed label set stays covered.
+        assert!(cases.len() == BreakGlassState::ALL.len());
+
+        let m = BrokerMetrics::new();
+        for (_, state, count) in cases {
+            m.record_break_glass_proposals(state, count);
+        }
+
+        let mut buf = String::new();
+        let r = m.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        drop(r);
+
+        for (label, _, count) in cases {
+            let needle =
+                format!("krabka_broker_break_glass_proposals{{state=\"{label}\"}} {count}");
+            assert!(buf.contains(&needle), "missing {needle} in:\n{buf}");
+        }
+    }
+
+    #[tokio::test]
+    async fn break_glass_action_label_covers_every_gated_transition() {
+        // The expected label text is spelled out here rather than read back
+        // from `action_name`, so renaming an action fails this test instead of
+        // silently renaming the series an alert rule groups by.
+        let cases = [
+            ("thaw_topic_freeze", GatedAction::ThawTopicFreeze),
+            ("unclean_elect_leaders", GatedAction::UncleanElectLeaders),
+            ("unclean_recovery", GatedAction::UncleanRecovery),
+            ("unregister_broker", GatedAction::UnregisterBroker),
+            ("cancel_reassignment", GatedAction::CancelReassignment),
+            ("delete_topic", GatedAction::DeleteTopic),
+            ("delete_records", GatedAction::DeleteRecords),
+        ];
+        // An action added to the metadata enum needs a row here, so the closed
+        // label set stays covered.
+        assert!(cases.len() == crate::break_glass::ALL_ACTIONS.len());
+        for action in crate::break_glass::ALL_ACTIONS {
+            assert!(
+                cases.iter().any(|(_, cased)| *cased == action),
+                "no expected label for {action:?}"
+            );
+        }
+
+        // Each action gets a distinct refusal count, so a label that resolves
+        // to the wrong series shows up as the wrong number rather than as a
+        // still-passing test.
+        let m = BrokerMetrics::new();
+        for (i, (_, action)) in cases.into_iter().enumerate() {
+            for _ in 0..=i {
+                m.record_break_glass_refusal(BreakGlassAction(action));
+            }
+            m.record_break_glass_bypass(BreakGlassAction(action));
+        }
+
+        let mut buf = String::new();
+        let r = m.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        drop(r);
+
+        for (i, (label, _)) in cases.into_iter().enumerate() {
+            let refused = format!(
+                "krabka_broker_break_glass_refusals_total{{action=\"{label}\"}} {}",
+                i + 1
+            );
+            let bypassed =
+                format!("krabka_broker_break_glass_bypassed_total{{action=\"{label}\"}} 1");
+            assert!(buf.contains(&refused), "missing {refused} in:\n{buf}");
+            assert!(buf.contains(&bypassed), "missing {bypassed} in:\n{buf}");
+        }
+    }
+
+    #[test]
+    fn topic_freeze_rejections_accumulate_per_topic() {
+        // KFC-9: the produce gate bumps once per refused partition row, and a
+        // topic no freeze covers keeps a flat series.
+        let m = BrokerMetrics::new();
+        m.record_topic_freeze_rejection("orders");
+        m.record_topic_freeze_rejection("orders");
+        m.record_topic_freeze_rejection("payments");
+
+        let cases = [("orders", 2), ("payments", 1), ("unfrozen", 0)];
+        for (topic, want) in cases {
+            let lbl = TopicLabel {
+                topic: topic.to_string(),
+            };
+            // One `get_or_create` guard per statement (first
+            // materialization takes the family write lock).
+            let got = m.topic_freeze_rejections.get_or_create(&lbl).get();
+            assert!(got == want, "freeze rejections for {topic}");
+        }
+    }
+
+    #[test]
+    fn kfc9_gauges_fall_as_well_as_rise() {
+        // A thaw removes a registry entry and consumes the proposal that
+        // authorized it, so both gauges have to come back down.
+        let m = BrokerMetrics::new();
+        let pending = BreakGlassStateLabel {
+            state: BreakGlassState::Pending,
+        };
+        let consumed = BreakGlassStateLabel {
+            state: BreakGlassState::Consumed,
+        };
+
+        m.record_topic_freezes_active(3);
+        assert!(m.topic_freezes_active.get() == 3);
+        m.record_topic_freezes_active(1);
+        assert!(m.topic_freezes_active.get() == 1);
+        m.record_topic_freezes_active(0);
+        assert!(m.topic_freezes_active.get() == 0);
+
+        m.record_break_glass_proposals(BreakGlassState::Pending, 2);
+        m.record_break_glass_proposals(BreakGlassState::Consumed, 5);
+        // One `get_or_create` guard per statement (first materialization
+        // takes the family write lock).
+        let up = m.break_glass_proposals.get_or_create(&pending).get();
+        assert!(up == 2);
+
+        m.record_break_glass_proposals(BreakGlassState::Pending, 0);
+        m.record_break_glass_proposals(BreakGlassState::Consumed, 6);
+        let down = m.break_glass_proposals.get_or_create(&pending).get();
+        assert!(down == 0);
+        let rose = m.break_glass_proposals.get_or_create(&consumed).get();
+        assert!(rose == 6);
     }
 
     #[test]
