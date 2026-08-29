@@ -143,7 +143,7 @@ impl CleanedTransactionMetadata {
     /// survives, that is, the producer is in the survivor set. The rewrite
     /// drops the entries of producers whose data is fully gone, together with
     /// the marker, which is then removable.
-    fn retained_aborted(&self) -> impl Iterator<Item = &AbortedTxn> {
+    pub(super) fn retained_aborted(&self) -> impl Iterator<Item = &AbortedTxn> {
         self.aborted
             .iter()
             .filter(move |e| self.survivors.contains(&e.producer_id))
