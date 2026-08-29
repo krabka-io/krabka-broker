@@ -1,5 +1,5 @@
-//! The two unclean-recovery keys, KIP-841's enable flag and KIP-966's
-//! strategy, and the topic-over-cluster-default lookup they share.
+//! The two unclean-recovery keys, the KIP-841 enable flag and the KIP-966
+//! strategy, with the topic-over-cluster-default lookup they share.
 
 /// KIP-841: gates whether the controller may auto-elect an out-of-ISR
 /// replica as leader on ISR-empty failover. Default: `false`, which matches
