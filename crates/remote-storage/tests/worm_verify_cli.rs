@@ -51,7 +51,7 @@ fn metadata(index: usize) -> RemoteLogSegmentMetadata {
         RemoteLogSegmentDetails::new(
             4096,
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0), start)]),
+            maplit::btreemap! {LeaderEpoch(0) => start},
         ),
     )
     .unwrap()

@@ -223,7 +223,7 @@ mod tests {
 
         prune_orphaned_shard_dirs(
             &[root.path().to_path_buf()],
-            &std::collections::HashSet::from([keep.clone()]),
+            &maplit::hashset! {keep.clone()},
         )
         .unwrap();
 

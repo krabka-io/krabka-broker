@@ -98,7 +98,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-            super_users: std::collections::HashSet::from([admin.to_string()]),
+            super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
@@ -264,7 +264,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-            super_users: std::collections::HashSet::from([admin.to_string()]),
+            super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
                 username: admin.to_string(),
                 password: admin_pass.to_string(),

@@ -123,7 +123,7 @@ fn archive_segment(
         RemoteLogSegmentDetails::new(
             i32::try_from(std::fs::metadata(&export.log_path).unwrap().len()).expect("fits i32"),
             RemoteLogSegmentState::CopySegmentFinished,
-            BTreeMap::from([(LeaderEpoch(0), export.base_offset.0)]),
+            maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
         ),
     )
     .expect("valid remote metadata");

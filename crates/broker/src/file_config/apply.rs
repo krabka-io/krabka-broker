@@ -282,10 +282,7 @@ protocol = "Plaintext"
                     sasl_config: None,
                 },
             ],
-            server_properties: std::collections::BTreeMap::from([(
-                "log.retention.hours".to_string(),
-                "24".to_string(),
-            )]),
+            server_properties: maplit::btreemap! {"log.retention.hours".to_string() => "24".to_string()},
             controller_listener_protocol: None,
             tls_config: None,
             oauthbearer: None,

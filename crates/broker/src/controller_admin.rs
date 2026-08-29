@@ -179,7 +179,7 @@ mod tests {
 
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
-            keys == BTreeSet::from([29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 64,])
+            keys == maplit::btreeset! {29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 64,}
         );
     }
 

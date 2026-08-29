@@ -300,7 +300,7 @@ mod tests {
         let placed = fanout
             .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
             .await;
-        assert!(placed == BTreeMap::from([(at("orders", 0), Offset(77))]));
+        assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(77)});
     }
 
     #[tokio::test]
@@ -346,7 +346,7 @@ mod tests {
         let placed = fanout
             .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
             .await;
-        assert!(placed == BTreeMap::from([(at("orders", 0), Offset(12))]));
+        assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(12)});
     }
 
     #[tokio::test]

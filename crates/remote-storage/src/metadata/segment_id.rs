@@ -86,7 +86,7 @@ mod tests {
         let a = TopicIdPartition::new(Uuid::from_u128(7), "alpha", 3);
         let b = TopicIdPartition::new(Uuid::from_u128(7), "renamed", 3);
         assert!(a == b);
-        let set: HashSet<_> = [a, b].into_iter().collect();
+        let set: HashSet<_> = maplit::hashset! {a, b};
         assert!(set.len() == 1, "same id+partition must collapse in a set");
     }
 

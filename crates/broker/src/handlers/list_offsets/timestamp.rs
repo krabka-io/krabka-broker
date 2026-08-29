@@ -187,7 +187,7 @@ mod tests {
             RemoteLogSegmentDetails::new(
                 i32::try_from(log_bytes.len()).expect("segment size"),
                 RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 0)]),
+                maplit::btreemap! {LeaderEpoch(0) => 0},
             ),
         )
         .expect("segment metadata");

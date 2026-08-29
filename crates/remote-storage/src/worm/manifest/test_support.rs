@@ -47,7 +47,7 @@ pub(super) fn sample_body() -> ManifestBody {
             broker_id: 7,
             event_timestamp_ms: 1_713_000_001_000,
             segment_size_bytes: 4096,
-            leader_epochs: BTreeMap::from([(0, 100), (1, 150)]),
+            leader_epochs: maplit::btreemap! {0 => 100, 1 => 150},
             txn_index_empty: false,
         },
         objects: vec![located_object(), bare_object()],

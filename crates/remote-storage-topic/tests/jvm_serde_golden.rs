@@ -61,7 +61,7 @@ fn segment_id() -> RemoteLogSegmentId {
 }
 
 fn epochs() -> BTreeMap<LeaderEpoch, i64> {
-    BTreeMap::from([(LeaderEpoch(0), 0), (LeaderEpoch(1), 50)])
+    maplit::btreemap! {LeaderEpoch(0) => 0, LeaderEpoch(1) => 50}
 }
 
 /// Base add-segment metadata shared by the three add cases:

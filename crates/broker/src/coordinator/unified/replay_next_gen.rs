@@ -163,12 +163,9 @@ mod tests {
         let expected = GroupSeed {
             group_epoch: 11,
             target_epoch: 12,
-            members: std::collections::HashMap::from([("member-a".to_string(), member)]),
-            target_per_member: std::collections::HashMap::from([("member-a".to_string(), target)]),
-            current_per_member: std::collections::HashMap::from([(
-                "member-a".to_string(),
-                current,
-            )]),
+            members: maplit::hashmap! {"member-a".to_string() => member},
+            target_per_member: maplit::hashmap! {"member-a".to_string() => target},
+            current_per_member: maplit::hashmap! {"member-a".to_string() => current},
         };
         assert!(*coord.seeds.get("g").unwrap() == expected);
         assert!(coord.cached_seed("g") == Some(expected));

@@ -190,7 +190,7 @@ mod tests {
         }));
         img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: BTreeMap::from([(UNCLEAN_RECOVERY_STRATEGY.into(), "invalid".into())]),
+            overrides: maplit::btreemap! {UNCLEAN_RECOVERY_STRATEGY.into() => "invalid".into()},
         }));
 
         assert!(resolve_recovery_strategy(&img, "t") == RecoveryStrategy::None);

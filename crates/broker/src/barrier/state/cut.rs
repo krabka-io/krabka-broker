@@ -127,11 +127,10 @@ mod tests {
     #[test]
     fn a_cut_that_reached_every_partition_is_complete() {
         let targets = vec![target("orders", 2), target("payments", 1)];
-        let placed = BTreeMap::from([
-            (at("orders", 0), Offset(10)),
-            (at("orders", 1), Offset(11)),
-            (at("payments", 0), Offset(5)),
-        ]);
+        let placed = maplit::btreemap! {
+        at("orders", 0) => Offset(10),
+        at("orders", 1) => Offset(11),
+        at("payments", 0) => Offset(5)};
         let expected = CutValue {
             triggered_at: 100,
             completed_at: 140,
@@ -166,7 +165,7 @@ mod tests {
     #[test]
     fn a_cut_that_missed_a_partition_is_partial_and_names_it() {
         let targets = vec![target("orders", 2)];
-        let placed = BTreeMap::from([(at("orders", 1), Offset(11))]);
+        let placed = maplit::btreemap! {at("orders", 1) => Offset(11)};
         let expected = CutValue {
             triggered_at: 100,
             completed_at: 140,
@@ -215,7 +214,8 @@ mod tests {
     #[test]
     fn a_cut_ignores_an_offset_that_no_target_names() {
         let targets = vec![target("orders", 1)];
-        let placed = BTreeMap::from([(at("orders", 0), Offset(4)), (at("dropped", 0), Offset(9))]);
+        let placed =
+            maplit::btreemap! {at("orders", 0) => Offset(4), at("dropped", 0) => Offset(9)};
         let cut = build_cut(1, 2, &targets, &placed);
         assert!(cut.status == CutStatus::Complete);
         assert!(cut.topics.len() == 1);

@@ -100,16 +100,9 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: std::collections::BTreeMap::from([
-                (
-                    crate::config_keys::CLEANUP_POLICY.to_string(),
-                    "delete".to_string(),
-                ),
-                (
-                    crate::config_keys::DELIVERY_MODE.to_string(),
-                    "scheduled".to_string(),
-                ),
-            ]),
+            overrides: maplit::btreemap! {
+            crate::config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
+            crate::config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string()},
         });
         assert!(record == expected);
     }
@@ -150,10 +143,7 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: std::collections::BTreeMap::from([(
-                crate::config_keys::RETENTION_MS.to_string(),
-                "60000".to_string(),
-            )]),
+            overrides: maplit::btreemap! {crate::config_keys::RETENTION_MS.to_string() => "60000".to_string()},
         });
         assert!(record == expected);
     }

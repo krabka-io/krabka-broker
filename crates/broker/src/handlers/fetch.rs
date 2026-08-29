@@ -324,20 +324,16 @@ mod tests {
                 topic_id,
                 partition: PartitionIndex(0),
             },
-            std::sync::Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-                krabka_raft::NodeId(1),
-                source,
-            )]))),
+            std::sync::Arc::new(WalShardEngine::for_logs(
+                maplit::btreemap! {krabka_raft::NodeId(1) => source},
+            )),
         );
         broker
             .wal_shards
-            .replace_placements(&std::collections::HashMap::from([(
-                ShardId {
-                    topic_id,
-                    partition: PartitionIndex(0),
-                },
-                vec![local_node_id],
-            )]));
+            .replace_placements(&maplit::hashmap! {ShardId {
+                topic_id,
+                partition: PartitionIndex(0),
+            } => vec![local_node_id]});
         let principal = Principal {
             name: "broker-2".into(),
             auth_method: AuthMethod::Anonymous,

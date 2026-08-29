@@ -103,7 +103,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
             // freshly minted delegation token (TokenID/HMAC) can authenticate
             // via the token-fallback path on the SCRAM handler.
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha256],
-            super_users: std::collections::HashSet::from([admin.to_string()]),
+            super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
                 username: admin.to_string(),
                 password: admin_pass.to_string(),

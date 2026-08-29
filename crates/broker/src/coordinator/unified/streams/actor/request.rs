@@ -102,10 +102,9 @@ mod tests {
         ];
         let map = task_offsets_to_map(&wire);
         check!(
-            map == BTreeMap::from([
-                (("sub-a".to_string(), 0), Offset(42)),
-                (("sub-a".to_string(), 1), Offset(7)),
-            ])
+            map == maplit::btreemap! {
+            ("sub-a".to_string(), 0) => Offset(42),
+            ("sub-a".to_string(), 1) => Offset(7)}
         );
     }
 }

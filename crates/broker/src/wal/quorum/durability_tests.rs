@@ -234,10 +234,9 @@ async fn quorum_wal_store_rejects_a_source_outside_the_voter_set() {
     let replica = Arc::new(Mutex::new(
         Log::open(dir.path().join("replica"), LogConfig::default()).unwrap(),
     ));
-    let engine = Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-        NodeId(1),
-        replica,
-    )])));
+    let engine = Arc::new(WalShardEngine::for_logs(
+        maplit::btreemap! {NodeId(1) => replica},
+    ));
     let store = QuorumWalStore::new(source, engine);
 
     let error = store.trim_to_offset(Offset(0)).await.unwrap_err();

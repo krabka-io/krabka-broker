@@ -254,7 +254,7 @@ pub(crate) fn start_sasl_ssl_broker(
             client_auth: krabka_security::ClientAuthMode::Disabled,
         }),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
-        super_users: std::collections::HashSet::from([admin.to_string()]),
+        super_users: maplit::hashset! {admin.to_string()},
         ..BrokerConfig::default()
     };
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(

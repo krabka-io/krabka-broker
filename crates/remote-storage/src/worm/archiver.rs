@@ -198,7 +198,7 @@ mod tests {
             RemoteLogSegmentDetails::new(
                 4096,
                 RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 0)]),
+                maplit::btreemap! {LeaderEpoch(0) => 0},
             ),
         )
         .unwrap();

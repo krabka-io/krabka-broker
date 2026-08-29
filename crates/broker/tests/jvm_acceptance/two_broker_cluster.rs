@@ -89,7 +89,7 @@ pub(crate) async fn start_two_sasl_brokers(
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-            super_users: std::collections::HashSet::from([admin.to_string()]),
+            super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
@@ -251,7 +251,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
                 client_auth: krabka_security::ClientAuthMode::Disabled,
             }),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
-            super_users: std::collections::HashSet::from([admin.to_string()]),
+            super_users: maplit::hashset! {admin.to_string()},
             inter_broker_credentials: Some(InterBrokerCredentials::Plain {
                 username: admin.to_string(),
                 password: admin_pass.to_string(),

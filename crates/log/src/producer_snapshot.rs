@@ -266,12 +266,12 @@ mod tests {
 
     fn sample() -> HashMap<ProducerId, ProducerSnapshotEntry> {
         let entry = sample_entry();
-        HashMap::from([(entry.producer_id, entry)])
+        maplit::hashmap! {entry.producer_id => entry}
     }
 
     fn assert_rejected(entry: ProducerSnapshotEntry) {
         let dir = tempfile::tempdir().unwrap();
-        let entries = HashMap::from([(entry.producer_id, entry)]);
+        let entries = maplit::hashmap! {entry.producer_id => entry};
         let path = write(dir.path(), Offset(1), &entries).unwrap();
         assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
     }
@@ -288,7 +288,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut entry = sample_entry();
         entry.producer_id = ProducerId(0);
-        let entries = HashMap::from([(entry.producer_id, entry)]);
+        let entries = maplit::hashmap! {entry.producer_id => entry};
         let path = write(dir.path(), Offset(102), &entries).unwrap();
         assert2::assert!(read(&path).unwrap() == entries);
     }
@@ -483,7 +483,7 @@ mod tests {
             coordinator_epoch: 0,
             current_txn_first_offset: None,
         };
-        let entries = HashMap::from([(marker.producer_id, marker), (data.producer_id, data)]);
+        let entries = maplit::hashmap! {marker.producer_id => marker, data.producer_id => data};
         let path = write(dir.path(), Offset(1), &entries).unwrap();
         assert2::assert!(read(&path).unwrap() == entries);
     }

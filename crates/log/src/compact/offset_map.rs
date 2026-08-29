@@ -179,7 +179,7 @@ mod tests {
         let seg = write_sealed_batches(dir.path(), &[control_batch(0, 1000, 1 /* COMMIT */), data]);
         let segment_refs: Vec<&Segment> = vec![&seg];
         let map = build_offset_map(&segment_refs).unwrap();
-        assert2::assert!(map == HashMap::from([(Bytes::from_static(b"k1"), Offset(1))]));
+        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
     #[test]
@@ -197,10 +197,9 @@ mod tests {
         let segment_refs: Vec<&Segment> = vec![&first_segment];
         let map = build_offset_map(&segment_refs).unwrap();
         assert2::assert!(
-            map == HashMap::from([
-                (Bytes::from_static(b"k1"), Offset(2)),
-                (Bytes::from_static(b"k2"), Offset(1)),
-            ])
+            map == maplit::hashmap! {
+            Bytes::from_static(b"k1") => Offset(2),
+            Bytes::from_static(b"k2") => Offset(1)}
         );
     }
 
@@ -218,7 +217,7 @@ mod tests {
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment];
         let map = build_offset_map(&segment_refs).unwrap();
-        assert2::assert!(map == HashMap::from([(Bytes::from_static(b"k1"), Offset(1))]));
+        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
     #[test]
@@ -236,7 +235,7 @@ mod tests {
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment, &second_segment];
         let map = build_offset_map(&segment_refs).unwrap();
-        assert2::assert!(map == HashMap::from([(Bytes::from_static(b"k1"), Offset(10))]));
+        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(10)});
     }
 
     // Survivor detection compares each record's absolute offset
@@ -279,7 +278,7 @@ mod tests {
         let segment_refs: Vec<&Segment> = vec![&seg];
         let map = build_offset_map(&segment_refs).unwrap();
         // Sanity: the newest-for-key absolute offset is 15 (10 + 5).
-        assert2::assert!(map == HashMap::from([(Bytes::from_static(b"k1"), Offset(15))]));
+        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(15)});
 
         let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
         // Producer 2000's newest data survives; producer 1000's is superseded.

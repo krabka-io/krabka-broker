@@ -153,7 +153,7 @@ mod tests {
 
         let (tx1, _rx1) = tokio::sync::oneshot::channel();
         let (tx2, _rx2) = tokio::sync::oneshot::channel();
-        let mut joiners = HashMap::from([("m1".to_string(), tx1), ("m2".to_string(), tx2)]);
+        let mut joiners = maplit::hashmap! {"m1".to_string() => tx1, "m2".to_string() => tx2};
         let mut followers = HashMap::new();
 
         complete_classic_rebalance(&mut state, &mut joiners, &mut followers);
@@ -168,8 +168,8 @@ mod tests {
     async fn removed_classic_members_drain_parked_waiters() {
         let (join_tx, join_rx) = tokio::sync::oneshot::channel();
         let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
-        let mut joiners = HashMap::from([("m1".to_string(), join_tx)]);
-        let mut followers = HashMap::from([("m1".to_string(), sync_tx)]);
+        let mut joiners = maplit::hashmap! {"m1".to_string() => join_tx};
+        let mut followers = maplit::hashmap! {"m1".to_string() => sync_tx};
 
         drain_removed_classic_waiters(&["m1".to_string()], &mut joiners, &mut followers);
 

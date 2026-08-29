@@ -298,7 +298,7 @@ pub fn stuck_started_segment(
         krabka_remote_storage::RemoteLogSegmentDetails::new(
             100,
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0), base)]),
+            maplit::btreemap! {LeaderEpoch(0) => base},
         ),
     )
     .unwrap();

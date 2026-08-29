@@ -153,7 +153,7 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         .partition_record_for_test(TOPIC, 0)
         .expect("partition record after reassignment");
     let got: std::collections::HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
-    let want: std::collections::HashSet<u64> = [staying, new_node].into_iter().collect();
+    let want: std::collections::HashSet<u64> = maplit::hashset! {staying, new_node};
     assert!(
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"

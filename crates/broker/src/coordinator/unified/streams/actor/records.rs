@@ -249,7 +249,7 @@ mod tests {
                 member_epoch: 4,
                 previous_member_epoch: 3,
                 state: 0,
-                active: BTreeMap::from([("0".to_string(), vec![0, 1])]),
+                active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),
@@ -259,7 +259,7 @@ mod tests {
         target.insert(
             "m1".to_string(),
             StreamsGroupTargetAssignmentMemberValue {
-                active: BTreeMap::from([("0".to_string(), vec![0, 1])]),
+                active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
             },
@@ -285,8 +285,10 @@ mod tests {
         check!(m.member_epoch == 4);
         check!(m.previous_member_epoch == 3);
         check!(m.process_id == "p1");
-        check!(m.active == BTreeMap::from([("0".to_string(), vec![0, 1])]));
-        check!(actor.state.target.active["m1"] == BTreeMap::from([("0".to_string(), vec![0, 1])]));
+        check!(m.active == maplit::btreemap! {"0".to_string() => vec![0, 1]});
+        check!(
+            actor.state.target.active["m1"] == maplit::btreemap! {"0".to_string() => vec![0, 1]}
+        );
         check!(actor.state.phase == StreamsGroupStatePhase::Stable);
     }
 }

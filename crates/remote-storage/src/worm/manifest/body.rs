@@ -173,8 +173,11 @@ mod tests {
         }
 
         // An unknown field is a decode failure, not a silently dropped one.
-        let with_extra = r#"{"body":{"format_version":1,"surprise":true},"signature":null}"#;
-        check!(serde_json::from_str::<SegmentManifest>(with_extra).is_err());
+        let with_extra = serde_json::json!({
+            "body": {"format_version": 1, "surprise": true},
+            "signature": null,
+        });
+        check!(serde_json::from_value::<SegmentManifest>(with_extra).is_err());
     }
 
     #[test]
@@ -192,7 +195,7 @@ mod tests {
             RemoteLogSegmentDetails::new(
                 4096,
                 RemoteLogSegmentState::CopySegmentFinished,
-                BTreeMap::from([(LeaderEpoch(0), 100), (LeaderEpoch(1), 150)]),
+                maplit::btreemap! {LeaderEpoch(0) => 100, LeaderEpoch(1) => 150},
             ),
         )
         .unwrap()
@@ -211,7 +214,7 @@ mod tests {
                     broker_id: 7,
                     event_timestamp_ms: 1_713_000_001_000,
                     segment_size_bytes: 4096,
-                    leader_epochs: BTreeMap::from([(0, 100), (1, 150)]),
+                    leader_epochs: maplit::btreemap! {0 => 100, 1 => 150},
                     txn_index_empty: true,
                 }
         );

@@ -22,7 +22,7 @@ async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
     for n in [1u64, 2, 3] {
         l.record_heartbeat(n).await;
     }
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = super::compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -58,7 +58,7 @@ async fn offline_dir_leaves_healthy_dir_partition_untouched() {
     for n in [1u64, 2, 3] {
         l.record_heartbeat(n).await;
     }
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = super::compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -79,7 +79,7 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
     for n in [1u64, 2, 3] {
         l.record_heartbeat(n).await;
     }
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = super::compute_offline_dir_failover_changes(
         &img,
         NodeId(2),
@@ -117,7 +117,7 @@ async fn offline_dir_idempotent_after_failover() {
     for n in [1u64, 2, 3] {
         l.record_heartbeat(n).await;
     }
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = super::compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -142,7 +142,7 @@ async fn offline_dir_empty_isr_balanced_strategy_defers_to_urm() {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // Only broker 3 alive but it's NOT in the ISR — alive_isr = empty.
     l.record_heartbeat(3).await;
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -173,7 +173,7 @@ async fn offline_dir_empty_isr_aggressive_strategy_defers_to_urm() {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // broker 2 is not alive, broker 3 is alive but not in ISR.
     l.record_heartbeat(3).await;
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -203,7 +203,7 @@ async fn offline_dir_empty_isr_unclean_enabled_elects_out_of_isr_replica() {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // broker 3 alive, broker 2 dead (no heartbeat).
     l.record_heartbeat(3).await;
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let metrics = crate::metrics::BrokerMetrics::new();
     let plan = compute_offline_dir_failover_changes(&img, NodeId(1), &offline, &l, &metrics).await;
     assert!(plan.recoveries.is_empty());
@@ -238,7 +238,7 @@ async fn offline_dir_empty_isr_no_unclean_leaves_partition_unavailable() {
     let img = img_with_dirs("t", 1, &[1, 2, 3], &[1, 2], &[bad, good, good]);
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     l.record_heartbeat(3).await; // only 3 alive, but not in ISR
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let plan = compute_offline_dir_failover_changes(
         &img,
         NodeId(1),
@@ -265,7 +265,7 @@ async fn offline_dir_empty_isr_unclean_enabled_no_alive_replica_stays_unavailabl
     set_topic_config(&mut img, "t", UNCLEAN_LEADER_ELECTION_ENABLE, "true");
     let l = ControllerLivenessState::new(krabka_units::secs(10));
     // No heartbeats — nobody alive.
-    let offline: std::collections::HashSet<uuid::Uuid> = [bad].into_iter().collect();
+    let offline: std::collections::HashSet<uuid::Uuid> = maplit::hashset! {bad};
     let metrics = crate::metrics::BrokerMetrics::new();
     let plan = compute_offline_dir_failover_changes(&img, NodeId(1), &offline, &l, &metrics).await;
     check!(

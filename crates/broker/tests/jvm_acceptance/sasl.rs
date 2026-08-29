@@ -152,7 +152,7 @@ pub(crate) fn start_dual_mech_broker(
             SaslMechanism::ScramSha256,
             SaslMechanism::ScramSha512,
         ],
-        super_users: std::collections::HashSet::from([admin.to_string()]),
+        super_users: maplit::hashset! {admin.to_string()},
         ..BrokerConfig::default()
     };
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
@@ -298,7 +298,7 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-        super_users: std::collections::HashSet::from([super_user.clone()]),
+        super_users: maplit::hashset! {super_user.clone()},
         ..BrokerConfig::default()
     };
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(

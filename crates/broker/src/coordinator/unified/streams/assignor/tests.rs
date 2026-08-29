@@ -57,10 +57,7 @@ fn single_member_single_stateless_subtopology() {
     let out = assign(&members, &inp);
     assert!(
         out == StreamsAssignment {
-            active: HashMap::from([(
-                "A".to_string(),
-                BTreeMap::from([("sub-0".to_string(), vec![0, 1, 2])]),
-            )]),
+            active: maplit::hashmap! {"A".to_string() => maplit::btreemap! {"sub-0".to_string() => vec![0, 1, 2]}},
             standby: HashMap::new(),
             warmup: HashMap::new(),
         }
@@ -80,16 +77,9 @@ fn two_members_four_stateless_tasks_balanced() {
     // alternating.
     assert!(
         out.active
-            == HashMap::from([
-                (
-                    "A".to_string(),
-                    BTreeMap::from([("sub-0".to_string(), vec![0, 2])]),
-                ),
-                (
-                    "B".to_string(),
-                    BTreeMap::from([("sub-0".to_string(), vec![1, 3])]),
-                ),
-            ])
+            == maplit::hashmap! {
+            "A".to_string() => maplit::btreemap! {"sub-0".to_string() => vec![0, 2]},
+            "B".to_string() => maplit::btreemap! {"sub-0".to_string() => vec![1, 3]}}
     );
     // Re-running yields identical output.
     let out2 = assign(&members, &inp);
@@ -99,7 +89,7 @@ fn two_members_four_stateless_tasks_balanced() {
 #[test]
 fn stickiness_keeps_owned_tasks() {
     let mut a = member("A", "p1");
-    a.current_active = BTreeMap::from([("sub-0".to_owned(), vec![0, 1])]);
+    a.current_active = maplit::btreemap! {"sub-0".to_owned() => vec![0, 1]};
     let b = member("B", "p2");
     let members = [a, b];
     // Universe grew to 4 partitions; A owns 0,1 already.
@@ -118,7 +108,7 @@ fn stickiness_keeps_owned_tasks() {
 fn stickiness_rebalances_when_skewed() {
     // A owns all 4; adding B must move some over to balance.
     let mut a = member("A", "p1");
-    a.current_active = BTreeMap::from([("sub-0".to_owned(), vec![0, 1, 2, 3])]);
+    a.current_active = maplit::btreemap! {"sub-0".to_owned() => vec![0, 1, 2, 3]};
     let b = member("B", "p2");
     let members = [a, b];
     let inp = input(
@@ -185,7 +175,7 @@ fn warmup_deferral_when_target_not_caught_up() {
     // A currently owns both partitions; balanced target wants to move one
     // to B. B has no lag info -> not caught up -> defer + warmup.
     let mut a = member("A", "p1");
-    a.current_active = BTreeMap::from([("sub-0".to_owned(), vec![0, 1])]);
+    a.current_active = maplit::btreemap! {"sub-0".to_owned() => vec![0, 1]};
     let b = member("B", "p2");
     let members = [a, b];
     let mut inp = input(
@@ -208,11 +198,11 @@ fn warmup_promotes_when_caught_up() {
     // Same skew, but B reports lag within acceptable bounds for the task it
     // would receive -> active move applied immediately, no warmup.
     let mut a = member("A", "p1");
-    a.current_active = BTreeMap::from([("sub-0".to_owned(), vec![0, 1])]);
+    a.current_active = maplit::btreemap! {"sub-0".to_owned() => vec![0, 1]};
     let mut b = member("B", "p2");
     // The balanced target moves the lexicographically-largest task (1) off
     // A onto B; report B caught up on it.
-    b.task_lag = BTreeMap::from([(("sub-0".to_owned(), 1), 5_i64)]);
+    b.task_lag = maplit::btreemap! {("sub-0".to_owned(), 1) => 5_i64};
     let members = [a, b];
     let mut inp = input(
         &[("sub-0", &[0, 1])],
@@ -225,16 +215,9 @@ fn warmup_promotes_when_caught_up() {
     // Move applied: A keeps 0, B takes 1; no warmup.
     assert!(
         out.active
-            == HashMap::from([
-                (
-                    "A".to_string(),
-                    BTreeMap::from([("sub-0".to_string(), vec![0])]),
-                ),
-                (
-                    "B".to_string(),
-                    BTreeMap::from([("sub-0".to_string(), vec![1])]),
-                ),
-            ])
+            == maplit::hashmap! {
+            "A".to_string() => maplit::btreemap! {"sub-0".to_string() => vec![0]},
+            "B".to_string() => maplit::btreemap! {"sub-0".to_string() => vec![1]}}
     );
     assert!(out.warmup.is_empty());
 }
@@ -243,7 +226,7 @@ fn warmup_promotes_when_caught_up() {
 fn warmup_cap_respected() {
     // Two tasks both need to move to B, but the warmup cap is 1.
     let mut a = member("A", "p1");
-    a.current_active = BTreeMap::from([("sub-0".to_owned(), vec![0, 1, 2, 3])]);
+    a.current_active = maplit::btreemap! {"sub-0".to_owned() => vec![0, 1, 2, 3]};
     let b = member("B", "p2");
     let members = [a, b];
     let mut inp = input(

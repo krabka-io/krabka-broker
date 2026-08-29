@@ -149,7 +149,7 @@ mod tests {
             let acquired = state.acquire("m1", 1, i32::MAX, std::time::Instant::now(), LOCK, 5);
             assert!(acquired.len() == 1);
         }
-        let partitions = HashSet::from([(tid, 0)]);
+        let partitions = maplit::hashset! {(tid, 0)};
         mgr.update_fetch_session(
             "g1",
             "m1",

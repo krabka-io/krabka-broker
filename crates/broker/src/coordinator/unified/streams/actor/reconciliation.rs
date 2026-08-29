@@ -222,16 +222,14 @@ mod tests {
     fn task_lag_is_end_minus_offset_only_when_both_reported() {
         let mut m = StreamsMemberState::joining("m1", "client", "/127.0.0.1");
         // Two tasks with both endpoints reported → lag = end - offset.
-        m.task_end_offsets = BTreeMap::from([
-            (("sub-a".to_string(), 0), Offset(10)),
-            (("sub-a".to_string(), 1), Offset(5)),
-            // A task with an end offset but NO reported position is dropped.
-            (("sub-b".to_string(), 0), Offset(99)),
-        ]);
-        m.task_offsets = BTreeMap::from([
-            (("sub-a".to_string(), 0), Offset(3)),
-            (("sub-a".to_string(), 1), Offset(5)),
-        ]);
+        m.task_end_offsets = maplit::btreemap! {
+        ("sub-a".to_string(), 0) => Offset(10),
+        ("sub-a".to_string(), 1) => Offset(5),
+        // A task with an end offset but NO reported position is dropped.
+        ("sub-b".to_string(), 0) => Offset(99)};
+        m.task_offsets = maplit::btreemap! {
+        ("sub-a".to_string(), 0) => Offset(3),
+        ("sub-a".to_string(), 1) => Offset(5)};
         let lag = task_lag(&m);
         // 10 - 3 = 7 (kills `-`→`+` which is 13, and `-`→`/` which is 3).
         check!(lag[&("sub-a".to_string(), 0)] == 7);

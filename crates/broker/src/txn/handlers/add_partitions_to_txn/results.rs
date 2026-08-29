@@ -167,9 +167,9 @@ mod tests {
             partition: PartitionIndex(1),
         });
         let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
-        let denied = HashSet::from(["denied".to_string()]);
+        let denied = maplit::hashset! {"denied".to_string()};
 
-        let frozen = HashSet::from(["frozen".to_string()]);
+        let frozen = maplit::hashset! {"frozen".to_string()};
         let topics = [topics, vec![topic("frozen", &[4])]].concat();
 
         let rows = verify_partitions(&e, &topics, &denied, &frozen);
@@ -192,8 +192,8 @@ mod tests {
             topic("denied", &[3]),
             topic("frozen", &[4]),
         ];
-        let denied = HashSet::from(["denied".to_string()]);
-        let frozen = HashSet::from(["frozen".to_string()]);
+        let denied = maplit::hashset! {"denied".to_string()};
+        let frozen = maplit::hashset! {"frozen".to_string()};
 
         let rows = per_topic_with_refusals(&topics, &denied, &frozen, codes::NOT_COORDINATOR);
 

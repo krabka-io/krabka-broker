@@ -404,7 +404,7 @@ mod tests {
         };
         let mut last = HashMap::new();
 
-        replace(&metrics, &mut last, HashMap::from([(label.clone(), 0)]));
+        replace(&metrics, &mut last, maplit::hashmap! {label.clone() => 0});
         assert_eq!(
             metrics
                 .share_group_backlog
@@ -429,7 +429,7 @@ mod tests {
             partition: 0,
         };
         metrics.share_group_backlog.get_or_create(&label).set(11);
-        let mut last = HashMap::from([(label.clone(), 11)]);
+        let mut last = maplit::hashmap! {label.clone() => 11};
 
         prune_stale(&metrics, &mut last, &image, NodeId(1), &[group_id]);
 

@@ -17,10 +17,7 @@ fn persisted_group_config_overrides_actor_defaults() {
     image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
         krabka_metadata::GroupConfigRecord {
             group_id: "streams-app".into(),
-            configs: std::collections::BTreeMap::from([(
-                KEY_NUM_STANDBY_REPLICAS.into(),
-                "1".into(),
-            )]),
+            configs: maplit::btreemap! {KEY_NUM_STANDBY_REPLICAS.into() => "1".into()},
         },
     ));
     let config =

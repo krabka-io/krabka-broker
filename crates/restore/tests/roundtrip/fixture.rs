@@ -103,7 +103,7 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
                     )
                     .expect("fixture segment fits i32"),
                     RemoteLogSegmentState::CopySegmentFinished,
-                    BTreeMap::from([(LeaderEpoch(0), export.base_offset.0)]),
+                    maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
                 ),
             )
             .expect("valid remote metadata");

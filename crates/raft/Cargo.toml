@@ -25,6 +25,7 @@ workspace = true
 scenarios = ["krabka-kraft-core/sim"]
 
 [dependencies]
+maplit = { workspace = true }
 assert2 = { workspace = true }
 krabka-kraft-core = { version = "0.4.0", path = "../kraft-core" }
 krabka-ids = { version = "0.4.0" }

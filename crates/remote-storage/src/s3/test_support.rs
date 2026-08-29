@@ -40,7 +40,7 @@ pub(super) fn sample_metadata(id: u128) -> RemoteLogSegmentMetadata {
         crate::metadata::RemoteLogSegmentDetails::new(
             8,
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0), 0)]),
+            maplit::btreemap! {LeaderEpoch(0) => 0},
         ),
     )
     .unwrap()

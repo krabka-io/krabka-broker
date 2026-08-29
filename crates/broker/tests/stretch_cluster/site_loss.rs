@@ -32,7 +32,7 @@ async fn preferred_site_holds_replicas_zero_and_the_leader() {
             == Some(PartitionView {
                 leader: 1,
                 replicas: vec![1, 2, WITNESS],
-                isr: BTreeSet::from([1, 2, WITNESS]),
+                isr: maplit::btreeset! {1, 2, WITNESS},
                 adding_replicas: vec![],
                 removing_replicas: vec![],
             }),
@@ -73,7 +73,7 @@ async fn acks_all_survives_the_loss_of_the_non_preferred_data_site() {
             == Some(PartitionView {
                 leader: 1,
                 replicas: vec![1, 2, WITNESS],
-                isr: BTreeSet::from([1, WITNESS]),
+                isr: maplit::btreeset! {1, WITNESS},
                 adding_replicas: vec![],
                 removing_replicas: vec![],
             }),

@@ -275,10 +275,8 @@ mod tests {
             partition: PartitionIndex(0),
         };
         let registry = WalShardRegistry::new(NodeId(1));
-        registry.replace_placements(&HashMap::from([(
-            shard,
-            vec![NodeId(1), NodeId(2), NodeId(3)],
-        )]));
+        registry
+            .replace_placements(&maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]});
         registry.insert(shard, store.engine());
         let follower =
             FollowerLog::for_log(Log::open(follower_dir.path(), LogConfig::default()).unwrap());

@@ -157,13 +157,10 @@ mod tests {
 
     #[test]
     fn mark_submit_failed_only_rewrites_successful_rows() {
-        let mut by_topic = std::collections::HashMap::from([(
-            "orders".to_string(),
-            vec![
-                ok_row(7),
-                err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "unknown partition".into()),
-            ],
-        )]);
+        let mut by_topic = maplit::hashmap! {"orders".to_string() => vec![
+            ok_row(7),
+            err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "unknown partition".into()),
+        ]};
 
         mark_submit_failed(&mut by_topic, "submit failed: not controller");
         let rows = by_topic.get("orders").expect("topic rows");

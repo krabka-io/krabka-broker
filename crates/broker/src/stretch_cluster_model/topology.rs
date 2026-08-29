@@ -41,7 +41,7 @@ impl StretchModel {
             return BTreeSet::new();
         }
         if state.isolated.contains(&site) {
-            return BTreeSet::from([site]);
+            return maplit::btreeset! {site};
         }
         (0..self.site_count())
             .filter(|k| !(state.down.contains(k) || state.isolated.contains(k)))

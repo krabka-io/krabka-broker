@@ -83,7 +83,7 @@ fn synth_remote_md(
         krabka_remote_storage::RemoteLogSegmentDetails::new(
             size,
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0), start)]),
+            maplit::btreemap! {LeaderEpoch(0) => start},
         ),
     )
     .unwrap()

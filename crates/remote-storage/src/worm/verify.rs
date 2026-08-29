@@ -75,7 +75,7 @@ impl TrustedManifestKeys {
     #[must_use]
     pub fn single(key_id: String, public_key: Vec<u8>) -> Self {
         Self {
-            keys: HashMap::from([(key_id, public_key)]),
+            keys: maplit::hashmap! {key_id => public_key},
         }
     }
 

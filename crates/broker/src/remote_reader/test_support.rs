@@ -137,7 +137,7 @@ pub fn sparse_remote_segment_reader_with_max_timestamp(
         krabka_remote_storage::RemoteLogSegmentDetails::new(
             i32::try_from(log_bytes.len()).unwrap_or(i32::MAX),
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0_i32), 10_i64)]),
+            maplit::btreemap! {LeaderEpoch(0_i32) => 10_i64},
         ),
     )
     .unwrap();
@@ -204,7 +204,7 @@ pub fn populated_reader(
         // Unwrap the log-layer `Offset`s into the remote-storage metadata's
         // `i64` world at the seam.
         let epochs: BTreeMap<LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
-            BTreeMap::from([(LeaderEpoch(0), ex.base_offset.0)])
+            maplit::btreemap! {LeaderEpoch(0) => ex.base_offset.0}
         } else {
             ex.leader_epochs
                 .iter()
@@ -308,7 +308,7 @@ pub fn populated_reader_with_abort(
         // Unwrap the log-layer `Offset`s into the remote-storage metadata's
         // `i64` world at the seam.
         let epochs: BTreeMap<LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
-            BTreeMap::from([(LeaderEpoch(0), ex.base_offset.0)])
+            maplit::btreemap! {LeaderEpoch(0) => ex.base_offset.0}
         } else {
             ex.leader_epochs
                 .iter()

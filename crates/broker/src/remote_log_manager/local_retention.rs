@@ -156,7 +156,7 @@ mod tests {
             synth_export(10, 19, 200, 64),
             synth_export(20, 29, 5_000, 64),
         ];
-        let finished: HashSet<i64> = [0, 10, 20].into_iter().collect();
+        let finished: HashSet<i64> = maplit::hashset! {0, 10, 20};
         // now=1000, retention=500ms → segs with max_ts<500 are deletable.
         // Only seg0 (max_ts=100) and seg1 (max_ts=200) qualify; seg2 stops it.
         let target = local_retention_target(&exports, &finished, Some(millis(500)), None, 1_000);
@@ -170,7 +170,7 @@ mod tests {
             synth_export(10, 19, 200, 100),
             synth_export(20, 29, 300, 100),
         ];
-        let finished: HashSet<i64> = [0, 10, 20].into_iter().collect();
+        let finished: HashSet<i64> = maplit::hashset! {0, 10, 20};
         let cases = [
             // Total = 300; budget = 150 → must evict 150 bytes → oldest two go.
             (Some(bytes(150)), Some(20)),
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn local_retention_target_equal_size_budget_keeps_all_segments() {
         let exports = vec![synth_export(0, 9, 100, 100), synth_export(10, 19, 200, 100)];
-        let finished: HashSet<i64> = [0, 10].into_iter().collect();
+        let finished: HashSet<i64> = maplit::hashset! {0, 10};
         let target = local_retention_target(&exports, &finished, None, Some(bytes(200)), 1_000);
         assert!(target == None);
     }
@@ -206,7 +206,7 @@ mod tests {
             synth_export(20, 29, 300, 64),
         ];
         // Segment at base=10 has NOT been copy-finished. Walk stops there.
-        let finished: HashSet<i64> = [0, 20].into_iter().collect();
+        let finished: HashSet<i64> = maplit::hashset! {0, 20};
         let target = local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000);
         assert!(
             target == Some(10),
@@ -221,7 +221,7 @@ mod tests {
         // the topic's `retention` (the fallback), the helper deletes the
         // same set as if `local_retention` had been set directly.
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
-        let finished: HashSet<i64> = [0, 10].into_iter().collect();
+        let finished: HashSet<i64> = maplit::hashset! {0, 10};
         // Caller resolved effective_local = retention = 250ms; now=1000.
         let target = local_retention_target(&exports, &finished, Some(millis(250)), None, 1_000);
         assert!(target == Some(20));

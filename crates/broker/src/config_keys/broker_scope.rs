@@ -223,7 +223,7 @@ mod tests {
         register_node(&mut img, 2, Some(WITNESS_TRUE));
         register_node(&mut img, 3, Some("false"));
         register_node(&mut img, 4, Some(WITNESS_TRUE));
-        assert!(witness_node_ids(&img) == HashSet::from([NodeId(2), NodeId(4)]));
+        assert!(witness_node_ids(&img) == maplit::hashset! {NodeId(2), NodeId(4)});
     }
 
     #[test]
