@@ -23,7 +23,7 @@ use jvm_acceptance::*;
 ///
 /// The test turns off hostname verification with
 /// `ssl.endpoint.identification.algorithm=`, because the CN of the dev cert
-/// is `krabka-dev`, not `host.docker.internal`. The dev cert is a
+/// is `crabka-dev`, not `host.docker.internal`. The dev cert is a
 /// self-signed ECDSA P-256 end-entity, regenerated from the original
 /// ED25519 + CA:TRUE fixture. cp-kafka:6.1.1 ships Java 11, whose
 /// `SunJSSE` does not advertise `ed25519` signature schemes during the TLS

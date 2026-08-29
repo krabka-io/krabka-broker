@@ -138,7 +138,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_cfg));
     let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
+    let server_name = ServerName::try_from("crabka-dev").unwrap();
     let _tls = connector
         .connect(server_name, tcp)
         .await
@@ -2855,7 +2855,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
         keytab_path: manifest_dir().join("tests/fixtures/security/kdc/kafka.keytab"),
         service_name: "kafka".to_string(),
         principal_to_local_rules: vec![],
-        realm: Some("KRABKA.TEST".to_string()),
+        realm: Some("CRABKA.TEST".to_string()),
         kdc: None,
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
@@ -2905,7 +2905,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// A Krabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
 /// service key in `kafka.keytab`. `InterBrokerClient` dials it with
 /// `InterBrokerCredentials::Gssapi` and authenticates *from a keytab* as
-/// `alice@KRABKA.TEST`, with no password. The test proves the full outbound
+/// `alice@CRABKA.TEST`, with no password. The test proves the full outbound
 /// GSSAPI path: AS/TGS from `alice.keytab` → AP-REQ → broker validates →
 /// RFC 4752 auth-only layer negotiation → authenticated stream. A follow-up
 /// `ApiVersions` round-trip confirms the stream.
@@ -2940,10 +2940,10 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
     cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
         keytab_path: fixtures.join("kafka.keytab"),
         service_name: "kafka".to_string(),
-        // DEFAULT rule + matching default realm maps alice@KRABKA.TEST to
+        // DEFAULT rule + matching default realm maps alice@CRABKA.TEST to
         // the short name "alice".
         principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
-        realm: Some("KRABKA.TEST".to_string()),
+        realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url.clone()),
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
@@ -2955,7 +2955,7 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
         None,
         Some(krabka_broker::config::InterBrokerCredentials::Gssapi {
             keytab_path: fixtures.join("alice.keytab"),
-            client_principal: "alice@KRABKA.TEST".to_string(),
+            client_principal: "alice@CRABKA.TEST".to_string(),
             service_name: "kafka".to_string(),
             kdc_url,
         }),

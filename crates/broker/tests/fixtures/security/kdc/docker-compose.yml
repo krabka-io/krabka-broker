@@ -1,4 +1,4 @@
-# Local MIT krb5 KDC for the KRABKA.TEST realm, used by the GSSAPI spike and
+# Local MIT krb5 KDC for the CRABKA.TEST realm, used by the GSSAPI spike and
 # (later) the GSSAPI integration tests. Hand-rolled on debian so we control the
 # realm, principals, enctypes, and keytab export precisely.
 #

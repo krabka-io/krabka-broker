@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Entry point for the KDC container. Bootstraps the KRABKA.TEST realm, creates
+# Entry point for the KDC container. Bootstraps the CRABKA.TEST realm, creates
 # the broker service principal (kafka/localhost) and a client principal (alice),
 # exports their keytabs into the shared /fixtures volume, then runs krb5kdc in
 # the foreground so the container stays up and the port mapping stays live.
 set -euo pipefail
 
-REALM="KRABKA.TEST"
+REALM="CRABKA.TEST"
 MASTER_PW="masterkey"
 FIXTURES="/fixtures"
 

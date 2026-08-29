@@ -19,7 +19,7 @@
 //! which `tests/fixtures/gssapi/krb5.conf` configures.
 //!
 //! Because the broker advertises `host.docker.internal`, the stock Kafka GSSAPI
-//! client derives the server principal `kafka/host.docker.internal@KRABKA.TEST`.
+//! client derives the server principal `kafka/host.docker.internal@CRABKA.TEST`.
 //! The KDC fixture supplies that SPN together with `kafka/localhost`, and
 //! exports both keys into the single `kafka.keytab` the broker loads.
 //!
@@ -106,9 +106,9 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
     cfg.gssapi = Some(GssapiConfig {
         keytab_path: kdc_fixtures().join("kafka.keytab"),
         service_name: "kafka".to_string(),
-        // DEFAULT maps alice@KRABKA.TEST → "alice".
+        // DEFAULT maps alice@CRABKA.TEST → "alice".
         principal_to_local_rules: vec![Rule::Default],
-        realm: Some("KRABKA.TEST".to_string()),
+        realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url),
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });

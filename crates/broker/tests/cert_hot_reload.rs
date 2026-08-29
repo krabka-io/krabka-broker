@@ -121,7 +121,7 @@ async fn handshake_against(
     let client_cfg = pinned_client_config(pinned);
     let connector = TlsConnector::from(client_cfg);
     let tcp = TcpStream::connect(addr).await?;
-    let server_name = ServerName::try_from("krabka-dev").unwrap();
+    let server_name = ServerName::try_from("crabka-dev").unwrap();
     connector
         .connect(server_name, tcp)
         .await

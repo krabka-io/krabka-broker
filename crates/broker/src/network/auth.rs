@@ -714,7 +714,7 @@ fn finish_gssapi(
 /// Applies the configured `auth_to_local` rules to a raw Kerberos principal.
 ///
 /// `sspi` recovers the principal in lower case, for example
-/// `alice@krabka.test`. This function canonicalises the realm back to upper
+/// `alice@crabka.test`. This function canonicalises the realm back to upper
 /// case before it matches, because Kerberos realms are conventionally upper
 /// case, and because both the configured default realm and the
 /// `auth_to_local` rules are written in the upper-case form. When no default
@@ -1222,7 +1222,7 @@ mod tests {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
             principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
+            realm: Some("CRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
@@ -1233,7 +1233,7 @@ mod tests {
         };
 
         let resp = finish_gssapi(
-            "alice@krabka.test",
+            "alice@crabka.test",
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
@@ -1274,7 +1274,7 @@ mod tests {
         };
 
         let resp = finish_gssapi(
-            "alice@krabka.test",
+            "alice@crabka.test",
             SaslMechanism::Gssapi,
             &config,
             &mut auth,
@@ -1290,7 +1290,7 @@ mod tests {
             keytab_path: std::path::PathBuf::from("/nonexistent.keytab"),
             service_name: "kafka".to_string(),
             principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
+            realm: Some("CRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
@@ -1340,7 +1340,7 @@ mod tests {
             Ok(token.to_vec())
         }
         fn src_principal(&self) -> Result<String, krabka_security::gssapi::GssError> {
-            Ok("alice@KRABKA.TEST".to_string())
+            Ok("alice@CRABKA.TEST".to_string())
         }
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
             principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
+            realm: Some("CRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
@@ -1401,12 +1401,12 @@ mod tests {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
             principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
+            realm: Some("CRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
         };
 
-        let short = map_gssapi_principal("alice@krabka.test", &config).expect("map principal");
+        let short = map_gssapi_principal("alice@crabka.test", &config).expect("map principal");
 
         assert!(short == "alice");
     }
