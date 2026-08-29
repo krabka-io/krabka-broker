@@ -1,0 +1,216 @@
+//! The records resolvers that turn one `RecordsPayload` into the [`WriteOp`]
+//! segments the drainer writes.
+//!
+//! [`resolve_records_inline`] is the portable path: it keeps every payload
+//! kind in userspace bytes, and shares the `Bytes` view where the payload is
+//! already verbatim wire bytes. [`resolve_records_sendfile`] instead keeps a
+//! `FileRegions` payload file-backed, one op per contributing segment, for the
+//! kernel `sendfile(2)` drain.
+
+use bytes::BytesMut;
+use krabka_protocol::records::RecordsPayload;
+
+use super::WriteOp;
+use crate::error::BrokerError;
+
+/// Portable (Increment C) records resolver: emit the records payload as a
+/// single inline segment. For `RecordsPayload::Raw` this function hands the
+/// verbatim `.log` `Bytes` to the socket directly. That is a refcounted view
+/// and copies no records bytes. For parsed and legacy payloads it encodes them
+/// into a fresh buffer, which is the rare non-passthrough path. For a
+/// `FileRegions` payload, the TLS and non-Linux fallback, it `pread`s the
+/// regions into one buffer.
+pub fn resolve_records_inline(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
+    let bytes = match payload {
+        // `Raw`/`Legacy` are already verbatim wire bytes — share the `Bytes`.
+        RecordsPayload::Raw(b) | RecordsPayload::Legacy(b) => b.clone(),
+        // Parsed batches must be encoded; rare on the fetch path.
+        RecordsPayload::V2(_) => {
+            let mut buf = BytesMut::with_capacity(payload.payload_len());
+            payload
+                .encode_to(&mut buf)
+                .map_err(|e| BrokerError::Io(std::io::Error::other(e.to_string())))?;
+            buf.freeze()
+        }
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+        ))]
+        RecordsPayload::FileRegions(_) => {
+            // TLS / non-sendfile fallback for a FileRegions payload: pread into a
+            // buffer (byte-identical to the sendfile'd region).
+            let mut buf = BytesMut::with_capacity(payload.payload_len());
+            payload
+                .encode_to(&mut buf)
+                .map_err(|e| BrokerError::Io(std::io::Error::other(e.to_string())))?;
+            buf.freeze()
+        }
+    };
+    Ok(vec![WriteOp::Inline(bytes)])
+}
+
+crate::sendfile_cfg! {
+    /// Plaintext-sendfile (Increments D + E) records resolver: emit each
+    /// `FileRegion` of a `FileRegions` payload as its own [`WriteOp::File`],
+    /// one per contributing segment, for the kernel `sendfile` drain. Every
+    /// other payload kind defers to [`resolve_records_inline`], as does a
+    /// `FileRegions` payload that arrives here on a non-sendfile path. This
+    /// function compiles on the SENDFILE alias (Linux + Apple +
+    /// FreeBSD/DragonFly).
+    pub fn resolve_records_sendfile(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
+        match payload {
+            RecordsPayload::FileRegions(regions) => {
+                Ok(regions.iter().cloned().map(WriteOp::File).collect())
+            }
+            _ => resolve_records_inline(payload),
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+))]
+mod tests {
+    use krabka_protocol::owned::fetch_response::{
+        FetchResponse, FetchableTopicResponse, PartitionData,
+    };
+
+    use super::*;
+    use crate::network::fetch_writer::{
+        build_fetch_plan,
+        test_support::{DEFAULT_MAX_FRAME_BYTES, file_payload, raw_batch},
+    };
+
+    /// The Increment-D wire invariant: a `FileRegions` payload through the
+    /// sendfile resolver produces the SAME framed wire bytes as the
+    /// equivalent `Raw` payload through the inline resolver. Only the op
+    /// kinds differ, File against Inline. The records bytes the broker
+    /// emits are identical for both the sendfile path and the copy path.
+    #[test]
+    fn sendfile_plan_wire_bytes_equal_raw_plan() {
+        for version in [4i16, 11, 12, 18] {
+            // Records bytes large enough to be realistic.
+            let records = {
+                let mut b = BytesMut::new();
+                b.extend_from_slice(&raw_batch(0));
+                b.extend_from_slice(&raw_batch(1));
+                b.freeze()
+            };
+            let (_tf, file_payload) = file_payload(&records);
+
+            let raw_resp = FetchResponse {
+                session_id: 1,
+                responses: vec![FetchableTopicResponse {
+                    topic: if version <= 12 {
+                        "t".into()
+                    } else {
+                        String::new()
+                    },
+                    partitions: vec![PartitionData {
+                        partition_index: 0,
+                        high_watermark: 2,
+                        last_stable_offset: 2,
+                        log_start_offset: 0,
+                        records: Some(RecordsPayload::Raw(records.clone())),
+                        ..PartitionData::default()
+                    }],
+                    ..FetchableTopicResponse::default()
+                }],
+                ..FetchResponse::default()
+            };
+            let mut file_resp = raw_resp.clone();
+            file_resp.responses[0].partitions[0].records = Some(file_payload);
+
+            let raw_ops = build_fetch_plan(
+                &raw_resp,
+                version,
+                9,
+                version >= 12,
+                DEFAULT_MAX_FRAME_BYTES,
+                resolve_records_inline,
+            )
+            .unwrap();
+            let file_ops = build_fetch_plan(
+                &file_resp,
+                version,
+                9,
+                version >= 12,
+                DEFAULT_MAX_FRAME_BYTES,
+                resolve_records_sendfile,
+            )
+            .unwrap();
+
+            // The file plan must actually contain a File op (zero-copy).
+            assert!(
+                file_ops.iter().any(|o| matches!(o, WriteOp::File(_))),
+                "sendfile resolver must emit a File op at v{version}"
+            );
+
+            // Resolve both plans to bytes (pread the file ops) and compare.
+            let raw_bytes = resolve_ops_to_bytes(&raw_ops);
+            let file_bytes = resolve_ops_to_bytes(&file_ops);
+            assert_eq!(
+                raw_bytes, file_bytes,
+                "sendfile plan wire bytes must equal raw plan at v{version}"
+            );
+        }
+    }
+
+    /// Resolve a plan to bytes and read File ops out of their backing
+    /// file. This mirrors what the sendfile drain transmits and what the
+    /// TLS pread fallback copies.
+    fn resolve_ops_to_bytes(ops: &[WriteOp]) -> Vec<u8> {
+        use std::os::unix::fs::FileExt;
+        let mut out = Vec::new();
+        for op in ops {
+            match op {
+                WriteOp::Inline(b) => out.extend_from_slice(b),
+                WriteOp::File(region) => {
+                    let mut buf = vec![0u8; region.len];
+                    let mut filled = 0;
+                    let mut off = region.offset;
+                    while filled < buf.len() {
+                        let n = region.file.read_at(&mut buf[filled..], off).unwrap();
+                        assert!(n > 0);
+                        filled += n;
+                        off += n as u64;
+                    }
+                    out.extend_from_slice(&buf);
+                }
+            }
+        }
+        out
+    }
+
+    /// The TLS / non-sendfile fallback: `resolve_records_inline` on a
+    /// `FileRegions` payload preads the regions into one inline op whose
+    /// bytes equal the file contents.
+    #[test]
+    fn inline_fallback_preads_file_regions() {
+        let records = {
+            let mut b = BytesMut::new();
+            b.extend_from_slice(&raw_batch(3));
+            b.extend_from_slice(&raw_batch(4));
+            b.freeze()
+        };
+        let (_tf, payload) = file_payload(&records);
+        let ops = resolve_records_inline(&payload).unwrap();
+        assert_eq!(ops.len(), 1);
+        let WriteOp::Inline(ref b) = ops[0] else {
+            panic!("fallback must produce an inline op");
+        };
+        assert_eq!(&b[..], &records[..]);
+    }
+}

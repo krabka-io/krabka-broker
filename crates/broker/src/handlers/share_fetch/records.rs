@@ -5,7 +5,7 @@
 //! back the verbatim on-disk batch bytes plus the `acquired_records` rows that
 //! describe them. The same log-scan shape answers the two questions the pass
 //! asks before it acquires: which offsets hold control batches, and which
-//! offsets KIP-932 delivery has not released yet.
+//! offsets KFC-1 scheduled delivery has not released yet.
 
 use std::sync::Arc;
 
