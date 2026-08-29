@@ -289,9 +289,12 @@ mod tests {
     use krabka_metadata::NodeId;
 
     use super::*;
-    use crate::barrier::{
-        coordinator::test_support::{Fixture, GROUP, spec},
-        test_support::topic_records,
+    use crate::{
+        barrier::{
+            coordinator::test_support::{Fixture, GROUP, spec},
+            test_support::topic_records,
+        },
+        metadata_source::MetadataSource,
     };
 
     #[tokio::test]

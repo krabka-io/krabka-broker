@@ -1,6 +1,6 @@
-//! Metadata, JoinGroup, and InitProducerId enforcement (T24): the Topic,
-//! Group, and TransactionalId resource types each gate a different request,
-//! and Metadata gates one of two ways depending on how the client asks.
+//! `Metadata`, `JoinGroup`, and `InitProducerId` enforcement (T24): the Topic,
+//! Group, and `TransactionalId` resource types each gate a different request,
+//! and `Metadata` gates one of two ways depending on how the client asks.
 //!
 //! Each test boots a fresh single-broker `SASL_PLAINTEXT` cluster with admin
 //! as the super-user. The test seeds whatever ACL records the scenario

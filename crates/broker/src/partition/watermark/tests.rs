@@ -12,7 +12,6 @@ use krabka_log::{Log, LogConfig, Offset};
 use tempfile::tempdir;
 use tokio::sync::{Notify, mpsc};
 
-use super::*;
 use crate::{
     delivery::DeliveryHandles,
     partition::{
