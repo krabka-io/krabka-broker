@@ -99,6 +99,7 @@ pub async fn create_mixed_topic(bootstrap: &str, topic: &str) {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
+
 #[test]
 fn topic_description_isr_parser_ignores_ids_outside_isr_field() {
     let description =

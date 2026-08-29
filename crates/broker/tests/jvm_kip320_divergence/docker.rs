@@ -98,6 +98,7 @@ pub fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> std::proc
     );
     out
 }
+
 /// Produce `lines` to `topic` partition 0 with the JVM `kafka-console-producer`
 /// at `acks=all`, one record per line. Panics on producer failure.
 pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {

@@ -66,6 +66,7 @@ async fn run_features_on_krabka(bootstrap: &str, command: &[&str]) -> std::proce
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
+
 /// Block until every Krabka broker sees the JVM broker (id 3) advertise
 /// `expected` as its `metadata.version` maximum. The `AdminClient` can route
 /// `UpdateFeatures` to either Krabka broker, so both images must hold the
