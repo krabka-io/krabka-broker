@@ -21,11 +21,16 @@ mod state;
 #[cfg(test)]
 mod test_support;
 
+// Only test code -- dispatch::session's tests and oauthbearer's -- builds an
+// AuthenticatedSnapshot through this path, so the re-export is test-gated:
+// in a normal build it is dead and -D warnings rejects it.
+#[cfg(test)]
+pub use self::state::AuthenticatedSnapshot;
 pub use self::{
     gssapi::handle_authenticate_gssapi,
     handshake::handle_handshake,
     oauthbearer::handle_authenticate_oauthbearer,
     plain::handle_authenticate_plain,
     scram::handle_authenticate_scram,
-    state::{AuthenticatedSnapshot, ConnectionAuth, SaslExchange, is_pre_auth_allowed},
+    state::{ConnectionAuth, SaslExchange, is_pre_auth_allowed},
 };
