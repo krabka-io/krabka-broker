@@ -15,6 +15,7 @@ use tracing::{debug, instrument, warn};
 
 use crate::{error::MetadataLogError, kafka_log::config::KafkaMetadataLogConfig};
 
+/// Provision the topic if it is missing and return `(partition_count,
 /// topic_id)`.
 ///
 /// An existing topic's count and id win. This function re-reads a
