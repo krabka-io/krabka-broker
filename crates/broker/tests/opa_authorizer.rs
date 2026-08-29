@@ -27,10 +27,10 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{
+use krabka_broker::{
     Broker, BrokerConfig, BrokerHandle, authorizer::opa::OpaAuthorizer, config::ListenerSpec,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -46,7 +46,7 @@ use crabka_protocol::{
     },
     records::{Record, RecordBatch},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -54,7 +54,7 @@ use tokio::{
 };
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
-// Local mirror of `crabka_broker::codes::TOPIC_AUTHORIZATION_FAILED`,
+// Local mirror of `krabka_broker::codes::TOPIC_AUTHORIZATION_FAILED`,
 // kept inline because the `codes` module is crate-private. The value
 // matches the Apache Kafka error table and `tests/acl_handlers.rs`.
 const ERR_TOPIC_AUTHORIZATION_FAILED: i16 = 29;
@@ -101,7 +101,7 @@ fn start_broker_with_opa_authorizer(
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials
         .insert("alice".to_string(), "wonderland".to_string());
-    cfg.inter_broker_credentials = Some(crabka_broker::config::InterBrokerCredentials::Plain {
+    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
         username: "admin".to_string(),
         password: "admin-secret".to_string(),
     });
@@ -128,8 +128,8 @@ fn start_broker_with_opa_authorizer(
         // means the second call in any same-test sequence is always a
         // cache miss after `tokio::time::sleep(Duration::from_millis(5))`.
         /* expire_after */
-        crabka_units::millis(1),
-        crabka_units::secs(5),
+        krabka_units::millis(1),
+        krabka_units::secs(5),
     )
     .expect("OpaAuthorizer::new must succeed inside a tokio runtime");
     cfg.authorizer = std::sync::Arc::new(opa);
@@ -163,7 +163,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-opa-test";
+    let client_id = "krabka-opa-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
     frame.put_slice(client_id.as_bytes());
     if flexible {

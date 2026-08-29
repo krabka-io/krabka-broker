@@ -4,8 +4,8 @@
 //! state.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, DeleteTopicRecord, MetadataRecord};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, DeleteTopicRecord, MetadataRecord};
+use krabka_protocol::{
     Decode,
     owned::{
         delete_topics_request::DeleteTopicsRequest,
@@ -13,8 +13,8 @@ use crabka_protocol::{
     },
     primitives::uuid::Uuid as WireUuid,
 };
-use crabka_raft::RaftError;
-use crabka_units::{Time, convert::TimeExt};
+use krabka_raft::RaftError;
+use krabka_units::{Time, convert::TimeExt};
 
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
@@ -52,12 +52,12 @@ fn delete_topics_response(
     }
 }
 
-fn deleted_topic_resources(results: &[DeletableTopicResult]) -> Vec<crabka_audit::AuditResource> {
+fn deleted_topic_resources(results: &[DeletableTopicResult]) -> Vec<krabka_audit::AuditResource> {
     results
         .iter()
         .filter(|t| t.error_code == codes::NONE)
         .filter_map(|t| {
-            t.name.as_deref().map(|n| crabka_audit::AuditResource {
+            t.name.as_deref().map(|n| krabka_audit::AuditResource {
                 resource_type: "Topic".to_string(),
                 name: n.to_string(),
             })
@@ -66,16 +66,16 @@ fn deleted_topic_resources(results: &[DeletableTopicResult]) -> Vec<crabka_audit
 }
 
 fn audit_deleted_topics(
-    audit_log: &crabka_audit::AuditLog,
+    audit_log: &krabka_audit::AuditLog,
     ctx: &crate::handlers::RequestContext<'_>,
-    deleted: Vec<crabka_audit::AuditResource>,
+    deleted: Vec<krabka_audit::AuditResource>,
 ) {
     if !deleted.is_empty() {
         crate::handlers::audit_admin(
             audit_log,
             ctx,
             "DeleteTopics",
-            crabka_audit::AuditOutcome::Success,
+            krabka_audit::AuditOutcome::Success,
             deleted,
         );
     }
@@ -261,7 +261,7 @@ pub(crate) async fn handle(
                 }
                 codes::NONE
             }
-            Err(RaftError::Metadata(crabka_metadata::MetadataError::UnknownTopic(_))) => {
+            Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(_))) => {
                 codes::UNKNOWN_TOPIC_OR_PARTITION
             }
             Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => codes::NOT_CONTROLLER,
@@ -297,10 +297,10 @@ type TopicNameRequest = (Option<String>, bool, WireUuid);
 fn tiered_partitions(
     broker: &Broker,
     partitions: &crate::partition_registry::PartitionRegistry,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic_name: &str,
-    local_partitions: &[crabka_ids::PartitionIndex],
-) -> Vec<crabka_remote_storage::TopicIdPartition> {
+    local_partitions: &[krabka_ids::PartitionIndex],
+) -> Vec<krabka_remote_storage::TopicIdPartition> {
     if broker.remote_reader.is_none() {
         return Vec::new();
     }
@@ -319,7 +319,7 @@ fn tiered_partitions(
             })
         })
         .map(|index| {
-            crabka_remote_storage::TopicIdPartition::new(
+            krabka_remote_storage::TopicIdPartition::new(
                 topic_id,
                 topic_name.to_string(),
                 index.get(),
@@ -330,7 +330,7 @@ fn tiered_partitions(
 
 fn resolve_topic_names(
     request: &DeleteTopicsRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Vec<TopicNameRequest> {
     if !request.topic_names.is_empty() {
         return request
@@ -358,8 +358,8 @@ fn resolve_topic_names(
 
 fn denied_topic_names(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     peer: &std::net::SocketAddr,
     requests: &[TopicNameRequest],
 ) -> std::collections::HashSet<String> {
@@ -383,9 +383,9 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
-    use crabka_security::Principal;
-    use crabka_units::millis;
+    use krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
+    use krabka_security::Principal;
+    use krabka_units::millis;
 
     use super::*;
     use crate::test_support::{DenyAll, peer, principal};
@@ -459,7 +459,7 @@ mod tests {
             topic_id: id,
             error_code: codes::UNKNOWN_TOPIC_ID,
             error_message: None,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(unknown_id == expected_unknown);
 
@@ -473,7 +473,7 @@ mod tests {
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: None,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(denied == expected_denied);
 
@@ -481,7 +481,7 @@ mod tests {
         let expected_resp = DeleteTopicsResponse {
             throttle_time_ms: 123,
             responses: vec![expected_denied],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected_resp);
     }
@@ -500,7 +500,7 @@ mod tests {
 
         let resources = deleted_topic_resources(&results);
 
-        let expected = vec![crabka_audit::AuditResource {
+        let expected = vec![krabka_audit::AuditResource {
             resource_type: "Topic".into(),
             name: "ok".into(),
         }];
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn audit_deleted_topics_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
@@ -523,14 +523,14 @@ mod tests {
         audit_deleted_topics(
             log.as_ref(),
             &ctx,
-            vec![crabka_audit::AuditResource {
+            vec![krabka_audit::AuditResource {
                 resource_type: "Topic".into(),
                 name: "orders".into(),
             }],
         );
 
         let event = rx.try_recv().expect("admin audit event");
-        let crabka_audit::AuditEvent::AdminOperation {
+        let krabka_audit::AuditEvent::AdminOperation {
             outcome,
             principal,
             operation,
@@ -540,11 +540,11 @@ mod tests {
         else {
             panic!("expected AdminOperation");
         };
-        let expected_resources = vec![crabka_audit::AuditResource {
+        let expected_resources = vec![krabka_audit::AuditResource {
             resource_type: "Topic".into(),
             name: "orders".into(),
         }];
-        check!(outcome == crabka_audit::AuditOutcome::Success);
+        check!(outcome == krabka_audit::AuditOutcome::Success);
         check!(principal.name.as_str() == "admin");
         check!(operation.as_str() == "DeleteTopics");
         check!(resources == expected_resources);
@@ -573,9 +573,9 @@ mod tests {
                 topic_id: WireUuid::ZERO,
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 error_message: None,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -601,17 +601,17 @@ mod tests {
                     topic_id: WireUuid::ZERO,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
                 DeletableTopicResult {
                     name: None,
                     topic_id: bogus_id,
                     error_code: codes::UNKNOWN_TOPIC_ID,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;

@@ -2,7 +2,7 @@
 //! gets the additional internal `TimestampSource` coordinate that it records
 //! in the `.stampindex` sidecar.
 //!
-//! The trait is deliberately tiny, and it lives in `crabka-log` rather than in
+//! The trait is deliberately tiny, and it lives in `krabka-log` rather than in
 //! the broker. The log owns both the append seam that folds stamps in and the
 //! `.stampindex` that they land in. The seam therefore stays here, so tests
 //! can check the log's own stamp behavior with a deterministic in-crate

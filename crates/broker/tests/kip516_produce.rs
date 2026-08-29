@@ -2,7 +2,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},

@@ -1,10 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use crabka_ids::{Offset, PartitionIndex};
-use crabka_log::DeliveryPolicy;
-use crabka_metadata::NodeId;
-use crabka_units::{millis, secs};
+use krabka_ids::{Offset, PartitionIndex};
+use krabka_log::DeliveryPolicy;
+use krabka_metadata::NodeId;
+use krabka_units::{millis, secs};
 use qubit_clock::{Clock, DateTime, MockTime};
 use tokio_util::sync::CancellationToken;
 

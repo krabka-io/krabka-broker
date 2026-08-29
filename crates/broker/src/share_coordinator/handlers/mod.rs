@@ -19,8 +19,8 @@ pub(crate) mod write;
 pub(crate) mod test_support {
     use std::{path::Path, sync::Arc};
 
-    use crabka_ids::{NodeId, PartitionIndex};
-    use crabka_log::{Log, LogConfig, Offset};
+    use krabka_ids::{NodeId, PartitionIndex};
+    use krabka_log::{Log, LogConfig, Offset};
 
     use crate::{
         broker::{Broker, BrokerHandle},

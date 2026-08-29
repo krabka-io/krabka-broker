@@ -1,12 +1,12 @@
 //! KIP-595 Slice 6 ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
 //!
-//! One `mirror.gcr.io/apache/kafka:4.0.0` controller and two Crabka
+//! One `mirror.gcr.io/apache/kafka:4.0.0` controller and two Krabka
 //! controllers form one STATIC metadata quorum, with
 //! `controller.quorum.voters` and kraft.version=0. The quorum elects a
 //! cross-implementation leader AND replicates committed metadata. The JVM
-//! joins as a follower of the Crabka leader, never fatal-faults, catches its
+//! joins as a follower of the Krabka leader, never fatal-faults, catches its
 //! high-watermark up to the leader's, and builds a `FeaturesImage` that
-//! carries `metadata.version=25` from the Crabka-committed log. This is the
+//! carries `metadata.version=25` from the Krabka-committed log. This is the
 //! program's end goal for the leader-to-follower direction. KIP-853 dynamic
 //! voters are not needed for it.
 //!
@@ -15,16 +15,16 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p crabka-broker --test jvm_static_quorum_spike -- --ignored --nocapture
+//! cargo test -p krabka-broker --test jvm_static_quorum_spike -- --ignored --nocapture
 //! ```
 //!
 //! ## Topology
 //!
-//! - Crabka voters id 1, 2: in-process, real TCP controller listeners bound to
+//! - Krabka voters id 1, 2: in-process, real TCP controller listeners bound to
 //!   `0.0.0.0:p1` / `0.0.0.0:p2` on the host. They hold the 2/3 majority and
 //!   elect among themselves immediately.
 //! - JVM voter id 3: `mirror.gcr.io/apache/kafka:4.0.0`, `process.roles=controller`, in a
-//!   container publishing `-p p3:p3`, dialing the Crabka voters at
+//!   container publishing `-p p3:p3`, dialing the Krabka voters at
 //!   `host.docker.internal:p1` / `:p2`.
 //! - Shared cluster id: a `uuid::Uuid` whose 16 bytes are the same bytes the JVM
 //!   sees as the base64-url-no-pad `--cluster-id` string.
@@ -33,27 +33,27 @@ use std::{net::SocketAddr, process::Command, time::Duration};
 
 use assert2::check;
 use base64::Engine as _;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
 use tempfile::TempDir;
 use uuid::Uuid;
 
 mod support;
 
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
-const CONTAINER: &str = "crabka-kip595-slice5-spike";
+const CONTAINER: &str = "krabka-kip595-slice5-spike";
 
 /// Kafka encodes a 16-byte UUID as URL-safe base64 with no padding. The JVM
-/// `--cluster-id` string and Crabka's `uuid::Uuid` must wrap the *same* 16
+/// `--cluster-id` string and Krabka's `uuid::Uuid` must wrap the *same* 16
 /// bytes. Otherwise the two sides reject each other on a cluster-id
 /// mismatch.
 fn kafka_cluster_id_string(id: Uuid) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
 }
 
-/// Builds a Crabka controller `BrokerConfig` for voter `i` in the shared static
+/// Builds a Krabka controller `BrokerConfig` for voter `i` in the shared static
 /// 3-voter set, with the shared cluster id. `i` is 0-indexed, and the id is
 /// `i+1`.
-fn crabka_controller_config(
+fn krabka_controller_config(
     i: usize,
     own_client_addr: SocketAddr,
     own_controller_addr: SocketAddr,
@@ -63,7 +63,7 @@ fn crabka_controller_config(
 ) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
     cfg.broker_id = i32::try_from(i + 1).unwrap();
-    cfg.node_id = crabka_broker::NodeId(u64::try_from(i + 1).unwrap());
+    cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
     cfg.listen_addr = own_client_addr;
     cfg.advertised_listener = own_client_addr.to_string();
     cfg.controller_listen_addr = own_controller_addr;
@@ -71,7 +71,7 @@ fn crabka_controller_config(
     cfg.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     cfg.auto_join = false;
     cfg.bootstrap_servers = vec![];
@@ -89,7 +89,7 @@ fn docker_rm(name: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker + a published controller port (throwaway spike)"]
-async fn static_mixed_jvm_crabka_quorum() {
+async fn static_mixed_jvm_krabka_quorum() {
     support::init_tracing();
     docker_rm(CONTAINER);
 
@@ -104,37 +104,37 @@ async fn static_mixed_jvm_crabka_quorum() {
     let p2 = controller_addrs[1].port();
     let p3 = controller_addrs[2].port();
 
-    // Crabka voters bind 0.0.0.0 so the JVM container can reach them through
+    // Krabka voters bind 0.0.0.0 so the JVM container can reach them through
     // host.docker.internal. The pre-bound addrs are 127.0.0.1:<p>; rewrite to
-    // 0.0.0.0:<p> for the bind, but keep 127.0.0.1 in the voter set Crabka uses
+    // 0.0.0.0:<p> for the bind, but keep 127.0.0.1 in the voter set Krabka uses
     // to dial *its own* peers (loopback is reachable in-process).
-    let crabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
-    let crabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
+    let krabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
+    let krabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
 
-    // Voter set as seen FROM the Crabka side: dial peers on loopback; the JVM
+    // Voter set as seen FROM the Krabka side: dial peers on loopback; the JVM
     // (id 3) is reachable at its published host port.
-    let crabka_voters: Vec<(u64, SocketAddr)> = vec![
+    let krabka_voters: Vec<(u64, SocketAddr)> = vec![
         (1, format!("127.0.0.1:{p1}").parse().unwrap()),
         (2, format!("127.0.0.1:{p2}").parse().unwrap()),
         (3, format!("127.0.0.1:{p3}").parse().unwrap()),
     ];
 
-    // ── start the 2 Crabka controllers ─────────────────────────────────────
+    // ── start the 2 Krabka controllers ─────────────────────────────────────
     let dir1 = TempDir::new().unwrap();
     let dir2 = TempDir::new().unwrap();
-    let cfg1 = crabka_controller_config(
+    let cfg1 = krabka_controller_config(
         0,
         client_addrs[0],
-        crabka_ctrl_1,
-        &crabka_voters,
+        krabka_ctrl_1,
+        &krabka_voters,
         cluster_id,
         dir1.path(),
     );
-    let cfg2 = crabka_controller_config(
+    let cfg2 = krabka_controller_config(
         1,
         client_addrs[1],
-        crabka_ctrl_2,
-        &crabka_voters,
+        krabka_ctrl_2,
+        &krabka_voters,
         cluster_id,
         dir2.path(),
     );
@@ -142,15 +142,15 @@ async fn static_mixed_jvm_crabka_quorum() {
         let s1 = tokio::spawn(Broker::start(cfg1));
         let s2 = tokio::spawn(Broker::start(cfg2));
         (
-            s1.await.unwrap().expect("crabka voter 1 start"),
-            s2.await.unwrap().expect("crabka voter 2 start"),
+            s1.await.unwrap().expect("krabka voter 1 start"),
+            s2.await.unwrap().expect("krabka voter 2 start"),
         )
     };
-    eprintln!("both Crabka controllers started (2/3 majority should self-elect)");
+    eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
 
     // ── format + start the JVM controller (id 3) ───────────────────────────
     // The JVM's controller.quorum.voters lists addresses reachable FROM the
-    // container: the Crabka voters at host.docker.internal, itself on localhost.
+    // container: the Krabka voters at host.docker.internal, itself on localhost.
     let props = format!(
         "process.roles=controller\n\
          node.id=3\n\
@@ -192,7 +192,7 @@ async fn static_mixed_jvm_crabka_quorum() {
 
     // ── observe for ~40s ────────────────────────────────────────────────────
     // Success criterion 1: a single leader emerges across all three voters and
-    // the two Crabka nodes agree on it. Success criterion 2: a follower's image
+    // the two Krabka nodes agree on it. Success criterion 2: a follower's image
     // reflects the leader's committed records.
     let deadline = std::time::Instant::now() + Duration::from_secs(50);
     let mut elected = false;
@@ -207,12 +207,12 @@ async fn static_mixed_jvm_crabka_quorum() {
         if l1.is_some() && l1 == l2 {
             elected = true;
         }
-        // Crabka-side telemetry every ~2s: leader epoch, HWM, and per-voter
+        // Krabka-side telemetry every ~2s: leader epoch, HWM, and per-voter
         // matched index (does the JVM voter id=3 show up as fetching?).
         if tick.is_multiple_of(4) {
             let qs = c1.controller_quorum_state_for_test();
             eprintln!(
-                "[t={}s] crabka n1 view: leader={:?} epoch={} hwm={} matched={:?}",
+                "[t={}s] krabka n1 view: leader={:?} epoch={} hwm={} matched={:?}",
                 tick / 2,
                 qs.current_leader,
                 qs.current_term,
@@ -250,26 +250,26 @@ async fn static_mixed_jvm_crabka_quorum() {
         eprintln!("{line}");
     }
 
-    // Crabka-side observations.
+    // Krabka-side observations.
     eprintln!(
-        "Crabka leader view: node1={last_l1:?} node2={last_l2:?}  \
+        "Krabka leader view: node1={last_l1:?} node2={last_l2:?}  \
          voter_count(n1)={} voter_count(n2)={}",
         c1.voter_count_for_test(),
         c2.voter_count_for_test(),
     );
 
     // Did the JVM successfully join the quorum cross-impl? Success looks like
-    // the JVM transitioning to Follower of the Crabka leader (or, less likely,
+    // the JVM transitioning to Follower of the Krabka leader (or, less likely,
     // winning leadership itself). The dominant *failure* signal is the JVM
     // declaring `UNSUPPORTED_VERSION` ("The node does not support VOTE") because
-    // Crabka's controller-listener ApiVersions handshake advertises no APIs —
+    // Krabka's controller-listener ApiVersions handshake advertises no APIs —
     // so the JVM's NetworkClient refuses to even send Vote/Fetch on the wire.
     let jvm_joined = log_text.contains("Completed transition to FollowerState")
         || log_text.contains("Completed transition to LeaderState");
     let jvm_unsupported_version =
         log_text.contains("does not support VOTE") || log_text.contains("UNSUPPORTED_VERSION");
     let jvm_fatal_fault = log_text.contains("Encountered fatal fault");
-    // The done bar: the JVM follower replicated the Crabka leader's committed
+    // The done bar: the JVM follower replicated the Krabka leader's committed
     // log and built its FeaturesImage from it — proving cross-impl metadata
     // replication, not just election.
     let jvm_replicated = log_text.contains("finished catching up to the current high water mark")
@@ -283,14 +283,14 @@ async fn static_mixed_jvm_crabka_quorum() {
     c1.shutdown().await;
     c2.shutdown().await;
 
-    // The two Crabka voters MUST elect among themselves regardless of the JVM.
+    // The two Krabka voters MUST elect among themselves regardless of the JVM.
     check!(
         elected,
-        "Crabka 2/3 majority failed to elect a stable shared leader \
+        "Krabka 2/3 majority failed to elect a stable shared leader \
          (n1={last_l1:?} n2={last_l2:?})"
     );
 
-    // The acceptance bar (Slice 6): the JVM controller joins the Crabka-led
+    // The acceptance bar (Slice 6): the JVM controller joins the Krabka-led
     // static quorum as a follower, never fatal-faults, and replicates the
     // leader's committed metadata (HWM catch-up + a FeaturesImage carrying
     // metadata.version=25).
@@ -304,36 +304,36 @@ async fn static_mixed_jvm_crabka_quorum() {
     );
     check!(
         jvm_replicated,
-        "JVM did not replicate the Crabka leader's committed metadata (no HWM catch-up / \
+        "JVM did not replicate the Krabka leader's committed metadata (no HWM catch-up / \
          metadata.version not loaded); see JVM logs"
     );
 }
 
-const CONTESTED_CONTAINER: &str = "crabka-kip996-contested";
+const CONTESTED_CONTAINER: &str = "krabka-kip996-contested";
 
 /// KIP-996 CONTESTED-ELECTION ACCEPTANCE TEST, Docker-gated and `#[ignore]`.
 ///
-/// Two Crabka voters, ids 1 and 2, and one `mirror.gcr.io/apache/kafka:4.0.0`
-/// voter, id 3, form a static 3-voter quorum. After the test kills the Crabka
-/// leader, only one Crabka voter and the JVM voter survive. The surviving
-/// Crabka candidate can then reach a majority only if the JVM grants both its
+/// Two Krabka voters, ids 1 and 2, and one `mirror.gcr.io/apache/kafka:4.0.0`
+/// voter, id 3, form a static 3-voter quorum. After the test kills the Krabka
+/// leader, only one Krabka voter and the JVM voter survive. The surviving
+/// Krabka candidate can then reach a majority only if the JVM grants both its
 /// PRE-VOTE and its real vote.
 ///
 /// The old `PRE_VOTE_ECHO_TAG` shortcut broke this path, because it dropped a
 /// JVM pre-vote grant.
 ///
 /// The JVM is tuned to release the dead leader quickly but to self-nominate
-/// slowly, so the surviving Crabka node wins. Recovery to a new Crabka leader
+/// slowly, so the surviving Krabka node wins. Recovery to a new Krabka leader
 /// at a higher epoch is the proof.
 ///
 /// Run:
 /// ```text
-/// cargo test -p crabka-broker --test jvm_static_quorum_spike \
-///   contested_election_crabka_counts_jvm_prevote -- --ignored --nocapture
+/// cargo test -p krabka-broker --test jvm_static_quorum_spike \
+///   contested_election_krabka_counts_jvm_prevote -- --ignored --nocapture
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker + a published controller port"]
-async fn contested_election_crabka_counts_jvm_prevote() {
+async fn contested_election_krabka_counts_jvm_prevote() {
     support::init_tracing();
     docker_rm(CONTESTED_CONTAINER);
 
@@ -344,44 +344,44 @@ async fn contested_election_crabka_counts_jvm_prevote() {
     let p1 = controller_addrs[0].port();
     let p2 = controller_addrs[1].port();
     let p3 = controller_addrs[2].port();
-    let crabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
-    let crabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
-    let crabka_voters: Vec<(u64, SocketAddr)> = vec![
+    let krabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
+    let krabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
+    let krabka_voters: Vec<(u64, SocketAddr)> = vec![
         (1, format!("127.0.0.1:{p1}").parse().unwrap()),
         (2, format!("127.0.0.1:{p2}").parse().unwrap()),
         (3, format!("127.0.0.1:{p3}").parse().unwrap()),
     ];
 
-    // Slow Crabka pre-vote retries (2s) so they sit well above the JVM's 300ms
+    // Slow Krabka pre-vote retries (2s) so they sit well above the JVM's 300ms
     // fetch-timeout — giving the JVM a quiet window between pre-votes to time out
     // the dead leader and promote itself to Prospective (then grant the survivor).
     let dir1 = TempDir::new().unwrap();
     let dir2 = TempDir::new().unwrap();
-    let mut cfg1 = crabka_controller_config(
+    let mut cfg1 = krabka_controller_config(
         0,
         client_addrs[0],
-        crabka_ctrl_1,
-        &crabka_voters,
+        krabka_ctrl_1,
+        &krabka_voters,
         cluster_id,
         dir1.path(),
     );
-    let mut cfg2 = crabka_controller_config(
+    let mut cfg2 = krabka_controller_config(
         1,
         client_addrs[1],
-        crabka_ctrl_2,
-        &crabka_voters,
+        krabka_ctrl_2,
+        &krabka_voters,
         cluster_id,
         dir2.path(),
     );
-    cfg1.controller_election_timeout = crabka_units::secs(2);
-    cfg2.controller_election_timeout = crabka_units::secs(2);
+    cfg1.controller_election_timeout = krabka_units::secs(2);
+    cfg2.controller_election_timeout = krabka_units::secs(2);
 
     let (c1, c2): (BrokerHandle, BrokerHandle) = {
         let s1 = tokio::spawn(Broker::start(cfg1));
         let s2 = tokio::spawn(Broker::start(cfg2));
         (
-            s1.await.unwrap().expect("crabka voter 1 start"),
-            s2.await.unwrap().expect("crabka voter 2 start"),
+            s1.await.unwrap().expect("krabka voter 1 start"),
+            s2.await.unwrap().expect("krabka voter 2 start"),
         )
     };
 
@@ -425,13 +425,13 @@ async fn contested_election_crabka_counts_jvm_prevote() {
         .expect("docker run JVM controller");
     assert!(status.success(), "docker run failed");
 
-    // ── Phase 1: a Crabka node leads and the JVM joins as a follower. ───────
+    // ── Phase 1: a Krabka node leads and the JVM joins as a follower. ───────
     let deadline = std::time::Instant::now() + Duration::from_secs(50);
     let mut leader0: Option<u64> = None;
     while std::time::Instant::now() < deadline {
         let l1 = c1.controller_leader_id();
         let l2 = c2.controller_leader_id();
-        if l1.is_some() && l1 == l2 && matches!(l1, Some(crabka_broker::NodeId(1 | 2))) {
+        if l1.is_some() && l1 == l2 && matches!(l1, Some(krabka_broker::NodeId(1 | 2))) {
             leader0 = l1.map(|n| n.0);
             break;
         }
@@ -441,17 +441,17 @@ async fn contested_election_crabka_counts_jvm_prevote() {
         // retry and could spuriously trip on a transient election disagreement.
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    let leader0 = leader0.expect("Crabka 2/3 majority did not elect a leader in {1,2}");
+    let leader0 = leader0.expect("Krabka 2/3 majority did not elect a leader in {1,2}");
     let epoch0 = c1.controller_quorum_state_for_test().current_term;
-    eprintln!("phase 1: Crabka leader={leader0} epoch={epoch0}");
+    eprintln!("phase 1: Krabka leader={leader0} epoch={epoch0}");
 
     // ── Phase 1b: WAIT for the JVM voter to actually join AND catch up. ──────
-    // The two Crabka nodes agree on a leader in ~1-2s, but the JVM container
+    // The two Krabka nodes agree on a leader in ~1-2s, but the JVM container
     // takes ~20-40s to boot and replicate. If we kill the leader before the JVM
     // is a functional, caught-up voter, the lone survivor (1 of 3) has no
     // reachable majority and stays stuck forever. So gate the kill on the JVM
     // log showing BOTH a role transition (Follower/Leader) AND high-water-mark
-    // catch-up — the same join signals the sibling `static_mixed_jvm_crabka_quorum`
+    // catch-up — the same join signals the sibling `static_mixed_jvm_krabka_quorum`
     // test relies on. Generous deadline to tolerate a slow JVM boot.
     let join_deadline = std::time::Instant::now() + Duration::from_secs(70);
     let mut jvm_joined = false;
@@ -475,7 +475,7 @@ async fn contested_election_crabka_counts_jvm_prevote() {
             break;
         }
         // intentional: polls the external JVM container's `docker logs` for its
-        // Follower/Leader transition + HWM catch-up; no in-process crabka
+        // Follower/Leader transition + HWM catch-up; no in-process krabka
         // metric reflects the JVM's internal role/replication state.
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -516,11 +516,11 @@ async fn contested_election_crabka_counts_jvm_prevote() {
     // Follower(leader=1) and rejects every pre-vote for the whole window.
     //
     // Sleeping here lets the JVM run several live Fetch cycles before the kill.
-    // NOTE: doing so surfaced a SEPARATE, deeper Crabka blocker — the JVM
+    // NOTE: doing so surfaced a SEPARATE, deeper Krabka blocker — the JVM
     // replicates past the bootstrap snapshot and fatal-faults applying a
     // DUPLICATE `__consumer_offsets` TopicRecord with a mismatched topic id
     // ("Found duplicate TopicRecord for __consumer_offsets with a different ID
-    // than before"). That duplicate comes from both Crabka voters racing the
+    // than before"). That duplicate comes from both Krabka voters racing the
     // read-then-write topic-bootstrap in coordinator/bootstrap.rs, each
     // submitting a TopicRecord with its own fresh Uuid::new_v4(). Until that
     // bootstrap is made idempotent on topic id, a JVM follower that replicates
@@ -528,16 +528,16 @@ async fn contested_election_crabka_counts_jvm_prevote() {
     tokio::time::sleep(Duration::from_secs(6)).await;
     eprintln!("phase 1c: JVM has had 6s of steady fetching — killing the leader now");
 
-    // ── Phase 2: kill the Crabka leader; the survivor needs the JVM's grants. ─
+    // ── Phase 2: kill the Krabka leader; the survivor needs the JVM's grants. ─
     let (killed, survivor, survivor_id) = if leader0 == 1 {
         (c1, c2, 2u64)
     } else {
         (c2, c1, 1u64)
     };
     killed.shutdown().await;
-    eprintln!("phase 2: killed Crabka leader {leader0}; survivor is {survivor_id}");
+    eprintln!("phase 2: killed Krabka leader {leader0}; survivor is {survivor_id}");
 
-    // ── Phase 3: the surviving Crabka voter must win a new election. ─────────
+    // ── Phase 3: the surviving Krabka voter must win a new election. ─────────
     // Trace the survivor's quorum state every ~2s so a stuck recovery is legible:
     // does `current_term` climb past epoch0 (the survivor IS promoting in some
     // rounds) or is it truly pinned at the old epoch (no majority reachable)?
@@ -554,7 +554,7 @@ async fn contested_election_crabka_counts_jvm_prevote() {
                 qs.current_term,
             );
         }
-        if qs.current_leader == Some(crabka_broker::NodeId(survivor_id)) && qs.current_term > epoch0
+        if qs.current_leader == Some(krabka_broker::NodeId(survivor_id)) && qs.current_term > epoch0
         {
             recovered = true;
             break;
@@ -579,7 +579,7 @@ async fn contested_election_crabka_counts_jvm_prevote() {
 
     assert!(
         recovered,
-        "surviving Crabka voter {survivor_id} did not win a new election at a \
+        "surviving Krabka voter {survivor_id} did not win a new election at a \
          higher epoch after the leader died — the JVM's pre-vote grant was not \
          counted (KIP-996 interop regression). survivor view: leader={:?} epoch={} (was {epoch0})",
         final_qs.current_leader, final_qs.current_term

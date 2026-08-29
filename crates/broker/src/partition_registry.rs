@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use crabka_ids::PartitionIndex;
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
 
 use crate::partition::Partition;
 
@@ -26,7 +26,7 @@ use crate::partition::Partition;
 #[derive(Debug, Default)]
 pub(crate) struct PartitionRegistry {
     inner: DashMap<String, DashMap<PartitionIndex, Arc<Partition>>>,
-    stamp_source: Option<Arc<dyn crabka_log::StampSource>>,
+    stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 }
 
 impl PartitionRegistry {
@@ -39,7 +39,7 @@ impl PartitionRegistry {
     /// Build a registry whose partitions share one internal timestamp source.
     #[must_use]
     pub(crate) fn with_stamp_source(
-        stamp_source: Option<Arc<dyn crabka_log::StampSource>>,
+        stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
     ) -> Self {
         Self {
             inner: DashMap::new(),
@@ -49,7 +49,7 @@ impl PartitionRegistry {
 
     /// Return the source to install on a newly opened partition log.
     #[must_use]
-    pub(crate) fn stamp_source(&self) -> Option<Arc<dyn crabka_log::StampSource>> {
+    pub(crate) fn stamp_source(&self) -> Option<Arc<dyn krabka_log::StampSource>> {
         self.stamp_source.as_ref().map(Arc::clone)
     }
 
@@ -151,8 +151,8 @@ mod tests {
     use std::{path::Path, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_ids::PartitionIndex;
-    use crabka_log::{Log, LogConfig};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig};
     use tempfile::tempdir;
 
     use super::PartitionRegistry;

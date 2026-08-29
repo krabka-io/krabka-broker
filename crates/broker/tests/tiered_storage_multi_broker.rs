@@ -6,7 +6,7 @@
 //!
 //! ## Design
 //!
-//! Three in-process Crabka brokers boot with:
+//! Three in-process Krabka brokers boot with:
 //! - advertised listeners on `127.0.0.1:<port>`, with no Docker and no
 //!   host.docker.internal
 //! - a **shared** `Local` remote-storage backend, the same temp dir, on all
@@ -61,12 +61,12 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use crabka_broker::{
+use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend,
     RlmmKind,
 };
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -121,14 +121,14 @@ async fn start_three_tiered_brokers() -> (
         .map(|i| {
             let mut cfg = BrokerConfig::for_tests(log_dirs[i].path().to_path_buf());
             cfg.broker_id = i32::try_from(i + 1).unwrap();
-            cfg.node_id = crabka_broker::NodeId(u64::try_from(i + 1).unwrap());
+            cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
             cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
             cfg.listen_addr = client_addrs[i];
             cfg.advertised_listener = format!("127.0.0.1:{}", client_addrs[i].port());
             cfg.controller_listen_addr = controller_addrs[i];
             cfg.controller_quorum_voters = voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect();
             cfg.bootstrap_mode = BootstrapMode::Bootstrap;
             cfg.auto_join = false;
@@ -136,7 +136,7 @@ async fn start_three_tiered_brokers() -> (
             cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
                 dir: remote_dir.path().to_path_buf(),
             });
-            cfg.remote_log_manager_interval = crabka_units::secs(1);
+            cfg.remote_log_manager_interval = krabka_units::secs(1);
             // RLMM: all 3 brokers bootstrap into broker 1's loopback.
             // num_partitions=1 keeps all metadata on a single partition.
             // replication=3 prevents the topic from being created before all
@@ -148,7 +148,7 @@ async fn start_three_tiered_brokers() -> (
                 bootstrap: format!("127.0.0.1:{}", client_addrs[0].port()),
                 num_partitions: 1,
                 replication: 3,
-                snapshot_interval: crabka_units::hours(1),
+                snapshot_interval: krabka_units::hours(1),
                 snapshot_dir: std::path::PathBuf::new(), // derived from log_dir
                 security: None,
                 ..KafkaRlmmConfig::default()
@@ -404,8 +404,8 @@ async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandl
                 .partition_log_config_for_test(TOPIC, 0)
                 .is_some_and(|config| {
                     config.remote_storage_enable
-                        && config.segment_size == crabka_units::kibibytes(1)
-                        && config.local_retention_size == Some(crabka_units::bytes(1))
+                        && config.segment_size == krabka_units::kibibytes(1)
+                        && config.local_retention_size == Some(krabka_units::bytes(1))
                 })
         };
         if ready(b1) || ready(b2) {
@@ -558,7 +558,7 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
     let survivor = if follower_node_id
         == opt_b1
             .as_ref()
-            .map_or(0, crabka_broker::BrokerHandle::node_id)
+            .map_or(0, krabka_broker::BrokerHandle::node_id)
     {
         opt_b1.as_ref().unwrap()
     } else {
@@ -572,7 +572,7 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
     // rf=2 the only surviving replica is the follower, so the new leader can
     // only be `follower_node_id`.
     survivor
-        .wait_until_partition_leader_changed(TOPIC, 0, crabka_broker::NodeId(leader_node_id))
+        .wait_until_partition_leader_changed(TOPIC, 0, krabka_broker::NodeId(leader_node_id))
         .await;
     eprintln!("ITEST: survivor (broker{follower_node_id}) is now partition leader");
 

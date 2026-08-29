@@ -7,7 +7,7 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "restore")
 
-# `krabka-restore`, not `crabka-restore`. The `krabka` operator CLI resolves an
+# `krabka-restore`, not `krabka-restore`. The `krabka` operator CLI resolves an
 # unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves
 # `git foo` to `git-foo`, so this exact spelling is what makes `krabka restore`
 # work. `bazel run //crates/restore:krabka-restore -- --help`.

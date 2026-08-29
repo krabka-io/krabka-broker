@@ -14,11 +14,11 @@
 use std::path::Path;
 
 use bytes::{BufMut, BytesMut};
-use crabka_remote_storage::{
+use krabka_remote_storage::{
     PartitionDump, RemoteLogSegmentMetadata, RemotePartitionDeleteState, RlmmCacheDump,
     TopicIdPartition,
 };
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes as byte_size};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes as byte_size};
 use tracing::instrument;
 
 use crate::{
@@ -40,7 +40,7 @@ const ENCODE_BUFFER_HINT: ByteSize = byte_size(256);
 /// A decoded snapshot: the per-metadata-partition committed offsets and
 /// the cache dump to seed an [`InmemoryRemoteLogMetadataManager`].
 ///
-/// [`InmemoryRemoteLogMetadataManager`]: crabka_remote_storage::InmemoryRemoteLogMetadataManager
+/// [`InmemoryRemoteLogMetadataManager`]: krabka_remote_storage::InmemoryRemoteLogMetadataManager
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     /// Highest offset applied into the cache per metadata partition, indexed
@@ -75,7 +75,7 @@ impl Snapshot {
             if let Some(state) = p.delete_state {
                 entries.push(
                     MetadataEvent::PartitionDelete(
-                        crabka_remote_storage::RemotePartitionDeleteMetadata {
+                        krabka_remote_storage::RemotePartitionDeleteMetadata {
                             topic_id_partition: p.topic_id_partition.clone(),
                             state,
                             event_timestamp_ms: 0,
@@ -269,8 +269,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::assert;
-    use crabka_ids::LeaderEpoch;
-    use crabka_remote_storage::{
+    use krabka_ids::LeaderEpoch;
+    use krabka_remote_storage::{
         RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
         RemotePartitionDeleteState, TopicIdPartition,
     };
@@ -290,7 +290,7 @@ mod tests {
             end + 1,
             1,
             100,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 2048,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), start)]),
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn write_then_load_round_trips_through_a_file() {
-        let dir = std::env::temp_dir().join(format!("crabka-snap-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("krabka-snap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("snapshot");
         let snap = sample_snapshot();
@@ -367,14 +367,14 @@ mod tests {
 
     #[test]
     fn load_absent_file_is_ok_none() {
-        let path = std::env::temp_dir().join("crabka-snap-does-not-exist-xyz");
+        let path = std::env::temp_dir().join("krabka-snap-does-not-exist-xyz");
         let _ = std::fs::remove_file(&path);
         assert!(Snapshot::load(&path).unwrap() == None);
     }
 
     #[test]
     fn load_corrupt_file_is_err() {
-        let dir = std::env::temp_dir().join(format!("crabka-snap-corrupt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("krabka-snap-corrupt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("snapshot");
         std::fs::write(&path, [0xFF, 0xFF, 0x00, 0x01]).unwrap();

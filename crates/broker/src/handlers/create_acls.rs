@@ -5,15 +5,15 @@
 //! controller. It returns one result per binding.
 
 use bytes::Bytes;
-use crabka_metadata::{AclEntry, MetadataRecord};
-use crabka_protocol::{
+use krabka_metadata::{AclEntry, MetadataRecord};
+use krabka_protocol::{
     Encode,
     owned::{
         create_acls_request::CreateAclsRequest,
         create_acls_response::{AclCreationResult, CreateAclsResponse},
     },
 };
-use crabka_units::convert::ByteSizeExt as _;
+use krabka_units::convert::ByteSizeExt as _;
 
 use super::acl_wire::{
     CLUSTER_RESOURCE_NAME, operation_concrete, pattern_type_concrete, permission_concrete,
@@ -25,7 +25,7 @@ use crate::{
     codes,
 };
 
-/// Kafka principal-type prefix. It is the only principal type that Crabka
+/// Kafka principal-type prefix. It is the only principal type that Krabka
 /// accepts.
 const USER_PRINCIPAL_PREFIX: &str = "User:";
 
@@ -50,9 +50,9 @@ pub(crate) async fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Alter,
+            operation: krabka_metadata::AclOperation::Alter,
         },
     );
     if allow == AuthorizationResult::Deny {
@@ -134,11 +134,11 @@ fn created_acl_resources(
     req: &CreateAclsRequest,
     results: &[AclCreationResult],
     to_submit: &[(usize, MetadataRecord)],
-) -> Vec<crabka_audit::AuditResource> {
+) -> Vec<krabka_audit::AuditResource> {
     to_submit
         .iter()
         .filter(|(idx, _)| results[*idx].error_code == codes::NONE)
-        .map(|(idx, _)| crabka_audit::AuditResource {
+        .map(|(idx, _)| krabka_audit::AuditResource {
             resource_type: "Acl".to_string(),
             name: req.creations[*idx].resource_name.clone(),
         })
@@ -146,23 +146,23 @@ fn created_acl_resources(
 }
 
 fn audit_created_acls(
-    audit_log: &crabka_audit::AuditLog,
+    audit_log: &krabka_audit::AuditLog,
     ctx: &crate::handlers::RequestContext<'_>,
-    created_acls: Vec<crabka_audit::AuditResource>,
+    created_acls: Vec<krabka_audit::AuditResource>,
 ) {
     if !created_acls.is_empty() {
         crate::handlers::audit_admin(
             audit_log,
             ctx,
             "CreateAcls",
-            crabka_audit::AuditOutcome::Success,
+            krabka_audit::AuditOutcome::Success,
             created_acls,
         );
     }
 }
 
 fn validate(
-    c: &crabka_protocol::owned::create_acls_request::AclCreation,
+    c: &krabka_protocol::owned::create_acls_request::AclCreation,
     max_principal_bytes: usize,
     max_resource_name_bytes: usize,
 ) -> Result<AclEntry, (i16, &'static str)> {
@@ -216,8 +216,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
-    use crabka_protocol::{UnknownTaggedFields, owned::create_acls_request::AclCreation};
+    use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
+    use krabka_protocol::{UnknownTaggedFields, owned::create_acls_request::AclCreation};
 
     use super::*;
     use crate::{
@@ -260,7 +260,7 @@ mod tests {
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
-    fn all_acls(handle: &BrokerHandle) -> Vec<crabka_metadata::AclEntry> {
+    fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> {
         handle
             .controller_image_for_test()
             .all_acls()
@@ -277,8 +277,8 @@ mod tests {
         const PRINCIPAL_LIMIT: usize = 10;
         const RESOURCE_NAME_LIMIT: usize = 8;
 
-        fn limit(characters: usize) -> crabka_units::ByteSize {
-            crabka_units::ByteSize::from_bytes(
+        fn limit(characters: usize) -> krabka_units::ByteSize {
+            krabka_units::ByteSize::from_bytes(
                 u64::try_from(characters).expect("test limit fits u64"),
             )
         }
@@ -440,7 +440,7 @@ mod tests {
 
         let resources = created_acl_resources(&req, &results, &submitted);
 
-        let expected = vec![crabka_audit::AuditResource {
+        let expected = vec![krabka_audit::AuditResource {
             resource_type: "Acl".to_string(),
             name: "topic-ok".to_string(),
         }];
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn audit_created_acls_skips_empty_and_emits_non_empty_admin_event() {
-        let (log, mut rx) = crabka_audit::AuditLog::new(8);
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
@@ -463,14 +463,14 @@ mod tests {
         audit_created_acls(
             log.as_ref(),
             &ctx,
-            vec![crabka_audit::AuditResource {
+            vec![krabka_audit::AuditResource {
                 resource_type: "Acl".into(),
                 name: "topic-ok".into(),
             }],
         );
 
         let event = rx.try_recv().expect("admin audit event");
-        let crabka_audit::AuditEvent::AdminOperation {
+        let krabka_audit::AuditEvent::AdminOperation {
             outcome,
             principal,
             operation,
@@ -487,10 +487,10 @@ mod tests {
                 operation.as_str(),
                 resources,
             ) == (
-                crabka_audit::AuditOutcome::Success,
+                krabka_audit::AuditOutcome::Success,
                 "admin",
                 "CreateAcls",
-                vec![crabka_audit::AuditResource {
+                vec![krabka_audit::AuditResource {
                     resource_type: "Acl".to_string(),
                     name: "topic-ok".to_string(),
                 }],

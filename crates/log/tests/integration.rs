@@ -1,4 +1,4 @@
-//! Round-trip a real JVM Kafka broker's log dir against `crabka-log`.
+//! Round-trip a real JVM Kafka broker's log dir against `krabka-log`.
 //!
 //! These tests carry `#[ignore]`, so `cargo test` does not pull Docker by
 //! default. Run them with `--include-ignored` or `--ignored`.
@@ -9,14 +9,14 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_log::{Log, LogConfig};
-use crabka_protocol::records::{Record, RecordBatch};
-use crabka_units::prelude::gibibytes;
+use krabka_log::{Log, LogConfig};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::prelude::gibibytes;
 use tempfile::tempdir;
 use testcontainers::{ImageExt, core::Mount, runners::AsyncRunner};
 use testcontainers_modules::kafka::{KAFKA_PORT, Kafka};
 
-const TOPIC: &str = "crabka-log-itest";
+const TOPIC: &str = "krabka-log-itest";
 /// The deadline for a container to start, which includes the image pull.
 ///
 /// `AsyncRunner::start` waits for the pull with no bound of its own. A stalled
@@ -144,7 +144,7 @@ async fn read_jvm_produced_log_dir() {
     docker_cp(&container_id, &partition_dir, host_tmp.path());
     assert2::assert!(host_target.exists());
 
-    // 5. Open with crabka-log and read everything back.
+    // 5. Open with krabka-log and read everything back.
     let log = Log::open(&host_target, LogConfig::default()).expect("open log");
     let out = log
         .read(log.log_start_offset(), gibibytes(4))
@@ -232,7 +232,7 @@ async fn jvm_consumes_rust_written_log_dir() {
             ..LogConfig::default()
         },
     )
-    .expect("open JVM partition with crabka-log");
+    .expect("open JVM partition with krabka-log");
     log.append(&mut batch).expect("append Rust-written batch");
     drop(log);
 

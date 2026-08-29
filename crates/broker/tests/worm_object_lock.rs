@@ -1,7 +1,7 @@
 //! The WORM archive against a real Object-Lock bucket.
 //!
-//! Every other WORM test proves that Crabka never issues a delete. That is a
-//! statement about Crabka, and an auditor does not have to believe it. This
+//! Every other WORM test proves that Krabka never issues a delete. That is a
+//! statement about Krabka, and an auditor does not have to believe it. This
 //! suite proves the other half: the bucket itself refuses the delete, so the
 //! archive survives an operator who does issue one. `MinIO` with Object Lock in
 //! compliance mode is the S3 implementation under test.
@@ -15,21 +15,21 @@ mod support;
 use std::process::Command;
 
 use assert2::{assert, check};
-use crabka_audit::signing::FileEd25519Signer;
-use crabka_log::LogConfig;
 use jvm_acceptance::*;
+use krabka_audit::signing::FileEd25519Signer;
+use krabka_log::LogConfig;
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
 /// is the ordinary mutable tier, and a locked bucket behaves differently enough
 /// that sharing the name would mislead whoever reads a failure.
-const BUCKET: &str = "crabka-worm-locked";
+const BUCKET: &str = "krabka-worm-locked";
 
 /// Key id the archive records in every signature, and the id the verifier
 /// looks the trusted public key up under.
 const KEY_ID: &str = "worm-itest-key";
 
-const TOPIC: &str = "crabka-worm-lock-itest";
+const TOPIC: &str = "krabka-worm-lock-itest";
 
 /// 200 records of about 30 bytes each, so `segment.bytes=2048` rolls several
 /// sealed segments and the copy path runs more than once. The same fixture the
@@ -47,7 +47,7 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
     minio_make_locked_bucket(BUCKET);
 
     // The signing key is a throwaway PKCS#8 Ed25519 key in a temp file, minted
-    // the way `crabka_audit::signing`'s own tests mint one. The broker reads
+    // the way `krabka_audit::signing`'s own tests mint one. The broker reads
     // the file; the test keeps the public half to verify with.
     let key_dir = tempfile::tempdir().expect("tempdir for the signing key");
     let key_path = key_dir.path().join("worm-signing.pk8");
@@ -57,7 +57,7 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
         .expect("ring mints a valid PKCS#8 Ed25519 key")
         .public_key();
 
-    let s3 = crabka_remote_storage::S3Config {
+    let s3 = krabka_remote_storage::S3Config {
         bucket: BUCKET.to_string(),
         region: "us-east-1".to_string(),
         prefix: None,
@@ -153,15 +153,15 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
     // object body. `Deep` is the only depth that catches a body replaced with
     // different bytes of the same length.
     let store =
-        crabka_object_store::build_object_store(&crabka_object_store::ObjectStoreConfig::S3(s3))
+        krabka_object_store::build_object_store(&krabka_object_store::ObjectStoreConfig::S3(s3))
             .expect("build the verifier's object store");
     let trusted =
-        crabka_remote_storage::TrustedManifestKeys::single(KEY_ID.to_string(), public_key);
-    let request = crabka_remote_storage::VerifyRequest {
-        depth: crabka_remote_storage::VerifyDepth::Deep,
-        ..crabka_remote_storage::VerifyRequest::default()
+        krabka_remote_storage::TrustedManifestKeys::single(KEY_ID.to_string(), public_key);
+    let request = krabka_remote_storage::VerifyRequest {
+        depth: krabka_remote_storage::VerifyDepth::Deep,
+        ..krabka_remote_storage::VerifyRequest::default()
     };
-    let report = crabka_remote_storage::verify_archive(&store, &request, &trusted)
+    let report = krabka_remote_storage::verify_archive(&store, &request, &trusted)
         .await
         .expect("the archive is readable");
     check!(
@@ -185,17 +185,17 @@ async fn object_lock_bucket_refuses_delete_of_an_archived_segment() {
 /// `key_path`.
 ///
 /// This is [`start_host_broker_with_minio_tier`] plus
-/// [`crabka_broker::BrokerConfig::remote_storage_worm`], which that helper does
+/// [`krabka_broker::BrokerConfig::remote_storage_worm`], which that helper does
 /// not carry. The caller must keep the returned temp dir alive: it is the
 /// broker's `log.dir`.
 async fn start_worm_broker(
-    s3: crabka_remote_storage::S3Config,
+    s3: krabka_remote_storage::S3Config,
     key_path: &std::path::Path,
-) -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -203,23 +203,23 @@ async fn start_worm_broker(
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
-    let config = crabka_broker::BrokerConfig {
+    let config = krabka_broker::BrokerConfig {
         broker_id: 1,
         listen_addr,
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        remote_storage_backend: Some(crabka_broker::RemoteStorageBackend::S3(s3)),
-        remote_storage_worm: Some(crabka_remote_storage::WormConfig {
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3)),
+        remote_storage_worm: Some(krabka_remote_storage::WormConfig {
             signing_key_path: Some(key_path.to_path_buf()),
             signing_key_id: Some(KEY_ID.to_string()),
             // The archive stays readable, so the consume assertion above
@@ -228,18 +228,18 @@ async fn start_worm_broker(
         }),
         // 1 s tick, so the sealed segments reach the archive and the
         // local-retention pass evicts them inside the test's wall clock.
-        remote_log_manager_interval: crabka_units::secs(1),
+        remote_log_manager_interval: krabka_units::secs(1),
         // One process, one run, so the in-memory manager holds the chain tip
         // for the whole test. A restart is what would start a new epoch, and
         // this suite never restarts.
-        remote_log_metadata: crabka_broker::RlmmKind::InMemory,
-        ..crabka_broker::BrokerConfig::default()
+        remote_log_metadata: krabka_broker::RlmmKind::InMemory,
+        ..krabka_broker::BrokerConfig::default()
     };
-    let handle = crabka_broker::Broker::start(config)
+    let handle = krabka_broker::Broker::start(config)
         .await
         .expect("start the WORM broker");
     eprintln!(
-        "CRABKA[test] WORM broker started listen={listen} advertised={advertised}",
+        "KRABKA[test] WORM broker started listen={listen} advertised={advertised}",
         listen = broker0_listen(),
         advertised = broker0_advertised()
     );
@@ -267,7 +267,7 @@ async fn wait_for_sealed_manifests(bucket: &str, min_segments: usize) -> String 
             return listing;
         }
         // intentional: bounded poll of an external process, MinIO under
-        // `mc ls`. No crabka metric reflects object arrival in the bucket.
+        // `mc ls`. No krabka metric reflects object arrival in the bucket.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     panic!(

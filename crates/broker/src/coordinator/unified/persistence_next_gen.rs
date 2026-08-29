@@ -3,7 +3,7 @@
 //! version preamble.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_protocol::{ProtocolError, primitives::uuid::Uuid};
+use krabka_protocol::{ProtocolError, primitives::uuid::Uuid};
 
 use crate::{
     coordinator::unified::persistence::{

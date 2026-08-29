@@ -32,14 +32,14 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use crabka_ids::{NodeId, PartitionIndex};
-use crabka_log::Offset;
-use crabka_metadata::{BrokerRegistrationRecord, MetadataImage};
-use crabka_protocol::krabka::barrier::{
+use krabka_ids::{NodeId, PartitionIndex};
+use krabka_log::Offset;
+use krabka_metadata::{BrokerRegistrationRecord, MetadataImage};
+use krabka_protocol::krabka::barrier::{
     WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
     WriteBarrierMarkersResponse,
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 use tracing::warn;
 
 use crate::{
@@ -100,9 +100,9 @@ impl RemoteMarkerWriter for InterBrokerMarkerWriter {
         };
         let (host, port) = endpoint_of(broker_info, &self.listener_name);
 
-        let options = crabka_client_core::ConnectionOptions {
-            client_id: format!("crabka-broker-barrier-{}", self.node_id),
-            ..crabka_client_core::ConnectionOptions::default()
+        let options = krabka_client_core::ConnectionOptions {
+            client_id: format!("krabka-broker-barrier-{}", self.node_id),
+            ..krabka_client_core::ConnectionOptions::default()
         };
         let connection = self
             .client
@@ -228,8 +228,8 @@ fn placements(response: &WriteBarrierMarkersResponse) -> Vec<MarkerPlacement> {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::BrokerEndpoint;
-    use crabka_protocol::krabka::barrier::{WrittenBarrierPartition, WrittenBarrierTopic};
+    use krabka_metadata::BrokerEndpoint;
+    use krabka_protocol::krabka::barrier::{WrittenBarrierPartition, WrittenBarrierTopic};
 
     use super::*;
 

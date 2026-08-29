@@ -57,7 +57,7 @@ impl OtlpForwarder {
     /// (HTTP/protobuf `/v1/metrics`). `capacity` bounds the in-flight queue.
     pub(crate) fn spawn(
         endpoint: String,
-        protocol: crabka_telemetry::OtlpProtocol,
+        protocol: krabka_telemetry::OtlpProtocol,
         capacity: usize,
         dropped: Counter,
         failed: Counter,
@@ -69,7 +69,7 @@ impl OtlpForwarder {
             while let Some((md, instance)) = rx.recv().await {
                 let req = build_export_request(md, &instance);
                 let result = match protocol {
-                    crabka_telemetry::OtlpProtocol::HttpProtobuf => {
+                    krabka_telemetry::OtlpProtocol::HttpProtobuf => {
                         let body = {
                             use prost::Message;
                             req.encode_to_vec()
@@ -84,7 +84,7 @@ impl OtlpForwarder {
                             .map(|_| ())
                             .map_err(|error| error.to_string())
                     }
-                    crabka_telemetry::OtlpProtocol::Grpc => {
+                    krabka_telemetry::OtlpProtocol::Grpc => {
                         match MetricsServiceClient::connect(endpoint.clone()).await {
                             Ok(mut client) => client
                                 .export(tonic::Request::new(req))
@@ -206,7 +206,7 @@ mod tests {
         let failed = Counter::default();
         let forwarder = OtlpForwarder::spawn(
             server.uri(),
-            crabka_telemetry::OtlpProtocol::HttpProtobuf,
+            krabka_telemetry::OtlpProtocol::HttpProtobuf,
             1,
             dropped.clone(),
             failed.clone(),
@@ -228,7 +228,7 @@ mod tests {
             .await;
         let forwarder = OtlpForwarder::spawn(
             server.uri(),
-            crabka_telemetry::OtlpProtocol::HttpProtobuf,
+            krabka_telemetry::OtlpProtocol::HttpProtobuf,
             1,
             Counter::default(),
             Counter::default(),

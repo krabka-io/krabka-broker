@@ -17,8 +17,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crabka_client_core::ClientDuplex;
-use crabka_protocol::{
+use krabka_client_core::ClientDuplex;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::{self, ApiVersionsRequest},
@@ -28,8 +28,8 @@ use crabka_protocol::{
         sasl_handshake_request::{self, SaslHandshakeRequest},
     },
 };
-use crabka_raft::{ControllerHandle, RaftConnection, RaftHandshakeError, RaftListenerHandshake};
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_raft::{ControllerHandle, RaftConnection, RaftHandshakeError, RaftListenerHandshake};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -44,7 +44,7 @@ use crate::network::auth::{
 
 /// Late-bound handle to the broker's [`ControllerHandle`].
 ///
-/// The broker constructs the handshake *before* `crabka_raft::Controller::start`
+/// The broker constructs the handshake *before* `krabka_raft::Controller::start`
 /// returns, and moves it into `ControllerConfig::handshake`, so the controller
 /// is only available later. This type therefore carries an
 /// `Arc<OnceCell<…>>`, and `Broker::start` calls `OnceCell::set` on it once
@@ -68,9 +68,9 @@ pub struct BrokerRaftHandshake {
     pub tls_acceptor: Option<TlsAcceptor>,
     pub plain_credentials: HashMap<String, String>,
     pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
-    pub gssapi: Option<crabka_security::gssapi::GssapiConfig>,
-    pub oauthbearer_validator: crabka_security::OAuthBearerValidator,
-    pub oauthbearer_max_session_lifetime: Option<crabka_units::Time>,
+    pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
+    pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
+    pub oauthbearer_max_session_lifetime: Option<krabka_units::Time>,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
     /// Maximum Kafka handshake frame body accepted before authentication.
@@ -102,10 +102,10 @@ impl BrokerRaftHandshake {
     /// connections. On Deny, the broker drops the connection.
     fn authorize_cluster_action(
         &self,
-        principal: &crabka_security::Principal,
+        principal: &krabka_security::Principal,
         peer: &std::net::SocketAddr,
     ) -> Result<(), RaftHandshakeError> {
-        use crabka_metadata::{AclOperation, ResourceType};
+        use krabka_metadata::{AclOperation, ResourceType};
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
@@ -143,10 +143,10 @@ impl BrokerRaftHandshake {
 
     fn authorize_cluster_alter(
         &self,
-        principal: &crabka_security::Principal,
+        principal: &krabka_security::Principal,
         peer: &std::net::SocketAddr,
     ) -> Result<bool, RaftHandshakeError> {
-        use crabka_metadata::{AclOperation, ResourceType};
+        use krabka_metadata::{AclOperation, ResourceType};
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
@@ -236,7 +236,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
 async fn run_inbound_sasl(
     stream: &mut dyn ClientDuplex,
     cfg: &BrokerRaftHandshake,
-) -> Result<(crabka_security::Principal, bool), RaftHandshakeError> {
+) -> Result<(krabka_security::Principal, bool), RaftHandshakeError> {
     let mut auth = pre_auth_state();
     loop {
         let (api_key, api_version, corr_id, body) =
@@ -520,7 +520,7 @@ mod tests {
             &self,
             buf: &mut B,
             _version: i16,
-        ) -> Result<(), crabka_protocol::ProtocolError> {
+        ) -> Result<(), krabka_protocol::ProtocolError> {
             buf.put_slice(self.0);
             Ok(())
         }
@@ -594,7 +594,7 @@ mod tests {
             plain_credentials,
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             gssapi: None,
-            oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
+            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             oauthbearer_max_session_lifetime: None,
             protocol: ListenerProtocol::SaslPlaintext,
             controller: Arc::new(OnceCell::new()),
@@ -652,7 +652,7 @@ mod tests {
             plain_credentials: HashMap::new(),
             enabled_sasl_mechanisms: vec![],
             gssapi: None,
-            oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
+            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             oauthbearer_max_session_lifetime: None,
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
@@ -670,8 +670,8 @@ mod tests {
     async fn authorize_cluster_action_denies_when_authorizer_denies() {
         let dir = tempfile::tempdir().expect("tempdir");
         let controller = Arc::new(
-            crabka_raft::Controller::start(crabka_raft::ControllerConfig::for_tests(
-                crabka_raft::NodeId(1),
+            krabka_raft::Controller::start(krabka_raft::ControllerConfig::for_tests(
+                krabka_raft::NodeId(1),
                 dir.path().to_path_buf(),
             ))
             .await
@@ -685,16 +685,16 @@ mod tests {
             plain_credentials: HashMap::new(),
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             gssapi: None,
-            oauthbearer_validator: crabka_security::OAuthBearerValidator::default(),
+            oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             oauthbearer_max_session_lifetime: None,
             protocol: ListenerProtocol::SaslPlaintext,
             controller: controller_cell,
             max_frame_bytes: 4096,
             authorizer: Arc::new(DenyAll),
         };
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "broker".to_string(),
-            auth_method: crabka_security::AuthMethod::SaslPlain,
+            auth_method: krabka_security::AuthMethod::SaslPlain,
             groups: Vec::new(),
         };
         let peer = "127.0.0.1:9092".parse().expect("peer");
@@ -766,8 +766,8 @@ mod tests {
             request_api_version: 3,
             correlation_id: 44,
             client_id: Some("c".to_string()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![
-                crabka_protocol::UnknownTaggedField {
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![
+                krabka_protocol::UnknownTaggedField {
                     tag: 300,
                     bytes: Bytes::from_static(b"tag-payload"),
                 },
@@ -975,7 +975,7 @@ mod tests {
 
         let (principal, via_token) = server.await.expect("server task").expect("authenticated");
         assert!(principal.name == "broker");
-        assert!(principal.auth_method == crabka_security::AuthMethod::SaslPlain);
+        assert!(principal.auth_method == krabka_security::AuthMethod::SaslPlain);
         assert!(!via_token);
     }
 

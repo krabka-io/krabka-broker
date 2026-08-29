@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock, Weak};
 
-use crabka_raft::{
+use krabka_raft::{
     ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
     ControllerAdminRouter, ControllerApiVersion, RaftError,
 };
@@ -16,17 +16,17 @@ use crate::{
 macro_rules! api_version {
     ($request:ident) => {
         ControllerApiVersion {
-            api_key: crabka_protocol::owned::$request::API_KEY,
-            min_version: crabka_protocol::owned::$request::MIN_VERSION,
-            max_version: crabka_protocol::owned::$request::MAX_VERSION,
-            flexible_min: crabka_protocol::owned::$request::FLEXIBLE_MIN,
+            api_key: krabka_protocol::owned::$request::API_KEY,
+            min_version: krabka_protocol::owned::$request::MIN_VERSION,
+            max_version: krabka_protocol::owned::$request::MAX_VERSION,
+            flexible_min: krabka_protocol::owned::$request::FLEXIBLE_MIN,
         }
     };
 }
 
 /// KIP-919's controller-listener Admin subset. `DescribeQuorum`,
 /// `DescribeCluster`, `ApiVersions`, and controller registration are served
-/// directly by `crabka-raft`, so only the shared broker-handler subset lives
+/// directly by `krabka-raft`, so only the shared broker-handler subset lives
 /// here.
 const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(alter_configs_request),
@@ -104,9 +104,9 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
             })?;
             let principal = request
                 .principal
-                .unwrap_or_else(|| crabka_security::Principal {
+                .unwrap_or_else(|| krabka_security::Principal {
                     name: "ANONYMOUS".into(),
-                    auth_method: crabka_security::AuthMethod::Anonymous,
+                    auth_method: krabka_security::AuthMethod::Anonymous,
                     groups: Vec::new(),
                 });
             let client_id = request.client_id.as_deref().unwrap_or("");
@@ -133,7 +133,7 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                 DispatchKind::Auth(handler) => {
                     let auth = ConnectionAuth::Authenticated {
                         principal,
-                        mechanism: crabka_security::SaslMechanism::Plain,
+                        mechanism: krabka_security::SaslMechanism::Plain,
                         expires_at_ms: None,
                         authenticated_via_token: request.authenticated_via_token,
                     };

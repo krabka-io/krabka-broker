@@ -8,7 +8,7 @@
 
 use std::{collections::hash_map::DefaultHasher, hash::Hasher};
 
-use crabka_remote_storage::TopicIdPartition;
+use krabka_remote_storage::TopicIdPartition;
 
 /// Pick the metadata-topic partition for `tp`, given the
 /// `partition_count` of `__remote_log_metadata`.

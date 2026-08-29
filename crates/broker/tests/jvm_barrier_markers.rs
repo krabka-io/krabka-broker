@@ -25,7 +25,7 @@
 //! marker would pass.
 //!
 //! ```text
-//! cargo test -p crabka-broker --test jvm_barrier_markers -- --ignored --nocapture
+//! cargo test -p krabka-broker --test jvm_barrier_markers -- --ignored --nocapture
 //! ```
 
 mod jvm_acceptance;
@@ -34,15 +34,15 @@ mod support;
 use std::collections::BTreeMap;
 
 use assert2::{assert, check};
-use crabka_client_admin::{AdminClient, CreateTopicSpec};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::krabka::barrier::{
-    AlterBarrierGroupsRequest, AlterableBarrierGroup, CUT_STATUS_COMPLETE, TriggerBarrierRequest,
-};
 use jvm_acceptance::{
     KAFKA_IMAGE_TXN, docker_run_kafka_tool_with_image, rlmm_broker0_advertised,
     start_host_broker_with,
+};
+use krabka_client_admin::{AdminClient, CreateTopicSpec};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::krabka::barrier::{
+    AlterBarrierGroupsRequest, AlterableBarrierGroup, CUT_STATUS_COMPLETE, TriggerBarrierRequest,
 };
 
 const TOPIC: &str = "barrier-invisibility";
@@ -96,7 +96,7 @@ async fn wait_for_coordinator(client: &Client) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_mins(1);
     loop {
         let answered = client
-            .send(crabka_protocol::krabka::barrier::DescribeBarrierGroupsRequest::default())
+            .send(krabka_protocol::krabka::barrier::DescribeBarrierGroupsRequest::default())
             .await
             .is_ok();
         if answered {
@@ -268,7 +268,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
                 replicas: 1,
                 configs: BTreeMap::default(),
             }],
-            crabka_units::secs(10),
+            krabka_units::secs(10),
         )
         .await
         .expect("create topic");

@@ -1,7 +1,7 @@
 //! Exhaustive stateright shared-memory interleaving model of the live
-//! `crabka_throttle::TokenBucket` concurrency.
+//! `krabka_throttle::TokenBucket` concurrency.
 //!
-//! The model drives the production [`crabka_throttle::plan_consume`]
+//! The model drives the production [`krabka_throttle::plan_consume`]
 //! arithmetic. The state is the shared `{rate, available, pending}` atomics,
 //! modeled small, plus a seqlock `generation` and a per-thread program counter
 //! for each in-flight `try_consume` or `set_rate`. `available` is an `i64`, so
@@ -29,11 +29,11 @@
 //! witness `race_underflows_without_cas` discovers a counterexample. The CAS
 //! path holds the invariant even with a concurrent `set_rate`. The GREEN cases
 //! are `bucket_basic` and `bucket_wide`. See the design spec
-//! `docs/superpowers/specs/2026-06-14-crabka-token-bucket-quota-model-design.md`.
+//! `docs/superpowers/specs/2026-06-14-krabka-token-bucket-quota-model-design.md`.
 
 use std::time::Duration;
 
-use crabka_throttle::{
+use krabka_throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
 use stateright::{Checker, Model, Property};

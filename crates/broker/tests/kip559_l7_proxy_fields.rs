@@ -11,7 +11,7 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
 };

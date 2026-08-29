@@ -20,14 +20,14 @@ alias(
 # The broker server. `bazel run //:broker_bin -- --help`.
 alias(
     name = "broker_bin",
-    actual = "//crates/broker:crabka-broker",
+    actual = "//crates/broker:krabka-broker",
 )
 
 # Formats a fresh log directory. A KRaft node will not boot without this having
 # been run against its data directory first.
 alias(
     name = "format_bin",
-    actual = "//crates/format:crabka-format",
+    actual = "//crates/format:krabka-format",
 )
 
 # Offline point-in-time restore from a KIP-405 archive. Named `krabka-restore`

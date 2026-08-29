@@ -9,11 +9,11 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use crabka_audit::{
+use derive_more::{Display, From, Into};
+use krabka_audit::{
     chain::{GENESIS_HEAD, chain_hash, from_hex32, to_hex},
     signing::verify_signature,
 };
-use derive_more::{Display, From, Into};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -28,13 +28,13 @@ pub const MANIFEST_FORMAT_VERSION: u32 = 1;
 pub const MANIFEST_SUFFIX: &str = ".manifest";
 
 /// Domain separation for the manifest signature. Distinct from
-/// [`crabka_audit::signing::CHECKPOINT_DOMAIN`] — never share a domain
+/// [`krabka_audit::signing::CHECKPOINT_DOMAIN`] — never share a domain
 /// across signature purposes.
-pub const MANIFEST_DOMAIN: &[u8] = b"crabka-worm-manifest-v1\0";
+pub const MANIFEST_DOMAIN: &[u8] = b"krabka-worm-manifest-v1\0";
 
 /// Domain separation for the chain preimage, so a manifest body can never
 /// collide with any other chained value.
-pub const MANIFEST_BODY_DOMAIN: &[u8] = b"crabka-worm-manifest-body-v1\0";
+pub const MANIFEST_BODY_DOMAIN: &[u8] = b"krabka-worm-manifest-body-v1\0";
 
 /// Position of one manifest in its partition's hash chain.
 #[derive(
@@ -357,7 +357,7 @@ pub struct SegmentManifest {
 /// Appends a big-endian `u64` length prefix.
 ///
 /// `u64` rather than `u32` so the conversion from `usize` is lossless on every
-/// target Crabka builds for. A saturating `u32` prefix would make the encoding
+/// target Krabka builds for. A saturating `u32` prefix would make the encoding
 /// non-injective in principle — two different bodies could share a preimage —
 /// and "a field that large cannot occur" is a claim about callers, not a
 /// property of the encoding. A canonical encoding that a chain head depends on
@@ -508,11 +508,11 @@ pub fn verify_manifest_signature(manifest: &SegmentManifest, public_key: &[u8]) 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_audit::{
+    use krabka_audit::{
         ids::{EpochMs, Seq},
         signing::{CHECKPOINT_DOMAIN, FileEd25519Signer, checkpoint_signing_bytes},
     };
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 
     use super::*;
@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     fn genesis_head_is_the_audit_genesis() {
-        check!(ChainHead::GENESIS.0 == crabka_audit::chain::GENESIS_HEAD);
+        check!(ChainHead::GENESIS.0 == krabka_audit::chain::GENESIS_HEAD);
     }
 
     #[test]

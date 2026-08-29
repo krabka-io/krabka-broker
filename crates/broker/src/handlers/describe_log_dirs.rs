@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_log_dirs_request::DescribeLogDirsRequest,
@@ -145,7 +145,7 @@ pub(crate) async fn handle(
                     &partitions,
                     &future_logs,
                     &topic,
-                    crabka_ids::PartitionIndex(partition),
+                    krabka_ids::PartitionIndex(partition),
                 );
                 by_topic
                     .entry(topic)
@@ -222,8 +222,8 @@ fn offline_result(dir: &std::path::Path) -> DescribeLogDirsResult {
 /// Returns `true` when the authorizer denies the operation.
 fn cluster_describe_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
 ) -> bool {
     authorizer.authorize(
@@ -257,7 +257,7 @@ async fn offset_lag_for(
     topic: &str,
     partition: i32,
 ) -> i64 {
-    let Some(part) = partitions.get(topic, crabka_ids::PartitionIndex(partition)) else {
+    let Some(part) = partitions.get(topic, krabka_ids::PartitionIndex(partition)) else {
         return 0;
     };
     let leo = part.log_end_offset();
@@ -276,11 +276,11 @@ async fn offset_lag_for(
 fn future_offset_lag(
     partitions: &crate::partition_registry::PartitionRegistry,
     future_logs: &dashmap::DashMap<
-        (String, crabka_ids::PartitionIndex),
+        (String, krabka_ids::PartitionIndex),
         std::sync::Arc<crate::future_log::FutureLogState>,
     >,
     topic: &str,
-    partition: crabka_ids::PartitionIndex,
+    partition: krabka_ids::PartitionIndex,
 ) -> i64 {
     let Some(part) = partitions.get(topic, partition) else {
         return 0;
@@ -289,7 +289,7 @@ fn future_offset_lag(
     let future_leo =
         future_logs
             .get(&(topic.to_string(), partition))
-            .map_or(crabka_log::Offset(0), |e| {
+            .map_or(krabka_log::Offset(0), |e| {
                 e.value()
                     .future_log
                     .lock()
@@ -422,7 +422,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn log_dir_capacity_returns_minus_one_for_missing_path() {
-        let phantom = std::path::Path::new("/nonexistent/crabka/test/dir/should/not/exist");
+        let phantom = std::path::Path::new("/nonexistent/krabka/test/dir/should/not/exist");
         assert!(log_dir_capacity(phantom) == (-1, -1));
     }
 
@@ -434,12 +434,12 @@ mod tests {
     fn partition_with_leo(
         log_dir: &std::path::Path,
         topic: &str,
-        partition: crabka_ids::PartitionIndex,
+        partition: krabka_ids::PartitionIndex,
         count: i32,
     ) -> std::sync::Arc<crate::partition::Partition> {
         let part_dir = log_dir::partition_dir(log_dir, topic, partition.get());
         std::fs::create_dir_all(&part_dir).unwrap();
-        let log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default()).unwrap();
+        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         let part = crate::broker::spawn_partition(
             topic.to_string(),
             partition,
@@ -458,9 +458,9 @@ mod tests {
     /// Appends one batch of `count` records to a `Log` behind a mutex.
     ///
     /// The LEO of the log advances by `count`.
-    fn append_n(log: &std::sync::Mutex<crabka_log::Log>, count: i32) {
+    fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: i32) {
         use bytes::Bytes;
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
         let mut batch = RecordBatch {
             base_offset: 0,
             partition_leader_epoch: -1,
@@ -506,9 +506,9 @@ mod tests {
     async fn offset_lag_uses_leo_minus_hw() {
         let dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
-        let part = partition_with_leo(dir.path(), "t", crabka_ids::PartitionIndex(0), 5);
-        assert!(part.log_end_offset() == crabka_log::Offset(5));
-        reg.insert("t".to_string(), crabka_ids::PartitionIndex(0), part);
+        let part = partition_with_leo(dir.path(), "t", krabka_ids::PartitionIndex(0), 5);
+        assert!(part.log_end_offset() == krabka_log::Offset(5));
+        reg.insert("t".to_string(), krabka_ids::PartitionIndex(0), part);
         // Fresh partition HW is 0 → lag == LEO == 5 (not -1, not 0).
         assert!(offset_lag_for(&reg, "t", 0).await == 5);
     }
@@ -520,7 +520,7 @@ mod tests {
     ) -> std::sync::Arc<crate::future_log::FutureLogState> {
         let future_path = dir.join("future");
         std::fs::create_dir_all(&future_path).unwrap();
-        let flog = crabka_log::Log::open(&future_path, crabka_log::LogConfig::default()).unwrap();
+        let flog = krabka_log::Log::open(&future_path, krabka_log::LogConfig::default()).unwrap();
         let future_log = std::sync::Arc::new(std::sync::Mutex::new(flog));
         if future_count > 0 {
             append_n(&future_log, future_count);
@@ -542,7 +542,7 @@ mod tests {
     async fn future_offset_lag_missing_partition_is_zero() {
         let reg = crate::partition_registry::PartitionRegistry::new();
         let future_logs = dashmap::DashMap::new();
-        let lag = future_offset_lag(&reg, &future_logs, "ghost", crabka_ids::PartitionIndex(0));
+        let lag = future_offset_lag(&reg, &future_logs, "ghost", krabka_ids::PartitionIndex(0));
         assert!(lag == 0);
     }
 
@@ -556,30 +556,30 @@ mod tests {
         let cur_dir = tempfile::tempdir().unwrap();
         let fut_dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
-        let part = partition_with_leo(cur_dir.path(), "t", crabka_ids::PartitionIndex(3), 5);
-        assert!(part.log_end_offset() == crabka_log::Offset(5));
-        reg.insert("t".to_string(), crabka_ids::PartitionIndex(3), part);
+        let part = partition_with_leo(cur_dir.path(), "t", krabka_ids::PartitionIndex(3), 5);
+        assert!(part.log_end_offset() == krabka_log::Offset(5));
+        reg.insert("t".to_string(), krabka_ids::PartitionIndex(3), part);
 
         let future_logs = dashmap::DashMap::new();
         future_logs.insert(
-            ("t".to_string(), crabka_ids::PartitionIndex(3)),
+            ("t".to_string(), krabka_ids::PartitionIndex(3)),
             future_state_with_leo(fut_dir.path(), 2),
         );
 
-        let lag = future_offset_lag(&reg, &future_logs, "t", crabka_ids::PartitionIndex(3));
+        let lag = future_offset_lag(&reg, &future_logs, "t", krabka_ids::PartitionIndex(3));
         assert!(lag == 3, "current LEO 5 − future LEO 2 == 3, got {lag}");
     }
 
     #[test]
     fn cluster_describe_denied_yields_cluster_authorization_failed() {
-        use crabka_protocol::owned::describe_log_dirs_response::{self, DescribeLogDirsResponse};
+        use krabka_protocol::owned::describe_log_dirs_response::{self, DescribeLogDirsResponse};
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

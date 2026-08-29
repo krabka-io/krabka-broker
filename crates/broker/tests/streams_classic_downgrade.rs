@@ -10,9 +10,9 @@ use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -49,7 +49,7 @@ const CONVERGE_TRIES: usize = 15;
 
 // ── boot / connect helpers ────────────────────────────────────────────────────
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -384,7 +384,7 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
     let (member_id, resp) =
         streams_join_and_converge(&streams_client, "g", topology("in"), 1, CONVERGE_TRIES).await;
     broker
-        .wait_until_group_type("g", crabka_broker::coordinator::unified::GroupType::Streams)
+        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Streams)
         .await;
     let group_type = broker.group_type_for_test("g");
     let empty_waiter_timed_out = tokio::time::timeout(
@@ -398,7 +398,7 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
         "streams member must converge without error (precondition for the downgrade): {resp:?}"
     );
     check!(
-        group_type == Some(crabka_broker::coordinator::unified::GroupType::Streams),
+        group_type == Some(krabka_broker::coordinator::unified::GroupType::Streams),
         "streams member must converge on a Streams-typed group (precondition for the \
          downgrade): {resp:?}"
     );
@@ -422,11 +422,11 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
     // ── Phase 2: classic JoinGroup for the same id → downgrade to classic. ──
     let (_cm, _gen) = classic_join_sync(&classic_client, "g").await;
     broker
-        .wait_until_group_type("g", crabka_broker::coordinator::unified::GroupType::Classic)
+        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Classic)
         .await;
     assert!(
         broker.group_type_for_test("g")
-            == Some(crabka_broker::coordinator::unified::GroupType::Classic),
+            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
         "group_type must be Classic after downgrade, got {:?}",
         broker.group_type_for_test("g")
     );
@@ -475,13 +475,13 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     broker
         .wait_until_group_type(
             "g2",
-            crabka_broker::coordinator::unified::GroupType::Streams,
+            krabka_broker::coordinator::unified::GroupType::Streams,
         )
         .await;
     broker.wait_until_streams_group_member_count("g2", 1).await;
     assert!(
         broker.group_type_for_test("g2")
-            == Some(crabka_broker::coordinator::unified::GroupType::Streams)
+            == Some(krabka_broker::coordinator::unified::GroupType::Streams)
     );
 
     // Round-1 classic JoinGroup (empty member_id) must be rejected BEFORE the
@@ -501,7 +501,7 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     );
     assert!(
         broker.group_type_for_test("g2")
-            == Some(crabka_broker::coordinator::unified::GroupType::Streams),
+            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
         "group_type must remain Streams after rejected downgrade"
     );
 }
@@ -544,13 +544,13 @@ async fn converted_group_admin_views_respect_type_lock() {
     broker
         .wait_until_group_type(
             "g3",
-            crabka_broker::coordinator::unified::GroupType::Streams,
+            krabka_broker::coordinator::unified::GroupType::Streams,
         )
         .await;
     broker.wait_until_streams_group_member_count("g3", 1).await;
     assert!(
         broker.group_type_for_test("g3")
-            == Some(crabka_broker::coordinator::unified::GroupType::Streams)
+            == Some(krabka_broker::coordinator::unified::GroupType::Streams)
     );
 
     // ListGroups: the converted group appears exactly once, as `streams`.
@@ -582,7 +582,7 @@ async fn converted_group_admin_views_respect_type_lock() {
     );
     assert!(
         broker.group_type_for_test("g3")
-            == Some(crabka_broker::coordinator::unified::GroupType::Streams),
+            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
         "the streams group must survive the rejected delete"
     );
 }
@@ -622,12 +622,12 @@ async fn downgrade_survives_restart() {
         broker
             .wait_until_group_type(
                 "g4",
-                crabka_broker::coordinator::unified::GroupType::Classic,
+                krabka_broker::coordinator::unified::GroupType::Classic,
             )
             .await;
         assert!(
             broker.group_type_for_test("g4")
-                == Some(crabka_broker::coordinator::unified::GroupType::Classic)
+                == Some(krabka_broker::coordinator::unified::GroupType::Classic)
         );
         broker.shutdown().await;
     }
@@ -644,7 +644,7 @@ async fn downgrade_survives_restart() {
         );
         assert!(
             broker.group_type_for_test("g4")
-                != Some(crabka_broker::coordinator::unified::GroupType::Streams),
+                != Some(krabka_broker::coordinator::unified::GroupType::Streams),
             "group must not replay as Streams after downgrade"
         );
         let fr = cc

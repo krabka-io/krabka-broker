@@ -38,8 +38,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_log::Offset;
-use crabka_protocol::{
+use krabka_log::Offset;
+use krabka_protocol::{
     owned::consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
     primitives::uuid::Uuid,
 };

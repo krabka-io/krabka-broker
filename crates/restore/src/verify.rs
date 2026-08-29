@@ -2,7 +2,7 @@
 //!
 //! This module owns the decision that a segment is safe to rehydrate. It
 //! fetches the segment's artifacts, walks the `.log` batch by batch with
-//! `crabka_protocol::records::validate_one_v2_batch`, and checks framing and
+//! `krabka_protocol::records::validate_one_v2_batch`, and checks framing and
 //! CRC without decoding records. A batch whose declared length overruns the
 //! object is a truncated segment; a batch whose CRC disagrees with its body is
 //! a checksum mismatch, reported with the object key and the byte position. It
@@ -13,17 +13,17 @@
 //! returns the verified log bytes so the segment is fetched exactly once.
 
 use bytes::Bytes;
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_object_store::{ObjectOps, ObjectStoreError};
-use crabka_protocol::records::{RecordsError, validate_one_v2_batch};
-use crabka_remote_storage::{
+use crc32c::crc32c;
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_object_store::{ObjectOps, ObjectStoreError};
+use krabka_protocol::records::{RecordsError, validate_one_v2_batch};
+use krabka_remote_storage::{
     TopicIdPartition,
     index::{
         AbortedTxnIndexEntry, OffsetIndexEntry, TimeIndexEntry, parse_offset_index,
         parse_time_index, parse_txn_index,
     },
 };
-use crc32c::crc32c;
 use object_store::path::Path;
 use uuid::Uuid;
 
@@ -87,7 +87,7 @@ const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 /// leader change over the segment's lifetime.
 const MAX_LEADER_EPOCH_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Byte length of one serialized offset-index entry. `crabka_remote_storage`
+/// Byte length of one serialized offset-index entry. `krabka_remote_storage`
 /// keeps its own copy of this constant private, so it is recomputed here from
 /// the zerocopy struct it mirrors.
 const OFFSET_INDEX_ENTRY_LEN: usize = std::mem::size_of::<OffsetIndexEntry>();
@@ -109,7 +109,7 @@ const SNAPSHOT_HEADER_LEN: usize = 10;
 /// Byte offset where the `.snapshot`'s CRC32C coverage begins: right after
 /// the CRC field itself (bytes `2..6`), so the covered region includes the
 /// entry count (bytes `6..10`) as well as every entry. This must match
-/// `crabka_log::producer_snapshot`'s writer exactly -- it computes the CRC
+/// `krabka_log::producer_snapshot`'s writer exactly -- it computes the CRC
 /// over `&buffer[HEADER_LEN..]` with its own `HEADER_LEN = 6` -- or every
 /// genuinely archived snapshot fails verification with a false
 /// `ChecksumMismatch`, since [`SNAPSHOT_HEADER_LEN`] (10) is 4 bytes past
@@ -230,7 +230,7 @@ fn require_artifact<'a>(
 }
 
 /// Fetch a whole object, refusing it before buffering any bytes if it exceeds
-/// `max_bytes`. This mirrors `crabka_object_store::read_capped`'s head-then-get
+/// `max_bytes`. This mirrors `krabka_object_store::read_capped`'s head-then-get
 /// guard against OOM on a corrupt or oversized archive object; it is
 /// reimplemented here because that helper takes the concrete
 /// `Arc<dyn object_store::ObjectStore>` rather than the [`ObjectOps`] surface
@@ -665,7 +665,7 @@ fn checkpoint_error(key: &Path, position: u64, declared: u64, available: usize) 
 
 /// Parse a `.leader_epoch_checkpoint`: `"0\n{n}\n"` followed by exactly `n`
 /// `"{epoch} {offset}"` rows, matching the format
-/// `crabka_log::LeaderEpochCheckpoint` and the broker's remote-log-manager
+/// `krabka_log::LeaderEpochCheckpoint` and the broker's remote-log-manager
 /// copy path both write.
 ///
 /// Unlike `LeaderEpochCheckpoint::parse`, which is written for a local file a
@@ -736,7 +736,7 @@ mod tests {
     use assert2::check;
     use bytes::{BufMut, BytesMut};
     use clap::Parser as _;
-    use crabka_protocol::records::{Record, RecordBatch};
+    use krabka_protocol::records::{Record, RecordBatch};
     use tempfile::TempDir;
 
     use super::*;

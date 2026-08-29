@@ -1,6 +1,6 @@
 //! Voter placement helpers for diskless WAL quorums.
 
-use crabka_metadata::{BrokerRegistrationRecord, NodeId};
+use krabka_metadata::{BrokerRegistrationRecord, NodeId};
 
 /// Selects the WAL voters from distinct configured racks. An incomplete
 /// result makes the caller fail closed instead of weakening the AZ-loss
@@ -68,8 +68,8 @@ fn rack_distinct_candidates<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crabka_metadata::BrokerEndpoint;
-    use crabka_security::ListenerProtocol;
+    use krabka_metadata::BrokerEndpoint;
+    use krabka_security::ListenerProtocol;
 
     use super::*;
 

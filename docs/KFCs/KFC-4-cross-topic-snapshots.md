@@ -4,7 +4,7 @@ A coordinator writes epoch-stamped barrier markers into every partition of a dec
 
 ## Status
 
-**Adopted.** The implementation is the `barrier` module of `crabka-broker`, the `crabka-barrier` crate and its binary, and the barrier control-plane messages in `krabka-protocol`. It merged in [#2](https://github.com/krabka-io/krabka-broker/pull/2). This document lands on branch `claude/kfc-4-cross-topic-snapshots-0pjllz`.
+**Adopted.** The implementation is the `barrier` module of `krabka-broker`, the `krabka-barrier` crate and its binary, and the barrier control-plane messages in `krabka-protocol`. It merged in [#2](https://github.com/krabka-io/krabka-broker/pull/2). This document lands on branch `claude/kfc-4-cross-topic-snapshots-0pjllz`.
 
 No KIP defines a cross-topic cut, so this document is the specification for it. The design is the marker half of the Chandy-Lamport snapshot algorithm, which Apache Flink uses for its own checkpoints. The difference is where the marker lives. Flink injects a barrier into a dataflow that Flink controls, and this design injects one into a Kafka log that any client can read.
 
@@ -210,9 +210,9 @@ A marker append that fails feeds no counter. Every call site logs the topic, the
 
 ### The Command
 
-`crabka barrier` is the operator's spelling, and the binary is `crabka-barrier`. The monorepo carries it as a subcommand of `crabka-cli`. That crate also drives the gres layer, which is why it could not follow the broker out.
+`krabka barrier` is the operator's spelling, and the binary is `krabka-barrier`. The monorepo carries it as a subcommand of `krabka-cli`. That crate also drives the gres layer, which is why it could not follow the broker out.
 
-The crate is a library as well as a binary, for the same reason `crabka-format` is one. A test that spawns the binary needs a Cargo working tree to build it from, and a Bazel test sandbox has none, so the tests call `run_from_args` in process.
+The crate is a library as well as a binary, for the same reason `krabka-format` is one. A test that spawns the binary needs a Cargo working tree to build it from, and a Bazel test sandbox has none, so the tests call `run_from_args` in process.
 
 | Subcommand | Key | Purpose |
 | :--- | :--- | :--- |
@@ -223,9 +223,9 @@ The crate is a library as well as a binary, for the same reason `crabka-format` 
 | `list` | 1013 | Print a group's retained cuts. |
 | `verify` | 1013 and `Fetch` | Read the log at a cut's offsets and prove each marker is there. |
 
-`--bootstrap-server` is required and also reads `CRABKA_BOOTSTRAP_SERVER`.
+`--bootstrap-server` is required and also reads `KRABKA_BOOTSTRAP_SERVER`.
 
-A time flag takes any unit `crabka_units` accepts, so `500ms`, `30s`, `5m` and `1h` all work. A number with no unit is refused, and only zero is exempt. A `--timeout 30` from someone who meant milliseconds would otherwise wait thirty seconds without complaining.
+A time flag takes any unit `krabka_units` accepts, so `500ms`, `30s`, `5m` and `1h` all work. A number with no unit is refused, and only zero is exempt. A `--timeout 30` from someone who meant milliseconds would otherwise wait thirty seconds without complaining.
 
 | Exit code | Meaning |
 | :--- | :--- |
@@ -370,11 +370,11 @@ The bound moves the fan-out deadline and never drops the injection future. Aband
 
 ### A Cut Is Worth What Its Markers Are
 
-`crabka barrier verify` reads the log at each offset a cut names and checks that the batch there is a barrier control batch carrying that group and that epoch.
+`krabka barrier verify` reads the log at each offset a cut names and checks that the batch there is a barrier control batch carrying that group and that epoch.
 
 The subcommand exists because a cut record is just a list of integers. Nothing about the record proves the log agrees with it, and a cut used as a disaster-recovery replay point is trusted at the worst possible moment. Verify turns the claim into a check.
 
-It cannot read through `crabka_client_core::fetch_partition`, because that drops control batches the way every Kafka consumer does, and a marker being invisible is the whole design. So verify sends a raw `Fetch` and decodes the batches itself. From `Fetch` v13 a request names a topic by id rather than by name, so the metadata read that finds each leader also carries the topic id back, and the fetch is correct at any version the client negotiates.
+It cannot read through `krabka_client_core::fetch_partition`, because that drops control batches the way every Kafka consumer does, and a marker being invisible is the whole design. So verify sends a raw `Fetch` and decodes the batches itself. From `Fetch` v13 a request names a topic by id rather than by name, so the metadata read that finds each leader also carries the topic id back, and the fetch is correct at any version the client negotiates.
 
 A partition the log disagrees with is a mismatch in the outcome and not an error. The point is to report every one of them and not to stop at the first.
 
@@ -392,7 +392,7 @@ No Kafka wire format changes. No Kafka API key changes, and no request or respon
 
 The five keys are registered for dispatch and deliberately absent from the `ApiVersions` catalog. A client negotiates version 0 for an unadvertised key anyway, and advertising them would put `UNKNOWN(1010)` rows into `kafka-broker-api-versions.sh` output that a real Kafka broker never shows. The registry coverage test encodes that carve-out explicitly rather than being weakened for it: every advertised key is registered, every registered Kafka key is advertised, and every advertised key sits below the private floor.
 
-The cost of not advertising is that no JVM `AdminClient` can drive the control plane. That is what `crabka-barrier` is for, and it is the second reason every cut is published to `__barrier_state`, where any consumer in any language reads it with no new API key.
+The cost of not advertising is that no JVM `AdminClient` can drive the control plane. That is what `krabka-barrier` is for, and it is the second reason every cut is published to `__barrier_state`, where any consumer in any language reads it with no new API key.
 
 What a stock Kafka client observes on a topic that belongs to a barrier group is the contract this document adds.
 

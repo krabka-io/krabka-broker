@@ -20,15 +20,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_log::{LogConfig, Offset, SegmentExport};
-use crabka_metadata::NodeId;
-use crabka_remote_storage::{
+use krabka_log::{LogConfig, Offset, SegmentExport};
+use krabka_metadata::NodeId;
+use krabka_remote_storage::{
     ChainStamp, EpochId, LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState,
     RemotePartitionDeleteMetadata, RemotePartitionDeleteState, RemoteStorageManager,
     TopicIdPartition, WormChainRecord, next_chain_stamp,
 };
-use crabka_units::{
+use krabka_units::{
     ByteSize, Time, bytes,
     convert::{ByteSizeExt as _, TimeExt as _},
     secs,
@@ -66,9 +66,9 @@ pub(crate) enum ArchiveMode {
 
 impl ArchiveMode {
     /// The mode a broker's WORM setting implies: a
-    /// [`WormConfig`](crabka_remote_storage::WormConfig) makes the tier
+    /// [`WormConfig`](krabka_remote_storage::WormConfig) makes the tier
     /// write-once, and its absence leaves it mutable.
-    pub(crate) const fn from_worm(worm: Option<&crabka_remote_storage::WormConfig>) -> Self {
+    pub(crate) const fn from_worm(worm: Option<&krabka_remote_storage::WormConfig>) -> Self {
         match worm {
             Some(_) => Self::WriteOnce,
             None => Self::Mutable,
@@ -81,7 +81,7 @@ impl ArchiveMode {
 ///
 /// A copy into a write-once archive **must** carry a chain stamp: an unstamped
 /// copy uploads every object and only then fails with
-/// [`WormError::MissingChainStamp`](crabka_remote_storage::WormError::MissingChainStamp),
+/// [`WormError::MissingChainStamp`](krabka_remote_storage::WormError::MissingChainStamp),
 /// leaving orphans that nothing can ever collect. Pairing the mode and the
 /// stamp in one value, instead of passing an [`ArchiveMode`] beside an
 /// `Option<ChainStamp>`, makes that combination unrepresentable.
@@ -221,7 +221,7 @@ async fn tick_all(
         };
         // Atomic stores the raw epoch; wrap for the remote-storage metadata seam.
         let leader_epoch =
-            crabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+            krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
         let tp = TopicIdPartition::new(topic_id, partition.topic.clone(), partition.index.get());
         copy_eligible(
             &tp,
@@ -249,7 +249,7 @@ async fn tick_all(
 pub(crate) async fn copy_eligible(
     tp: &TopicIdPartition,
     broker_id: i32,
-    leader_epoch: crabka_ids::LeaderEpoch,
+    leader_epoch: krabka_ids::LeaderEpoch,
     exports: Vec<SegmentExport>,
     archive: ArchiveMode,
     rsm: &Arc<dyn RemoteStorageManager>,
@@ -311,7 +311,7 @@ pub(crate) async fn copy_eligible(
 }
 
 /// Compute the highest `target` to pass to
-/// [`crabka_log::Log::delete_local_segments_through`] given the
+/// [`krabka_log::Log::delete_local_segments_through`] given the
 /// partition's local sealed-segment exports and the per-topic
 /// local-retention settings. Returns `None` when nothing is deletable.
 ///
@@ -620,18 +620,18 @@ pub(crate) async fn cascade_remote_partition_delete(
 async fn rlmm_mutate<F>(
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     op: F,
-) -> Result<(), crabka_remote_storage::RemoteStorageError>
+) -> Result<(), krabka_remote_storage::RemoteStorageError>
 where
     F: FnOnce(
             &dyn RemoteLogMetadataManager,
-        ) -> Result<(), crabka_remote_storage::RemoteStorageError>
+        ) -> Result<(), krabka_remote_storage::RemoteStorageError>
         + Send
         + 'static,
 {
     let rlmm = Arc::clone(rlmm);
     match tokio::task::spawn_blocking(move || op(rlmm.as_ref())).await {
         Ok(res) => res,
-        Err(e) => Err(crabka_remote_storage::RemoteStorageError::Backend(format!(
+        Err(e) => Err(krabka_remote_storage::RemoteStorageError::Backend(format!(
             "RLMM mutation task panicked: {e}"
         ))),
     }
@@ -642,7 +642,7 @@ async fn put_partition_state(
     tp: &TopicIdPartition,
     state: RemotePartitionDeleteState,
     broker_id: i32,
-) -> Result<(), crabka_remote_storage::RemoteStorageError> {
+) -> Result<(), krabka_remote_storage::RemoteStorageError> {
     let md = RemotePartitionDeleteMetadata {
         topic_id_partition: tp.clone(),
         state,
@@ -753,7 +753,7 @@ async fn delete_one_segment(
 async fn copy_one(
     tp: &TopicIdPartition,
     broker_id: i32,
-    leader_epoch: crabka_ids::LeaderEpoch,
+    leader_epoch: krabka_ids::LeaderEpoch,
     ex: &SegmentExport,
     chain: ChainPosition,
     rsm: &Arc<dyn RemoteStorageManager>,
@@ -763,9 +763,9 @@ async fn copy_one(
     // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
     // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
     // `RemoteLogSegmentMetadata` carries verbatim.
-    let epochs: BTreeMap<crabka_ids::LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
+    let epochs: BTreeMap<krabka_ids::LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
         BTreeMap::from([(
-            crabka_ids::LeaderEpoch(leader_epoch.0.max(0)),
+            krabka_ids::LeaderEpoch(leader_epoch.0.max(0)),
             ex.base_offset.0,
         )])
     } else {
@@ -783,7 +783,7 @@ async fn copy_one(
         ex.max_timestamp,
         broker_id,
         now_ms(),
-        crabka_remote_storage::RemoteLogSegmentDetails::new(
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
             size,
             RemoteLogSegmentState::CopySegmentStarted,
             epochs.clone(),
@@ -950,7 +950,7 @@ async fn rollback(
 /// Serialize a segment's leader-epoch map into Kafka's
 /// `leader-epoch-checkpoint` text format (the bytes carried as
 /// `LogSegmentData.leader_epoch_index`).
-fn leader_epoch_index_bytes(epochs: &BTreeMap<crabka_ids::LeaderEpoch, i64>) -> Bytes {
+fn leader_epoch_index_bytes(epochs: &BTreeMap<krabka_ids::LeaderEpoch, i64>) -> Bytes {
     use std::fmt::Write as _;
     let mut s = String::from("0\n");
     let _ = writeln!(s, "{}", epochs.len());
@@ -975,15 +975,15 @@ mod tests {
     use std::sync::Mutex;
 
     use assert2::{assert, check};
-    use crabka_ids::{LeaderEpoch, PartitionIndex};
-    use crabka_log::{Log, LogConfig};
-    use crabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_remote_storage::{
+    use krabka_ids::{LeaderEpoch, PartitionIndex};
+    use krabka_log::{Log, LogConfig};
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_remote_storage::{
         ChainHead, CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
         ManifestSeq, ObjectEntry, RemoteStorageError, Sha256Digest, WormArchiver,
     };
-    use crabka_units::{hours, millis};
+    use krabka_units::{hours, millis};
 
     use super::*;
 
@@ -1237,7 +1237,7 @@ mod tests {
             self.deletes_attempted
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Err(RemoteStorageError::Worm(
-                crabka_remote_storage::WormError::DeleteRefused {
+                krabka_remote_storage::WormError::DeleteRefused {
                     key: format!("{}.log", metadata.remote_log_segment_id().id),
                 },
             ))
@@ -1274,8 +1274,8 @@ mod tests {
             self.leader_tx.subscribe()
         }
 
-        fn quorum_state(&self) -> crabka_raft::QuorumState {
-            crabka_raft::QuorumState {
+        fn quorum_state(&self) -> krabka_raft::QuorumState {
+            krabka_raft::QuorumState {
                 current_term: 0,
                 last_applied_index: 0,
                 current_leader: *self.leader_tx.borrow(),
@@ -1288,23 +1288,23 @@ mod tests {
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+        ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn change_membership(
             &self,
             _new_voters: std::collections::BTreeSet<NodeId>,
-        ) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+        ) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn add_learner(
             &self,
             _node_id: NodeId,
-            _node: crabka_raft::Node,
-        ) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+            _node: krabka_raft::Node,
+        ) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         fn controller_bound_addr(&self) -> std::net::SocketAddr {
@@ -1315,33 +1315,33 @@ mod tests {
             &self,
             _position: i64,
             _max_bytes: i32,
-        ) -> crabka_raft::SnapshotRange {
-            crabka_raft::SnapshotRange::NoSnapshot
+        ) -> krabka_raft::SnapshotRange {
+            krabka_raft::SnapshotRange::NoSnapshot
         }
 
-        async fn trigger_snapshot(&self) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+        async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn add_voter(
             &self,
-            _req: crabka_raft::AddVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+            _req: krabka_raft::AddVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn remove_voter(
             &self,
-            _req: crabka_raft::RemoveVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+            _req: krabka_raft::RemoveVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn update_voter(
             &self,
-            _req: crabka_raft::UpdateVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("fixed metadata source"))
+            _req: krabka_raft::UpdateVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
         }
 
         async fn cancel(&self) {}
@@ -2047,7 +2047,7 @@ mod tests {
             max_ts,
             1,
             max_ts,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 size,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), start)]),
@@ -2366,7 +2366,7 @@ mod tests {
             100,
             1,
             100,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 100,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), base)]),

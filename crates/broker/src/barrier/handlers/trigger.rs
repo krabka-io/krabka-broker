@@ -27,11 +27,11 @@
 //! carries `CLUSTER_AUTHORIZATION_FAILED` (31).
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     krabka::barrier::{CUT_STATUS_PARTIAL, TriggerBarrierRequest, TriggerBarrierResponse},
 };
-use crabka_units::{Time, millis};
+use krabka_units::{Time, millis};
 
 use crate::{
     barrier::{
@@ -140,8 +140,8 @@ mod tests {
             ("zero", 0, None),
             ("negative", -1, None),
             ("i32 floor", i32::MIN, None),
-            ("one millisecond", 1, Some(crabka_units::millis(1))),
-            ("thirty seconds", 30_000, Some(crabka_units::millis(30_000))),
+            ("one millisecond", 1, Some(krabka_units::millis(1))),
+            ("thirty seconds", 30_000, Some(krabka_units::millis(30_000))),
         ];
         for (case, requested, expected) in cases {
             assert!(requested_timeout(requested) == expected, "{case}");
@@ -149,9 +149,9 @@ mod tests {
     }
 
     use assert2::check;
-    use crabka_ids::PartitionIndex;
-    use crabka_log::Offset;
-    use crabka_protocol::krabka::barrier::{
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_protocol::krabka::barrier::{
         BarrierCutPartition, BarrierCutTopic, BarrierMissingPartition, CUT_STATUS_COMPLETE,
     };
 

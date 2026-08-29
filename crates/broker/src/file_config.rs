@@ -1,4 +1,4 @@
-//! TOML file-config surface for the `crabka-broker` binary.
+//! TOML file-config surface for the `krabka-broker` binary.
 //!
 //! Deserialized by `--config-file PATH` in `bin/broker.rs` and applied to
 //! [`crate::BrokerConfig`] by [`FileConfig::apply_to`]. Every field here is
@@ -7,8 +7,8 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
-use crabka_security::ListenerProtocol;
-use crabka_units::{
+use krabka_security::ListenerProtocol;
+use krabka_units::{
     ByteSize, Ratio, Time,
     convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _},
     secs,
@@ -82,25 +82,25 @@ pub struct FileConfig {
     pub stretch: Option<FileStretchConfig>,
     /// How often this broker sends `BrokerHeartbeat` to the controller leader.
     /// Absent leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub heartbeat_interval: Option<Time>,
     /// Controller-side session timeout for broker heartbeats. Absent leaves the
     /// `BrokerConfig` default intact.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub heartbeat_timeout: Option<Time>,
     /// Maximum follower lag before the leader proposes ISR shrink. Absent
     /// leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replica_lag_time_max: Option<Time>,
     /// Controller election timeout. Absent leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controller_election_timeout: Option<Time>,
     /// Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controller_heartbeat_interval: Option<Time>,
     pub inter_broker_listener_name: Option<String>,
@@ -165,7 +165,7 @@ pub struct FileConfig {
     pub oauthbearer: Option<FileOAuthBearerConfig>,
 
     /// KIP-48: delegation-token master key + lifetime knobs.
-    /// Env var `CRABKA_DELEGATION_TOKEN_SECRET_KEY` wins over `secret_key`
+    /// Env var `KRABKA_DELEGATION_TOKEN_SECRET_KEY` wins over `secret_key`
     /// here. When neither source provides a key, the broker disables
     /// delegation-token auth.
     pub delegation_token: Option<FileDelegationTokenConfig>,
@@ -219,250 +219,250 @@ pub struct FileConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeFileConfig {
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub startup_leader_wait_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub self_registration_backoff_min: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub self_registration_backoff_max: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub observer_poll_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub audit_spool_replay_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub audit_stats_poll_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub audit_partition_wait_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub liveness_tick_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub gauge_poll_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub isr_scan_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub cleaner_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub future_log_move_retry_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub client_metrics_eviction_tick: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub client_metrics_stale_floor: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub client_metrics_default_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub client_metrics_telemetry_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub client_metrics_prom_snapshot_ttl: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub rlmm_reconcile_tick: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub rlmm_bootstrap_backoff_initial: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub rlmm_bootstrap_backoff_max: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub connection_creation_throttle_max: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub opa_http_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub schema_registry_http_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub oauth_jwks_http_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub auto_join_retry_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub auto_join_voter_request_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub replication_fetch_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_fetch_max_wait: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub replication_fetch_min: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_throttle_exhausted_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_send_error_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_unknown_topic_retry_delay: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_epoch_fence_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_unexpected_error_backoff: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_reconnect_initial_delay: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replication_reconnect_delay_cap: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub coordinator_session_expiry_tick: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub coordinator_shutdown_ack_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_session_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_heartbeat_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_min_session_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_max_session_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_min_heartbeat_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub consumer_group_max_heartbeat_interval: Option<Time>,
     pub consumer_group_max_size: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub classic_group_initial_rebalance_delay: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub sync_group_follower_wait: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub unclean_recovery_aggressive_deadline: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub unclean_recovery_balanced_deadline: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub operator_recovery_deadline: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub quota_throttle_max: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controller_mutation_quota_window: Option<Time>,
     pub self_registration_max_attempts: Option<u32>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub observer_fetch_max: Option<ByteSize>,
     pub audit_event_queue_capacity: Option<usize>,
     pub audit_tail_window_offsets: Option<i64>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub audit_tail_read_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub offsets_topic_metadata_wait_timeout: Option<Time>,
     pub client_metrics_stale_push_intervals: Option<u32>,
     pub client_metrics_otlp_queue_capacity: Option<usize>,
     pub coordinator_actor_mailbox_capacity: Option<usize>,
     pub diskless_wal_local_replica_count: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub diskless_wal_flush_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub diskless_wal_flush_max_size: Option<ByteSize>,
     pub diskless_wal_trim_safety_lag: Option<i64>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub diskless_wal_index_projection_timeout: Option<Time>,
     pub unclean_recovery_queue_capacity: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub share_recovery_read_max: Option<ByteSize>,
     pub share_session_cache_max_when_unlimited: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub log_read_buffer_cap: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub log_timestamp_scan_window: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub log_segment_bytes: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub log_delivery_clock_uncertainty: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub socket_request_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub sendfile_min: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub socket_send_buffer: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub socket_receive_buffer: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub acl_max_principal: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub acl_max_resource_name: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_ratio")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<String>")]
-    pub telemetry_max_decompression_ratio: Option<crabka_units::Ratio>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    pub telemetry_max_decompression_ratio: Option<krabka_units::Ratio>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub telemetry_decompressed_output_floor: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub telemetry_decompressed_output_ceiling: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_ratio")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<String>")]
     pub record_decompression_max_ratio: Option<Ratio>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub record_decompression_output_floor: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub record_decompression_output_ceiling: Option<ByteSize>,
     pub inter_broker_server_name: Option<String>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub producer_id_expiration: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub producer_id_expiration_scan_interval: Option<Time>,
     pub max_produce_group: Option<usize>,
     pub partition_writer_queue_depth: Option<usize>,
     pub default_min_insync_replicas: Option<i32>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub future_log_move_read_chunk: Option<ByteSize>,
     pub share_state_num_partitions: Option<i32>,
@@ -470,117 +470,117 @@ pub struct RuntimeFileConfig {
     pub offsets_topic_num_partitions: Option<i32>,
     pub offsets_topic_replication_factor: Option<i16>,
     pub transaction_state_num_partitions: Option<i32>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub transaction_recovery_read_max: Option<ByteSize>,
     pub transaction_state_replication_factor: Option<i16>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub transaction_min_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub transaction_max_timeout: Option<Time>,
     pub barrier_state_num_partitions: Option<i32>,
     pub barrier_state_replication_factor: Option<i16>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub barrier_min_injection_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub barrier_injection_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub barrier_recovery_read_max: Option<ByteSize>,
     pub barrier_retained_cuts: Option<i32>,
     pub barrier_max_groups: Option<usize>,
     pub barrier_max_topics_per_group: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub partition_disk_scan_interval: Option<Time>,
     pub observer_lag_bound: Option<u64>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub heartbeat_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub heartbeat_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub replica_lag_time_max: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controller_election_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controller_heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: Option<u32>,
     pub metadata_raft_command_queue_capacity: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub metadata_raft_fetch_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub controlled_shutdown_drain_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub metadata_max_between_snapshots: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub metadata_max_snapshot_interval: Option<Time>,
     pub metadata_snapshot_interval_records: Option<u64>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub metadata_snapshot_fetch_max: Option<ByteSize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub txn_abort_cleanup_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub leader_imbalance_check_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_ratio")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<String>")]
-    pub leader_imbalance_per_broker: Option<crabka_units::Ratio>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    pub leader_imbalance_per_broker: Option<krabka_units::Ratio>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub tls_reload_interval: Option<Time>,
     pub max_incremental_fetch_session_cache_slots: Option<usize>,
     pub max_connections: Option<usize>,
     pub max_connections_per_ip: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub delegation_token_max_lifetime: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub delegation_token_expiry_check_interval: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub delegation_token_default_renew_period: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub remote_log_manager_interval: Option<Time>,
 
     pub share_group_enable: Option<bool>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub share_group_session_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub share_group_heartbeat_interval: Option<Time>,
     pub share_group_max_size: Option<usize>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub share_group_record_lock_duration: Option<Time>,
     pub share_group_max_delivery_attempts: Option<i16>,
     pub share_group_max_inflight_records: Option<i32>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub share_group_backlog_poll_interval: Option<Time>,
     pub share_group_isolation_level: Option<String>,
     pub streams_group_enable: Option<bool>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub streams_group_session_timeout: Option<Time>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub streams_group_heartbeat_interval: Option<Time>,
     pub streams_group_max_size: Option<usize>,
@@ -588,7 +588,7 @@ pub struct RuntimeFileConfig {
     pub streams_group_num_standby_replicas: Option<i32>,
     pub streams_group_num_warmup_replicas: Option<i32>,
     pub streams_group_acceptable_recovery_lag: Option<i64>,
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub streams_group_task_offset_interval: Option<Time>,
     pub streams_group_assignor: Option<String>,
@@ -639,26 +639,26 @@ pub struct FileKafkaRlmmConfig {
     /// `remote.log.metadata.topic.replication.factor`).
     pub replication: Option<i32>,
     /// Timeout for provisioning each internal metadata topic.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub topic_create_timeout: Option<Time>,
     /// Maximum wait for each per-partition metadata fetch.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub fetch_max_wait: Option<Time>,
     /// Maximum bytes returned by each per-partition metadata fetch.
-    #[serde(default, with = "crabka_units::serde_units::human::option_byte_size")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub fetch_max_bytes: Option<ByteSize>,
     /// Backoff after a failed metadata fetch.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub fetch_retry_backoff: Option<Time>,
     /// Capacity of the shared metadata-event delivery queue.
     #[schemars(range(min = 1))]
     pub event_queue_capacity: Option<usize>,
     /// RLMM cache snapshot cadence.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub snapshot_interval: Option<Time>,
     /// Explicit opt-out: run the non-durable in-memory RLMM instead of the
@@ -668,7 +668,7 @@ pub struct FileKafkaRlmmConfig {
 }
 
 /// TOML shape of `[remote_storage.s3]`. Maps to
-/// [`crabka_remote_storage::S3Config`].
+/// [`krabka_remote_storage::S3Config`].
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageS3Config {
@@ -692,25 +692,25 @@ pub struct FileRemoteStorageS3Config {
     #[serde(default)]
     pub allow_http: bool,
     /// Optional override of the multipart-upload threshold (bytes). When
-    /// `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
+    /// `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
     /// applies. Operators typically leave this alone; lower it to force
     /// multipart on smaller segments for testing.
     pub multipart_threshold: Option<u64>,
     /// Optional override of the per-part multipart chunk size (bytes).
-    /// When `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
+    /// When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
     /// applies. AWS requires parts ≥ 5 MiB except the last; `MinIO`
     /// tolerates smaller values.
     pub multipart_chunk_size: Option<usize>,
     /// Optional override of conditional puts (`If-None-Match`), which make a
     /// create-mode write fail on an existing key instead of overwriting it.
-    /// When `None`, the [`crabka_remote_storage::S3Config`] default of `true`
+    /// When `None`, the [`krabka_remote_storage::S3Config`] default of `true`
     /// applies. Turn it off only for an S3-compatible store that mishandles
     /// the header; WORM archive mode relies on it.
     #[serde(default)]
     pub conditional_put: Option<bool>,
     /// Optional override of the `x-amz-checksum-sha256` header, which has the
     /// server verify each object on ingest. When `None`, the
-    /// [`crabka_remote_storage::S3Config`] default of `true` applies.
+    /// [`krabka_remote_storage::S3Config`] default of `true` applies.
     #[serde(default)]
     pub checksum_sha256: Option<bool>,
 }
@@ -718,7 +718,7 @@ pub struct FileRemoteStorageS3Config {
 impl std::fmt::Debug for FileRemoteStorageS3Config {
     /// Redacts the credential fields so a stray `{:?}` / tracing call never
     /// leaks them. Mirrors the hand-written `Debug` on
-    /// [`crabka_remote_storage::S3Config`].
+    /// [`krabka_remote_storage::S3Config`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
         f.debug_struct("FileRemoteStorageS3Config")
@@ -738,7 +738,7 @@ impl std::fmt::Debug for FileRemoteStorageS3Config {
 }
 
 /// TOML shape of `[remote_storage.gcs]`. Maps to
-/// [`crabka_remote_storage::GcsConfig`].
+/// [`krabka_remote_storage::GcsConfig`].
 ///
 /// Omitting all credential fields (`service_account_path`,
 /// `service_account_key`, `application_credentials_path`) selects GKE
@@ -768,12 +768,12 @@ pub struct FileRemoteStorageGcsConfig {
     #[serde(default)]
     pub allow_http: bool,
     /// Optional override of the multipart-upload threshold (bytes). When
-    /// `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
+    /// `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD`]
     /// applies. Operators typically leave this alone; lower it to force
     /// multipart on smaller segments for testing.
     pub multipart_threshold: Option<u64>,
     /// Optional override of the per-part multipart chunk size (bytes).
-    /// When `None`, [`crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
+    /// When `None`, [`krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE`]
     /// applies.
     pub multipart_chunk_size: Option<usize>,
 }
@@ -781,7 +781,7 @@ pub struct FileRemoteStorageGcsConfig {
 impl std::fmt::Debug for FileRemoteStorageGcsConfig {
     /// Redacts the credential fields so a stray `{:?}` / tracing call never
     /// leaks them. Mirrors the hand-written `Debug` on
-    /// [`crabka_remote_storage::GcsConfig`].
+    /// [`krabka_remote_storage::GcsConfig`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***");
         f.debug_struct("FileRemoteStorageGcsConfig")
@@ -802,7 +802,7 @@ impl std::fmt::Debug for FileRemoteStorageGcsConfig {
 }
 
 /// TOML shape of `[remote_storage.worm]`. Maps to
-/// [`crabka_remote_storage::WormConfig`]. Presence of the table enables WORM
+/// [`krabka_remote_storage::WormConfig`]. Presence of the table enables WORM
 /// archive mode.
 ///
 /// Unlike [`FileRemoteStorageS3Config`] this derives `Debug` plainly, and that
@@ -967,9 +967,9 @@ fn default_schema_registry_expire_after_ms() -> i64 {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileDelegationTokenConfig {
-    /// HMAC master key. Overridden by `CRABKA_DELEGATION_TOKEN_SECRET_KEY`
+    /// HMAC master key. Overridden by `KRABKA_DELEGATION_TOKEN_SECRET_KEY`
     /// when set. Bytes are wrapped in
-    /// [`crabka_security::SecretBytes`] before reaching `BrokerConfig`.
+    /// [`krabka_security::SecretBytes`] before reaching `BrokerConfig`.
     pub secret_key: Option<String>,
     /// Hard upper bound on token lifetime, ms. Default 7 days.
     pub max_lifetime_ms: Option<i64>,
@@ -1039,7 +1039,7 @@ fn missing_stretch_field(name: &str) -> FileConfigError {
 }
 
 /// TOML shape of `[oauthbearer]`. Maps to
-/// [`crabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`
+/// [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`
 /// selects the signed-JWT validator; setting
 /// `introspection_endpoint_uri` selects the RFC 7662 introspection
 /// validator; the two endpoint URIs are mutually
@@ -1160,11 +1160,11 @@ const DEFAULT_KERBEROS_SERVICE_NAME: &str = "kafka";
 const DEFAULT_INTROSPECTION_HTTP_TIMEOUT: Time = secs(10);
 
 /// Default clock-skew tolerance for `exp` / `iat` / `nbf` checks. Matches the
-/// `crabka_security` validators' built-in default.
+/// `krabka_security` validators' built-in default.
 const DEFAULT_ALLOWABLE_CLOCK_SKEW: Time = secs(30);
 
 /// TOML shape of `[gssapi]`. Maps to
-/// [`crabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules`
+/// [`krabka_security::gssapi::GssapiConfig`]. `principal_to_local_rules`
 /// are parsed into `name::Rule` at `apply_to` time.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -1181,7 +1181,7 @@ pub struct FileGssapiConfig {
     /// falls back to krb5.conf when omitted.
     pub kdc: Option<String>,
     /// Maximum tolerated difference between client and broker clocks.
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub max_time_skew: Option<Time>,
 }
@@ -1316,7 +1316,7 @@ pub struct FileTlsConfig {
     /// cert as an outbound inter-broker / controller-quorum dialer. The
     /// operator renders the cluster CA here so KIP-595 controller peers can
     /// mutually authenticate over the controller listener. Maps to
-    /// [`crabka_security::TlsConfig::trust_roots_path`].
+    /// [`krabka_security::TlsConfig::trust_roots_path`].
     pub trust_roots_path: Option<std::path::PathBuf>,
     pub client_ca_path: Option<std::path::PathBuf>,
     #[serde(default)]
@@ -1335,12 +1335,12 @@ pub enum FileClientAuthMode {
 pub struct FileListenerSaslConfig {
     #[serde(default, deserialize_with = "deserialize_sasl_mechanisms")]
     #[schemars(with = "Vec<String>")]
-    pub enabled_mechanisms: Vec<crabka_security::SaslMechanism>,
+    pub enabled_mechanisms: Vec<krabka_security::SaslMechanism>,
 }
 
 fn deserialize_sasl_mechanisms<'de, D>(
     deserializer: D,
-) -> Result<Vec<crabka_security::SaslMechanism>, D::Error>
+) -> Result<Vec<krabka_security::SaslMechanism>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -1349,7 +1349,7 @@ where
     names
         .into_iter()
         .map(|s| {
-            crabka_security::SaslMechanism::from_wire(&s)
+            krabka_security::SaslMechanism::from_wire(&s)
                 .ok_or_else(|| D::Error::custom(format!("unknown SASL mechanism: {s}")))
         })
         .collect()
@@ -1408,8 +1408,8 @@ fn configure_introspection_validator(
         timeout,
     )
     .unwrap_or_else(|error| panic!("failed to build OAuth introspection client: {error}"));
-    cfg.oauthbearer_validator = crabka_security::OAuthBearerValidator::Introspection(
-        crabka_security::IntrospectionValidator {
+    cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Introspection(
+        krabka_security::IntrospectionValidator {
             client,
             principal_claim_name: oauth
                 .principal_claim_name
@@ -1480,13 +1480,13 @@ fn apply_oauthbearer(oauth: Option<FileOAuthBearerConfig>, cfg: &mut crate::conf
             let last_successful = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
             let last_on_demand = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
 
-            let handle = crabka_security::JwksHandle::new_with_refresher_handles(
-                crabka_security::Jwks::empty(),
+            let handle = krabka_security::JwksHandle::new_with_refresher_handles(
+                krabka_security::Jwks::empty(),
                 last_successful.clone(),
                 signal_tx,
             );
 
-            let mut v = crabka_security::SignedJwsValidator::new(handle);
+            let mut v = krabka_security::SignedJwsValidator::new(handle);
             if let Some(name) = oauth.principal_claim_name {
                 v.principal_claim_name = name;
             }
@@ -1511,7 +1511,7 @@ fn apply_oauthbearer(oauth: Option<FileOAuthBearerConfig>, cfg: &mut crate::conf
             v.cache_expiry = oauth
                 .jwks_expiry_seconds
                 .map(|s| Time::from_secs(i64::from(s)));
-            cfg.oauthbearer_validator = crabka_security::OAuthBearerValidator::Signed(v);
+            cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Signed(v);
             cfg.oauthbearer_jwks_endpoint = Some(jwks_uri);
             if let Some(ms) = oauth.jwks_refresh_interval_ms {
                 cfg.oauthbearer_jwks_refresh_interval =
@@ -1541,7 +1541,7 @@ fn apply_oauthbearer(oauth: Option<FileOAuthBearerConfig>, cfg: &mut crate::conf
         }
         (None, None) => {
             // Unsecured-JWS validation (development only).
-            let mut v = crabka_security::UnsecuredJwsValidator::default();
+            let mut v = krabka_security::UnsecuredJwsValidator::default();
             if let Some(name) = oauth.principal_claim_name {
                 v.principal_claim_name = name;
             }
@@ -1556,7 +1556,7 @@ fn apply_oauthbearer(oauth: Option<FileOAuthBearerConfig>, cfg: &mut crate::conf
             v.fallback_user_name_prefix = oauth.fallback_user_name_prefix;
             v.groups_claim = groups_claim_compiled;
             v.groups_claim_delimiter = oauth.groups_claim_delimiter;
-            cfg.oauthbearer_validator = crabka_security::OAuthBearerValidator::Unsecured(v);
+            cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
         }
     }
 }
@@ -1585,9 +1585,9 @@ fn apply_remote_storage(
         // The two integrity knobs default to on; read them from `S3Config`
         // rather than restating the values here, so a change there cannot
         // silently disagree with the TOML layer.
-        let s3_defaults = crabka_remote_storage::S3Config::default();
+        let s3_defaults = krabka_remote_storage::S3Config::default();
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::S3(
-            crabka_remote_storage::S3Config {
+            krabka_remote_storage::S3Config {
                 bucket: s3.bucket.clone(),
                 region: s3.region.clone(),
                 prefix: s3.prefix.clone(),
@@ -1597,17 +1597,17 @@ fn apply_remote_storage(
                 allow_http: s3.allow_http,
                 multipart_threshold: s3
                     .multipart_threshold
-                    .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
+                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
                 multipart_chunk_size: s3
                     .multipart_chunk_size
-                    .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
+                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
                 conditional_put: s3.conditional_put.unwrap_or(s3_defaults.conditional_put),
                 checksum_sha256: s3.checksum_sha256.unwrap_or(s3_defaults.checksum_sha256),
             },
         ));
     } else if let Some(gcs) = &rs.gcs {
         cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Gcs(
-            crabka_remote_storage::GcsConfig {
+            krabka_remote_storage::GcsConfig {
                 bucket: gcs.bucket.clone(),
                 prefix: gcs.prefix.clone(),
                 service_account_path: gcs.service_account_path.clone(),
@@ -1617,10 +1617,10 @@ fn apply_remote_storage(
                 allow_http: gcs.allow_http,
                 multipart_threshold: gcs
                     .multipart_threshold
-                    .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
+                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD),
                 multipart_chunk_size: gcs
                     .multipart_chunk_size
-                    .unwrap_or(crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
+                    .unwrap_or(krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE),
             },
         ));
     }
@@ -1673,7 +1673,7 @@ fn apply_remote_storage(
             }
             (Some(_), Some(_)) | (None, None) => {}
         }
-        cfg.remote_storage_worm = Some(crabka_remote_storage::WormConfig {
+        cfg.remote_storage_worm = Some(krabka_remote_storage::WormConfig {
             signing_key_path: worm
                 .signing_key_path
                 .as_deref()
@@ -1712,7 +1712,7 @@ fn apply_remote_storage(
                     km.fetch_retry_backoff.unwrap_or(policy.fetch_retry_backoff);
                 if let Some(capacity) = km.event_queue_capacity {
                     policy.event_queue_capacity =
-                        crabka_remote_storage_topic::MetadataEventQueueCapacity::new(capacity)
+                        krabka_remote_storage_topic::MetadataEventQueueCapacity::new(capacity)
                             .map_err(|error| {
                                 invalid_runtime_value("event_queue_capacity", error)
                             })?;
@@ -1804,7 +1804,7 @@ fn apply_listener_settings(
     if let Some(tls) = settings.tls_config
         && cfg.tls_config.is_none()
     {
-        use crabka_security::{ClientAuthMode, TlsConfig};
+        use krabka_security::{ClientAuthMode, TlsConfig};
         cfg.tls_config = Some(TlsConfig {
             cert_chain_path: tls.cert_path,
             private_key_path: tls.key_path,
@@ -1829,7 +1829,7 @@ fn apply_delegation_tokens(
     if cfg.delegation_token_secret_key.is_none()
         && let Some(key) = delegation.secret_key.clone()
     {
-        cfg.delegation_token_secret_key = Some(crabka_security::SecretBytes::new(key.into_bytes()));
+        cfg.delegation_token_secret_key = Some(krabka_security::SecretBytes::new(key.into_bytes()));
     }
     if let Some(milliseconds) = delegation.max_lifetime_ms {
         cfg.delegation_token_max_lifetime = Time::from_millis(positive_i64(
@@ -1912,7 +1912,7 @@ fn apply_config_tail(
     if let Some(gssapi) = tail.gssapi {
         let max_time_skew = gssapi
             .max_time_skew
-            .unwrap_or(crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+            .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
         if max_time_skew < Time::ZERO {
             return Err(FileConfigError::InvalidConfig(
                 "gssapi.max_time_skew must be non-negative".to_owned(),
@@ -1922,14 +1922,14 @@ fn apply_config_tail(
             .principal_to_local_rules
             .iter()
             .map(|spec| {
-                crabka_security::gssapi::name::Rule::parse(spec).map_err(|error| {
+                krabka_security::gssapi::name::Rule::parse(spec).map_err(|error| {
                     FileConfigError::InvalidConfig(format!(
                         "invalid GSSAPI principal rule {spec:?}: {error}"
                     ))
                 })
             })
             .collect::<Result<_, _>>()?;
-        cfg.gssapi = Some(crabka_security::gssapi::GssapiConfig {
+        cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
             keytab_path: gssapi.keytab_path,
             service_name: gssapi
                 .service_name
@@ -2061,7 +2061,7 @@ fn whole_bytes_u64(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigEr
 
 fn metadata_snapshot_fetch_max(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
     let value = whole_bytes_u64(name, value)?;
-    crabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(value)
+    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(value)
         .map(|_| value)
         .map_err(|error| invalid_runtime_value(name, error))
 }
@@ -2098,7 +2098,7 @@ fn whole_bytes_usize(name: &str, value: ByteSize) -> Result<ByteSize, FileConfig
 }
 
 fn positive_ratio(name: &str, value: Ratio) -> Result<Ratio, FileConfigError> {
-    if value.as_f64().is_finite() && value > crabka_units::fraction(0.0) {
+    if value.as_f64().is_finite() && value > krabka_units::fraction(0.0) {
         Ok(value)
     } else {
         Err(invalid_runtime_value(name, "must be finite and positive"))
@@ -2107,8 +2107,8 @@ fn positive_ratio(name: &str, value: Ratio) -> Result<Ratio, FileConfigError> {
 
 fn unit_interval_ratio(name: &str, value: Ratio) -> Result<Ratio, FileConfigError> {
     if value.as_f64().is_finite()
-        && value >= crabka_units::fraction(0.0)
-        && value <= crabka_units::fraction(1.0)
+        && value >= krabka_units::fraction(0.0)
+        && value <= krabka_units::fraction(1.0)
     {
         Ok(value)
     } else {
@@ -2894,16 +2894,16 @@ impl RuntimeFileConfig {
             cfg.controller_heartbeat_interval_explicit = true;
         }
         if let Some(value) = runtime.controller_fetch_miss_limit {
-            cfg.controller_fetch_miss_limit = crabka_raft::ControllerFetchMissLimit::new(value)
+            cfg.controller_fetch_miss_limit = krabka_raft::ControllerFetchMissLimit::new(value)
                 .map_err(FileConfigError::InvalidConfig)?;
         }
         if let Some(value) = runtime.metadata_raft_command_queue_capacity {
             cfg.metadata_raft_command_queue_capacity =
-                crabka_raft::MetadataRaftCommandQueueCapacity::new(value)
+                krabka_raft::MetadataRaftCommandQueueCapacity::new(value)
                     .map_err(FileConfigError::InvalidConfig)?;
         }
         if let Some(value) = runtime.metadata_raft_fetch_max {
-            cfg.metadata_raft_fetch_max = crabka_raft::MetadataRaftFetchMax::try_from(value)
+            cfg.metadata_raft_fetch_max = krabka_raft::MetadataRaftFetchMax::try_from(value)
                 .map_err(FileConfigError::InvalidConfig)?;
         }
         if let Some(value) = runtime.controlled_shutdown_drain_timeout {
@@ -3302,13 +3302,13 @@ impl FileConfig {
     /// [`FileConfigError::InvalidQuorumVoter`] when the entry has no `@`, a
     /// non-numeric node id, or a malformed `<host>:<port>` (missing port,
     /// empty host, or non-numeric port).
-    fn parse_quorum_voter(entry: &str) -> Result<(crabka_raft::NodeId, String), FileConfigError> {
+    fn parse_quorum_voter(entry: &str) -> Result<(krabka_raft::NodeId, String), FileConfigError> {
         let (id_str, host_port) = entry.split_once('@').ok_or_else(|| {
             FileConfigError::InvalidQuorumVoter(format!(
                 "{entry:?}: expected `<node_id>@<host>:<port>` (missing `@`)"
             ))
         })?;
-        let node_id = crabka_raft::NodeId(id_str.parse::<u64>().map_err(|e| {
+        let node_id = krabka_raft::NodeId(id_str.parse::<u64>().map_err(|e| {
             FileConfigError::InvalidQuorumVoter(format!(
                 "{entry:?}: invalid node id {id_str:?}: {e}"
             ))
@@ -3342,7 +3342,7 @@ impl FileConfig {
 impl FileListener {
     #[must_use]
     pub fn into_spec(self) -> ListenerSpec {
-        use crabka_security::{ClientAuthMode, TlsConfig as BrokerTlsConfig};
+        use krabka_security::{ClientAuthMode, TlsConfig as BrokerTlsConfig};
         ListenerSpec {
             name: self.name,
             bind_addr: self.bind_addr,
@@ -3421,7 +3421,7 @@ sasl_config = { enabled_mechanisms = ["SCRAM-SHA-512"] }
 "#;
         let cfg: FileConfig = toml::from_str(toml).unwrap();
         let sasl = cfg.listeners[0].sasl_config.as_ref().unwrap();
-        assert!(sasl.enabled_mechanisms == vec![crabka_security::SaslMechanism::ScramSha512]);
+        assert!(sasl.enabled_mechanisms == vec![krabka_security::SaslMechanism::ScramSha512]);
     }
 
     #[test]
@@ -3455,7 +3455,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use assert2::{assert, check};
-    use crabka_units::{
+    use krabka_units::{
         bytes,
         convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _},
         days, hours, mebibytes, millis, minutes, secs,
@@ -3510,7 +3510,7 @@ mod tests {
     fn full_toml_round_trips() {
         let src = r#"
 broker_id = 0
-log_dir = "/var/lib/crabka/data"
+log_dir = "/var/lib/krabka/data"
 inter_broker_listener_name = "PLAIN"
 
 [[listeners]]
@@ -3533,7 +3533,7 @@ protocol = "Plaintext"
             schema_registry: None,
             runtime: None,
             broker_id: Some(0),
-            log_dir: Some("/var/lib/crabka/data".to_string()),
+            log_dir: Some("/var/lib/krabka/data".to_string()),
             extra_log_dirs: vec![],
             rack: None,
             replica_selector: None,
@@ -3662,18 +3662,18 @@ protocol = "Plaintext"
     fn apply_to_log_dir_fills_default_but_preserves_existing() {
         use crate::config::BrokerConfig;
 
-        let file: FileConfig = toml::from_str(r#"log_dir = "/var/lib/crabka/file""#).unwrap();
+        let file: FileConfig = toml::from_str(r#"log_dir = "/var/lib/krabka/file""#).unwrap();
 
         let mut default_cfg = BrokerConfig::default();
         file.clone().apply_to(&mut default_cfg).unwrap();
-        assert!(default_cfg.log_dir == std::path::PathBuf::from("/var/lib/crabka/file"));
+        assert!(default_cfg.log_dir == std::path::PathBuf::from("/var/lib/krabka/file"));
 
         let mut existing_cfg = BrokerConfig {
-            log_dir: std::path::PathBuf::from("/var/lib/crabka/cli"),
+            log_dir: std::path::PathBuf::from("/var/lib/krabka/cli"),
             ..BrokerConfig::default()
         };
         file.apply_to(&mut existing_cfg).unwrap();
-        assert!(existing_cfg.log_dir == std::path::PathBuf::from("/var/lib/crabka/cli"));
+        assert!(existing_cfg.log_dir == std::path::PathBuf::from("/var/lib/krabka/cli"));
     }
 
     #[test]
@@ -3777,10 +3777,10 @@ controller_quorum_voters = ["0@127.0.0.1:9093", "1@127.0.0.2:9093", "2@127.0.0.3
 
         // Host:port carried verbatim (parsed, NOT DNS-resolved) so the dialer
         // re-resolves each peer per connect.
-        let expected: Vec<(crabka_raft::NodeId, String)> = vec![
-            (crabka_audit::NodeId(0), "127.0.0.1:9093".to_string()),
-            (crabka_audit::NodeId(1), "127.0.0.2:9093".to_string()),
-            (crabka_audit::NodeId(2), "127.0.0.3:9093".to_string()),
+        let expected: Vec<(krabka_raft::NodeId, String)> = vec![
+            (krabka_audit::NodeId(0), "127.0.0.1:9093".to_string()),
+            (krabka_audit::NodeId(1), "127.0.0.2:9093".to_string()),
+            (krabka_audit::NodeId(2), "127.0.0.3:9093".to_string()),
         ];
         assert!(cfg.controller_quorum_voters == expected);
     }
@@ -3801,8 +3801,8 @@ controller_quorum_voters = ["0@demo-broker-0-0.demo-broker-headless.default.svc.
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
 
-        let expected: Vec<(crabka_raft::NodeId, String)> = vec![(
-            crabka_audit::NodeId(0),
+        let expected: Vec<(krabka_raft::NodeId, String)> = vec![(
+            krabka_audit::NodeId(0),
             "demo-broker-0-0.demo-broker-headless.default.svc.cluster.local:9093".to_string(),
         )];
         assert!(cfg.controller_quorum_voters == expected);
@@ -3839,8 +3839,8 @@ controller_quorum_voters = ["0@demo-broker-0-0.demo-broker-headless.default.svc.
         assert!(file.controller_quorum_voters.is_empty());
 
         // Seed a pre-existing single self-voter as the binary would.
-        let seeded: Vec<(crabka_raft::NodeId, String)> =
-            vec![(crabka_audit::NodeId(7), "127.0.0.1:9093".to_string())];
+        let seeded: Vec<(krabka_raft::NodeId, String)> =
+            vec![(krabka_audit::NodeId(7), "127.0.0.1:9093".to_string())];
         let mut cfg = BrokerConfig {
             controller_quorum_voters: seeded.clone(),
             ..BrokerConfig::default()
@@ -3912,15 +3912,15 @@ controller_heartbeat_interval = "100ms"
 controller_listener_protocol = "Ssl"
 
 [tls_config]
-cert_path = "/etc/crabka/broker-tls/0.crt"
-key_path  = "/etc/crabka/broker-tls/0.key"
-client_ca_path = "/etc/crabka/cluster-ca/ca.crt"
+cert_path = "/etc/krabka/broker-tls/0.crt"
+key_path  = "/etc/krabka/broker-tls/0.key"
+client_ca_path = "/etc/krabka/cluster-ca/ca.crt"
 client_auth = "Required"
 "#;
         let cfg: FileConfig = toml::from_str(src).expect("parse TLS config");
         assert!(cfg.controller_listener_protocol == Some(ListenerProtocol::Ssl));
         let tls = cfg.tls_config.expect("tls_config present");
-        assert!(tls.cert_path == std::path::PathBuf::from("/etc/crabka/broker-tls/0.crt"));
+        assert!(tls.cert_path == std::path::PathBuf::from("/etc/krabka/broker-tls/0.crt"));
         assert!(tls.client_auth == FileClientAuthMode::Required);
     }
 
@@ -3952,7 +3952,7 @@ client_auth = "Required"
         let file: FileConfig = toml::from_str(src).expect("parse");
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
-        assert!(cfg.controller_listener_protocol == crabka_security::ListenerProtocol::Ssl);
+        assert!(cfg.controller_listener_protocol == krabka_security::ListenerProtocol::Ssl);
         let tls = cfg.tls_config.expect("tls_config propagated");
         assert!(tls.cert_chain_path == std::path::PathBuf::from("/c"));
     }
@@ -3965,10 +3965,10 @@ client_auth = "Required"
         let src = r#"
 controller_server_name = "demo-broker-headless.default.svc.cluster.local"
 [tls_config]
-cert_path = "/etc/crabka/broker-tls/0.crt"
-key_path = "/etc/crabka/broker-tls/0.key"
-trust_roots_path = "/etc/crabka/cluster-ca/ca.crt"
-client_ca_path = "/etc/crabka/cluster-ca/ca.crt"
+cert_path = "/etc/krabka/broker-tls/0.crt"
+key_path = "/etc/krabka/broker-tls/0.key"
+trust_roots_path = "/etc/krabka/cluster-ca/ca.crt"
+client_ca_path = "/etc/krabka/cluster-ca/ca.crt"
 client_auth = "Required"
 "#;
         let file: FileConfig = toml::from_str(src).expect("parse");
@@ -3981,7 +3981,7 @@ client_auth = "Required"
         let tls = cfg.tls_config.expect("tls_config propagated");
         assert!(
             tls.trust_roots_path.as_deref()
-                == Some(std::path::Path::new("/etc/crabka/cluster-ca/ca.crt"))
+                == Some(std::path::Path::new("/etc/krabka/cluster-ca/ca.crt"))
         );
     }
 
@@ -4018,7 +4018,7 @@ jwks_expiry_seconds = 360
         assert!(cfg.oauthbearer_jwks_endpoint.as_deref() == Some("https://idp.example/jwks"));
         assert!(cfg.oauthbearer_jwks_refresh_interval == minutes(1));
         match cfg.oauthbearer_validator {
-            crabka_security::OAuthBearerValidator::Signed(v) => {
+            krabka_security::OAuthBearerValidator::Signed(v) => {
                 check!(v.valid_issuer.as_deref() == Some("https://idp.example"));
                 check!(v.expected_audience.as_deref() == Some("kafka"));
                 check!(v.principal_claim_name.as_str() == "client_id");
@@ -4040,7 +4040,7 @@ allowable_clock_skew_ms = 5000
         file.apply_to(&mut cfg).unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
         match cfg.oauthbearer_validator {
-            crabka_security::OAuthBearerValidator::Unsecured(v) => {
+            krabka_security::OAuthBearerValidator::Unsecured(v) => {
                 assert!(v.allowable_clock_skew == secs(5));
             }
             other => {
@@ -4054,14 +4054,14 @@ allowable_clock_skew_ms = 5000
         let toml = r#"
 [oauthbearer]
 jwks_endpoint_uri = "https://idp.example/certs"
-idp_tls_trust = "/etc/crabka/oauth/idp-ca.pem"
+idp_tls_trust = "/etc/krabka/oauth/idp-ca.pem"
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         assert!(
             cfg.oauthbearer_idp_tls_trust.as_deref()
-                == Some(std::path::Path::new("/etc/crabka/oauth/idp-ca.pem"))
+                == Some(std::path::Path::new("/etc/krabka/oauth/idp-ca.pem"))
         );
     }
 
@@ -4096,7 +4096,7 @@ introspection_client_secret_path = '{}'
         file.apply_to(&mut cfg).unwrap();
         assert!(matches!(
             cfg.oauthbearer_validator,
-            crabka_security::OAuthBearerValidator::Introspection(_)
+            krabka_security::OAuthBearerValidator::Introspection(_)
         ));
     }
 
@@ -4172,7 +4172,7 @@ introspection_client_secret_path = '{}'
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         match cfg.oauthbearer_validator {
-            crabka_security::OAuthBearerValidator::Introspection(v) => assert!(v.call_userinfo),
+            krabka_security::OAuthBearerValidator::Introspection(v) => assert!(v.call_userinfo),
             other => panic!("expected Introspection, got {other:?}"),
         }
     }
@@ -4195,7 +4195,7 @@ introspection_client_secret_path = '{}'
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         match cfg.oauthbearer_validator {
-            crabka_security::OAuthBearerValidator::Introspection(v) => assert!(!v.call_userinfo),
+            krabka_security::OAuthBearerValidator::Introspection(v) => assert!(!v.call_userinfo),
             other => panic!("expected Introspection, got {other:?}"),
         }
     }
@@ -4210,7 +4210,7 @@ introspection_client_secret_path = '{}'
                 name: "X".into(),
                 bind_addr: "0.0.0.0:9094".parse().unwrap(),
                 advertised: "h:9094".into(),
-                protocol: crabka_security::ListenerProtocol::Plaintext,
+                protocol: krabka_security::ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
             }],
@@ -4262,14 +4262,14 @@ protocol = "Plaintext"
     fn remote_storage_section_enables_and_sets_dir() {
         let toml = r#"
 [remote_storage]
-storage_dir = "/var/lib/crabka/tier"
+storage_dir = "/var/lib/krabka/tier"
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::Local { dir }) => {
-                assert!(dir == std::path::PathBuf::from("/var/lib/crabka/tier"));
+                assert!(dir == std::path::PathBuf::from("/var/lib/krabka/tier"));
             }
             other => panic!("expected Local backend, got {other:?}"),
         }
@@ -4381,7 +4381,7 @@ snapshot_interval = "90s"
     fn remote_storage_s3_section_parses() {
         let toml = r#"
 [remote_storage.s3]
-bucket = "crabka-prod"
+bucket = "krabka-prod"
 region = "us-east-1"
 prefix = "cluster-a"
 endpoint = "http://minio:9000"
@@ -4394,7 +4394,7 @@ allow_http = true
             Some(crate::config::RemoteStorageBackend::S3(s3)) => {
                 // Credentials default to None and the multipart knobs default
                 // when the TOML omits them.
-                check!(s3.bucket.as_str() == "crabka-prod");
+                check!(s3.bucket.as_str() == "krabka-prod");
                 check!(s3.region.as_str() == "us-east-1");
                 check!(s3.prefix.as_deref() == Some("cluster-a"));
                 check!(s3.endpoint.as_deref() == Some("http://minio:9000"));
@@ -4402,10 +4402,10 @@ allow_http = true
                 check!(s3.access_key_id.is_none());
                 check!(s3.secret_access_key.is_none());
                 check!(
-                    s3.multipart_threshold == crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD
+                    s3.multipart_threshold == krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD
                 );
                 check!(
-                    s3.multipart_chunk_size == crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE
+                    s3.multipart_chunk_size == krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE
                 );
             }
             other => panic!("expected S3 backend, got {other:?}"),
@@ -4457,7 +4457,7 @@ region = "us-east-1"
     fn remote_storage_gcs_section_parses() {
         let toml = r#"
 [remote_storage.gcs]
-bucket = "crabka-prod"
+bucket = "krabka-prod"
 prefix = "cluster-a"
 endpoint = "http://fake-gcs:4443"
 allow_http = true
@@ -4470,16 +4470,16 @@ allow_http = true
                 // Leaving all credential fields unset selects Workload
                 // Identity / ADC; multipart knobs default when the TOML
                 // omits them.
-                check!(g.bucket.as_str() == "crabka-prod");
+                check!(g.bucket.as_str() == "krabka-prod");
                 check!(g.prefix.as_deref() == Some("cluster-a"));
                 check!(g.endpoint.as_deref() == Some("http://fake-gcs:4443"));
                 check!(g.allow_http);
                 check!(g.service_account_path.is_none());
                 check!(g.service_account_key.is_none());
                 check!(g.application_credentials_path.is_none());
-                check!(g.multipart_threshold == crabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD);
+                check!(g.multipart_threshold == krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD);
                 check!(
-                    g.multipart_chunk_size == crabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE
+                    g.multipart_chunk_size == krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE
                 );
             }
             other => panic!("expected Gcs backend, got {other:?}"),
@@ -4508,7 +4508,7 @@ service_account_path = "/etc/gcs/key.json"
     #[test]
     fn remote_storage_gcs_config_debug_redacts_credentials() {
         let gcs = FileRemoteStorageGcsConfig {
-            bucket: "crabka-prod".into(),
+            bucket: "krabka-prod".into(),
             prefix: None,
             service_account_path: Some("/etc/gcs/sa-path.json".into()),
             service_account_key: Some("super-secret-inline-key".into()),
@@ -4526,7 +4526,7 @@ service_account_path = "/etc/gcs/key.json"
             ("super-secret-inline-key", false),
             ("/etc/gcs/adc.json", false),
             ("***", true),
-            ("crabka-prod", true),
+            ("krabka-prod", true),
         ];
         for (needle, want) in cases {
             assert!(
@@ -4579,11 +4579,11 @@ bucket = "b"
     fn worm_table_maps_to_broker_config() {
         let toml = r#"
 [remote_storage.s3]
-bucket = "crabka-archive"
+bucket = "krabka-archive"
 region = "us-east-1"
 
 [remote_storage.worm]
-signing_key_path = "/etc/crabka/worm-signing.pk8"
+signing_key_path = "/etc/krabka/worm-signing.pk8"
 signing_key_id = "worm-2026-q3"
 write_only = true
 "#;
@@ -4592,9 +4592,9 @@ write_only = true
         file.apply_to(&mut cfg).unwrap();
         check!(
             cfg.remote_storage_worm
-                == Some(crabka_remote_storage::WormConfig {
+                == Some(krabka_remote_storage::WormConfig {
                     signing_key_path: Some(std::path::PathBuf::from(
-                        "/etc/crabka/worm-signing.pk8"
+                        "/etc/krabka/worm-signing.pk8"
                     )),
                     signing_key_id: Some("worm-2026-q3".to_string()),
                     write_only: true,
@@ -4606,7 +4606,7 @@ write_only = true
     fn worm_table_defaults_to_unsigned_readable_archive() {
         let toml = r#"
 [remote_storage.gcs]
-bucket = "crabka-archive"
+bucket = "krabka-archive"
 
 [remote_storage.worm]
 "#;
@@ -4614,7 +4614,7 @@ bucket = "crabka-archive"
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         // An empty table still enables WORM; every knob takes its default.
-        check!(cfg.remote_storage_worm == Some(crabka_remote_storage::WormConfig::default()));
+        check!(cfg.remote_storage_worm == Some(krabka_remote_storage::WormConfig::default()));
     }
 
     #[test]
@@ -4672,7 +4672,7 @@ bucket = "crabka-archive"
     fn worm_absent_leaves_config_none() {
         let toml = r#"
 [remote_storage.s3]
-bucket = "crabka-prod"
+bucket = "krabka-prod"
 region = "us-east-1"
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
@@ -4687,12 +4687,12 @@ region = "us-east-1"
         // and an operator auditing a chain must be able to tell which key
         // signed it. A `***` here would remove the only answer to that.
         let worm = FileWormConfig {
-            signing_key_path: Some("/etc/crabka/worm-signing.pk8".into()),
+            signing_key_path: Some("/etc/krabka/worm-signing.pk8".into()),
             signing_key_id: Some("worm-2026-q3".into()),
             write_only: true,
         };
         let rendered = format!("{worm:?}");
-        check!(rendered.contains("/etc/crabka/worm-signing.pk8"));
+        check!(rendered.contains("/etc/krabka/worm-signing.pk8"));
         check!(rendered.contains("worm-2026-q3"));
         check!(!rendered.contains("***"));
     }
@@ -4700,12 +4700,12 @@ region = "us-east-1"
     #[test]
     fn delegation_token_section_parses_secret_key_and_defaults() {
         // Hold the lock so a concurrently-running env-var test can't
-        // leak CRABKA_DELEGATION_TOKEN_SECRET_KEY into this assertion.
+        // leak KRABKA_DELEGATION_TOKEN_SECRET_KEY into this assertion.
         // `temp_env::with_var_unset` removes the var for the duration
         // of the closure and restores the prior value on return —
         // safe against the workspace `forbid(unsafe_code)` lint.
         let _g = env_lock().lock().unwrap();
-        temp_env::with_var_unset("CRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
+        temp_env::with_var_unset("KRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
             let toml = r#"
 [delegation_token]
 secret_key = "abcdef"
@@ -4731,7 +4731,7 @@ secret_key = "abcdef"
     #[test]
     fn delegation_token_default_renew_period_ms_default_and_override() {
         let _g = env_lock().lock().unwrap();
-        temp_env::with_var_unset("CRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
+        temp_env::with_var_unset("KRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
             // (1) When the TOML omits `default_renew_period_ms`, the config
             //     stays at the 24h KIP-48 default.
             let toml = r#"
@@ -4770,7 +4770,7 @@ secret_key = "toml-loses"
 "#;
         let file: FileConfig = toml::from_str(toml).unwrap();
         let mut cfg = crate::config::BrokerConfig {
-            delegation_token_secret_key: Some(crabka_security::SecretBytes::new(
+            delegation_token_secret_key: Some(krabka_security::SecretBytes::new(
                 b"runtime-wins".to_vec(),
             )),
             ..crate::config::BrokerConfig::default()
@@ -4788,7 +4788,7 @@ secret_key = "toml-loses"
     #[test]
     fn delegation_token_absent_when_unset_anywhere() {
         let _g = env_lock().lock().unwrap();
-        temp_env::with_var_unset("CRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
+        temp_env::with_var_unset("KRABKA_DELEGATION_TOKEN_SECRET_KEY", || {
             let file: FileConfig = toml::from_str("").unwrap();
             let mut cfg = crate::config::BrokerConfig::default();
             file.apply_to(&mut cfg).unwrap();
@@ -4818,17 +4818,17 @@ super_users = ["ANONYMOUS", "admin"]
 
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
 
-    fn test_principal(name: &str) -> crabka_security::Principal {
-        crabka_security::Principal {
+    fn test_principal(name: &str) -> krabka_security::Principal {
+        krabka_security::Principal {
             name: name.into(),
-            auth_method: crabka_security::AuthMethod::SaslPlain,
+            auth_method: krabka_security::AuthMethod::SaslPlain,
             groups: vec![],
         }
     }
 
     #[test]
     fn authorization_section_simple_builds_simple_acl_authorizer() {
-        use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
+        use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
@@ -4880,7 +4880,7 @@ super_users = ["admin"]
 
     #[test]
     fn authorization_section_opa_builds_opa_authorizer() {
-        use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
+        use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
@@ -4942,7 +4942,7 @@ expire_after_ms = 60000
         // And the built authorizer must Deny on OPA error (fail-closed).
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
+            use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 
             use crate::authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer};
 
@@ -5102,7 +5102,7 @@ schema_registry_http_timeout = "2500ms"
 
     #[test]
     fn authorization_section_absent_defaults_to_allow_all() {
-        use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
+        use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 
         use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
 
@@ -5323,7 +5323,7 @@ replica_selector = "nonsense"
         let src = r#"
 broker_id = 1
 [gssapi]
-keytab_path = "/etc/crabka/gssapi-keytab/keytab"
+keytab_path = "/etc/krabka/gssapi-keytab/keytab"
 service_name = "kafka"
 principal_to_local_rules = ["RULE:[1:$1@$0](.*@EXAMPLE.COM)s/@.*//", "DEFAULT"]
 realm = "EXAMPLE.COM"
@@ -5334,13 +5334,13 @@ max_time_skew = "17s"
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).expect("apply [gssapi]");
         let g = cfg.gssapi.expect("gssapi config present");
-        check!(g.keytab_path == std::path::PathBuf::from("/etc/crabka/gssapi-keytab/keytab"));
+        check!(g.keytab_path == std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"));
         check!(g.service_name.as_str() == "kafka");
         check!(g.principal_to_local_rules.len() == 2);
         // Second rule in the fixture is the bare DEFAULT rule.
         check!(matches!(
             g.principal_to_local_rules[1],
-            crabka_security::gssapi::name::Rule::Default
+            krabka_security::gssapi::name::Rule::Default
         ));
         check!(g.realm.as_deref() == Some("EXAMPLE.COM"));
         check!(g.kdc.as_deref() == Some("tcp://kdc:88"));
@@ -5359,7 +5359,7 @@ principal_to_local_rules = ["DEFAULT"]
         file.apply_to(&mut cfg).unwrap();
         let gssapi = cfg.gssapi.unwrap();
         assert!(gssapi.service_name == "kafka");
-        assert!(gssapi.max_time_skew == crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+        assert!(gssapi.max_time_skew == krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
     }
 
     #[test]
@@ -5405,7 +5405,7 @@ principal_to_local_rules = ["NOT_A_RULE:::"]
         let src = r#"
 [inter_broker_credentials]
 type = "gssapi"
-keytab_path = "/etc/crabka/gssapi-keytab/keytab"
+keytab_path = "/etc/krabka/gssapi-keytab/keytab"
 client_principal = "kafka@EXAMPLE.COM"
 service_name = "kafka"
 kdc_url = "tcp://kdc:88"
@@ -5414,7 +5414,7 @@ kdc_url = "tcp://kdc:88"
         let mut cfg = crate::config::BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
         let expected = crate::config::InterBrokerCredentials::Gssapi {
-            keytab_path: std::path::PathBuf::from("/etc/crabka/gssapi-keytab/keytab"),
+            keytab_path: std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"),
             client_principal: "kafka@EXAMPLE.COM".to_string(),
             service_name: "kafka".to_string(),
             kdc_url: "tcp://kdc:88".to_string(),
@@ -5535,17 +5535,17 @@ in_memory = true
         let toml = r#"
             [audit]
             enabled = true
-            topic = "__crabka_audit"
+            topic = "__krabka_audit"
         "#;
         let fc: FileConfig = toml::from_str(toml).expect("parse audit section");
         let audit = fc.audit.clone().expect("audit present");
         assert2::check!(audit.enabled);
-        assert2::check!(audit.topic == "__crabka_audit");
+        assert2::check!(audit.topic == "__krabka_audit");
 
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(cfg.audit_enabled);
-        assert2::check!(cfg.audit_topic == "__crabka_audit");
+        assert2::check!(cfg.audit_topic == "__krabka_audit");
     }
 
     #[test]
@@ -5555,7 +5555,7 @@ in_memory = true
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(cfg.audit_enabled);
-        assert2::check!(cfg.audit_topic == "__crabka_audit");
+        assert2::check!(cfg.audit_topic == "__krabka_audit");
     }
 
     #[test]
@@ -5565,7 +5565,7 @@ in_memory = true
             enabled = true
 
             [audit.signing]
-            key_path = "/etc/crabka/audit.pk8"
+            key_path = "/etc/krabka/audit.pk8"
             key_id = "audit-2026"
 
             [audit.checkpoint]
@@ -5576,7 +5576,7 @@ in_memory = true
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(
-            cfg.audit_signing_key_path == Some(std::path::PathBuf::from("/etc/crabka/audit.pk8"))
+            cfg.audit_signing_key_path == Some(std::path::PathBuf::from("/etc/krabka/audit.pk8"))
         );
         assert2::check!(cfg.audit_signing_key_id.as_deref() == Some("audit-2026"));
         assert2::check!(cfg.audit_checkpoint_every_n == 500);
@@ -5600,22 +5600,22 @@ in_memory = true
             [audit]
             enabled = true
             [audit.spool]
-            dir = "/var/lib/crabka/audit-spool"
+            dir = "/var/lib/krabka/audit-spool"
             max_bytes = 2048
         "#;
         let fc: FileConfig = toml::from_str(toml).expect("parse");
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(
-            cfg.audit_spool_dir == std::path::PathBuf::from("/var/lib/crabka/audit-spool")
+            cfg.audit_spool_dir == std::path::PathBuf::from("/var/lib/krabka/audit-spool")
         );
-        assert2::check!(cfg.audit_spool_max == crabka_units::kibibytes(2));
+        assert2::check!(cfg.audit_spool_max == krabka_units::kibibytes(2));
 
         let fc2: FileConfig = toml::from_str("[audit]\nenabled = true\n").expect("parse");
         let mut cfg2 = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc2.apply_to(&mut cfg2).expect("apply");
         assert2::check!(cfg2.audit_spool_dir == std::path::PathBuf::from("audit-spool"));
-        assert2::check!(cfg2.audit_spool_max == crabka_units::gibibytes(1));
+        assert2::check!(cfg2.audit_spool_max == krabka_units::gibibytes(1));
     }
 
     #[test]
@@ -5805,7 +5805,7 @@ barrier_max_topics_per_group = 16
 
     /// Every time and byte-size runtime key must survive the round trip
     /// TOML quantity → wire integer unchanged. This is the
-    /// regression the `crabka-units` adoption exists to prevent: a mapping
+    /// regression the `krabka-units` adoption exists to prevent: a mapping
     /// that reads `30000` as 30 000 *seconds*, or writes a 30 s timeout back
     /// as `30`, changes a Kafka wire field by three orders of magnitude.
     #[test]
@@ -6013,9 +6013,9 @@ record_decompression_output_ceiling = "512MiB"
         let policy = cfg
             .record_decompression_policy()
             .expect("validated decompression policy");
-        assert!(policy.max_ratio() == crabka_units::fraction(50.0));
-        assert!(policy.output_floor() == crabka_units::mebibytes(8));
-        assert!(policy.output_ceiling() == crabka_units::mebibytes(512));
+        assert!(policy.max_ratio() == krabka_units::fraction(50.0));
+        assert!(policy.output_floor() == krabka_units::mebibytes(8));
+        assert!(policy.output_ceiling() == krabka_units::mebibytes(512));
     }
 
     #[test]

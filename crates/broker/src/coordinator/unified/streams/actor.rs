@@ -25,8 +25,8 @@ use std::{
     time::Instant,
 };
 
-use crabka_log::Offset;
-use crabka_protocol::owned::{
+use krabka_log::Offset;
+use krabka_protocol::owned::{
     common::streams_group_heartbeat_response::{status::Status, task_ids::TaskIds as RespTaskIds},
     streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
@@ -341,7 +341,7 @@ fn resolve_group_config(
 
 fn resolve_group_config_from_image(
     defaults: &StreamsGroupConfig,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     group_id: &str,
 ) -> StreamsGroupConfig {
     let Some(overrides) = image.group_config(group_id) else {
@@ -357,8 +357,8 @@ fn resolve_group_config_from_image(
 }
 
 async fn wait_for_metadata_change(
-    rx: &mut Option<tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>>>,
-) -> Option<Arc<crabka_metadata::MetadataImage>> {
+    rx: &mut Option<tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>>,
+) -> Option<Arc<krabka_metadata::MetadataImage>> {
     match rx {
         Some(rx) => {
             rx.changed().await.ok()?;
@@ -595,7 +595,7 @@ async fn handle_leave(
 /// the group dirty.
 fn accept_topology(
     actor: &mut ActorState,
-    wire_topology: &crabka_protocol::owned::streams_group_heartbeat_request::Topology,
+    wire_topology: &krabka_protocol::owned::streams_group_heartbeat_request::Topology,
 ) {
     let stored = topology::to_stored_topology(wire_topology);
     actor.state.topology = Some(StoredTopologyHandle {
@@ -821,7 +821,7 @@ fn task_lag(m: &StreamsMemberState) -> BTreeMap<(String, i32), i64> {
 /// Converts request `TaskIds`, which hold a subtopology and its partitions,
 /// into the in-memory `subtopology -> partitions` task map.
 fn task_ids_to_map(
-    tasks: &[crabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds],
+    tasks: &[krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds],
 ) -> BTreeMap<String, Vec<i32>> {
     let mut map: BTreeMap<String, Vec<i32>> = BTreeMap::new();
     for t in tasks {
@@ -840,7 +840,7 @@ fn task_ids_to_map(
 /// raw `i64`, and this function wraps it as an `Offset` for the in-memory
 /// changelog-position map.
 fn task_offsets_to_map(
-    offsets: &[crabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset],
+    offsets: &[krabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset],
 ) -> BTreeMap<(String, i32), Offset> {
     offsets
         .iter()
@@ -1197,9 +1197,9 @@ mod tests {
     fn persisted_group_config_overrides_actor_defaults() {
         use crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS;
 
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&crabka_metadata::MetadataRecord::V1GroupConfig(
-            crabka_metadata::GroupConfigRecord {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
+            krabka_metadata::GroupConfigRecord {
                 group_id: "streams-app".into(),
                 configs: std::collections::BTreeMap::from([(
                     KEY_NUM_STANDBY_REPLICAS.into(),
@@ -1575,7 +1575,7 @@ mod tests {
 
     #[test]
     fn task_offsets_to_map_wraps_each_wire_entry() {
-        use crabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset;
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset;
         let wire = vec![
             TaskOffset {
                 subtopology_id: "sub-a".to_string(),

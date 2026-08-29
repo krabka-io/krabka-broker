@@ -6,22 +6,22 @@ use crate::types::NodeId;
 #[non_exhaustive]
 pub enum RaftError {
     #[error("storage: {0}")]
-    Storage(#[from] crabka_log::LogError),
+    Storage(#[from] krabka_log::LogError),
 
     #[error("network: {0}")]
-    Network(#[from] crabka_client_core::ClientError),
+    Network(#[from] krabka_client_core::ClientError),
 
     #[error("protocol: {0}")]
-    Protocol(#[from] crabka_protocol::ProtocolError),
+    Protocol(#[from] krabka_protocol::ProtocolError),
 
     #[error("controller admin dispatch: {0}")]
     ControllerAdmin(String),
 
     #[error("records: {0}")]
-    Records(#[from] crabka_protocol::records::RecordsError),
+    Records(#[from] krabka_protocol::records::RecordsError),
 
     #[error("metadata: {0}")]
-    Metadata(#[from] crabka_metadata::MetadataError),
+    Metadata(#[from] krabka_metadata::MetadataError),
 
     #[error("unsupported: {0}")]
     Unsupported(&'static str),

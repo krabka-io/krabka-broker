@@ -1,7 +1,7 @@
 //! Writing the restored cluster: the format, then the partition data.
 //!
 //! This module owns everything that touches the target log directory. It
-//! formats the target through `crabka_format::run_from_args_with_records`,
+//! formats the target through `krabka_format::run_from_args_with_records`,
 //! forwarding the `--cluster-id`, `--node-id`, `--standalone`,
 //! `--initial-controllers`, `--no-initial-controllers`, and
 //! `--controller-listener` flags and seeding the `TopicRecord` and one
@@ -11,7 +11,7 @@
 //! walks the batches: a batch the bound keeps is written verbatim through
 //! [`Log::append_verbatim_at`], with its base offset and leader epoch
 //! restamped and its producer CRC untouched; a batch the bound filters is
-//! rewritten through [`crabka_log::filter_batch`] and written through
+//! rewritten through [`krabka_log::filter_batch`] and written through
 //! [`Log::append_at`]; and a batch every one of whose records the bound
 //! excludes is still written through [`Log::append_at`], as a bare header
 //! with zero records and the archived `base_offset` and `last_offset_delta`
@@ -24,11 +24,11 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use crabka_ids::{LeaderEpoch, Offset, ProducerId};
-use crabka_log::{FilteredBatch, Log, LogConfig, VerbatimBatch, filter_batch, name};
-use crabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-use crabka_protocol::records::{Attributes, RecordBatch, RecordBatchBorrowed, RecordBatchHeader};
-use crabka_remote_storage::TopicIdPartition;
+use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_log::{FilteredBatch, Log, LogConfig, VerbatimBatch, filter_batch, name};
+use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_protocol::records::{Attributes, RecordBatch, RecordBatchBorrowed, RecordBatchHeader};
+use krabka_remote_storage::TopicIdPartition;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -113,7 +113,7 @@ pub async fn format_target(
     }
 
     let extra = seed_metadata_records(inventory, node_id);
-    let code = crabka_format::run_from_args_with_records(format_argv, extra).await;
+    let code = krabka_format::run_from_args_with_records(format_argv, extra).await;
     if code == 0 {
         Ok(cluster_id)
     } else {
@@ -123,7 +123,7 @@ pub async fn format_target(
 
 /// Build the topic and partition records a restore seeds into the target formatter, from what the archive scan recovered.
 ///
-/// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `crabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
+/// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
 ///
 /// Pulled out as a pure function, separate from [`format_target`]'s formatter call, so a test can check exactly what gets seeded without running the formatter at all.
 fn seed_metadata_records(inventory: &ArchiveInventory, node_id: NodeId) -> Vec<MetadataRecord> {
@@ -228,8 +228,8 @@ pub async fn write_segment(
         let mut cursor = &raw[pos..];
         let remaining_before = cursor.len();
         // `<_>::default()` stands in for `RecordDecompressionPolicy::default()`.
-        // `crabka-compression`, which defines that type, is only a transitive
-        // dependency here (through `crabka-protocol`), so this crate has no
+        // `krabka-compression`, which defines that type, is only a transitive
+        // dependency here (through `krabka-protocol`), so this crate has no
         // path to name it; the default policy this crate would otherwise ask
         // for by name is exactly what a bare `decode_borrow_with_policy`
         // caller already gets through inference here.
@@ -532,8 +532,8 @@ mod tests {
     }
 
     /// A minimal record at `offset_delta`, with no key or headers.
-    fn record(offset_delta: i32, value: &str) -> crabka_protocol::records::Record {
-        crabka_protocol::records::Record {
+    fn record(offset_delta: i32, value: &str) -> krabka_protocol::records::Record {
+        krabka_protocol::records::Record {
             attributes: 0,
             timestamp_delta: i64::from(offset_delta),
             offset_delta,
@@ -545,8 +545,8 @@ mod tests {
 
     /// A record like [`record`], but with a key an `--exclude-key` pattern
     /// can match.
-    fn record_with_key(offset_delta: i32, key: &str) -> crabka_protocol::records::Record {
-        crabka_protocol::records::Record {
+    fn record_with_key(offset_delta: i32, key: &str) -> krabka_protocol::records::Record {
+        krabka_protocol::records::Record {
             key: Some(Bytes::copy_from_slice(key.as_bytes())),
             ..record(offset_delta, "v")
         }
@@ -555,7 +555,7 @@ mod tests {
     /// A batch at `base_offset` holding `records`, with `last_offset_delta`
     /// derived from the highest `offset_delta` among them, matching how a
     /// real producer batch is shaped.
-    fn batch(base_offset: i64, records: Vec<crabka_protocol::records::Record>) -> RecordBatch {
+    fn batch(base_offset: i64, records: Vec<krabka_protocol::records::Record>) -> RecordBatch {
         let last_offset_delta = records.iter().map(|r| r.offset_delta).max().unwrap_or(0);
         RecordBatch {
             base_offset,

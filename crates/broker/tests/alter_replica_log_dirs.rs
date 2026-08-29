@@ -20,8 +20,8 @@ use std::{
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         alter_replica_log_dirs_request::{
@@ -40,7 +40,7 @@ use tokio::{
     net::TcpStream,
 };
 
-const CLIENT_ID: &str = "crabka-arld-test";
+const CLIENT_ID: &str = "krabka-arld-test";
 const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 = 4;
 
@@ -339,7 +339,7 @@ async fn alter_replica_log_dirs_rejects_unknown_replica() {
 /// `CLUSTER_AUTHORIZATION_FAILED` for every listed partition.
 #[tokio::test]
 async fn alter_replica_log_dirs_denied_without_cluster_alter() {
-    use crabka_broker::authorizer::SimpleAclAuthorizer;
+    use krabka_broker::authorizer::SimpleAclAuthorizer;
 
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
@@ -385,8 +385,8 @@ async fn alter_replica_log_dirs_denied_without_cluster_alter() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_replica_log_dirs_preserves_records_across_move() {
     use bytes::Bytes;
-    use crabka_client_consumer::{AutoOffsetReset, Consumer};
-    use crabka_client_producer::{Producer, ProducerRecord};
+    use krabka_client_consumer::{AutoOffsetReset, Consumer};
+    use krabka_client_producer::{Producer, ProducerRecord};
 
     let (handle, primary, extra, addr) = start_two_dir_broker().await;
     create_topic(addr, "t", 1).await;
@@ -444,7 +444,7 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
     let deadline = Instant::now() + Duration::from_secs(15);
     while received_values.len() < 50 && Instant::now() < deadline {
         for r in consumer
-            .poll(crabka_units::millis(200))
+            .poll(krabka_units::millis(200))
             .await
             .expect("poll")
         {
@@ -473,7 +473,7 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_resumes_move_for_existing_partition() {
     use bytes::Bytes;
-    use crabka_client_producer::{Producer, ProducerRecord};
+    use krabka_client_producer::{Producer, ProducerRecord};
 
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
@@ -531,7 +531,7 @@ async fn startup_resumes_move_for_existing_partition() {
     // because the raft log from the first boot is still on disk.
     let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
     cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
-    cfg.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
+    cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let handle = Broker::start(cfg).await.expect("restart");
     let addr = handle.listen_addr();
 

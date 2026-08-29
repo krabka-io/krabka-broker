@@ -1,7 +1,7 @@
 //! `FetchSnapshot` (`api_key=59`, KIP-630). Serves a byte range of the
 //! controller's `__cluster_metadata` snapshot to a replica catching up.
 //!
-//! Crabka runs a single raft log, the controller quorum, and snapshots its
+//! Krabka runs a single raft log, the controller quorum, and snapshots its
 //! `MetadataImage`. A replica fetches the snapshot one page at a time as it
 //! advances `position`. Each response carries the requested byte range
 //! verbatim, plus the snapshot's `(end_offset, epoch)` id and total `size`.
@@ -16,7 +16,8 @@
 //! match this cluster gets a top-level `INCONSISTENT_CLUSTER_ID` (104).
 
 use bytes::Bytes;
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_protocol::{
     Decode,
     owned::{
         fetch_snapshot_request::FetchSnapshotRequest,
@@ -26,8 +27,7 @@ use crabka_protocol::{
     },
     records::RecordsPayload,
 };
-use crabka_raft::SnapshotRange;
-use futures_util::future::BoxFuture;
+use krabka_raft::SnapshotRange;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -73,7 +73,7 @@ pub(crate) fn handle(
 
 /// Build the response from a decoded request. The function is pure, so a test
 /// can call it without a live `Broker` and pass a `resolve` closure that stands
-/// in for [`crabka_raft::ControllerHandle::read_snapshot_range`].
+/// in for [`krabka_raft::ControllerHandle::read_snapshot_range`].
 fn build_response(
     local_cluster_id: uuid::Uuid,
     req: &FetchSnapshotRequest,
@@ -143,13 +143,13 @@ fn build_response(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_raft::SnapshotSlice;
+    use krabka_raft::SnapshotSlice;
 
     use super::*;
 
     #[test]
     fn build_response_serves_requested_range() {
-        use crabka_protocol::owned::fetch_snapshot_request::{
+        use krabka_protocol::owned::fetch_snapshot_request::{
             FetchSnapshotRequest, PartitionSnapshot as ReqPartition, SnapshotId as ReqSnapshotId,
             TopicSnapshot as ReqTopic,
         };
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn build_response_rejects_cluster_id_mismatch() {
-        use crabka_protocol::owned::fetch_snapshot_request::{
+        use krabka_protocol::owned::fetch_snapshot_request::{
             FetchSnapshotRequest, PartitionSnapshot as ReqPartition, SnapshotId as ReqSnapshotId,
             TopicSnapshot as ReqTopic,
         };
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn build_response_position_past_end_returns_out_of_range() {
-        use crabka_protocol::owned::fetch_snapshot_request::{
+        use krabka_protocol::owned::fetch_snapshot_request::{
             FetchSnapshotRequest, PartitionSnapshot as ReqPartition, TopicSnapshot as ReqTopic,
         };
         use uuid::Uuid;

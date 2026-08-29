@@ -1,20 +1,20 @@
 //! Docker-gated: the JVM `kafka-dump-log --cluster-metadata-decoder` parses a
-//! Crabka-built `bootstrap.checkpoint` cleanly.
+//! Krabka-built `bootstrap.checkpoint` cleanly.
 //!
 //! ```text
-//! cargo test -p crabka-broker --test kraft_checkpoint_jvm -- --ignored --nocapture
+//! cargo test -p krabka-broker --test kraft_checkpoint_jvm -- --ignored --nocapture
 //! ```
 
 use std::{io::Write, process::Command};
 
 use assert2::assert;
-use crabka_protocol::records::metadata::checkpoint::build_bootstrap_checkpoint;
+use krabka_protocol::records::metadata::checkpoint::build_bootstrap_checkpoint;
 
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 
 #[test]
 #[ignore = "requires Docker"]
-fn jvm_dump_log_parses_crabka_bootstrap_checkpoint() {
+fn jvm_dump_log_parses_krabka_bootstrap_checkpoint() {
     let bytes = build_bootstrap_checkpoint(&[
         ("metadata.version", 25),
         ("group.version", 1),

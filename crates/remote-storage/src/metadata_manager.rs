@@ -1,7 +1,7 @@
 //! The [`RemoteLogMetadataManager`] SPI, which stores and queries
 //! remote-segment metadata.
 
-use crabka_ids::LeaderEpoch;
+use krabka_ids::LeaderEpoch;
 
 use crate::{
     error::RemoteStorageError,

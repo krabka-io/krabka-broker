@@ -7,9 +7,9 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "barrier-cli")
 
-# `bazel run //crates/barrier-cli:crabka-barrier -- --bootstrap-server host:9092 list --group g`
+# `bazel run //crates/barrier-cli:krabka-barrier -- --bootstrap-server host:9092 list --group g`
 crate_binary(
-    name = "crabka-barrier",
+    name = "krabka-barrier",
     crate_root = "src/main.rs",
     lib = ":barrier-cli",
 )

@@ -13,7 +13,7 @@
 //!
 //! The test drives a real classic `JoinGroup`, `SyncGroup`, and
 //! `DescribeGroups` sequence against the in-process broker over
-//! `crabka_client_core::Client`. It mirrors `group_protocol_negotiation.rs`,
+//! `krabka_client_core::Client`. It mirrors `group_protocol_negotiation.rs`,
 //! for the two-step `MEMBER_ID_REQUIRED` flow and the
 //! `INITIAL_REBALANCE_DELAY` wait, and `unit.rs`, for the `SyncGroup` shape.
 
@@ -21,9 +21,9 @@ use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
     describe_groups_response::DescribeGroupsResponse,
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
@@ -85,7 +85,7 @@ const ASSIGN: &[u8] = b"assign-bytes";
 /// field `member_metadata_hex`. The wire shape is version `i16=3`, then one
 /// subscribed topic `"t"`, `userData=null`, and an empty `ownedPartitions`.
 ///
-/// This pins Crabka's `DescribeGroups` echo to a *realistic* subscription
+/// This pins Krabka's `DescribeGroups` echo to a *realistic* subscription
 /// instead of an arbitrary blob. cp and the JVM are the authority.
 const REAL_KAFKA_SUBSCRIPTION: &[u8] = &[
     0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x74, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00,
@@ -99,7 +99,7 @@ const REAL_KAFKA_ASSIGNMENT: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff, 0xff,
 ];
 
-async fn start_broker() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn start_broker() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     let handle = Broker::start(config).await.expect("broker must start");
@@ -224,7 +224,7 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 /// `mirror.gcr.io/confluentinc/cp-kafka:7.4.0`. `describe_groups_jvm.rs`
 /// captured them into `real_kafka_classic.json`.
 ///
-/// Crabka's `DescribeGroups` must reproduce real Kafka's semantics:
+/// Krabka's `DescribeGroups` must reproduce real Kafka's semantics:
 /// `protocol_type == "consumer"`, `protocol_data == "range"`, and a byte-exact
 /// `member_metadata` echo of the realistic subscription, not only of the
 /// arbitrary blob that the test above pins.

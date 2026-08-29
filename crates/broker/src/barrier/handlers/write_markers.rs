@@ -34,9 +34,9 @@
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
-use crabka_ids::{NodeId, PartitionIndex};
-use crabka_metadata::MetadataImage;
-use crabka_protocol::{
+use krabka_ids::{NodeId, PartitionIndex};
+use krabka_metadata::MetadataImage;
+use krabka_protocol::{
     Decode,
     krabka::barrier::{
         WritableBarrierTopic, WriteBarrierMarkersRequest, WriteBarrierMarkersResponse,
@@ -219,15 +219,15 @@ fn response(topics: Vec<WrittenBarrierTopic>) -> WriteBarrierMarkersResponse {
 
 #[cfg(test)]
 mod tests {
-    use crabka_protocol::krabka::barrier::WritableBarrierPartition;
+    use krabka_protocol::krabka::barrier::WritableBarrierPartition;
 
     /// The epoch value that asks the receiving broker not to fence a partition.
     const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
 
     use assert2::check;
-    use crabka_log::Offset;
-    use crabka_metadata::MetadataRecord;
-    use crabka_units::mebibytes;
+    use krabka_log::Offset;
+    use krabka_metadata::MetadataRecord;
+    use krabka_units::mebibytes;
     use tempfile::tempdir;
     use uuid::Uuid;
 

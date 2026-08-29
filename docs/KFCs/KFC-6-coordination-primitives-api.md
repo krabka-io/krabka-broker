@@ -246,7 +246,7 @@ The design deliberately has no equivalent of KIP-345 static membership. A static
 
 ### Metadata Records
 
-Four record types carry the state. They live in `crabka-metadata`, in the sibling repository `krabka-protocol`.
+Four record types carry the state. They live in `krabka-metadata`, in the sibling repository `krabka-protocol`.
 
 | Record | Content | Tombstoned |
 | :--- | :--- | :--- |
@@ -261,7 +261,7 @@ A grant is one batch that carries a `V1CoordinationSequence` and a `V1Coordinati
 
 ### Client API Parity
 
-`krabka-client-rs` gains a `crabka-client-coordination` crate. `krabka-client-java` and `krabka-client-go` gain the same primitive.
+`krabka-client-rs` gains a `krabka-client-coordination` crate. `krabka-client-java` and `krabka-client-go` gain the same primitive.
 
 The Rust surface is a guard.
 
@@ -303,13 +303,13 @@ krabka is greenfield, so there is no migration and no feature flag. The primitiv
 
 An operator who already runs an election built by hand keeps it. Nothing in this design changes any existing behaviour, and nothing forces a move.
 
-The work reaches one sibling repository. `crabka-metadata` gains four `MetadataRecord` variants, so this needs a `krabka-protocol` revision in the `[patch.crates-io]` block at the bottom of the root `Cargo.toml`, a regenerated lockfile, and both files committed together. `crabka-raft` needs no new RPC, because every state change rides the existing `submit_change` path.
+The work reaches one sibling repository. `krabka-metadata` gains four `MetadataRecord` variants, so this needs a `krabka-protocol` revision in the `[patch.crates-io]` block at the bottom of the root `Cargo.toml`, a regenerated lockfile, and both files committed together. `krabka-raft` needs no new RPC, because every state change rides the existing `submit_change` path.
 
 ## Test Plan
 
 Five layers cover the feature, in the shape that [KFC-2](KFC-2-witness-broker-stretch-cluster.md) set.
 
-**Formal proof.** `crates/verified/src/coordination.rs` carries Creusot contracts for the arithmetic the safety claim rests on. `epochs_strictly_increase` states that the counter never repeats a value across an arbitrary sequence of grants, joins, role deletes, and role recreates. `grant_follows_line_head` states that the granted member is the least sequence number in the line. Proof sessions live under `verif/crabka_verified_rlib/coordination/`.
+**Formal proof.** `crates/verified/src/coordination.rs` carries Creusot contracts for the arithmetic the safety claim rests on. `epochs_strictly_increase` states that the counter never repeats a value across an arbitrary sequence of grants, joins, role deletes, and role recreates. `grant_follows_line_head` states that the granted member is the least sequence number in the line. Proof sessions live under `verif/krabka_verified_rlib/coordination/`.
 
 **Model check.** An exhaustive stateright search over controller failover, heartbeat loss, message reorder, clock skew inside the declared bound, and a role delete during a live grant. The properties are the four in [What the Design Guarantees](#what-the-design-guarantees-and-what-it-does-not), plus the succession property that one fault produces one transition. The model drives the real decision functions and not a copy of them, and a deliberately broken grant function proves that the mutual-exclusion property fires.
 

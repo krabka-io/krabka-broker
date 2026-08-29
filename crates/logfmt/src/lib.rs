@@ -1,6 +1,6 @@
-//! Structured-JSON `tracing` log formatter shared across Crabka services.
+//! Structured-JSON `tracing` log formatter shared across Krabka services.
 //!
-//! Every Crabka service installs this formatter on its stdout `fmt` layer, so
+//! Every Krabka service installs this formatter on its stdout `fmt` layer, so
 //! container log collectors ingest each line as fields and not as
 //! ANSI-coloured human text. Those services are the broker, the gateway, the
 //! operator, and the schema-registry. The output is shaped for Google Cloud
@@ -18,7 +18,7 @@
 //! `target` and all the event fields. A line looks like this:
 //!
 //! ```json
-//! {"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"crabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
+//! {"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
 //! ```
 //!
 //! The JSON formatter never writes ANSI escape codes, so logs stay clean in

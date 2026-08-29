@@ -8,7 +8,7 @@
 //! write. Recovery of that kind is a hand-built runbook everywhere else.
 //!
 //! The tool runs when the cluster does not. It reads the archive through the
-//! object-store layer and formats the target through [`crabka_format`], and it
+//! object-store layer and formats the target through [`krabka_format`], and it
 //! does not depend on the broker.
 //!
 //! # Stages

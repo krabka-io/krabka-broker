@@ -1,5 +1,5 @@
 //! Multi-RPC sequences against an in-process broker, driven through
-//! `crabka-client-core`. These run on every push (no Docker required).
+//! `krabka-client-core`. These run on every push (no Docker required).
 
 use assert2::{assert, check};
 mod support;
@@ -7,7 +7,7 @@ mod support;
 use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_protocol::{
+use krabka_protocol::{
     Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -71,9 +71,9 @@ fn timestamped_batch(entries: &[(&str, i64)]) -> RecordBatch {
 /// Produce / Fetch at v ≥ 13 carry only `topic_id` on the wire, so the
 /// caller must pass the real UUID through.
 async fn topic_id_for(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     name: &str,
-) -> crabka_protocol::primitives::uuid::Uuid {
+) -> krabka_protocol::primitives::uuid::Uuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
@@ -176,7 +176,7 @@ async fn end_to_end_create_produce_fetch_delete() {
     let v = p
         .client
         .send(ApiVersionsRequest {
-            client_software_name: "crabka".into(),
+            client_software_name: "krabka".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })
@@ -398,10 +398,10 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
 async fn second_open_recovers_partitions_from_disk() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let config = crabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
-        let handle = crabka_broker::Broker::start(config).await.unwrap();
+        let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let handle = krabka_broker::Broker::start(config).await.unwrap();
         let bootstrap = handle.listen_addr().to_string();
-        let client = crabka_client_core::Client::builder()
+        let client = krabka_client_core::Client::builder()
             .bootstrap(&bootstrap)
             .client_id("recovery-test")
             .build()
@@ -425,11 +425,11 @@ async fn second_open_recovers_partitions_from_disk() {
     }
     // Reopen on the same log_dir. Must use Rejoin because the raft log
     // already exists from the first run; Bootstrap would be rejected.
-    let mut config = crabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.bootstrap_mode = crabka_broker::BootstrapMode::Rejoin;
-    let handle = crabka_broker::Broker::start(config).await.unwrap();
+    let mut config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let handle = krabka_broker::Broker::start(config).await.unwrap();
     let bootstrap = handle.listen_addr().to_string();
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(&bootstrap)
         .client_id("recovery-test")
         .build()

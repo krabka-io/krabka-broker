@@ -11,7 +11,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering, Ordering::Relaxed},
 };
 
-use crabka_units::prelude::{
+use krabka_units::prelude::{
     ByteRate, ByteRateExt as _, ByteSize, ByteSizeExt as _, Frequency, FrequencyExt as _, Time,
     secs,
 };
@@ -321,7 +321,7 @@ mod tests {
     };
 
     use assert2::check;
-    use crabka_units::prelude::{bytes, bytes_per_sec, kibibytes, kibibytes_per_sec, mebibytes};
+    use krabka_units::prelude::{bytes, bytes_per_sec, kibibytes, kibibytes_per_sec, mebibytes};
     use qubit_clock::MockTime;
 
     use super::*;

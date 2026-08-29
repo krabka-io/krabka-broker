@@ -35,7 +35,7 @@ exclude_globs = [
     # diagrams, not the broker -- 143 survivors of a 187-survivor crate, none of
     # them about anything a cluster does.
     "crates/kraft-core/src/sim.rs",
-    # `crabka-broker`'s `main` is pure entrypoint glue: parse CLI args, derive
+    # `krabka-broker`'s `main` is pure entrypoint glue: parse CLI args, derive
     # the controller listener and self single-voter set, build `BrokerConfig`,
     # hand it to `Broker::start`, then wait for a termination signal and
     # controlled-shutdown. No unit-testable signal -- no test constructs the
@@ -44,7 +44,7 @@ exclude_globs = [
     # an `exclude_re` because name-regex exclusions do not reliably match
     # struct-field-deletion mutants here.
     "crates/broker/src/bin/**",
-    # crabka-audit's `verify` CLI: clap arg-parse plus VerifyReport->ExitCode
+    # krabka-audit's `verify` CLI: clap arg-parse plus VerifyReport->ExitCode
     # glue. The verification logic lives in verify.rs and IS mutation-tested.
     "crates/audit/src/bin/**",
 ]

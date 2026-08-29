@@ -7,7 +7,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     metadata_request::MetadataRequest, unregister_broker_request::UnregisterBrokerRequest,
 };
 
@@ -40,7 +40,7 @@ async fn unregister_known_broker_drops_it_from_metadata() {
     // The Raft commit may race the Metadata response; await the controller
     // image dropping broker 1 instead of polling the wire.
     p.broker
-        .wait_for_image(|img| img.broker(crabka_broker::NodeId(1)).is_none())
+        .wait_for_image(|img| img.broker(krabka_broker::NodeId(1)).is_none())
         .await;
 
     p.broker.shutdown().await;
@@ -110,7 +110,7 @@ async fn unregister_is_idempotent_on_repeat_call() {
     // Wait for the unregister to commit: await the controller image
     // dropping broker 1 rather than polling the wire.
     p.broker
-        .wait_for_image(|img| img.broker(crabka_broker::NodeId(1)).is_none())
+        .wait_for_image(|img| img.broker(krabka_broker::NodeId(1)).is_none())
         .await;
 
     // Second call against the now-removed broker: surfaces

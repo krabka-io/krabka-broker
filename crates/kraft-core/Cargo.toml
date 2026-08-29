@@ -1,17 +1,17 @@
 [package]
-name = "crabka-kraft-core"
+name = "krabka-kraft-core"
 publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Deterministic, sans-IO KRaft consensus core (KIP-595/996) for Crabka — wasm-friendly"
+description = "Deterministic, sans-IO KRaft consensus core (KIP-595/996) for Krabka — wasm-friendly"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-kraft-core"
+documentation = "https://docs.rs/krabka-kraft-core"
 readme = "README.md"
-keywords = ["kafka", "raft", "kraft", "consensus", "crabka"]
+keywords = ["kafka", "raft", "kraft", "consensus", "krabka"]
 categories = ["algorithms", "simulation"]
 
 [lints]
@@ -26,15 +26,15 @@ default = []
 sim = ["dep:serde"]
 
 # A pure, deterministic, sans-IO leaf: no tokio, no filesystem, no sockets, no
-# crypto. The async engine, real wire, and on-disk log live in `crabka-raft`,
-# which re-exports this crate's modules under `crabka_raft::kraft`. Keeping the
+# crypto. The async engine, real wire, and on-disk log live in `krabka-raft`,
+# which re-exports this crate's modules under `krabka_raft::kraft`. Keeping the
 # core a clean leaf is what lets it compile to `wasm32-unknown-unknown` for the
 # browser playground.
 [dependencies]
 assert2 = { workspace = true }
-crabka-voters = { version = "0.4.0" }
-crabka-verified = { version = "0.4.0", path = "../verified" }
-crabka-units = { workspace = true }
+krabka-voters = { version = "0.4.0" }
+krabka-verified = { version = "0.4.0", path = "../verified" }
+krabka-units = { workspace = true }
 bytes = { workspace = true }
 refined_type = { workspace = true }
 uuid = { workspace = true, features = ["js"] }

@@ -23,7 +23,7 @@ use jvm_acceptance::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_sasl_plain_produce_consume() {
-    const TOPIC: &str = "crabka-sasl-plain-itest";
+    const TOPIC: &str = "krabka-sasl-plain-itest";
     const USER: &str = "alice";
     const PASS: &str = "wonderland";
 
@@ -152,7 +152,7 @@ async fn jvm_sasl_plain_produce_consume() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_sasl_scram_sha512_produce_consume() {
-    const TOPIC: &str = "crabka-sasl-scram-itest";
+    const TOPIC: &str = "krabka-sasl-scram-itest";
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
@@ -335,7 +335,7 @@ async fn jvm_sasl_scram_sha512_produce_consume() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_sasl_scram_sha256_produce_consume() {
-    const TOPIC: &str = "crabka-sasl-scram256-itest";
+    const TOPIC: &str = "krabka-sasl-scram256-itest";
     const ADMIN: &str = "admin";
     const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
@@ -498,12 +498,12 @@ async fn jvm_sasl_scram_sha256_produce_consume() {
 /// End-to-end `SASL_PLAINTEXT` + OAUTHBEARER drive of the JVM
 /// `kafka-topics` / `kafka-console-producer` / `kafka-console-consumer`
 /// tools. The JVM client uses the built-in unsecured login module to mint an
-/// `alg:none` JWS for `sub=admin`. Crabka parses the RFC 7628 client initial
+/// `alg:none` JWS for `sub=admin`. Krabka parses the RFC 7628 client initial
 /// response, validates the token, and derives `User:admin`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_sasl_oauthbearer_produce_consume() {
-    const TOPIC: &str = "crabka-sasl-oauthbearer-itest";
+    const TOPIC: &str = "krabka-sasl-oauthbearer-itest";
     const USER: &str = "admin";
 
     let (broker, _dir) = start_oauthbearer_broker().await;
@@ -1064,7 +1064,7 @@ async fn jvm_unauthorized_produce_fails() {
     let stderr = String::from_utf8_lossy(&bob_out.stderr);
     let stdout = String::from_utf8_lossy(&bob_out.stdout);
     eprintln!(
-        "CRABKA[test] bob producer status={} stderr={stderr} stdout={stdout}",
+        "KRABKA[test] bob producer status={} stderr={stderr} stdout={stdout}",
         bob_out.status,
     );
     assert!(
@@ -1190,7 +1190,7 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     eprintln!(
-        "CRABKA[test] alice consumer group-denied status={} stderr={stderr} stdout={stdout}",
+        "KRABKA[test] alice consumer group-denied status={} stderr={stderr} stdout={stdout}",
         out.status,
     );
     assert!(
@@ -1425,7 +1425,7 @@ async fn jvm_prefixed_topic_acl_works() {
     let denied_stderr = String::from_utf8_lossy(&denied_out.stderr);
     let denied_stdout = String::from_utf8_lossy(&denied_out.stdout);
     eprintln!(
-        "CRABKA[test] alice denied consumer status={} stderr={denied_stderr} stdout={denied_stdout}",
+        "KRABKA[test] alice denied consumer status={} stderr={denied_stderr} stdout={denied_stdout}",
         denied_out.status,
     );
     assert!(

@@ -7,10 +7,10 @@ use std::{
 
 use assert2::check;
 use bytes::Bytes;
-use crabka_ids::Offset;
-use crabka_log::{CleanupPolicy, CompactionContext, Log, LogConfig};
-use crabka_protocol::records::{Record, RecordBatch};
-use crabka_units::prelude::{TimeExt as _, bytes, days, gibibytes, hours};
+use krabka_ids::Offset;
+use krabka_log::{CleanupPolicy, CompactionContext, Log, LogConfig};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::prelude::{TimeExt as _, bytes, days, gibibytes, hours};
 use tempfile::tempdir;
 
 fn epoch_millis(at: SystemTime) -> i64 {

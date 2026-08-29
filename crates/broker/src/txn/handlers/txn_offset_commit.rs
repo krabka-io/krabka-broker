@@ -25,10 +25,10 @@
 //!   of that topic `TOPIC_AUTHORIZATION_FAILED (29)`.
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         txn_offset_commit_request::TxnOffsetCommitRequest,
@@ -202,7 +202,7 @@ pub(crate) async fn handle(
             .txn_coordinator
             .register_offsets_partition(
                 &req.transactional_id,
-                crabka_log::ProducerId(req.producer_id),
+                krabka_log::ProducerId(req.producer_id),
                 req.producer_epoch,
                 PartitionIndex(offsets_partition),
                 txnv,
@@ -365,8 +365,8 @@ mod tests {
     use std::{collections::HashSet, path::Path, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::owned::{
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::owned::{
         txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
         txn_offset_commit_response::TxnOffsetCommitResponse,
     };
@@ -437,17 +437,17 @@ mod tests {
                     TxnOffsetCommitResponsePartition {
                         partition_index: 2,
                         error_code: code,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     },
                     TxnOffsetCommitResponsePartition {
                         partition_index: 3,
                         error_code: code,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     },
                 ],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(*resp == expected);
     }
@@ -510,7 +510,7 @@ mod tests {
             .expect("offsets partition");
         let log = part.log.lock().expect("lock offsets log");
         let read = log
-            .read(crabka_log::Offset(0), crabka_units::mebibytes(1))
+            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
             .expect("read offsets log");
         assert!(read.batches.len() == 1);
         let batch = &read.batches[0];
@@ -550,7 +550,7 @@ mod tests {
             .expect("offsets partition");
         let log = part.log.lock().expect("lock offsets log");
         let read = log
-            .read(crabka_log::Offset(0), crabka_units::mebibytes(1))
+            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
             .expect("read offsets log");
         assert!(read.batches.is_empty());
     }

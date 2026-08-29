@@ -47,9 +47,9 @@
 //!
 //! A group record with a null value is a tombstone, and it deletes the group.
 
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_protocol::{
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_protocol::{
     ProtocolError,
     primitives::{
         array::{get_array_len, put_array_len},
@@ -57,7 +57,7 @@ use crabka_protocol::{
         string_bytes::{get_string_owned, put_string},
     },
 };
-use crabka_units::{
+use krabka_units::{
     Time,
     convert::wire::{opt_time_from_millis_i64, opt_time_to_millis_i64},
 };
@@ -449,7 +449,7 @@ fn decode_vec<T>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::convert::TimeExt;
+    use krabka_units::convert::TimeExt;
 
     use super::*;
 

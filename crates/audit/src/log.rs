@@ -9,7 +9,7 @@ use std::sync::{
 };
 
 use arc_swap::ArcSwapOption;
-use crabka_units::prelude::{Time, TimeExt as _};
+use krabka_units::prelude::{Time, TimeExt as _};
 use qubit_clock::sleep::AsyncSleeper;
 use tokio::sync::mpsc;
 
@@ -353,7 +353,7 @@ mod tests {
     };
 
     use assert2::check;
-    use crabka_units::prelude::{ByteSize, Time, TimeExt as _, bytes, hours, mebibytes, millis};
+    use krabka_units::prelude::{ByteSize, Time, TimeExt as _, bytes, hours, mebibytes, millis};
     use qubit_clock::{MockTimeline, sleep::MockSleeper};
 
     use super::*;
@@ -369,8 +369,8 @@ mod tests {
 
     fn product() -> ProductInfo {
         ProductInfo {
-            vendor_name: "Crabka".into(),
-            name: "crabka-broker".into(),
+            vendor_name: "Krabka".into(),
+            name: "krabka-broker".into(),
             version: "0".into(),
         }
     }

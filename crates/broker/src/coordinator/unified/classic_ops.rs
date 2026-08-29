@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
     leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
     sync_group_request::SyncGroupRequest,
@@ -62,7 +62,7 @@ pub(super) fn handle_join(
                 None => format!("{instance_id}-{}", Uuid::new_v4()),
             }
         } else {
-            format!("crabka-{}", Uuid::new_v4())
+            format!("krabka-{}", Uuid::new_v4())
         };
         if require_known_member_id {
             return JoinAction::Immediate(JoinResult {
@@ -496,7 +496,7 @@ pub(super) fn validate_commit(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         join_group_request::JoinGroupRequestProtocol, leave_group_request::MemberIdentity,
         sync_group_request::SyncGroupRequestAssignment,
     };
@@ -545,7 +545,7 @@ mod tests {
         match action {
             JoinAction::Immediate(r) => {
                 assert!(r.error_code == codes::MEMBER_ID_REQUIRED);
-                assert!(r.member_id.starts_with("crabka-"));
+                assert!(r.member_id.starts_with("krabka-"));
             }
             _ => panic!("expected Immediate MEMBER_ID_REQUIRED"),
         }
@@ -577,11 +577,11 @@ mod tests {
             Duration::from_secs(3),
         );
         assert!(matches!(action, JoinAction::Park));
-        assert!(request.member_id.starts_with("crabka-"));
+        assert!(request.member_id.starts_with("krabka-"));
         assert!(
             g.members
                 .keys()
-                .any(|member_id| member_id.starts_with("crabka-"))
+                .any(|member_id| member_id.starts_with("krabka-"))
         );
     }
 

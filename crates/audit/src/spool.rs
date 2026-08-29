@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crabka_units::{
+use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _},
 };
@@ -360,7 +360,7 @@ fn take_bytes(b: &mut &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes};
+    use krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes};
 
     use super::*;
     use crate::{

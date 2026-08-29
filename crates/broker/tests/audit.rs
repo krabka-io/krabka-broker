@@ -1,7 +1,7 @@
 mod support;
 
-use crabka_broker::coordinator::AUDIT_TOPIC;
-use crabka_protocol::owned::{
+use krabka_broker::coordinator::AUDIT_TOPIC;
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -12,7 +12,7 @@ async fn audit_topic_exists_after_startup() {
     let p = support::start().await;
     p.broker.wait_until_partition_present(AUDIT_TOPIC, 0).await;
 
-    // Send a Metadata request for `__crabka_audit` and assert the broker
+    // Send a Metadata request for `__krabka_audit` and assert the broker
     // returns it with `error_code == 0` and at least one partition.
     let resp = p
         .client
@@ -30,7 +30,7 @@ async fn audit_topic_exists_after_startup() {
         .topics
         .iter()
         .find(|t| t.name.as_deref() == Some(AUDIT_TOPIC))
-        .expect("__crabka_audit not in Metadata response");
+        .expect("__krabka_audit not in Metadata response");
 
     assert2::check!(
         topic.error_code == 0,
@@ -39,7 +39,7 @@ async fn audit_topic_exists_after_startup() {
     );
     assert2::check!(
         !topic.partitions.is_empty(),
-        "__crabka_audit has no partitions"
+        "__krabka_audit has no partitions"
     );
 
     p.broker.shutdown().await;
@@ -216,7 +216,7 @@ async fn denied_operation_returns_cluster_authorization_failed() {
     let denied = resp
         .topics
         .iter()
-        .any(|t| t.error_code == crabka_broker::codes::CLUSTER_AUTHORIZATION_FAILED);
+        .any(|t| t.error_code == krabka_broker::codes::CLUSTER_AUTHORIZATION_FAILED);
     assert2::check!(denied, "expected CreateTopics to be denied; resp: {resp:?}");
 
     // Verify the broker is still alive by checking the audit topic is reachable.

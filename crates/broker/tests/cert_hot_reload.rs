@@ -5,7 +5,7 @@
 //!
 //! This test starts a broker with cert A and completes a handshake against
 //! it. It then overwrites the cert files with cert B, calls
-//! [`crabka_broker::BrokerHandle::reload_tls`], and verifies that the next
+//! [`krabka_broker::BrokerHandle::reload_tls`], and verifies that the next
 //! handshake serves cert B.
 //!
 //! The client pins exact DER blobs, so the assertion is "the server presented
@@ -15,8 +15,8 @@
 use std::{io, path::PathBuf, sync::Arc};
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use crabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
@@ -158,7 +158,7 @@ async fn reload_tls_swaps_served_cert() {
     // Disable the periodic watcher; this test drives reloads via the
     // explicit `BrokerHandle::reload_tls()` so it doesn't depend on
     // poll-tick timing.
-    cfg.tls_reload_interval = <crabka_units::Time as crabka_units::convert::TimeExt>::ZERO;
+    cfg.tls_reload_interval = <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO;
 
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();
@@ -226,7 +226,7 @@ async fn periodic_watcher_reloads_on_mtime_change() {
         client_ca_path: None,
         client_auth: ClientAuthMode::Disabled,
     });
-    cfg.tls_reload_interval = crabka_units::millis(100);
+    cfg.tls_reload_interval = krabka_units::millis(100);
 
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();

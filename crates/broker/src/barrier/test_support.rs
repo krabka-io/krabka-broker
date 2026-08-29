@@ -11,10 +11,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, LogConfig};
-use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-use crabka_raft::{
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, LogConfig};
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_raft::{
     AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
     SubmitChangeResult, UpdateVoter,
 };
@@ -106,7 +106,7 @@ pub(crate) fn topic_records(topic: &str, partitions: i32, leader: NodeId) -> Vec
             leader,
             replicas: vec![leader],
             isr: vec![leader],
-            leader_epoch: crabka_metadata::LeaderEpoch(3),
+            leader_epoch: krabka_metadata::LeaderEpoch(3),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],

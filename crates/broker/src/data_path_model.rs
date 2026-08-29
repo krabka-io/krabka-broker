@@ -24,8 +24,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_log::{EpochEntry, Offset, epoch_and_offset_for_entries};
-use crabka_metadata::PartitionRecord;
+use krabka_log::{EpochEntry, Offset, epoch_and_offset_for_entries};
+use krabka_metadata::PartitionRecord;
 use stateright::{Checker, Model, Property};
 
 use crate::{
@@ -152,17 +152,17 @@ fn real_hwm(s: &DpState, base: Instant) -> i64 {
     let leader = s.leader;
     let leader_leo = s.leader_leo();
     let leader_log = &s.log[usize::from(leader)];
-    let isr_nodes: Vec<crabka_audit::NodeId> = (0..NB_U8)
+    let isr_nodes: Vec<krabka_audit::NodeId> = (0..NB_U8)
         .filter(|&b| has(s.isr, b))
-        .map(|b| crabka_audit::NodeId(node(b)))
+        .map(|b| krabka_audit::NodeId(node(b)))
         .collect();
-    let replica_nodes: Vec<crabka_audit::NodeId> =
-        (0..NB_U8).map(|b| crabka_audit::NodeId(node(b))).collect();
+    let replica_nodes: Vec<krabka_audit::NodeId> =
+        (0..NB_U8).map(|b| krabka_audit::NodeId(node(b))).collect();
     let mut rs = ReplicaState::new();
     rs.install_isr(
         &isr_nodes,
         &replica_nodes,
-        crabka_audit::NodeId(node(leader)),
+        krabka_audit::NodeId(node(leader)),
         base,
     );
     for b in 0..NB_U8 {
@@ -170,7 +170,7 @@ fn real_hwm(s: &DpState, base: Instant) -> i64 {
             let leo = consistent_leo(&s.log[usize::from(b)], leader_log);
             // Wrap this model's `i64` LEOs into `Offset` for the real HWM core.
             rs.update_follower_leo(
-                crabka_audit::NodeId(node(b)),
+                krabka_audit::NodeId(node(b)),
                 Offset(leo),
                 Offset(leader_leo),
                 base,
@@ -185,7 +185,7 @@ fn real_hwm(s: &DpState, base: Instant) -> i64 {
 /// so the model constrains the ISR to the leader broker and releases exactly
 /// the durable WAL prefix.
 fn real_wal_hwm(leader: u8, durable_leo: i64, base: Instant) -> i64 {
-    let leader = crabka_audit::NodeId(node(leader));
+    let leader = krabka_audit::NodeId(node(leader));
     let mut rs = ReplicaState::new();
     rs.install_isr(&[leader], &[leader], leader, base);
     rs.recompute_hw_for_wal_durable(Offset(durable_leo)).0
@@ -198,7 +198,7 @@ fn epoch_entries(log: &[u8]) -> Vec<EpochEntry> {
     for (off, &e) in log.iter().enumerate() {
         if last != Some(e) {
             out.push(EpochEntry {
-                epoch: crabka_log::LeaderEpoch(i32::from(e)),
+                epoch: krabka_log::LeaderEpoch(i32::from(e)),
                 start_offset: Offset(model_offset(off)),
             });
             last = Some(e);
@@ -214,7 +214,7 @@ fn real_truncation_offset(follower_log: &[u8], leader_log: &[u8]) -> i64 {
     let follower_latest = follower_log.last().map_or(-1, |&e| i32::from(e));
     let (_, end) = epoch_and_offset_for_entries(
         &leader_entries,
-        crabka_log::LeaderEpoch(follower_latest),
+        krabka_log::LeaderEpoch(follower_latest),
         Offset(model_offset(leader_log.len())),
     );
     // Unwrap the log-layer `Offset` into this model's `i64` world at the seam.
@@ -265,22 +265,22 @@ fn apply_elect(s: &mut DpState, new_leader: u8, isr_mask: u8, unclean: bool) {
 /// an ISR shrink. In the unclean config it also drives the real KIP-966
 /// `select_best_replica` for the empty-ISR `Recover` path.
 fn do_failover(s: &mut DpState, dead: u8, unclean: bool) {
-    let isr_nodes: Vec<crabka_audit::NodeId> = (0..NB_U8)
+    let isr_nodes: Vec<krabka_audit::NodeId> = (0..NB_U8)
         .filter(|&b| has(s.isr, b))
-        .map(|b| crabka_audit::NodeId(node(b)))
+        .map(|b| krabka_audit::NodeId(node(b)))
         .collect();
-    let replica_nodes: Vec<crabka_audit::NodeId> =
-        (0..NB_U8).map(|b| crabka_audit::NodeId(node(b))).collect();
+    let replica_nodes: Vec<krabka_audit::NodeId> =
+        (0..NB_U8).map(|b| krabka_audit::NodeId(node(b))).collect();
     let pr = PartitionRecord {
-        leader: crabka_audit::NodeId(node(s.leader)),
+        leader: krabka_audit::NodeId(node(s.leader)),
         replicas: replica_nodes,
         isr: isr_nodes,
-        leader_epoch: crabka_metadata::LeaderEpoch(i32::from(s.leader_epoch)),
+        leader_epoch: krabka_metadata::LeaderEpoch(i32::from(s.leader_epoch)),
         ..Default::default()
     };
-    let alive: HashSet<crabka_audit::NodeId> = (0..NB_U8)
+    let alive: HashSet<krabka_audit::NodeId> = (0..NB_U8)
         .filter(|&b| has(s.live, b))
-        .map(|b| crabka_audit::NodeId(node(b)))
+        .map(|b| krabka_audit::NodeId(node(b)))
         .collect();
     // Clean config: strategy None + unclean disabled → only ISR elections (else
     // Unavailable). Unclean config: Balanced strategy defers an empty-ISR
@@ -291,10 +291,10 @@ fn do_failover(s: &mut DpState, dead: u8, unclean: bool) {
         RecoveryStrategy::None
     };
     // This model has no witness broker: every replica can lead.
-    let witnesses: HashSet<crabka_audit::NodeId> = HashSet::new();
+    let witnesses: HashSet<krabka_audit::NodeId> = HashSet::new();
     match failover_one(
         &pr,
-        crabka_audit::NodeId(node(dead)),
+        krabka_audit::NodeId(node(dead)),
         &alive,
         &witnesses,
         strategy,
@@ -317,7 +317,7 @@ fn do_failover(s: &mut DpState, dead: u8, unclean: bool) {
             let infos: Vec<ReplicaLogInfo> = (0..NB_U8)
                 .filter(|&b| has(s.live, b))
                 .map(|b| ReplicaLogInfo {
-                    broker_id: crabka_audit::NodeId(node(b)),
+                    broker_id: krabka_audit::NodeId(node(b)),
                     last_written_leader_epoch: s.log[usize::from(b)]
                         .last()
                         .map_or(0, |&e| i32::from(e)),

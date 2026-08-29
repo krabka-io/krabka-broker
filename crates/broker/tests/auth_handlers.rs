@@ -14,9 +14,9 @@ use std::{io, net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_client_core::Client;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         alter_user_scram_credentials_request::{
@@ -33,7 +33,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
+use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -112,7 +112,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         private_key_path: key_path,
         trust_roots_path: None,
         client_ca_path: None,
-        client_auth: crabka_security::ClientAuthMode::Disabled,
+        client_auth: krabka_security::ClientAuthMode::Disabled,
     });
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -213,8 +213,8 @@ impl ServerCertVerifier for PinnedDevCertVerifier {
 /// carries a single `host:port` per broker, because the codec has no
 /// `endpoints[]` array on `MetadataResponseBroker`. So this test asserts:
 ///
-/// 1. The on-disk registration record stored in [`crabka_metadata::MetadataImage`]
-///    carries one [`crabka_metadata::BrokerEndpoint`] per [`ListenerSpec`].
+/// 1. The on-disk registration record stored in [`krabka_metadata::MetadataImage`]
+///    carries one [`krabka_metadata::BrokerEndpoint`] per [`ListenerSpec`].
 /// 2. A `MetadataRequest::v12` round-trip over the PLAINTEXT listener
 ///    returns at least one broker entry whose `host:port` matches one of
 ///    the configured advertised endpoints.
@@ -272,7 +272,7 @@ async fn metadata_response_carries_listener_endpoints() {
         private_key_path: key_path,
         trust_roots_path: None,
         client_ca_path: None,
-        client_auth: crabka_security::ClientAuthMode::Disabled,
+        client_auth: krabka_security::ClientAuthMode::Disabled,
     });
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -286,7 +286,7 @@ async fn metadata_response_carries_listener_endpoints() {
     let node_id = handle.node_id();
     handle
         .wait_for_image(|img| {
-            img.broker(crabka_broker::NodeId(node_id))
+            img.broker(krabka_broker::NodeId(node_id))
                 .is_some_and(|b| b.endpoints.len() >= 2)
         })
         .await;
@@ -317,7 +317,7 @@ async fn metadata_response_carries_listener_endpoints() {
     let bootstrap = plaintext_addr.to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)
-        .client_id("crabka-auth-test")
+        .client_id("krabka-auth-test")
         .build()
         .await
         .expect("client build");
@@ -415,8 +415,8 @@ async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
     let body = scrape_metrics(metrics_addr).await;
     handle.shutdown().await;
 
-    let success_needle = "crabka_broker_successful_authentication_total{mechanism=\"PLAIN\"} 1";
-    let failed_needle = "crabka_broker_failed_authentication_total{mechanism=\"PLAIN\"} 1";
+    let success_needle = "krabka_broker_successful_authentication_total{mechanism=\"PLAIN\"} 1";
+    let failed_needle = "krabka_broker_failed_authentication_total{mechanism=\"PLAIN\"} 1";
     assert!(
         body.contains(success_needle),
         "missing or wrong-value {success_needle} in:\n{body}"
@@ -499,7 +499,7 @@ async fn sasl_plain_wrong_password_closes_connection() {
 ///   plus a `0x00` tagged byte, for every other flexible response. v0 for
 ///   non-flexible.
 /// - Length framing: a 4-byte big-endian length prefix on every frame in both
-///   directions, the same as `crabka_broker::network::codec`.
+///   directions, the same as `krabka_broker::network::codec`.
 async fn drive_sasl_plain_session(
     addr: SocketAddr,
     user: &str,
@@ -613,14 +613,14 @@ async fn sasl_scram_sha512_happy_path() {
 
     // Provision alice/wonderland directly via the controller, rather than
     // through the public path (AlterUserScramCredentials, api_key 51).
-    let cred = crabka_security::hash_scram_password(
+    let cred = krabka_security::hash_scram_password(
         alice_password().as_bytes(),
         SaslMechanism::ScramSha512,
         4096,
     );
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+            krabka_metadata::ScramCredentialRecord {
                 user: "alice".into(),
                 mechanism: SaslMechanism::ScramSha512,
                 salt: cred.salt,
@@ -664,14 +664,14 @@ async fn sasl_scram_sha512_wrong_password_closes_connection() {
 
     let handle = Broker::start(cfg).await.expect("broker must start");
 
-    let cred = crabka_security::hash_scram_password(
+    let cred = krabka_security::hash_scram_password(
         alice_password().as_bytes(),
         SaslMechanism::ScramSha512,
         4096,
     );
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+            krabka_metadata::ScramCredentialRecord {
                 user: "alice".into(),
                 mechanism: SaslMechanism::ScramSha512,
                 salt: cred.salt,
@@ -721,14 +721,14 @@ async fn sasl_scram_sha256_happy_path() {
 
     let handle = Broker::start(cfg).await.expect("broker must start");
 
-    let cred = crabka_security::hash_scram_password(
+    let cred = krabka_security::hash_scram_password(
         alice_password().as_bytes(),
         SaslMechanism::ScramSha256,
         4096,
     );
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+            krabka_metadata::ScramCredentialRecord {
                 user: "alice".into(),
                 mechanism: SaslMechanism::ScramSha256,
                 salt: cred.salt,
@@ -767,14 +767,14 @@ async fn sasl_scram_sha256_wrong_password_closes_connection() {
 
     let handle = Broker::start(cfg).await.expect("broker must start");
 
-    let cred = crabka_security::hash_scram_password(
+    let cred = krabka_security::hash_scram_password(
         alice_password().as_bytes(),
         SaslMechanism::ScramSha256,
         4096,
     );
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+            krabka_metadata::ScramCredentialRecord {
                 user: "alice".into(),
                 mechanism: SaslMechanism::ScramSha256,
                 salt: cred.salt,
@@ -814,7 +814,7 @@ async fn drive_sasl_scram_session(
     addr: SocketAddr,
     user: &str,
     password: &str,
-    mechanism: crabka_security::SaslMechanism,
+    mechanism: krabka_security::SaslMechanism,
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -850,7 +850,7 @@ async fn drive_sasl_scram_session(
     }
 
     // ── 3. SCRAM client-first → server-first.
-    let client = crabka_security::ScramClientExchange::new(
+    let client = krabka_security::ScramClientExchange::new(
         user.to_string(),
         password.as_bytes().to_vec(),
         mechanism,
@@ -947,7 +947,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-sasl-test";
+    let client_id = "krabka-sasl-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -1019,8 +1019,8 @@ fn now_unix_secs() -> i64 {
 /// the given validator.
 fn start_oauthbearer_broker(
     log_dir: &std::path::Path,
-    validator: crabka_security::OAuthBearerValidator,
-) -> impl std::future::Future<Output = crabka_broker::BrokerHandle> {
+    validator: krabka_security::OAuthBearerValidator,
+) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
@@ -1048,9 +1048,9 @@ fn start_oauthbearer_broker(
 /// where the session ends at the token exp.
 fn start_oauthbearer_broker_with_cap(
     log_dir: &std::path::Path,
-    validator: crabka_security::OAuthBearerValidator,
-    max_session_lifetime: Option<crabka_units::Time>,
-) -> impl std::future::Future<Output = crabka_broker::BrokerHandle> {
+    validator: krabka_security::OAuthBearerValidator,
+    max_session_lifetime: Option<krabka_units::Time>,
+) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
@@ -1138,7 +1138,7 @@ async fn sasl_oauthbearer_happy_path() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_oauthbearer_broker(
         log_dir.path(),
-        crabka_security::OAuthBearerValidator::default(),
+        krabka_security::OAuthBearerValidator::default(),
     )
     .await;
     let addr = handle.listen_addr();
@@ -1193,8 +1193,8 @@ async fn sasl_oauthbearer_happy_path() {
 async fn sasl_oauthbearer_invalid_token_two_round_failure() {
     let log_dir = tempfile::tempdir().unwrap();
     let validator =
-        crabka_security::OAuthBearerValidator::Unsecured(crabka_security::UnsecuredJwsValidator {
-            allowable_clock_skew: crabka_units::secs(0),
+        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            allowable_clock_skew: krabka_units::secs(0),
             ..Default::default()
         });
     let handle = start_oauthbearer_broker(log_dir.path(), validator).await;
@@ -1269,11 +1269,11 @@ fn es256_token(kp: &ring::signature::EcdsaKeyPair, kid: &str, claims: &str) -> S
 /// A `Signed` validator whose key set comes from `jwks_json`.
 ///
 /// The test needs no network fetch.
-fn signed_validator(jwks_json: &str) -> crabka_security::OAuthBearerValidator {
-    let handle = crabka_security::JwksHandle::new(
-        crabka_security::Jwks::from_json(jwks_json, false).unwrap(),
+fn signed_validator(jwks_json: &str) -> krabka_security::OAuthBearerValidator {
+    let handle = krabka_security::JwksHandle::new(
+        krabka_security::Jwks::from_json(jwks_json, false).unwrap(),
     );
-    crabka_security::OAuthBearerValidator::Signed(crabka_security::SignedJwsValidator::new(handle))
+    krabka_security::OAuthBearerValidator::Signed(krabka_security::SignedJwsValidator::new(handle))
 }
 
 /// Happy path: a real signed ES256 token, verified against an in-memory JWKS,
@@ -1402,9 +1402,9 @@ async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
 /// Zero clock skew makes `exp` the exact session boundary. This validator is
 /// the same as the one in the other OAuth tests, but it is pinned to zero
 /// skew so that the assertion windows in the re-auth tests do not drift.
-fn oauthbearer_zero_skew_validator() -> crabka_security::OAuthBearerValidator {
-    crabka_security::OAuthBearerValidator::Unsecured(crabka_security::UnsecuredJwsValidator {
-        allowable_clock_skew: crabka_units::secs(0),
+fn oauthbearer_zero_skew_validator() -> krabka_security::OAuthBearerValidator {
+    krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+        allowable_clock_skew: krabka_units::secs(0),
         ..Default::default()
     })
 }
@@ -1532,7 +1532,7 @@ async fn oauthbearer_session_capped_by_broker_max_session_lifetime_seconds() {
     let handle = start_oauthbearer_broker_with_cap(
         log_dir.path(),
         oauthbearer_zero_skew_validator(),
-        Some(crabka_units::secs(30)), // 30s cap
+        Some(krabka_units::secs(30)), // 30s cap
     )
     .await;
     let addr = handle.listen_addr();
@@ -2332,8 +2332,8 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1ScramCredential(
-            crabka_metadata::ScramCredentialRecord {
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
+            krabka_metadata::ScramCredentialRecord {
                 user: "alice".into(),
                 mechanism: SaslMechanism::ScramSha512,
                 iterations: 4096,
@@ -2619,7 +2619,7 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
     frame.put_i16(3); // api_key = Metadata
     frame.put_i16(12); // api_version
     frame.put_i32(1); // correlation_id
-    let client_id = "crabka-t19-test";
+    let client_id = "krabka-t19-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     frame.put_u8(0); // flexible header tagged-fields
@@ -2747,9 +2747,9 @@ async fn inter_broker_client_authenticates_via_plain() {
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
 
-    let client = crabka_broker::network::client::InterBrokerClient::new(
+    let client = krabka_broker::network::client::InterBrokerClient::new(
         None,
-        Some(crabka_broker::config::InterBrokerCredentials::Plain {
+        Some(krabka_broker::config::InterBrokerCredentials::Plain {
             username: "broker".to_string(),
             password: admin_plain_password(),
         }),
@@ -2767,11 +2767,11 @@ async fn inter_broker_client_authenticates_via_plain() {
 /// `SaslPlaintext`, so a GSSAPI SPN resolves to `kafka/localhost`. It then
 /// asserts that the post-auth stream works.
 async fn drive_inter_broker_client_then_apiversions(
-    client: &crabka_broker::network::client::InterBrokerClient,
+    client: &krabka_broker::network::client::InterBrokerClient,
     addr: SocketAddr,
 ) -> Result<(), io::Error> {
-    let options = crabka_client_core::ConnectionOptions {
-        client_id: "crabka-t16-test".to_owned(),
+    let options = krabka_client_core::ConnectionOptions {
+        client_id: "krabka-t16-test".to_owned(),
         ..Default::default()
     };
     let mut stream = client
@@ -2799,7 +2799,7 @@ async fn drive_inter_broker_client_then_apiversions(
     frame.put_i16(18); // api_key = ApiVersions
     frame.put_i16(0); // api_version
     frame.put_i32(99); // post-auth correlation id (distinct from auth ones)
-    let client_id = "crabka-t16-test";
+    let client_id = "krabka-t16-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     // ApiVersions v0 is non-flexible → no tagged-fields byte.
@@ -2849,7 +2849,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
-    cfg.gssapi = Some(crabka_security::gssapi::GssapiConfig {
+    cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
         // it (the acceptor is built lazily on the first SaslAuthenticate).
         keytab_path: manifest_dir().join("tests/fixtures/security/kdc/kafka.keytab"),
@@ -2857,7 +2857,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
         principal_to_local_rules: vec![],
         realm: Some("CRABKA.TEST".to_string()),
         kdc: None,
-        max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -2902,7 +2902,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
 
 /// End-to-end inter-broker GSSAPI initiate against a live KDC.
 ///
-/// A Crabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
+/// A Krabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
 /// service key in `kafka.keytab`. `InterBrokerClient` dials it with
 /// `InterBrokerCredentials::Gssapi` and authenticates *from a keytab* as
 /// `alice@CRABKA.TEST`, with no password. The test proves the full outbound
@@ -2916,7 +2916,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// ```text
 /// cd crates/broker/tests/fixtures/security/kdc && docker compose up --build -d
 /// KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
-///   cargo test -p crabka-broker gssapi_inter_broker -- --ignored
+///   cargo test -p krabka-broker gssapi_inter_broker -- --ignored
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the MIT KDC fixture (docker compose up) + exported KRB5_CONFIG/SSPI_KDC_URL"]
@@ -2937,23 +2937,23 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
-    cfg.gssapi = Some(crabka_security::gssapi::GssapiConfig {
+    cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
         keytab_path: fixtures.join("kafka.keytab"),
         service_name: "kafka".to_string(),
         // DEFAULT rule + matching default realm maps alice@CRABKA.TEST to
         // the short name "alice".
-        principal_to_local_rules: vec![crabka_security::gssapi::name::Rule::Default],
+        principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
         realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url.clone()),
-        max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
 
-    let client = crabka_broker::network::client::InterBrokerClient::new(
+    let client = krabka_broker::network::client::InterBrokerClient::new(
         None,
-        Some(crabka_broker::config::InterBrokerCredentials::Gssapi {
+        Some(krabka_broker::config::InterBrokerCredentials::Gssapi {
             keytab_path: fixtures.join("alice.keytab"),
             client_principal: "alice@CRABKA.TEST".to_string(),
             service_name: "kafka".to_string(),
@@ -2978,8 +2978,8 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
 
 mod two_broker_sasl {
     use assert2::assert;
-    use crabka_broker::{BootstrapMode, Broker, BrokerHandle, config::InterBrokerCredentials};
-    use crabka_protocol::{
+    use krabka_broker::{BootstrapMode, Broker, BrokerHandle, config::InterBrokerCredentials};
+    use krabka_protocol::{
         owned::{
             create_topics_request::{CreatableTopic, CreateTopicsRequest},
             produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
@@ -3023,11 +3023,11 @@ mod two_broker_sasl {
         cfg.broker_id = i32::try_from(i + 1).unwrap();
         cfg.listen_addr = listen;
         cfg.advertised_listener = listen.to_string();
-        cfg.node_id = crabka_broker::NodeId(u64::try_from(i + 1).unwrap());
+        cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
         cfg.controller_listen_addr = controller_addrs[i];
         cfg.controller_quorum_voters = voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect();
         cfg.bootstrap_mode = mode;
         cfg.listeners = vec![

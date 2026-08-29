@@ -12,15 +12,15 @@
 //! `ReconfigRejected → INVALID_REQUEST`.
 
 use bytes::Bytes;
-use crabka_metadata::{Voter, VoterEndpoint};
-use crabka_protocol::{
+use krabka_metadata::{Voter, VoterEndpoint};
+use krabka_protocol::{
     Decode,
     owned::{
         update_raft_voter_request::UpdateRaftVoterRequest,
         update_raft_voter_response::UpdateRaftVoterResponse,
     },
 };
-use crabka_raft::reconfig::UpdateVoter;
+use krabka_raft::reconfig::UpdateVoter;
 
 use crate::{
     broker::Broker,
@@ -61,7 +61,7 @@ pub(crate) async fn handle(
     let cluster_id = image.cluster_id().to_string();
     let quorum = broker.controller.quorum_state();
     if req.cluster_id.as_deref() != Some(cluster_id.as_str())
-        || req.voter_directory_id == crabka_protocol::primitives::uuid::Uuid::ZERO
+        || req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
         || i64::from(req.current_leader_epoch)
             != i64::try_from(quorum.current_term).unwrap_or(i64::MAX)
         || req.listeners.is_empty()
@@ -117,7 +117,7 @@ pub(crate) async fn handle(
     };
 
     let voter = Voter {
-        id: crabka_raft::NodeId(id),
+        id: krabka_raft::NodeId(id),
         directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
         endpoints: req
             .listeners
@@ -128,7 +128,7 @@ pub(crate) async fn handle(
                 port: l.port,
             })
             .collect(),
-        kraft_version: crabka_metadata::KRaftVersionRange {
+        kraft_version: krabka_metadata::KRaftVersionRange {
             min: min_version,
             max: max_version,
         },
@@ -155,11 +155,11 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::update_raft_voter_request::{KRaftVersionFeature, Listener},
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
 
     use crate::test_support::DenyAll;
 
@@ -196,7 +196,7 @@ mod tests {
     /// Decode and encode round-trip at the min and max versions.
     #[test]
     fn response_round_trips_at_min_and_max_versions() {
-        use crabka_protocol::owned::update_raft_voter_response::{self, UpdateRaftVoterResponse};
+        use krabka_protocol::owned::update_raft_voter_response::{self, UpdateRaftVoterResponse};
         for version in [
             update_raft_voter_response::MIN_VERSION,
             update_raft_voter_response::MAX_VERSION,

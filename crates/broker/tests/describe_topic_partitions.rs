@@ -4,7 +4,7 @@
 //!
 //! Covered:
 //!   * named-request, fetch-all, and unknown-topic paths
-//!   * `is_internal` flag set on Crabka's three internal topics
+//!   * `is_internal` flag set on Krabka's three internal topics
 //!   * `topic_authorized_operations` populated (KIP-430 helper) on every
 //!     Allow row. This API's v0 schema has no opt-in flag.
 //!   * Pagination through `response_partition_limit` and the `cursor` /
@@ -14,7 +14,7 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_topic_partitions_request::{
         Cursor as RequestCursor, DescribeTopicPartitionsRequest, TopicRequest,

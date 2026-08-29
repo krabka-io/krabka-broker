@@ -29,14 +29,14 @@
 
 use std::net::SocketAddr;
 
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::owned::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::owned::{
     describe_delegation_token_request::DescribeDelegationTokenRequest,
     describe_delegation_token_response::{
         DescribeDelegationTokenResponse, DescribedDelegationToken, DescribedDelegationTokenRenewer,
     },
 };
-use crabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_security::{KafkaPrincipal, SecretBytes};
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
@@ -90,7 +90,7 @@ pub(crate) fn handle(
     };
 
     // Build the visible-token set per the rules above.
-    let tokens: Vec<crabka_metadata::DelegationToken> = if *authenticated_via_token {
+    let tokens: Vec<krabka_metadata::DelegationToken> = if *authenticated_via_token {
         // KIP-48: a token-authed caller is restricted to tokens they
         // own. The wire owner filter is intentionally ignored, and the
         // ACL extension below does NOT apply to token-authed callers.
@@ -102,7 +102,7 @@ pub(crate) fn handle(
     } else {
         // Step 1: tokens visible via owner / renewer (and the optional
         // owner filter, if present).
-        let base: Vec<&crabka_metadata::DelegationToken> = if let Some(owners) = &candidate_owners {
+        let base: Vec<&krabka_metadata::DelegationToken> = if let Some(owners) = &candidate_owners {
             image
                 .all_delegation_tokens()
                 .filter(|t| {
@@ -126,7 +126,7 @@ pub(crate) fn handle(
         // `SimpleAclAuthorizer` (no matching ACL ⇒ default-deny) or
         // `OpaAuthorizer` (policy decides), the extension contributes
         // only tokens the caller is explicitly authorized to Describe.
-        let acl_extra: Vec<&crabka_metadata::DelegationToken> = image
+        let acl_extra: Vec<&krabka_metadata::DelegationToken> = image
             .all_delegation_tokens()
             .filter(|t| match &candidate_owners {
                 Some(owners) => owners.contains(&t.owner),
@@ -150,7 +150,7 @@ pub(crate) fn handle(
         // Merge + dedup by token_id. Order is unspecified (matches the
         // existing `delegation_tokens_*` accessor contracts).
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut merged: Vec<crabka_metadata::DelegationToken> = Vec::new();
+        let mut merged: Vec<krabka_metadata::DelegationToken> = Vec::new();
         for t in base.into_iter().chain(acl_extra) {
             if seen.insert(t.token_id.as_str()) {
                 merged.push(t.clone());
@@ -167,7 +167,7 @@ pub(crate) fn handle(
     }
 }
 
-fn describe_token(t: crabka_metadata::DelegationToken) -> DescribedDelegationToken {
+fn describe_token(t: krabka_metadata::DelegationToken) -> DescribedDelegationToken {
     DescribedDelegationToken {
         principal_type: t.owner.principal_type.clone(),
         principal_name: t.owner.name.clone(),
@@ -205,23 +205,23 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::{DelegationTokenRecord, MetadataRecord};
-    use crabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenOwner;
-    use crabka_raft::ControllerHandle;
-    use crabka_security::{AuthMethod, Principal, SaslMechanism};
+    use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+    use krabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenOwner;
+    use krabka_raft::ControllerHandle;
+    use krabka_security::{AuthMethod, Principal, SaslMechanism};
     use tempfile::TempDir;
 
     use super::*;
 
     /// Spin up a single-voter `Controller` for tests, wait for leader.
     async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = crabka_raft::ControllerConfig {
-            election_timeout: crabka_units::millis(200),
-            heartbeat_interval: Some(crabka_units::millis(50)),
+        let cfg = krabka_raft::ControllerConfig {
+            election_timeout: krabka_units::millis(200),
+            heartbeat_interval: Some(krabka_units::millis(50)),
             client_id: "test".into(),
-            ..crabka_raft::ControllerConfig::for_tests(crabka_raft::NodeId(1), log_dir)
+            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
         };
-        let handle = Arc::new(crabka_raft::Controller::start(cfg).await.unwrap());
+        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
         let mut rx = handle.watch_leader();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while rx.borrow().is_none() {
@@ -270,7 +270,7 @@ mod tests {
         crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new())
     }
 
-    async fn seed_acl(controller: &ControllerHandle, entry: crabka_metadata::AclEntry) {
+    async fn seed_acl(controller: &ControllerHandle, entry: krabka_metadata::AclEntry) {
         controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(entry)])
             .await
@@ -430,7 +430,7 @@ mod tests {
     /// that.
     #[tokio::test]
     async fn describe_grants_visibility_via_token_acl() {
-        use crabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+        use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
@@ -476,7 +476,7 @@ mod tests {
     /// tokens even when an ACL would otherwise extend visibility.
     #[tokio::test]
     async fn token_authed_caller_acl_extension_does_not_apply() {
-        use crabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+        use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());

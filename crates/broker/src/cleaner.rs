@@ -14,8 +14,8 @@ use std::{
     time::Duration,
 };
 
-use crabka_metadata::NodeId;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_metadata::NodeId;
+use krabka_units::{Time, convert::TimeExt as _};
 use qubit_clock::sleep::{AsyncSleeper, SystemSleeper};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -95,7 +95,7 @@ pub(crate) async fn tick_all(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             log.config_snapshot().cleanup_policy
         };
-        if policy != crabka_log::CleanupPolicy::Compact {
+        if policy != krabka_log::CleanupPolicy::Compact {
             continue;
         }
         match partition.compact_log().await {
@@ -124,9 +124,9 @@ mod tests {
 
     use assert2::assert;
     use bytes::Bytes;
-    use crabka_ids::PartitionIndex;
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_units::secs;
+    use krabka_ids::PartitionIndex;
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_units::secs;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -150,16 +150,16 @@ mod tests {
         topic: &str,
         partition_id: i32,
         leader: NodeId,
-        cleanup_policy: crabka_log::CleanupPolicy,
+        cleanup_policy: krabka_log::CleanupPolicy,
     ) -> Arc<Partition> {
         let part_dir = crate::log_dir::partition_dir(root.path(), topic, partition_id);
         std::fs::create_dir_all(&part_dir).expect("create partition dir");
-        let cfg = crabka_log::LogConfig {
+        let cfg = krabka_log::LogConfig {
             cleanup_policy,
-            segment_size: crabka_units::bytes(256),
+            segment_size: krabka_units::bytes(256),
             ..Default::default()
         };
-        let mut log = crabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
+        let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
         for idx in 0..12 {
             let mut batch = keyed_batch(idx, b"duplicate-key", format!("v{idx}").as_bytes());
             log.append(&mut batch).expect("append duplicate-key batch");
@@ -185,7 +185,7 @@ mod tests {
             .log
             .lock()
             .expect("partition log lock")
-            .read(crabka_log::Offset(0), crabka_units::mebibytes(1))
+            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
             .expect("read partition log");
         read.batches.iter().map(|batch| batch.records.len()).sum()
     }
@@ -197,14 +197,14 @@ mod tests {
         // (topic, leader, cleanup_policy, expect_compacted): only partitions
         // led locally (leader 7) with the Compact policy should shrink.
         let specs = [
-            ("local-compact", 7, crabka_log::CleanupPolicy::Compact, true),
+            ("local-compact", 7, krabka_log::CleanupPolicy::Compact, true),
             (
                 "follower-compact",
                 8,
-                crabka_log::CleanupPolicy::Compact,
+                krabka_log::CleanupPolicy::Compact,
                 false,
             ),
-            ("local-delete", 7, crabka_log::CleanupPolicy::Delete, false),
+            ("local-delete", 7, krabka_log::CleanupPolicy::Delete, false),
         ];
         let cases: Vec<_> = specs
             .into_iter()
@@ -249,7 +249,7 @@ mod tests {
             "run-compact",
             0,
             NodeId(7),
-            crabka_log::CleanupPolicy::Compact,
+            krabka_log::CleanupPolicy::Compact,
         );
         let before = record_count(&partition);
         registry.insert(

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crabka_object_store::{
+use krabka_object_store::{
     GcsConfig, ObjectOps, ObjectStoreClient, ObjectStoreConfig, S3Config, build_object_store,
 };
 use object_store::path::Path;

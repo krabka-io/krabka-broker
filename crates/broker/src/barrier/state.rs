@@ -10,9 +10,9 @@
 
 use std::collections::BTreeMap;
 
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::barrier::persistence::{
     CutStatus, CutValue, GroupValue, InjectionStartValue, MissingPartition, PartitionOffset,
@@ -315,7 +315,7 @@ pub(crate) fn expired_cut_epochs(published: i64, retained_cuts: i32, held: &[i64
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::millis;
+    use krabka_units::millis;
 
     use super::*;
 

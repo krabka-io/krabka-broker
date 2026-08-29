@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use assert2::check;
-use crabka_broker::{Broker, BrokerConfig, NodeId};
-use crabka_client_admin::{AdminClient, AdminError, CreateTopicSpec};
+use krabka_broker::{Broker, BrokerConfig, NodeId};
+use krabka_client_admin::{AdminClient, AdminError, CreateTopicSpec};
 
-async fn start_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+async fn start_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -37,7 +37,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 replicas: 1,
                 configs: BTreeMap::new(),
             }],
-            crabka_units::secs(5),
+            krabka_units::secs(5),
         )
         .await
         .unwrap();
@@ -57,7 +57,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
     check!(configs[0].topic == "controller-admin");
 
     let unsupported_reconciliation = controller_admin
-        .reconcile_topic_replication_factor("controller-admin", 1, crabka_units::secs(5))
+        .reconcile_topic_replication_factor("controller-admin", 1, krabka_units::secs(5))
         .await;
     check!(matches!(
         unsupported_reconciliation,
@@ -77,7 +77,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 replicas: 1,
                 configs: BTreeMap::new(),
             }],
-            crabka_units::secs(5),
+            krabka_units::secs(5),
         )
         .await;
     check!(matches!(

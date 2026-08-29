@@ -1,8 +1,8 @@
 //! Errors surfaced by the topic-backed
-//! [`RemoteLogMetadataManager`](crabka_remote_storage::RemoteLogMetadataManager)
+//! [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
 //! and the underlying [`MetadataEventLog`](crate::MetadataEventLog).
 
-use crabka_remote_storage::RemoteStorageError;
+use krabka_remote_storage::RemoteStorageError;
 
 /// Failures from the publish/subscribe transport that backs the
 /// `__remote_log_metadata` topic.

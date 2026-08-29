@@ -13,9 +13,9 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use crabka_ids::PartitionIndex;
-use crabka_log::{Log, Offset};
-use crabka_units::Time;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Log, Offset};
+use krabka_units::Time;
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
     sync::{Notify, mpsc},
@@ -47,7 +47,7 @@ fn flag_storage_failure(
     log_dir: &ArcSwap<PathBuf>,
     log_dir_status: &LogDirRegistry,
 ) -> bool {
-    if let crate::error::BrokerError::Log(crabka_log::LogError::Io(io_err)) = err {
+    if let crate::error::BrokerError::Log(krabka_log::LogError::Io(io_err)) = err {
         let dir = log_dir.load();
         return log_dir_status
             .mark_offline(&dir, &format!("partition write/fsync failed: {io_err}"));
@@ -78,7 +78,7 @@ pub(crate) fn storage_failure_error(
     detail: impl std::fmt::Display,
 ) -> crate::error::BrokerError {
     let io = std::io::Error::other(format!("{context}: {detail}"));
-    crate::error::BrokerError::Log(crabka_log::LogError::Io(io))
+    crate::error::BrokerError::Log(krabka_log::LogError::Io(io))
 }
 
 /// Append a whole group of produce jobs under a single lock acquisition.
@@ -338,12 +338,12 @@ async fn active_producers_for_compaction(
     partition: PartitionIndex,
     now_ms: i64,
     producer_id_expiration: Time,
-) -> std::collections::HashMap<crabka_log::ProducerId, Offset> {
+) -> std::collections::HashMap<krabka_log::ProducerId, Offset> {
     producer_state
         .active_snapshot(topic, partition, now_ms, producer_id_expiration)
         .await
         .into_iter()
-        .map(|(producer_id, offset)| (crabka_log::ProducerId(producer_id), Offset(offset)))
+        .map(|(producer_id, offset)| (krabka_log::ProducerId(producer_id), Offset(offset)))
         .collect()
 }
 
@@ -370,7 +370,7 @@ async fn handle_compact(
         producer_id_expiration,
     )
     .await;
-    let context = crabka_log::CompactionContext {
+    let context = krabka_log::CompactionContext {
         now,
         active_producers,
     };
@@ -409,7 +409,7 @@ async fn handle_replicate(
     log: &Arc<Mutex<Log>>,
     log_dir: &Arc<ArcSwap<PathBuf>>,
     log_dir_status: &LogDirRegistry,
-    mut batch: crabka_protocol::records::RecordBatch,
+    mut batch: krabka_protocol::records::RecordBatch,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
     append_notify: &Notify,
 ) {
@@ -743,7 +743,7 @@ fn swap_future_log(
     // the filesystem. `Log::close` consumes the value, so we move
     // both out via `mem::replace` against throwaway Logs anchored to
     // a sacrificial `*.tomb` directory we delete at the end.
-    let tomb_dir = future_path.with_extension("crabka-swap-tomb");
+    let tomb_dir = future_path.with_extension("krabka-swap-tomb");
     std::fs::create_dir_all(&tomb_dir)?;
     let old_current = std::mem::replace(&mut *log_guard, Log::open(&tomb_dir, config.clone())?);
     old_current.close();
@@ -802,10 +802,10 @@ mod tests {
     use std::sync::atomic::{AtomicI64, Ordering};
 
     use assert2::{assert, check};
-    use crabka_compression::CompressionType;
-    use crabka_log::LogConfig;
-    use crabka_protocol::records::{Record, RecordBatch};
-    use crabka_units::millis;
+    use krabka_compression::CompressionType;
+    use krabka_log::LogConfig;
+    use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_units::millis;
     use tempfile::tempdir;
     use tokio::sync::oneshot;
 
@@ -814,7 +814,7 @@ mod tests {
     #[derive(Debug)]
     struct FixedStamp(u64);
 
-    impl crabka_log::StampSource for FixedStamp {
+    impl krabka_log::StampSource for FixedStamp {
         fn next_stamp(&self) -> u64 {
             self.0
         }
@@ -967,7 +967,7 @@ mod tests {
         assert!(expired.is_empty());
         assert!(
             active
-                == [(crabka_log::ProducerId(7), Offset(12))]
+                == [(krabka_log::ProducerId(7), Offset(12))]
                     .into_iter()
                     .collect()
         );
@@ -1070,9 +1070,9 @@ mod tests {
         {
             let mut st = replica_state.lock().await;
             st.install_isr(
-                &[crabka_audit::NodeId(1)],
-                &[crabka_audit::NodeId(1)],
-                crabka_audit::NodeId(1),
+                &[krabka_audit::NodeId(1)],
+                &[krabka_audit::NodeId(1)],
+                krabka_audit::NodeId(1),
                 std::time::Instant::now(),
             );
         }
@@ -1152,9 +1152,9 @@ mod tests {
             {
                 let mut st = replica_state.lock().await;
                 st.install_isr(
-                    &[crabka_audit::NodeId(1)],
-                    &[crabka_audit::NodeId(1)],
-                    crabka_audit::NodeId(1),
+                    &[krabka_audit::NodeId(1)],
+                    &[krabka_audit::NodeId(1)],
+                    krabka_audit::NodeId(1),
                     std::time::Instant::now(),
                 );
             }
@@ -1308,8 +1308,8 @@ mod tests {
 
     #[tokio::test]
     async fn writer_appends_verbatim_byte_exact() {
-        use crabka_log::VerbatimBatch;
-        use crabka_protocol::records::RecordBatch as ProtoBatch;
+        use krabka_log::VerbatimBatch;
+        use krabka_protocol::records::RecordBatch as ProtoBatch;
 
         let dir = tempdir().expect("tempdir");
         let log = Arc::new(Mutex::new(
@@ -1348,8 +1348,8 @@ mod tests {
                 bytes: wire.clone(),
                 last_offset_delta: 0,
                 max_timestamp: 1_234,
-                leader_epoch: crabka_log::LeaderEpoch(5),
-                producer_id: crabka_log::ProducerId(-1),
+                leader_epoch: krabka_log::LeaderEpoch(5),
+                producer_id: krabka_log::ProducerId(-1),
                 producer_epoch: -1,
                 base_sequence: -1,
                 is_transactional: false,
@@ -1365,7 +1365,7 @@ mod tests {
         let r = log
             .lock()
             .unwrap()
-            .read_raw(Offset(0), Offset(1), crabka_units::mebibytes(10))
+            .read_raw(Offset(0), Offset(1), krabka_units::mebibytes(10))
             .unwrap();
         assert!(&r.bytes[21..] == &wire[21..], "CRC-covered region verbatim");
         assert!(&r.bytes[17..21] == &wire[17..21], "CRC unchanged");
@@ -1405,7 +1405,7 @@ mod tests {
         let read = log
             .lock()
             .unwrap()
-            .read(Offset(0), crabka_units::mebibytes(10))
+            .read(Offset(0), krabka_units::mebibytes(10))
             .unwrap();
         assert!(read.batches.len() == 1);
         check!(read.batches[0].attributes.compression() == CompressionType::Lz4);
@@ -1441,7 +1441,7 @@ mod tests {
         let read = log
             .lock()
             .unwrap()
-            .read(Offset(0), crabka_units::mebibytes(10))
+            .read(Offset(0), krabka_units::mebibytes(10))
             .unwrap();
         assert!(read.batches.len() == 1);
         check!(read.batches[0].attributes.compression() == CompressionType::None);
@@ -1475,7 +1475,7 @@ mod tests {
         let read = log
             .lock()
             .unwrap()
-            .read(Offset(0), crabka_units::mebibytes(10))
+            .read(Offset(0), krabka_units::mebibytes(10))
             .unwrap();
         check!(read.batches[0].attributes.compression() == CompressionType::None);
         check!(read.batches[0].attributes.is_control_batch());
@@ -1668,7 +1668,7 @@ mod tests {
 
         let dir = tempdir().expect("tempdir");
         let config = LogConfig {
-            delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
+            delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
             ..LogConfig::default()
         };
         let log = Arc::new(Mutex::new(
@@ -1806,9 +1806,9 @@ mod tests {
         {
             let mut st = replica_state.lock().await;
             st.install_isr(
-                &[crabka_audit::NodeId(1)],
-                &[crabka_audit::NodeId(1)],
-                crabka_audit::NodeId(1),
+                &[krabka_audit::NodeId(1)],
+                &[krabka_audit::NodeId(1)],
+                krabka_audit::NodeId(1),
                 std::time::Instant::now(),
             );
         }
@@ -1862,9 +1862,9 @@ mod tests {
         {
             let mut st = replica_state.lock().await;
             st.install_isr(
-                &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-                &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-                crabka_audit::NodeId(1),
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+                krabka_audit::NodeId(1),
                 std::time::Instant::now(),
             );
         }
@@ -1908,7 +1908,7 @@ mod tests {
 
     #[tokio::test]
     async fn writer_set_log_config_swaps_config() {
-        use crabka_log::LogConfig;
+        use krabka_log::LogConfig;
         let dir = tempdir().expect("tempdir");
         let log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open log"),
@@ -1934,7 +1934,7 @@ mod tests {
         ));
 
         let new_cfg = LogConfig {
-            retention: Some(crabka_units::minutes(2)),
+            retention: Some(krabka_units::minutes(2)),
             ..LogConfig::default()
         };
         let (ack, ack_rx) = tokio::sync::oneshot::channel();
@@ -1955,7 +1955,7 @@ mod tests {
 
     #[tokio::test]
     async fn writer_trim_to_offset_advances_log_start() {
-        use crabka_log::LogConfig;
+        use krabka_log::LogConfig;
         let dir = tempdir().expect("tempdir");
         let log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open log"),
@@ -2064,16 +2064,16 @@ mod tests {
             let mut st = replica_state.lock().await;
             st.install_isr(
                 &[
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
                 &[
-                    crabka_audit::NodeId(1),
-                    crabka_audit::NodeId(2),
-                    crabka_audit::NodeId(3),
+                    krabka_audit::NodeId(1),
+                    krabka_audit::NodeId(2),
+                    krabka_audit::NodeId(3),
                 ],
-                crabka_audit::NodeId(1),
+                krabka_audit::NodeId(1),
                 std::time::Instant::now(),
             );
         }

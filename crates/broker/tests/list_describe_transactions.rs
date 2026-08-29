@@ -10,9 +10,9 @@ use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_client_producer::{OwnedTransaction, Producer, ProducerRecord};
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_client_producer::{OwnedTransaction, Producer, ProducerRecord};
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_transactions_request::DescribeTransactionsRequest,
     describe_transactions_response::{TopicData, TransactionState as DescribedTransactionState},
@@ -33,7 +33,7 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
 }
 
 async fn create_topic(bootstrap: &str, name: &str) {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await
@@ -66,8 +66,8 @@ fn rec(topic: &str, v: &str) -> ProducerRecord {
     }
 }
 
-async fn admin_client(bootstrap: &str) -> crabka_client_core::Client {
-    crabka_client_core::Client::builder()
+async fn admin_client(bootstrap: &str) -> krabka_client_core::Client {
+    krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await

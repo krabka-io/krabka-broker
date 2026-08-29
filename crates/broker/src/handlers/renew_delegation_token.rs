@@ -16,12 +16,12 @@
 
 use std::{collections::HashSet, hash::BuildHasher};
 
-use crabka_metadata::{DelegationTokenRecord, MetadataRecord};
-use crabka_protocol::owned::{
+use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+use krabka_protocol::owned::{
     renew_delegation_token_request::RenewDelegationTokenRequest,
     renew_delegation_token_response::RenewDelegationTokenResponse,
 };
-use crabka_security::SecretBytes;
+use krabka_security::SecretBytes;
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
@@ -52,7 +52,7 @@ pub(crate) async fn handle<S: BuildHasher>(
     if crate::features::require_feature(
         &image,
         crate::features::METADATA_VERSION,
-        crabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
     {
@@ -116,8 +116,8 @@ mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use assert2::assert;
-    use crabka_raft::ControllerHandle;
-    use crabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
+    use krabka_raft::ControllerHandle;
+    use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
     use tempfile::TempDir;
 
     use super::*;
@@ -136,13 +136,13 @@ mod tests {
 
     /// Spin up a single-voter `Controller` for tests, wait for leader.
     async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = crabka_raft::ControllerConfig {
-            election_timeout: crabka_units::millis(200),
-            heartbeat_interval: Some(crabka_units::millis(50)),
+        let cfg = krabka_raft::ControllerConfig {
+            election_timeout: krabka_units::millis(200),
+            heartbeat_interval: Some(krabka_units::millis(50)),
             client_id: "test".into(),
-            ..crabka_raft::ControllerConfig::for_tests(crabka_raft::NodeId(1), log_dir)
+            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
         };
-        let handle = Arc::new(crabka_raft::Controller::start(cfg).await.unwrap());
+        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
         let mut rx = handle.watch_leader();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while rx.borrow().is_none() {

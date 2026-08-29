@@ -3,7 +3,7 @@
 //! truncates to when it rejoins a leader. The follower must keep every record
 //! both sides agree on, the committed common prefix, and drop every divergent
 //! higher-epoch record. See the design spec
-//! `docs/superpowers/specs/2026-06-14-crabka-data-plane-safety-models-design.md`.
+//! `docs/superpowers/specs/2026-06-14-krabka-data-plane-safety-models-design.md`.
 //!
 //! The model enumerates every bounded *authoritative leader* epoch-history,
 //! that is, a history with strictly increasing epoch and `start_offset`, **with
@@ -29,8 +29,8 @@
 //! round, and the model asserts only the valid-target and resolved-epoch floor
 //! for it.
 
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_units::prelude::{Time, TimeExt as _, minutes};
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_units::prelude::{Time, TimeExt as _, minutes};
 use stateright::{Checker, Model, Property};
 
 use super::{EpochEntry, UNDEFINED_EPOCH, epoch_and_offset_for_entries};

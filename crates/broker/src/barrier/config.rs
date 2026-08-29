@@ -3,7 +3,7 @@
 //! The broker configuration owns these values. The coordinator takes them as
 //! one struct, so a test can build a coordinator without a `BrokerConfig`.
 
-use crabka_units::{ByteSize, Time, mebibytes, millis, minutes, secs};
+use krabka_units::{ByteSize, Time, mebibytes, millis, minutes, secs};
 
 /// How the coordinator sizes its internal topic, its retries, and its
 /// scheduler.
@@ -51,7 +51,7 @@ impl Default for BarrierConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::convert::TimeExt as _;
+    use krabka_units::convert::TimeExt as _;
 
     use super::*;
 

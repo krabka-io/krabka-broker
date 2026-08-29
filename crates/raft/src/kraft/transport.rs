@@ -93,7 +93,7 @@ pub enum Command {
     /// once the batch is committed and applied, or it replies with a
     /// rejection.
     SubmitChange {
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
         reply: oneshot::Sender<Result<crate::SubmitChangeResult, RaftError>>,
     },
     /// Handle op: append a KIP-853 control batch and optionally wait for it to
@@ -115,7 +115,7 @@ pub enum Command {
     /// `API_KEY_METADATA_FETCH` (1004), encoded as Kafka record batches.
     MetadataFetch {
         fetch_offset: i64,
-        max_size: crabka_units::ByteSize,
+        max_size: krabka_units::ByteSize,
         reply: oneshot::Sender<MetadataFetchSlice>,
     },
     /// Test-only: append a metadata batch to the log, the same way the
@@ -123,7 +123,7 @@ pub enum Command {
     /// apply pipeline. Replies with the appended base offset.
     #[cfg(test)]
     TestAppendAndCommit {
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
         reply: oneshot::Sender<i64>,
     },
     /// Stop the loop.
@@ -169,7 +169,7 @@ pub struct QuorumStateSnapshot {
     /// Log-start offset. It rises past 0 once the log has been pruned below a
     /// snapshot under KIP-630.
     pub log_start_offset: i64,
-    pub voters: crabka_metadata::VoterSet,
+    pub voters: krabka_metadata::VoterSet,
     /// Directory identity voted for in the current epoch, if any.
     pub voted_directory_id: Option<uuid::Uuid>,
     /// Replicas that have fetched from the leader but are not current voters.
@@ -209,7 +209,7 @@ pub trait PeerSender: Send + Sync {
     }
 
     /// Replace the peer endpoint table after applying a `VotersRecord`.
-    fn update_voters(&self, _voters: &crabka_metadata::VoterSet) {}
+    fn update_voters(&self, _voters: &krabka_metadata::VoterSet) {}
 
     /// Transport-only bootstrap peers used by an observer with no voter view.
     fn discovery_peers(&self) -> Vec<NodeId> {
@@ -275,18 +275,18 @@ pub mod api_key {
 /// generated KIP-595 message bodies. Those bodies are header-less, because the
 /// framing layer in `server.rs` and `network.rs` adds the request header and
 /// the response header. The captured wire versions are Vote v2,
-/// `BeginQuorumEpoch` v1, `EndQuorumEpoch` v1, and Fetch v17. Crabka-to-Crabka
+/// `BeginQuorumEpoch` v1, `EndQuorumEpoch` v1, and Fetch v17. Krabka-to-Krabka
 /// replication rides these exact bytes.
 ///
 /// The metadata log is the single `KRaft` topic `__cluster_metadata`, partition
 /// 0, so every RPC body carries exactly one topic and exactly one partition.
 /// Kafka's `VoteResponse` carries no pre-vote field. A candidate matches a
-/// reply to its round from its own `Prospective` or `Candidate` role, so Crabka
+/// reply to its round from its own `Prospective` or `Candidate` role, so Krabka
 /// encodes a byte-faithful `VoteResponse` and the core infers the round itself
 /// (KIP-996).
 pub mod wire {
     use bytes::{Buf, Bytes, BytesMut};
-    use crabka_protocol::{
+    use krabka_protocol::{
         Decode, Encode,
         owned::{
             begin_quorum_epoch_request::{self as bqe_req, BeginQuorumEpochRequest},
@@ -727,10 +727,10 @@ pub mod wire {
                     // BeginQuorumEpochResponse with the responder's leader_epoch.
                     let resp = BeginQuorumEpochResponse {
                         topics: vec![
-                            crabka_protocol::owned::begin_quorum_epoch_response::TopicData {
+                            krabka_protocol::owned::begin_quorum_epoch_response::TopicData {
                                 topic_name: METADATA_TOPIC.to_string(),
                                 partitions: vec![
-                                    crabka_protocol::owned::begin_quorum_epoch_response::PartitionData {
+                                    krabka_protocol::owned::begin_quorum_epoch_response::PartitionData {
                                         partition_index: METADATA_PARTITION,
                                         leader_id: -1,
                                         leader_epoch: epoch_to_wire(*epoch),
@@ -950,7 +950,7 @@ pub mod wire {
 
         #[test]
         fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
-            use crabka_protocol::Decode;
+            use krabka_protocol::Decode;
 
             let req = PeerRequest::Vote {
                 voter_id: NodeId(9),
@@ -992,7 +992,7 @@ pub mod wire {
 
         #[test]
         fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
-            use crabka_protocol::Decode;
+            use krabka_protocol::Decode;
 
             let begin = PeerRequest::BeginQuorumEpoch {
                 leader_id: NodeId(5),
@@ -1032,7 +1032,7 @@ pub mod wire {
 
         #[test]
         fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
-            use crabka_protocol::{Decode, owned::fetch_request::FetchRequest};
+            use krabka_protocol::{Decode, owned::fetch_request::FetchRequest};
 
             let req = PeerRequest::Fetch {
                 from: NodeId(2),
@@ -1064,7 +1064,7 @@ pub mod wire {
 
         #[test]
         fn encoded_vote_response_carries_success_error_codes() {
-            use crabka_protocol::Decode;
+            use krabka_protocol::Decode;
 
             let resp = PeerResponse::Vote {
                 epoch: 3,
@@ -1086,7 +1086,7 @@ pub mod wire {
 
         #[test]
         fn decodes_jvm_style_response_without_echo_tag() {
-            // A real JVM `VoteResponse` is byte-faithful Kafka v2 with no Crabka
+            // A real JVM `VoteResponse` is byte-faithful Kafka v2 with no Krabka
             // echo tag. Build one straight from the generated protocol type
             // (bypassing `PeerResponse::Vote::encode`) and confirm `decode_vote`
             // tolerates it — the regression guard for the removed
@@ -1126,7 +1126,7 @@ pub mod wire {
 
         #[test]
         fn encoded_ack_response_carries_success_error_codes() {
-            use crabka_protocol::Decode;
+            use krabka_protocol::Decode;
 
             let resp = PeerResponse::Ack { epoch: 8 };
             let mut cur = &resp.encode()[..];
@@ -1170,7 +1170,7 @@ pub mod wire {
 
         #[test]
         fn encoded_fetch_snapshot_request_carries_empty_cluster_id() {
-            use crabka_protocol::Decode;
+            use krabka_protocol::Decode;
 
             let req = PeerRequest::FetchSnapshot {
                 from: NodeId(2),
@@ -1237,7 +1237,7 @@ pub mod wire {
 
         #[test]
         fn fetch_error_round_trips_with_unknown_leader() {
-            use crabka_protocol::{Decode, owned::fetch_response::FetchResponse};
+            use krabka_protocol::{Decode, owned::fetch_response::FetchResponse};
 
             let resp = PeerResponse::FetchError {
                 leader_epoch: 5,
@@ -1262,7 +1262,7 @@ pub mod wire {
 
         #[test]
         fn fetch_error_with_zero_leader_preserves_redirect() {
-            use crabka_protocol::{Decode, Encode, owned::fetch_response::FetchResponse};
+            use krabka_protocol::{Decode, Encode, owned::fetch_response::FetchResponse};
 
             let success = PeerResponse::Fetch {
                 leader_id: NodeId(0),
@@ -1292,7 +1292,7 @@ pub mod wire {
 
         #[test]
         fn encoded_fetch_response_carries_partition_success_fields() {
-            use crabka_protocol::{Decode, owned::fetch_response::FetchResponse};
+            use krabka_protocol::{Decode, owned::fetch_response::FetchResponse};
 
             let resp = PeerResponse::Fetch {
                 leader_id: NodeId(2),
@@ -1319,7 +1319,7 @@ pub mod wire {
 
         #[test]
         fn fetch_wire_carries_metadata_topic_id() {
-            use crabka_protocol::{
+            use krabka_protocol::{
                 Decode,
                 owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
             };

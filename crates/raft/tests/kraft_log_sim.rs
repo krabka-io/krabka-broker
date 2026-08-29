@@ -13,13 +13,13 @@ mod sim_harness;
 
 use std::cell::RefCell;
 
-use crabka_ids::{NodeId, Offset};
-use crabka_protocol::records::{Attributes, Record, RecordBatch};
-use crabka_raft::kraft::{
+use krabka_ids::{NodeId, Offset};
+use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_raft::kraft::{
     KraftLog,
     types::{Epoch, LogView},
 };
-use crabka_units::prelude::{ByteSize, gibibytes};
+use krabka_units::prelude::{ByteSize, gibibytes};
 use sim_harness::{Sim, SimNodeLog};
 
 /// A read budget larger than any log this simulation builds, so every read

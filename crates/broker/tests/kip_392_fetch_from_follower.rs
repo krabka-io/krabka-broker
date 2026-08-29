@@ -25,9 +25,9 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{BrokerConfig, BrokerHandle, replica_selector::ReplicaSelectorKind};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BrokerConfig, BrokerHandle, replica_selector::ReplicaSelectorKind};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},

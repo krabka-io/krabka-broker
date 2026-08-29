@@ -13,9 +13,9 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_log::LogConfig;
 use jvm_acceptance::*;
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_log::LogConfig;
 
 // Three-node quorum: produce on one node, consume on another, then kill
 // the controller leader and assert the surviving brokers still answer
@@ -27,18 +27,18 @@ use jvm_acceptance::*;
 // the brokers via `host.docker.internal:<client-port>`. The advertised
 // listener uses the same hostname so the AdminClient's post-Metadata
 // reconnect resolves correctly. Controller ports use `127.0.0.1` for
-// inter-broker traffic — all three Crabka brokers live on the host's
+// inter-broker traffic — all three Krabka brokers live on the host's
 // loopback, so docker reachability is not required for the controller
 // listener.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn three_node_jvm_round_trip() {
-    const TOPIC: &str = "crabka-quorum-itest";
+    const TOPIC: &str = "krabka-quorum-itest";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -79,20 +79,20 @@ async fn three_node_jvm_round_trip() {
         advertised_listener: format!("host.docker.internal:{}", client_ports[0]),
         log_dir: dir0.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: format!("0.0.0.0:{}", controller_ports[0])
             .parse()
             .expect("static addr"),
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let h0 = tokio::spawn(async move { Broker::start(cfg0).await.expect("broker start") });
@@ -109,20 +109,20 @@ async fn three_node_jvm_round_trip() {
             advertised_listener: format!("host.docker.internal:{}", client_ports[i]),
             log_dir: dir.path().to_path_buf(),
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i])
                 .parse()
                 .expect("static addr"),
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
-            bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
+            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
             ..BrokerConfig::default()
         };
         tempdirs.push(dir);
@@ -226,7 +226,7 @@ async fn three_node_jvm_round_trip() {
     let mut leader_idx = None;
     for (i, (h, _)) in cluster.iter().enumerate() {
         let want = u64::try_from(i + 1).unwrap();
-        if h.controller_leader_id() == Some(crabka_broker::NodeId(want)) {
+        if h.controller_leader_id() == Some(krabka_broker::NodeId(want)) {
             leader_idx = Some(i);
             break;
         }
@@ -262,7 +262,7 @@ async fn three_node_jvm_round_trip() {
     }
 }
 
-// Replication byte-compare: stand up a 3-broker Crabka cluster, create a
+// Replication byte-compare: stand up a 3-broker Krabka cluster, create a
 // `replication-factor=3` topic, produce 100 records via the JVM
 // `kafka-console-producer`, then run `kafka-dump-log` against each
 // broker's local partition file and assert the three dumps are
@@ -283,12 +283,12 @@ async fn three_node_jvm_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn three_node_replication_byte_compare() {
-    const TOPIC: &str = "crabka-replication-itest";
+    const TOPIC: &str = "krabka-replication-itest";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -333,20 +333,20 @@ async fn three_node_replication_byte_compare() {
         advertised_listener: format!("host.docker.internal:{}", client_ports[0]),
         log_dir: dir0.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: format!("0.0.0.0:{}", controller_ports[0])
             .parse()
             .expect("static addr"),
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let h0 = tokio::spawn(async move { Broker::start(cfg0).await.expect("broker start") });
@@ -363,20 +363,20 @@ async fn three_node_replication_byte_compare() {
             advertised_listener: format!("host.docker.internal:{}", client_ports[i]),
             log_dir: dir.path().to_path_buf(),
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i])
                 .parse()
                 .expect("static addr"),
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
-            bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
+            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
             ..BrokerConfig::default()
         };
         tempdirs.push(dir);
@@ -514,7 +514,7 @@ async fn three_node_replication_byte_compare() {
     }
 }
 
-// Transactional EOS smoke: stand up a 3-broker Crabka cluster, compile and
+// Transactional EOS smoke: stand up a 3-broker Krabka cluster, compile and
 // run a small official JVM KafkaProducer client that commits 6 records and
 // aborts 2, then verify read_committed and read_uncommitted isolation.
 //
@@ -527,12 +527,12 @@ async fn three_node_replication_byte_compare() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn transactional_console_producer_eos() {
-    const TOPIC: &str = "crabka-txn-itest";
+    const TOPIC: &str = "krabka-txn-itest";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -570,34 +570,34 @@ async fn transactional_console_producer_eos() {
             advertised_listener: advertised_listener.clone(),
             log_dir: dir.path().to_path_buf(),
             log_config: LogConfig::default(),
-            node_id: crabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i])
                 .parse()
                 .expect("static addr"),
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
-            bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
+            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
             listeners: vec![
-                crabka_broker::config::ListenerSpec {
+                krabka_broker::config::ListenerSpec {
                     name: "EXTERNAL".to_string(),
                     bind_addr: listen_addr,
                     advertised: advertised_listener,
-                    protocol: crabka_security::ListenerProtocol::Plaintext,
+                    protocol: krabka_security::ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_mechanisms: None,
                 },
-                crabka_broker::config::ListenerSpec {
+                krabka_broker::config::ListenerSpec {
                     name: "INTERNAL".to_string(),
                     bind_addr: inter_broker_addr,
                     advertised: inter_broker_addr.to_string(),
-                    protocol: crabka_security::ListenerProtocol::Plaintext,
+                    protocol: krabka_security::ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_mechanisms: None,
                 },
@@ -667,7 +667,7 @@ async fn transactional_console_producer_eos() {
     drop(producer.stdin.take());
     let producer_out = producer.wait_with_output().expect("wait Java producer");
     eprintln!(
-        "CRABKA[test] transactional Java producer status={} stdout={} stderr={}",
+        "KRABKA[test] transactional Java producer status={} stdout={} stderr={}",
         producer_out.status,
         String::from_utf8_lossy(&producer_out.stdout),
         String::from_utf8_lossy(&producer_out.stderr),
@@ -686,7 +686,7 @@ async fn transactional_console_producer_eos() {
 
     // 3. Brief pause to let commit markers propagate through the log.
     // intentional: transactional commit-marker propagation and LSO advance are
-    // not in the metadata image and have no crabka awaiter/metric.
+    // not in the metadata image and have no krabka awaiter/metric.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // 4. read_committed must return exactly the committed transaction.
@@ -762,7 +762,7 @@ async fn transactional_console_producer_eos() {
     }
 }
 
-// `acks=all` durability gate: 3-broker Crabka cluster, JVM
+// `acks=all` durability gate: 3-broker Krabka cluster, JVM
 // `kafka-console-producer --request-required-acks -1` writes 100
 // records, then `kafka-console-consumer --isolation-level
 // read_committed` reads them all back. Confirms HW+acks=all works
@@ -774,12 +774,12 @@ async fn transactional_console_producer_eos() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn acks_all_durability() {
-    const TOPIC: &str = "crabka-acks-all-itest";
+    const TOPIC: &str = "krabka-acks-all-itest";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -809,28 +809,28 @@ async fn acks_all_durability() {
 
     // Broker 0 (Bootstrap).
     let dir0 = tempfile::tempdir().unwrap();
-    let cfg0 = crabka_broker::BrokerConfig {
+    let cfg0 = krabka_broker::BrokerConfig {
         broker_id: 1,
         listen_addr: format!("0.0.0.0:{}", client_ports[0]).parse().unwrap(),
         advertised_listener: format!("host.docker.internal:{}", client_ports[0]),
         log_dir: dir0.path().to_path_buf(),
-        log_config: crabka_log::LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        log_config: krabka_log::LogConfig::default(),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: format!("0.0.0.0:{}", controller_ports[0]).parse().unwrap(),
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        ..crabka_broker::BrokerConfig::default()
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        ..krabka_broker::BrokerConfig::default()
     };
     let h0 = tokio::spawn(async move {
-        crabka_broker::Broker::start(cfg0)
+        krabka_broker::Broker::start(cfg0)
             .await
             .expect("broker start")
     });
@@ -839,29 +839,29 @@ async fn acks_all_durability() {
     let mut join_spawns = Vec::with_capacity(2);
     for i in 1..3 {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = crabka_broker::BrokerConfig {
+        let cfg = krabka_broker::BrokerConfig {
             broker_id: i32::try_from(i + 1).unwrap(),
             listen_addr: format!("0.0.0.0:{}", client_ports[i]).parse().unwrap(),
             advertised_listener: format!("host.docker.internal:{}", client_ports[i]),
             log_dir: dir.path().to_path_buf(),
-            log_config: crabka_log::LogConfig::default(),
-            node_id: crabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+            log_config: krabka_log::LogConfig::default(),
+            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i]).parse().unwrap(),
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(3_000),
-            heartbeat_timeout: crabka_units::millis(9_000),
-            replica_lag_time_max: crabka_units::millis(30_000),
-            controller_election_timeout: crabka_units::secs(5),
-            controller_heartbeat_interval: crabka_units::millis(500),
-            bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-            ..crabka_broker::BrokerConfig::default()
+            heartbeat_interval: krabka_units::millis(3_000),
+            heartbeat_timeout: krabka_units::millis(9_000),
+            replica_lag_time_max: krabka_units::millis(30_000),
+            controller_election_timeout: krabka_units::secs(5),
+            controller_heartbeat_interval: krabka_units::millis(500),
+            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+            ..krabka_broker::BrokerConfig::default()
         };
         tempdirs.push(dir);
         join_spawns.push(tokio::spawn(async move {
-            crabka_broker::Broker::start(cfg)
+            krabka_broker::Broker::start(cfg)
                 .await
                 .expect("broker start")
         }));
@@ -921,7 +921,7 @@ async fn acks_all_durability() {
         .output()
         .expect("spawn kafka-console-producer");
     eprintln!(
-        "CRABKA[test] producer status={} stdout={} stderr={}",
+        "KRABKA[test] producer status={} stdout={} stderr={}",
         producer_out.status,
         String::from_utf8_lossy(&producer_out.stdout),
         String::from_utf8_lossy(&producer_out.stderr),
@@ -936,7 +936,7 @@ async fn acks_all_durability() {
     // intentional: wait for the produced records (acks=-1) to replicate to
     // node 3 and its high-watermark to advance before the read_committed
     // consume below. Follower high-watermark/LSO is not in the metadata image
-    // and has no crabka awaiter/metric.
+    // and has no krabka awaiter/metric.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
@@ -966,7 +966,7 @@ async fn acks_all_durability() {
     }
 }
 
-// `acks=all` survives a leader crash mid-produce burst: 3-broker Crabka
+// `acks=all` survives a leader crash mid-produce burst: 3-broker Krabka
 // cluster, JVM `kafka-console-producer --request-required-acks=-1` writes
 // 100 records while the partition-0 leader is killed at mid-burst. The
 // surviving brokers elect a new leader; the producer retries and all
@@ -979,12 +979,12 @@ async fn acks_all_durability() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn acks_all_survives_leader_crash() {
-    const TOPIC: &str = "crabka-acks-all-crash-itest";
+    const TOPIC: &str = "krabka-acks-all-crash-itest";
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -1010,28 +1010,28 @@ async fn acks_all_survives_leader_crash() {
 
     // Broker 0 (Bootstrap).
     let dir0 = tempfile::tempdir().unwrap();
-    let cfg0 = crabka_broker::BrokerConfig {
+    let cfg0 = krabka_broker::BrokerConfig {
         broker_id: 1,
         listen_addr: format!("0.0.0.0:{}", client_ports[0]).parse().unwrap(),
         advertised_listener: format!("host.docker.internal:{}", client_ports[0]),
         log_dir: dir0.path().to_path_buf(),
-        log_config: crabka_log::LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        log_config: krabka_log::LogConfig::default(),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: format!("0.0.0.0:{}", controller_ports[0]).parse().unwrap(),
         controller_quorum_voters: voters
             .iter()
-            .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+            .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
             .collect(),
-        heartbeat_interval: crabka_units::millis(200),
-        heartbeat_timeout: crabka_units::millis(2_000),
-        replica_lag_time_max: crabka_units::millis(2_000),
-        controller_election_timeout: crabka_units::millis(500),
-        controller_heartbeat_interval: crabka_units::millis(100),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-        ..crabka_broker::BrokerConfig::default()
+        heartbeat_interval: krabka_units::millis(200),
+        heartbeat_timeout: krabka_units::millis(2_000),
+        replica_lag_time_max: krabka_units::millis(2_000),
+        controller_election_timeout: krabka_units::millis(500),
+        controller_heartbeat_interval: krabka_units::millis(100),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+        ..krabka_broker::BrokerConfig::default()
     };
     let h0 = tokio::spawn(async move {
-        crabka_broker::Broker::start(cfg0)
+        krabka_broker::Broker::start(cfg0)
             .await
             .expect("broker start")
     });
@@ -1040,29 +1040,29 @@ async fn acks_all_survives_leader_crash() {
     let mut join_spawns = Vec::with_capacity(2);
     for i in 1..3 {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = crabka_broker::BrokerConfig {
+        let cfg = krabka_broker::BrokerConfig {
             broker_id: i32::try_from(i + 1).unwrap(),
             listen_addr: format!("0.0.0.0:{}", client_ports[i]).parse().unwrap(),
             advertised_listener: format!("host.docker.internal:{}", client_ports[i]),
             log_dir: dir.path().to_path_buf(),
-            log_config: crabka_log::LogConfig::default(),
-            node_id: crabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
+            log_config: krabka_log::LogConfig::default(),
+            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
             controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i]).parse().unwrap(),
             controller_quorum_voters: voters
                 .iter()
-                .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
                 .collect(),
-            heartbeat_interval: crabka_units::millis(200),
-            heartbeat_timeout: crabka_units::millis(2_000),
-            replica_lag_time_max: crabka_units::millis(2_000),
-            controller_election_timeout: crabka_units::millis(500),
-            controller_heartbeat_interval: crabka_units::millis(100),
-            bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
-            ..crabka_broker::BrokerConfig::default()
+            heartbeat_interval: krabka_units::millis(200),
+            heartbeat_timeout: krabka_units::millis(2_000),
+            replica_lag_time_max: krabka_units::millis(2_000),
+            controller_election_timeout: krabka_units::millis(500),
+            controller_heartbeat_interval: krabka_units::millis(100),
+            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
+            ..krabka_broker::BrokerConfig::default()
         };
         tempdirs.push(dir);
         join_spawns.push(tokio::spawn(async move {
-            crabka_broker::Broker::start(cfg)
+            krabka_broker::Broker::start(cfg)
                 .await
                 .expect("broker start")
         }));
@@ -1076,7 +1076,7 @@ async fn acks_all_survives_leader_crash() {
     // would deadlock. Spawn all starts concurrently and join them. (The old
     // openraft bootstrap-then-join via add_learner/change_membership is gone
     // with the static voter set.)
-    let mut cluster: Vec<(crabka_broker::BrokerHandle, tempfile::TempDir)> = Vec::with_capacity(3);
+    let mut cluster: Vec<(krabka_broker::BrokerHandle, tempfile::TempDir)> = Vec::with_capacity(3);
     cluster.push((h0.await.expect("spawn"), dir0));
     for (spawn, dir) in join_spawns.into_iter().zip(tempdirs) {
         cluster.push((spawn.await.expect("spawn"), dir));
@@ -1113,9 +1113,9 @@ async fn acks_all_survives_leader_crash() {
 
     // 3. Determine partition-0 leader from Metadata via local port (not Docker).
     let leader_node_id = {
-        use crabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
+        use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
         let local_bootstrap = format!("127.0.0.1:{}", client_ports[0]);
-        let probe = crabka_client_core::Client::builder()
+        let probe = krabka_client_core::Client::builder()
             .bootstrap(local_bootstrap)
             .build()
             .await
@@ -1170,7 +1170,7 @@ async fn acks_all_survives_leader_crash() {
 
     let leader_idx = usize::try_from((leader_node_id - 1).max(0)).unwrap_or(0);
     if leader_idx < cluster.len() {
-        eprintln!("CRABKA[test] killing leader node_id={leader_node_id} idx={leader_idx}");
+        eprintln!("KRABKA[test] killing leader node_id={leader_node_id} idx={leader_idx}");
         let (leader_handle, _dir) = cluster.remove(leader_idx);
         leader_handle.shutdown().await;
     }
@@ -1178,20 +1178,20 @@ async fn acks_all_survives_leader_crash() {
     // 6. Wait for the JVM producer to complete (up to 60s for election + retry).
     let producer_out = producer_child.wait_with_output().expect("wait producer");
     eprintln!(
-        "CRABKA[test] producer status={} stderr_len={}",
+        "KRABKA[test] producer status={} stderr_len={}",
         producer_out.status,
         producer_out.stderr.len(),
     );
     if !producer_out.status.success() {
         eprintln!(
-            "CRABKA[test] producer stderr: {}",
+            "KRABKA[test] producer stderr: {}",
             String::from_utf8_lossy(&producer_out.stderr),
         );
     }
 
     // 7. Wait briefly for replication to settle post-election.
     // intentional: post-election follower high-watermark convergence is not in
-    // the metadata image and has no crabka awaiter/metric; the JVM consumer
+    // the metadata image and has no krabka awaiter/metric; the JVM consumer
     // below has its own poll timeout to absorb any remaining replication lag.
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 

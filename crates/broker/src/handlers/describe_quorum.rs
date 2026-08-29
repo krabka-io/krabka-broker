@@ -1,11 +1,11 @@
 //! `DescribeQuorum` (`api_key=55`, KIP-595). It returns the raft-quorum state
 //! for the cluster-metadata topic.
 //!
-//! Crabka's `KRaft` setup runs one raft log, the controller quorum that
+//! Krabka's `KRaft` setup runs one raft log, the controller quorum that
 //! `controller_quorum_voters` configures, and applies committed records to
 //! `MetadataImage`. Clients, such as the JVM `kafka-metadata-quorum
 //! --describe` admin tool, ask for `__cluster_metadata` partition 0. The
-//! broker answers from [`crabka_raft::ControllerHandle::quorum_state`]:
+//! broker answers from [`krabka_raft::ControllerHandle::quorum_state`]:
 //!
 //! - `leader_id` is `current_leader`. It is `-1` when the leader is unknown,
 //!   for example during an election.
@@ -17,15 +17,15 @@
 //!   replication map only on the leader, so on a follower every voter falls
 //!   back to the JVM `-1` "Unknown" sentinel. Callers are meant to route
 //!   `kafka-metadata-quorum --describe` to the leader.
-//! - `observers` is empty, because Crabka has no observer role yet.
+//! - `observers` is empty, because Krabka has no observer role yet.
 //!
 //! For any topic OTHER than `__cluster_metadata`, the per-partition row gets
 //! `INVALID_TOPIC_EXCEPTION` (17). That matches the JVM behavior on a
 //! non-metadata topic.
 
 use bytes::Bytes;
-use crabka_metadata::AclOperation;
-use crabka_protocol::{
+use krabka_metadata::AclOperation;
+use krabka_protocol::{
     Decode,
     owned::{
         common::describe_quorum_response::replica_state::ReplicaState,
@@ -36,7 +36,7 @@ use crabka_protocol::{
     },
     primitives::uuid::Uuid,
 };
-use crabka_raft::QuorumState;
+use krabka_raft::QuorumState;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -80,7 +80,7 @@ pub(crate) fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Describe,
         },
@@ -121,7 +121,7 @@ pub(crate) fn handle(
 /// per-partition `INVALID_TOPIC_EXCEPTION` row. The function is pure, so a
 /// test can drive it with a hand-built `QuorumState` and no controller.
 fn build_topic_responses(
-    requested: &[crabka_protocol::owned::describe_quorum_request::TopicData],
+    requested: &[krabka_protocol::owned::describe_quorum_request::TopicData],
     quorum: &QuorumState,
 ) -> Vec<TopicData> {
     let leader_id = quorum
@@ -248,7 +248,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::describe_quorum_request::{
             PartitionData as ReqPartitionData, TopicData as ReqTopicData,
@@ -291,12 +291,12 @@ mod tests {
         QuorumState {
             current_term: term,
             last_applied_index: applied,
-            current_leader: leader.map(crabka_raft::NodeId),
-            voters: voters.iter().copied().map(crabka_raft::NodeId).collect(),
+            current_leader: leader.map(krabka_raft::NodeId),
+            voters: voters.iter().copied().map(krabka_raft::NodeId).collect(),
             voter_nodes: BTreeMap::new(),
             per_voter_matched_index: matched
                 .iter()
-                .map(|&(v, m)| (crabka_raft::NodeId(v), m))
+                .map(|&(v, m)| (krabka_raft::NodeId(v), m))
                 .collect::<BTreeMap<_, _>>(),
         }
     }
@@ -329,7 +329,7 @@ mod tests {
                     expected_voter(2, 42),
                     expected_voter(3, 38),
                 ],
-                // No observers in Crabka yet.
+                // No observers in Krabka yet.
                 observers: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
             }],
@@ -474,15 +474,15 @@ mod tests {
 
     #[test]
     fn v2_replica_directory_id_and_nodes_come_from_voter_nodes() {
-        use crabka_metadata::VoterEndpoint;
-        use crabka_raft::Node;
+        use krabka_metadata::VoterEndpoint;
+        use krabka_raft::Node;
 
         let req = req_for(CLUSTER_METADATA_TOPIC, 0);
         let dir1 = uuid::Uuid::from_u128(1);
         let dir2 = uuid::Uuid::from_u128(2);
         let mut voter_nodes = BTreeMap::new();
         voter_nodes.insert(
-            crabka_audit::NodeId(1u64),
+            krabka_audit::NodeId(1u64),
             Node {
                 directory_id: dir1,
                 endpoints: vec![VoterEndpoint {
@@ -490,11 +490,11 @@ mod tests {
                     host: "10.0.0.1".into(),
                     port: 9093,
                 }],
-                kraft_version: crabka_metadata::KRaftVersionRange::default(),
+                kraft_version: krabka_metadata::KRaftVersionRange::default(),
             },
         );
         voter_nodes.insert(
-            crabka_audit::NodeId(2u64),
+            krabka_audit::NodeId(2u64),
             Node {
                 directory_id: dir2,
                 endpoints: vec![VoterEndpoint {
@@ -502,14 +502,14 @@ mod tests {
                     host: "10.0.0.2".into(),
                     port: 9094,
                 }],
-                kraft_version: crabka_metadata::KRaftVersionRange::default(),
+                kraft_version: krabka_metadata::KRaftVersionRange::default(),
             },
         );
         let q = QuorumState {
             current_term: 1,
             last_applied_index: 5,
-            current_leader: Some(crabka_audit::NodeId(1)),
-            voters: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            current_leader: Some(krabka_audit::NodeId(1)),
+            voters: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             voter_nodes,
             per_voter_matched_index: BTreeMap::new(),
         };

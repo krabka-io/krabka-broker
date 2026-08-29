@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::{BrokerConfig, BrokerHandle};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BrokerConfig, BrokerHandle};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -145,14 +145,14 @@ fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
 /// election before any of them can drive the partition failover.
 async fn wait_for_controller_leader_other_than(
     cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
-    victim: crabka_broker::NodeId,
+    victim: krabka_broker::NodeId,
 ) {
     for (h, _, _) in cluster {
         let mut rx = h.watch_leader_for_test();
         tokio::time::timeout(
             Duration::from_secs(30),
             rx.wait_for(
-                |l| matches!(l, Some(id) if *id != crabka_broker::NodeId(0) && *id != victim),
+                |l| matches!(l, Some(id) if *id != krabka_broker::NodeId(0) && *id != victim),
             ),
         )
         .await
@@ -259,7 +259,7 @@ async fn isr_expand_on_catchup() {
     // 1. Find the controller leader so we can activate dynamic membership.
     let leader_idx = find_controller_leader(&cluster).await;
     let leader_node_id = cluster[leader_idx].1.node_id;
-    eprintln!("CRABKA[test] controller leader is node_id={leader_node_id}");
+    eprintln!("KRABKA[test] controller leader is node_id={leader_node_id}");
 
     let outcome = cluster[leader_idx]
         .0
@@ -267,7 +267,7 @@ async fn isr_expand_on_catchup() {
         .await
         .expect("activate kraft.version 1");
     assert!(
-        matches!(outcome, crabka_raft::reconfig::ReconfigOutcome::Committed),
+        matches!(outcome, krabka_raft::reconfig::ReconfigOutcome::Committed),
         "kraft.version activation was not committed: {outcome:?}"
     );
 
@@ -306,13 +306,13 @@ async fn isr_expand_on_catchup() {
     let bootstrap_node_id = cluster[leader_idx].1.node_id;
     let bootstrap_controller = cluster[leader_idx].1.controller_listen_addr;
     reborn_cfg.log_dir = reborn_dir.path().to_path_buf();
-    reborn_cfg.bootstrap_mode = crabka_broker::BootstrapMode::Join;
+    reborn_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Join;
     reborn_cfg.controller_quorum_voters =
         vec![(bootstrap_node_id, bootstrap_controller.to_string())];
     reborn_cfg.bootstrap_servers = vec![bootstrap_controller.to_string()];
     reborn_cfg.auto_join = true;
     let reborn = support::start_reusing_addrs(&reborn_cfg, "reborn follower").await;
-    eprintln!("CRABKA[test] reborn follower {victim_node_id} started");
+    eprintln!("KRABKA[test] reborn follower {victim_node_id} started");
 
     // 5. Wait for the partition's ISR to expand back to {1, 2, 3}.
     cluster[0].0.wait_until_isr_len("expand", 0, 3).await;

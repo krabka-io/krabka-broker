@@ -14,8 +14,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -30,7 +30,7 @@ use tokio::{
     net::TcpStream,
 };
 
-const CLIENT_ID: &str = "crabka-jbod-test";
+const CLIENT_ID: &str = "krabka-jbod-test";
 
 async fn round_trip(
     stream: &mut TcpStream,

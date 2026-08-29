@@ -1,4 +1,4 @@
-//! Generic OTLP distributed-tracing pipeline for Crabka services.
+//! Generic OTLP distributed-tracing pipeline for Krabka services.
 //!
 //! The consuming service always installs a structured-JSON `tracing_subscriber`
 //! `fmt` layer. That layer writes to stdout and uses the usual `RUST_LOG`
@@ -14,21 +14,21 @@
 //!
 //! OTLP is **off by default**. A service with no OTLP environment keeps its
 //! behavior byte-for-byte. OTLP turns on when one of these variables sets an
-//! endpoint: `CRABKA_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or
-//! `OTEL_EXPORTER_OTLP_ENDPOINT`. `CRABKA_OTLP_ENABLED=true` also turns OTLP
+//! endpoint: `KRABKA_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or
+//! `OTEL_EXPORTER_OTLP_ENDPOINT`. `KRABKA_OTLP_ENABLED=true` also turns OTLP
 //! on. `OTEL_SDK_DISABLED=true` turns OTLP off and overrides the other
 //! variables.
 //!
 //! ## Resolve OTLP settings without touching the environment
 //!
 //! ```rust
-//! use crabka_telemetry::{OtlpConfig, OtlpProtocol};
+//! use krabka_telemetry::{OtlpConfig, OtlpProtocol};
 //!
 //! let cfg = OtlpConfig::from_env(
-//!     |key| (key == "CRABKA_OTLP_ENABLED").then(|| "true".to_string()),
+//!     |key| (key == "KRABKA_OTLP_ENABLED").then(|| "true".to_string()),
 //!     "broker-1",
 //!     "0.1.0",
-//!     "crabka-broker",
+//!     "krabka-broker",
 //! )
 //! .expect("valid OTLP configuration")
 //! .expect("OTLP enabled");
@@ -43,12 +43,12 @@ pub mod profiling;
 
 /// W3C Trace Context propagation helpers.
 ///
-/// These helpers live in the standalone, publishable `crabka-trace-context`
+/// These helpers live in the standalone, publishable `krabka-trace-context`
 /// crate. The wire-protocol crates can thus propagate a trace and do not link
 /// the OTLP exporter, the admin HTTP server, or the profiler that this crate
 /// depends on.
-pub use crabka_trace_context as propagation;
-use crabka_units::prelude::{Time, TimeExt, secs};
+pub use krabka_trace_context as propagation;
+use krabka_units::prelude::{Time, TimeExt, secs};
 use opentelemetry::{
     Context, KeyValue,
     trace::{
@@ -142,7 +142,7 @@ fn env_truthy(v: &str) -> bool {
 }
 
 fn parse_time(name: &'static str, value: &str) -> Result<Time, TelemetryError> {
-    let time = crabka_units::parse::non_negative_time(value).map_err(|error| {
+    let time = krabka_units::parse::non_negative_time(value).map_err(|error| {
         TelemetryError::InvalidConfig {
             name,
             message: error.to_string(),
@@ -171,7 +171,7 @@ impl OtlpConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error when a custom Crabka duration is malformed.
+    /// Returns an error when a custom Krabka duration is malformed.
     pub fn from_env(
         get: impl Fn(&str) -> Option<String>,
         service_instance_id: &str,
@@ -182,13 +182,13 @@ impl OtlpConfig {
             return Ok(None);
         }
 
-        let endpoint_override = get("CRABKA_OTLP_ENDPOINT")
+        let endpoint_override = get("KRABKA_OTLP_ENDPOINT")
             .or_else(|| get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
             .or_else(|| get("OTEL_EXPORTER_OTLP_ENDPOINT"))
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
 
-        let explicitly_enabled = get("CRABKA_OTLP_ENABLED")
+        let explicitly_enabled = get("KRABKA_OTLP_ENABLED")
             .as_deref()
             .is_some_and(env_truthy);
 
@@ -197,13 +197,13 @@ impl OtlpConfig {
             return Ok(None);
         }
 
-        let protocol = get("CRABKA_OTLP_PROTOCOL")
+        let protocol = get("KRABKA_OTLP_PROTOCOL")
             .or_else(|| get("OTEL_EXPORTER_OTLP_PROTOCOL"))
             .map_or(OtlpProtocol::Grpc, |s| OtlpProtocol::parse(&s));
 
         let endpoint = endpoint_override.unwrap_or_else(|| protocol.default_endpoint().to_owned());
 
-        let sample_ratio = get("CRABKA_OTLP_SAMPLE_RATIO")
+        let sample_ratio = get("KRABKA_OTLP_SAMPLE_RATIO")
             .or_else(|| get("OTEL_TRACES_SAMPLER_ARG"))
             .and_then(|s| s.trim().parse::<f64>().ok())
             .map_or(1.0, |r| r.clamp(0.0, 1.0));
@@ -213,8 +213,8 @@ impl OtlpConfig {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| default_service_name.to_owned());
 
-        let timeout = match get("CRABKA_OTLP_TIMEOUT") {
-            Some(value) => parse_time("CRABKA_OTLP_TIMEOUT", &value)?,
+        let timeout = match get("KRABKA_OTLP_TIMEOUT") {
+            Some(value) => parse_time("KRABKA_OTLP_TIMEOUT", &value)?,
             None => get("OTEL_EXPORTER_OTLP_TIMEOUT_SECS")
                 .and_then(|s| s.trim().parse::<u64>().ok())
                 .map_or_else(
@@ -223,8 +223,8 @@ impl OtlpConfig {
                 ),
         };
 
-        let heartbeat_interval = get("CRABKA_OTLP_HEARTBEAT_INTERVAL")
-            .map(|value| parse_time("CRABKA_OTLP_HEARTBEAT_INTERVAL", &value))
+        let heartbeat_interval = get("KRABKA_OTLP_HEARTBEAT_INTERVAL")
+            .map(|value| parse_time("KRABKA_OTLP_HEARTBEAT_INTERVAL", &value))
             .transpose()?
             .filter(|interval| *interval > Time::ZERO);
 
@@ -299,10 +299,10 @@ impl OtlpConfig {
 /// Per-layer filter for the OTLP layer.
 ///
 /// Operators who want more control can override the filter with
-/// `CRABKA_OTLP_FILTER`. Without that variable, the filter falls back to
+/// `KRABKA_OTLP_FILTER`. Without that variable, the filter falls back to
 /// `default`.
 fn otel_filter(default: &str, get: impl Fn(&str) -> Option<String>) -> EnvFilter {
-    get("CRABKA_OTLP_FILTER")
+    get("KRABKA_OTLP_FILTER")
         .and_then(|s| EnvFilter::try_new(s).ok())
         .unwrap_or_else(|| EnvFilter::new(default))
 }
@@ -346,7 +346,7 @@ impl TelemetryGuard {
 /// subscriber also has a batch OTLP export layer.
 ///
 /// - `fmt_default_filter`: the `fmt` layer's filter when `RUST_LOG` is unset.
-/// - `otel_default_filter`: the OTLP layer's filter when `CRABKA_OTLP_FILTER`
+/// - `otel_default_filter`: the OTLP layer's filter when `KRABKA_OTLP_FILTER`
 ///   is unset.
 /// - `tracer_name`: the name that this function passes to
 ///   `TracerProvider::tracer(...)`.
@@ -363,9 +363,9 @@ pub fn init(
 ) -> Result<TelemetryGuard, TelemetryError> {
     let fmt_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(fmt_default_filter));
-    // Structured Cloud Logging-friendly JSON to stdout (see `crabka_logfmt`),
+    // Structured Cloud Logging-friendly JSON to stdout (see `krabka_logfmt`),
     // so GKE / Cloud Logging ingests fields rather than ANSI-coloured text.
-    let fmt_layer = crabka_logfmt::layer(fmt_filter, std::io::stdout);
+    let fmt_layer = krabka_logfmt::layer(fmt_filter, std::io::stdout);
 
     let Some(cfg) = otlp else {
         tracing_subscriber::registry().with(fmt_layer).init();
@@ -444,7 +444,7 @@ fn spawn_heartbeat_task(
     interval: Time,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let tracer = provider.tracer("crabka-telemetry-heartbeat");
+        let tracer = provider.tracer("krabka-telemetry-heartbeat");
         let mut sequence = 0_i64;
         loop {
             emit_heartbeat_span(&tracer, &service_name, &service_instance_id, sequence);
@@ -476,14 +476,14 @@ fn emit_heartbeat_span<T: opentelemetry::trace::Tracer>(
     sequence: i64,
 ) {
     let mut span = tracer.build_with_context(
-        SpanBuilder::from_name("crabka.telemetry.heartbeat").with_attributes([
-            KeyValue::new("crabka.telemetry.signal", "heartbeat"),
-            KeyValue::new("crabka.telemetry.service_name", service_name.to_owned()),
+        SpanBuilder::from_name("krabka.telemetry.heartbeat").with_attributes([
+            KeyValue::new("krabka.telemetry.signal", "heartbeat"),
+            KeyValue::new("krabka.telemetry.service_name", service_name.to_owned()),
             KeyValue::new(
-                "crabka.telemetry.service_instance_id",
+                "krabka.telemetry.service_instance_id",
                 service_instance_id.to_owned(),
             ),
-            KeyValue::new("crabka.telemetry.sequence", sequence),
+            KeyValue::new("krabka.telemetry.sequence", sequence),
         ]),
         &heartbeat_parent_context(sequence),
     );
@@ -498,7 +498,7 @@ mod tests {
     };
 
     use assert2::check;
-    use crabka_units::prelude::secs;
+    use krabka_units::prelude::secs;
     use opentelemetry_sdk::error::OTelSdkResult;
 
     use super::*;
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn disabled_when_no_env() {
-        let cfg = OtlpConfig::from_env(env_from(&[]), "1", "0.1.1", "crabka-broker")
+        let cfg = OtlpConfig::from_env(env_from(&[]), "1", "0.1.1", "krabka-broker")
             .expect("valid config");
         assert2::assert!(cfg.is_none());
     }
@@ -572,41 +572,41 @@ mod tests {
     #[test]
     fn falsy_env_flags_do_not_enable_or_disable_otlp() {
         let cfg = OtlpConfig::from_env(
-            env_from(&[("CRABKA_OTLP_ENABLED", "false")]),
+            env_from(&[("KRABKA_OTLP_ENABLED", "false")]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config");
         assert2::assert!(cfg.is_none());
 
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://collector:4317"),
+                ("KRABKA_OTLP_ENDPOINT", "http://collector:4317"),
                 ("OTEL_SDK_DISABLED", "off"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config");
         assert2::assert!(cfg.is_some());
     }
 
     #[test]
-    fn enabled_by_crabka_endpoint() {
+    fn enabled_by_krabka_endpoint() {
         let cfg = OtlpConfig::from_env(
-            env_from(&[("CRABKA_OTLP_ENDPOINT", "http://collector:4317")]),
+            env_from(&[("KRABKA_OTLP_ENDPOINT", "http://collector:4317")]),
             "7",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
         assert2::assert!(cfg.endpoint.as_str() == "http://collector:4317");
         assert2::assert!(cfg.protocol == OtlpProtocol::Grpc);
         assert2::assert!((cfg.sample_ratio - 1.0).abs() < f64::EPSILON);
-        assert2::assert!(cfg.service_name.as_str() == "crabka-broker");
+        assert2::assert!(cfg.service_name.as_str() == "krabka-broker");
         assert2::assert!(cfg.service_instance_id.as_str() == "7");
         assert2::assert!(cfg.service_version.as_str() == "0.1.1");
     }
@@ -615,12 +615,12 @@ mod tests {
     fn enabled_flag_uses_protocol_default_endpoint() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENABLED", "true"),
-                ("CRABKA_OTLP_PROTOCOL", "http/protobuf"),
+                ("KRABKA_OTLP_ENABLED", "true"),
+                ("KRABKA_OTLP_PROTOCOL", "http/protobuf"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -631,10 +631,10 @@ mod tests {
     #[test]
     fn grpc_is_the_default_protocol() {
         let cfg = OtlpConfig::from_env(
-            env_from(&[("CRABKA_OTLP_ENABLED", "1")]),
+            env_from(&[("KRABKA_OTLP_ENABLED", "1")]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -646,12 +646,12 @@ mod tests {
     fn sdk_disabled_overrides_endpoint() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://collector:4317"),
+                ("KRABKA_OTLP_ENDPOINT", "http://collector:4317"),
                 ("OTEL_SDK_DISABLED", "true"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config");
         assert2::assert!(cfg.is_none());
@@ -659,12 +659,12 @@ mod tests {
 
     #[test]
     fn endpoint_precedence_and_standard_vars() {
-        // Standard OTLP env (no CRABKA_ override) still enables export.
+        // Standard OTLP env (no KRABKA_ override) still enables export.
         let cfg = OtlpConfig::from_env(
             env_from(&[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317")]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -678,37 +678,37 @@ mod tests {
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
         assert2::assert!(cfg.endpoint == "http://traces:4317");
 
-        // CRABKA override wins over everything.
+        // KRABKA override wins over everything.
         let cfg = OtlpConfig::from_env(
             env_from(&[
                 ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://traces:4317"),
-                ("CRABKA_OTLP_ENDPOINT", "http://crabka:4317"),
+                ("KRABKA_OTLP_ENDPOINT", "http://krabka:4317"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
-        assert2::assert!(cfg.endpoint == "http://crabka:4317");
+        assert2::assert!(cfg.endpoint == "http://krabka:4317");
     }
 
     #[test]
     fn sample_ratio_parsed_and_clamped() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
-                ("CRABKA_OTLP_SAMPLE_RATIO", "0.25"),
+                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                ("KRABKA_OTLP_SAMPLE_RATIO", "0.25"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -717,12 +717,12 @@ mod tests {
         // Out-of-range clamps to [0,1].
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENABLED", "true"),
-                ("CRABKA_OTLP_SAMPLE_RATIO", "9.0"),
+                ("KRABKA_OTLP_ENABLED", "true"),
+                ("KRABKA_OTLP_SAMPLE_RATIO", "9.0"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -732,10 +732,10 @@ mod tests {
     #[test]
     fn heartbeat_interval_is_disabled_by_default_and_ignores_zero() {
         let cfg = OtlpConfig::from_env(
-            env_from(&[("CRABKA_OTLP_ENDPOINT", "http://c:4317")]),
+            env_from(&[("KRABKA_OTLP_ENDPOINT", "http://c:4317")]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -743,12 +743,12 @@ mod tests {
 
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
-                ("CRABKA_OTLP_HEARTBEAT_INTERVAL", "0s"),
+                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                ("KRABKA_OTLP_HEARTBEAT_INTERVAL", "0s"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -759,12 +759,12 @@ mod tests {
     fn heartbeat_interval_parses_from_env() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
-                ("CRABKA_OTLP_HEARTBEAT_INTERVAL", "15s"),
+                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                ("KRABKA_OTLP_HEARTBEAT_INTERVAL", "15s"),
             ]),
             "1",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn custom_otlp_times_reject_malformed_values() {
-        for name in ["CRABKA_OTLP_TIMEOUT", "CRABKA_OTLP_HEARTBEAT_INTERVAL"] {
+        for name in ["KRABKA_OTLP_TIMEOUT", "KRABKA_OTLP_HEARTBEAT_INTERVAL"] {
             for value in [
                 "5",
                 "1MiB",
@@ -782,10 +782,10 @@ mod tests {
                 "999999999999999999999999999999999999999999999999999999999999s",
             ] {
                 let error = OtlpConfig::from_env(
-                    env_from(&[("CRABKA_OTLP_ENDPOINT", "http://c:4317"), (name, value)]),
+                    env_from(&[("KRABKA_OTLP_ENDPOINT", "http://c:4317"), (name, value)]),
                     "1",
                     "0.1.1",
-                    "crabka-broker",
+                    "krabka-broker",
                 )
                 .expect_err("invalid custom OTLP time must fail startup");
                 assert2::assert!(
@@ -814,21 +814,21 @@ mod tests {
             ))))
             .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
             .build();
-        let tracer = provider.tracer("crabka-telemetry-test");
+        let tracer = provider.tracer("krabka-telemetry-test");
 
-        emit_heartbeat_span(&tracer, "crabka-broker", "broker-1", 7);
+        emit_heartbeat_span(&tracer, "krabka-broker", "broker-1", 7);
         provider.force_flush().expect("flush spans");
 
         let spans = exporter.spans();
         assert2::assert!(spans.len() == 1);
         let span = &spans[0];
-        assert2::assert!(span.name == "crabka.telemetry.heartbeat");
+        assert2::assert!(span.name == "krabka.telemetry.heartbeat");
         check!(span.parent_span_is_remote);
         assert2::assert!(span.span_context.trace_flags() == TraceFlags::SAMPLED);
         check!(
             span.attributes
                 .iter()
-                .any(|attr| attr.key.as_str() == "crabka.telemetry.sequence"
+                .any(|attr| attr.key.as_str() == "krabka.telemetry.sequence"
                     && attr.value == opentelemetry::Value::I64(7))
         );
     }
@@ -837,13 +837,13 @@ mod tests {
     fn service_name_and_timeout_overrides() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
                 ("OTEL_SERVICE_NAME", "my-kafka"),
-                ("CRABKA_OTLP_TIMEOUT", "3s"),
+                ("KRABKA_OTLP_TIMEOUT", "3s"),
             ]),
             "9",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -856,12 +856,12 @@ mod tests {
         for (value, expected) in [("7", 7), ("7s", 10)] {
             let cfg = OtlpConfig::from_env(
                 env_from(&[
-                    ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                    ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
                     ("OTEL_EXPORTER_OTLP_TIMEOUT_SECS", value),
                 ]),
                 "9",
                 "0.1.1",
-                "crabka-broker",
+                "krabka-broker",
             )
             .expect("standard OTLP timeout remains non-failing")
             .expect("enabled");
@@ -870,16 +870,16 @@ mod tests {
     }
 
     #[test]
-    fn unit_suffixed_crabka_otlp_time_names_are_not_aliases() {
+    fn unit_suffixed_krabka_otlp_time_names_are_not_aliases() {
         let cfg = OtlpConfig::from_env(
             env_from(&[
-                ("CRABKA_OTLP_ENDPOINT", "http://c:4317"),
-                ("CRABKA_OTLP_TIMEOUT_SECS", "3"),
-                ("CRABKA_OTLP_HEARTBEAT_INTERVAL_SECS", "15"),
+                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
+                ("KRABKA_OTLP_TIMEOUT_SECS", "3"),
+                ("KRABKA_OTLP_HEARTBEAT_INTERVAL_SECS", "15"),
             ]),
             "9",
             "0.1.1",
-            "crabka-broker",
+            "krabka-broker",
         )
         .expect("valid config")
         .expect("enabled");
@@ -906,11 +906,11 @@ mod tests {
 
         let filter = otel_filter(
             "warn",
-            env_from(&[("CRABKA_OTLP_FILTER", "crabka_telemetry=debug")]),
+            env_from(&[("KRABKA_OTLP_FILTER", "krabka_telemetry=debug")]),
         );
-        assert2::assert!(filter.to_string() == "crabka_telemetry=debug");
+        assert2::assert!(filter.to_string() == "krabka_telemetry=debug");
 
-        let filter = otel_filter("warn", env_from(&[("CRABKA_OTLP_FILTER", "[")]));
+        let filter = otel_filter("warn", env_from(&[("KRABKA_OTLP_FILTER", "[")]));
         assert2::assert!(filter.to_string() == "warn");
     }
 

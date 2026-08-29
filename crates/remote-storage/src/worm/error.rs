@@ -9,7 +9,7 @@
 /// That last group is deliberately its own variant rather than a codec error.
 /// A verifier must be able to tell "I looked and the archive is broken" from
 /// "I could not look", because only the first is evidence of tampering. The
-/// grading in `crabka-worm-verify` rests on that distinction.
+/// grading in `krabka-worm-verify` rests on that distinction.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WormError {

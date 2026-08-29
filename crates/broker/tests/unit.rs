@@ -1,7 +1,7 @@
 use assert2::{assert, check};
 mod support;
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::{
         api_versions_request::ApiVersionsRequest,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -57,8 +57,8 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
 async fn topic_id_for(
     p: &support::InProcess,
     name: &str,
-) -> crabka_protocol::primitives::uuid::Uuid {
-    use crabka_protocol::owned::metadata_request::MetadataRequestTopic;
+) -> krabka_protocol::primitives::uuid::Uuid {
+    use krabka_protocol::owned::metadata_request::MetadataRequestTopic;
     let resp = p
         .client
         .send(MetadataRequest {
@@ -83,7 +83,7 @@ async fn api_versions_round_trip() {
     let resp = p
         .client
         .send(ApiVersionsRequest {
-            client_software_name: "crabka-test".into(),
+            client_software_name: "krabka-test".into(),
             client_software_version: "0.0.0".into(),
             ..Default::default()
         })
@@ -380,7 +380,7 @@ async fn find_coordinator_returns_self() {
 
 #[tokio::test]
 async fn join_group_with_empty_member_returns_member_id_required() {
-    use crabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol};
+    use krabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol};
     let p = support::start().await;
     let req = JoinGroupRequest {
         group_id: "g".into(),
@@ -403,7 +403,7 @@ async fn join_group_with_empty_member_returns_member_id_required() {
 
 #[tokio::test]
 async fn join_group_single_member_completes_after_deadline() {
-    use crabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol};
+    use krabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol};
     let p = support::start().await;
     // First call to obtain a server-assigned member_id.
     let r1 = p
@@ -451,7 +451,7 @@ async fn join_group_single_member_completes_after_deadline() {
 
 #[tokio::test]
 async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         heartbeat_request::HeartbeatRequest,
         join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
         leave_group_request::LeaveGroupRequest,

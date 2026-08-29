@@ -3,29 +3,29 @@ use std::process::Command;
 use assert2::assert;
 
 fn broker_bin() -> std::path::PathBuf {
-    let exe = std::env::var_os("CARGO_BIN_EXE_crabka-broker")
+    let exe = std::env::var_os("CARGO_BIN_EXE_krabka-broker")
         .expect("cargo provides CARGO_BIN_EXE_<bin> in test env");
     std::path::PathBuf::from(exe)
 }
 
 /// Formats a fresh standalone log directory.
 ///
-/// KIP-853 needs every node formatted before `crabka-broker` boots: the step
+/// KIP-853 needs every node formatted before `krabka-broker` boots: the step
 /// seeds `meta.properties.json` and the singleton `VotersRecord`, and the broker
 /// treats an unformatted dir as operator error and aborts startup.
 ///
 /// Called in process rather than spawned. The formatting is setup for the boot
-/// test below, not the thing under test -- `crabka-format`'s own `format_smoke`
+/// test below, not the thing under test -- `krabka-format`'s own `format_smoke`
 /// suite runs the real binary -- and a subprocess would need a Cargo working
 /// tree to build from, which a Bazel test sandbox does not have. This test is
 /// synchronous, so it drives the async formatter on a current-thread runtime.
-fn run_crabka_format(log_dir: &std::path::Path, node_id: u32, controller_listener: &str) {
+fn run_krabka_format(log_dir: &std::path::Path, node_id: u32, controller_listener: &str) {
     let code = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("current-thread runtime")
-        .block_on(crabka_format::run_from_args([
-            "crabka-format",
+        .block_on(krabka_format::run_from_args([
+            "krabka-format",
             "--log-dir",
             log_dir.to_str().unwrap(),
             "--standalone",
@@ -34,7 +34,7 @@ fn run_crabka_format(log_dir: &std::path::Path, node_id: u32, controller_listene
             "--controller-listener",
             controller_listener,
         ]));
-    assert!(code == 0, "crabka-format exited {code}");
+    assert!(code == 0, "krabka-format exited {code}");
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn version_returns_zero() {
     assert!(out.status.success());
 }
 
-/// Boot `crabka-broker` with `--config-file` set to a minimal TOML, and
+/// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
 /// assert that the process binds the listener declared in the file. The port
 /// comes from the file, not from a CLI flag.
 #[test]
@@ -76,9 +76,9 @@ fn boots_with_config_file_listener() {
     let log_dir = tmp.path().join("data");
 
     // KIP-853: the broker refuses to boot an unformatted log dir, so seed
-    // it first. `crabka format` creates the directory itself (it must be
+    // it first. `krabka format` creates the directory itself (it must be
     // empty or non-existent), so don't pre-create it.
-    run_crabka_format(&log_dir, 1, "127.0.0.1:9093");
+    run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
 
     // Pick an ephemeral port by binding briefly, then release it.
     let port = {
@@ -110,7 +110,7 @@ protocol = "Plaintext"
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("spawn crabka-broker");
+        .expect("spawn krabka-broker");
 
     // Poll for the port to accept connections within 10 seconds.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -120,7 +120,7 @@ protocol = "Plaintext"
             connected = true;
             break;
         }
-        // intentional: waiting on a spawned crabka-broker subprocess to bind its
+        // intentional: waiting on a spawned krabka-broker subprocess to bind its
         // TCP listener; no in-process BrokerHandle, image, or metric to await here.
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -138,7 +138,7 @@ fn errors_when_config_file_and_listen_addr_both_set() {
         .arg("--config-file=/tmp/nonexistent.toml")
         .arg("--listen-addr=127.0.0.1:9092")
         .output()
-        .expect("spawn crabka-broker");
+        .expect("spawn krabka-broker");
 
     assert!(!out.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&out.stderr);

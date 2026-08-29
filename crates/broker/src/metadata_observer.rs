@@ -3,7 +3,7 @@
 //! A broker-only `KRaft` node is not an openraft voter. It keeps its
 //! `MetadataImage` current by *fetching* the committed `__cluster_metadata`
 //! log from the controller quorum over `API_KEY_METADATA_FETCH`. It decodes
-//! each record batch through the `crabka_metadata` Kafka-record bridge, and
+//! each record batch through the `krabka_metadata` Kafka-record bridge, and
 //! applies the records exactly as the controller state machine would.
 
 use std::sync::{
@@ -11,10 +11,10 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use crabka_metadata::{MetadataImage, from_kraft_value};
-use crabka_protocol::records::RecordBatch;
-use crabka_raft::{NodeId, OutboundDialer};
-use crabka_units::{
+use krabka_metadata::{MetadataImage, from_kraft_value};
+use krabka_protocol::records::RecordBatch;
+use krabka_raft::{NodeId, OutboundDialer};
+use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
@@ -27,9 +27,9 @@ use tracing::{debug, warn};
 #[derive(Clone)]
 pub struct ObserverConfig {
     /// Capacity of each outbound observer connection.
-    pub client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
+    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     /// Maximum frame size of each outbound observer connection.
-    pub client_frame_max: crabka_client_core::ClientFrameMax,
+    pub client_frame_max: krabka_client_core::ClientFrameMax,
     /// Controller-listener voter map `(id, "<host>:<port>")`, from
     /// `controller_quorum_voters`. The map carries the host verbatim. The
     /// dialer resolves it again on each connect, so it reaches the new pod IP
@@ -131,18 +131,18 @@ async fn fetch_once(
     fetch_offset: u64,
     image_tx: &watch::Sender<Arc<MetadataImage>>,
 ) -> Option<u64> {
-    let req = crabka_raft::CrabkaMetadataFetchRequest {
+    let req = krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: i64::try_from(fetch_offset).unwrap_or(i64::MAX),
         max_bytes: config.max_bytes.bytes_i32(),
     };
     let mut body = Vec::with_capacity(12);
     req.encode_v0(&mut body);
 
-    let opts = crabka_client_core::ConnectionOptions {
+    let opts = krabka_client_core::ConnectionOptions {
         client_id: config.client_id.clone(),
         dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         frame_max: config.client_frame_max,
-        ..crabka_client_core::ConnectionOptions::default()
+        ..krabka_client_core::ConnectionOptions::default()
     };
     let conn = match config.dialer.dial(target, addr, opts).await {
         Ok(c) => c,
@@ -153,7 +153,7 @@ async fn fetch_once(
     };
     let resp_body = match conn
         .raw_request(
-            crabka_raft::API_KEY_METADATA_FETCH,
+            krabka_raft::API_KEY_METADATA_FETCH,
             0,
             bytes::Bytes::from(body),
         )
@@ -169,7 +169,7 @@ async fn fetch_once(
     conn.close();
 
     let mut cur: &[u8] = &resp_body;
-    let resp = match crabka_raft::CrabkaMetadataFetchResponse::decode_v0(&mut cur) {
+    let resp = match krabka_raft::KrabkaMetadataFetchResponse::decode_v0(&mut cur) {
         Ok(r) => r,
         Err(e) => {
             warn!(%addr, error = %e, "observer response decode failed");
@@ -301,8 +301,8 @@ mod tests {
 
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
-    use crabka_metadata::{MetadataRecord, TopicRecord, to_kraft_values};
-    use crabka_protocol::{
+    use krabka_metadata::{MetadataRecord, TopicRecord, to_kraft_values};
+    use krabka_protocol::{
         Encode,
         owned::{
             api_versions_request,
@@ -310,8 +310,8 @@ mod tests {
         },
         records::{Record, RecordBatch, header::Attributes},
     };
-    use crabka_raft::{BootstrapMode, Controller, ControllerConfig};
-    use crabka_units::{mebibytes, millis, minutes};
+    use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
+    use krabka_units::{mebibytes, millis, minutes};
     use qubit_clock::{
         MockWaiterKind,
         sleep::{MockSleeper, SystemSleeper},
@@ -332,13 +332,13 @@ mod tests {
             &self,
             target: NodeId,
             addr: &str,
-            options: crabka_client_core::ConnectionOptions,
-        ) -> Result<crabka_client_core::Connection, crabka_client_core::ClientError> {
+            options: krabka_client_core::ConnectionOptions,
+        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
             self.client_ids
                 .lock()
                 .unwrap()
                 .push(options.client_id.clone());
-            crabka_raft::PlaintextDialer
+            krabka_raft::PlaintextDialer
                 .dial(target, addr, options)
                 .await
         }
@@ -355,10 +355,10 @@ mod tests {
             &self,
             target: NodeId,
             addr: &str,
-            options: crabka_client_core::ConnectionOptions,
-        ) -> Result<crabka_client_core::Connection, crabka_client_core::ClientError> {
+            options: krabka_client_core::ConnectionOptions,
+        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
             self.dial_count.fetch_add(1, Ordering::SeqCst);
-            crabka_raft::PlaintextDialer
+            krabka_raft::PlaintextDialer
                 .dial(target, addr, options)
                 .await
         }
@@ -382,7 +382,7 @@ mod tests {
 
     fn metadata_fetch_response_body(records: Bytes) -> Vec<u8> {
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
-        crabka_raft::CrabkaMetadataFetchResponse {
+        krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 1,
             log_start_offset: 0,
@@ -455,9 +455,9 @@ mod tests {
     #[test]
     fn voter_at_wraps_round_robin_by_modulo() {
         let voters = vec![
-            (crabka_raft::NodeId(1), "a:9093".to_string()),
-            (crabka_raft::NodeId(2), "b:9093".to_string()),
-            (crabka_raft::NodeId(3), "c:9093".to_string()),
+            (krabka_raft::NodeId(1), "a:9093".to_string()),
+            (krabka_raft::NodeId(2), "b:9093".to_string()),
+            (krabka_raft::NodeId(3), "c:9093".to_string()),
         ];
         // In-range picks each distinct voter. `idx / len` (the `%`→`/` mutant)
         // would collapse 1 and 2 to index 0 ("a"), so distinguishing 0/1/2 here
@@ -465,11 +465,11 @@ mod tests {
         // Wrap-around: index 3 must rotate back to the first voter (3 % 3 == 0);
         // `3 / 3 == 1` would return the second voter instead.
         let cases = [
-            (0usize, crabka_raft::NodeId(1)),
-            (1, crabka_raft::NodeId(2)),
-            (2, crabka_raft::NodeId(3)),
-            (3, crabka_raft::NodeId(1)),
-            (4, crabka_raft::NodeId(2)),
+            (0usize, krabka_raft::NodeId(1)),
+            (1, krabka_raft::NodeId(2)),
+            (2, krabka_raft::NodeId(3)),
+            (3, krabka_raft::NodeId(1)),
+            (4, krabka_raft::NodeId(2)),
         ];
         for (idx, expected_id) in cases {
             assert!(voter_at(&voters, idx).0 == expected_id, "idx {idx}");
@@ -501,10 +501,10 @@ mod tests {
     async fn cancel_drains_background_task() {
         let observer = MetadataObserver::start(ObserverConfig {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![],
-            dialer: Arc::new(crabka_raft::PlaintextDialer),
+            dialer: Arc::new(krabka_raft::PlaintextDialer),
             client_id: "cancel-test".into(),
             cluster_id: Uuid::nil(),
             max_bytes: TEST_MAX_FETCH_BYTES,
@@ -524,11 +524,11 @@ mod tests {
         let fetches = Arc::new(AtomicUsize::new(0));
         let fetches_for_mock = fetches.clone();
         let mock =
-            crabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
                     return Some(api_versions_response_v0());
                 }
-                if api_key == crabka_raft::API_KEY_METADATA_FETCH {
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
                     fetches_for_mock.fetch_add(1, Ordering::SeqCst);
                     return Some(metadata_fetch_response_body(Bytes::new()));
                 }
@@ -540,9 +540,9 @@ mod tests {
         let timeline = sleeper.timeline();
         let observer = MetadataObserver::start(ObserverConfig {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
-            voters: vec![(crabka_raft::NodeId(1), mock.addr.to_string())],
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],
             dialer: Arc::new(CountingDialer {
                 dial_count: dial_count.clone(),
             }),
@@ -596,7 +596,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Bootstrap,
-            ..ControllerConfig::for_tests(crabka_raft::NodeId(1), dir.path().to_path_buf())
+            ..ControllerConfig::for_tests(krabka_raft::NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg).await.expect("bootstrap");
         let mut leader_rx = ctrl.watch_leader();
@@ -616,9 +616,9 @@ mod tests {
 
         let observer = MetadataObserver::start(ObserverConfig {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
-            voters: vec![(crabka_raft::NodeId(1), ctrl_addr.to_string())],
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            voters: vec![(krabka_raft::NodeId(1), ctrl_addr.to_string())],
             dialer: Arc::new(RecordingDialer {
                 client_ids: client_ids.clone(),
             }),

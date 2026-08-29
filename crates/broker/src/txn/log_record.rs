@@ -29,9 +29,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::PartitionIndex;
-use crabka_log::ProducerId;
-use crabka_protocol::{
+use krabka_ids::PartitionIndex;
+use krabka_log::ProducerId;
+use krabka_protocol::{
     ProtocolError,
     primitives::{
         array::{get_array_len, get_nullable_array_len, put_array_len, put_nullable_array_len},

@@ -9,9 +9,9 @@
 use std::collections::BTreeSet;
 
 use assert2::assert;
-use crabka_broker::{BootstrapMode, Broker, config::NodeRole};
-use crabka_client_core::Client;
-use crabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use krabka_broker::{BootstrapMode, Broker, config::NodeRole};
+use krabka_client_core::Client;
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 use tempfile::TempDir;
 
 mod support;

@@ -160,7 +160,7 @@ pub const DEFAULT_MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// `group.consumer.max.heartbeat.interval.ms`.
 pub const DEFAULT_MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Crabka's default cap on consumer-group membership
+/// Krabka's default cap on consumer-group membership
 /// (`group.consumer.max.size`).
 pub const DEFAULT_MAX_GROUP_SIZE: usize = 200;
 

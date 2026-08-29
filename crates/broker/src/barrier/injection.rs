@@ -17,9 +17,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use crabka_log::Offset;
-use crabka_metadata::{MetadataImage, NodeId};
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_log::Offset;
+use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio::time::Instant;
 use tracing::warn;
 
@@ -296,8 +296,8 @@ pub(crate) async fn append_marker(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_ids::PartitionIndex;
-    use crabka_units::{millis, secs};
+    use krabka_ids::PartitionIndex;
+    use krabka_units::{millis, secs};
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -332,7 +332,7 @@ mod tests {
         }
     }
 
-    fn source(records: &[crabka_metadata::MetadataRecord]) -> Arc<dyn MetadataSource> {
+    fn source(records: &[krabka_metadata::MetadataRecord]) -> Arc<dyn MetadataSource> {
         Arc::new(StaticSource::new(records))
     }
 
@@ -440,7 +440,7 @@ mod tests {
                 .get("orders", PartitionIndex(p))
                 .expect("the partition is open");
             let read = partition
-                .read_log(Offset(0), crabka_units::mebibytes(1))
+                .read_log(Offset(0), krabka_units::mebibytes(1))
                 .expect("read the log back");
             let batch = &read.batches[0];
             check!(batch.attributes.is_control_batch());

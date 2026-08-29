@@ -11,9 +11,9 @@ use std::{
     time::Instant,
 };
 
-use crabka_ids::LeaderEpoch;
-use crabka_log::Offset;
-use crabka_raft::NodeId;
+use krabka_ids::LeaderEpoch;
+use krabka_log::Offset;
+use krabka_raft::NodeId;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FollowerStats {

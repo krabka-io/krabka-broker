@@ -1,6 +1,6 @@
 //! Quota lookup with Kafka's 8-priority entity matching.
 
-use crabka_metadata::{EntityKey, MetadataImage};
+use krabka_metadata::{EntityKey, MetadataImage};
 
 /// Return the configured value for `quota_key` under the most-specific
 /// matching entity for `(principal, client_id)`. First match wins per
@@ -110,7 +110,7 @@ fn first_matching_quota(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_metadata::{ClientQuotaRecord, MetadataImage};
+    use krabka_metadata::{ClientQuotaRecord, MetadataImage};
 
     use super::*;
     use crate::quota::test_support::{image_with_quotas, quota_record};

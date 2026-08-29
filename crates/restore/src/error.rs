@@ -6,10 +6,10 @@
 
 use std::path::PathBuf;
 
-use crabka_log::LogError;
-use crabka_object_store::ObjectStoreError;
-use crabka_protocol::records::RecordsError;
-use crabka_remote_storage::RemoteStorageError;
+use krabka_log::LogError;
+use krabka_object_store::ObjectStoreError;
+use krabka_protocol::records::RecordsError;
+use krabka_remote_storage::RemoteStorageError;
 use uuid::Uuid;
 
 /// Exit codes:

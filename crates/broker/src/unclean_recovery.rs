@@ -5,8 +5,8 @@
 //! their log-end-offset and last-written leader epoch with `GetReplicaLogInfo`
 //! (`api_key` 93), and elects the most complete log.
 
-use crabka_raft::NodeId;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_raft::NodeId;
+use krabka_units::{Time, convert::TimeExt as _};
 
 /// One replica's reported log state, from a `GetReplicaLogInfo` response.
 ///
@@ -50,9 +50,9 @@ pub(crate) fn has_newer_leader(responses: &[ReplicaLogInfo], known_leader_epoch:
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use crabka_metadata::{MetadataRecord, PartitionRecord};
-use crabka_protocol::primitives::uuid::Uuid as WireUuid;
 use futures_util::FutureExt as _;
+use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
 
@@ -66,7 +66,7 @@ pub(crate) struct RecoveryPolicy {
     pub aggressive_deadline: Time,
     pub balanced_deadline: Time,
     pub queue_capacity: usize,
-    pub listener_protocol: crabka_security::ListenerProtocol,
+    pub listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
 }
 
@@ -141,7 +141,7 @@ pub(crate) struct UncleanRecoveryManager {
     liveness: Arc<ControllerLivenessState>,
     node_id: NodeId,
     inter_broker_client: Arc<InterBrokerClient>,
-    listener_protocol: crabka_security::ListenerProtocol,
+    listener_protocol: krabka_security::ListenerProtocol,
     metrics: crate::metrics::BrokerMetrics,
     policy: RecoveryPolicy,
     in_flight: Arc<Mutex<HashSet<(String, i32)>>>,
@@ -346,7 +346,7 @@ impl UncleanRecoveryManager {
 /// decode error, and also if the replica reports an error for this
 /// partition.
 struct ReplicaQuery {
-    proto: crabka_security::ListenerProtocol,
+    proto: krabka_security::ListenerProtocol,
     host: String,
     port: u16,
     my_broker_id: i32,
@@ -357,12 +357,12 @@ struct ReplicaQuery {
 }
 
 async fn query_replica(client: &InterBrokerClient, query: ReplicaQuery) -> Option<ReplicaLogInfo> {
-    use crabka_protocol::owned::get_replica_log_info_request::{
+    use krabka_protocol::owned::get_replica_log_info_request::{
         GetReplicaLogInfoRequest, TopicPartitions,
     };
-    let opts = crabka_client_core::ConnectionOptions {
-        client_id: "crabka-unclean-recovery".to_string(),
-        ..crabka_client_core::ConnectionOptions::default()
+    let opts = krabka_client_core::ConnectionOptions {
+        client_id: "krabka-unclean-recovery".to_string(),
+        ..krabka_client_core::ConnectionOptions::default()
     };
     let conn = client
         .connect_as_connection(
@@ -433,7 +433,7 @@ where
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::millis;
+    use krabka_units::millis;
 
     use super::*;
 
@@ -476,14 +476,14 @@ mod tests {
             aggressive_deadline: millis(7),
             balanced_deadline: millis(19),
             queue_capacity: 3,
-            listener_protocol: crabka_security::ListenerProtocol::Ssl,
+            listener_protocol: krabka_security::ListenerProtocol::Ssl,
             inter_broker_server_name: "broker.internal".to_string(),
         };
 
         assert!(policy.deadline(RecoveryStrategy::Aggressive) == millis(7));
         assert!(policy.deadline(RecoveryStrategy::Balanced) == millis(19));
         assert!(policy.queue_capacity == 3);
-        assert!(policy.listener_protocol == crabka_security::ListenerProtocol::Ssl);
+        assert!(policy.listener_protocol == krabka_security::ListenerProtocol::Ssl);
         assert!(policy.inter_broker_server_name == "broker.internal");
     }
 
@@ -538,7 +538,7 @@ mod urm_tests {
         };
         let got = gather_responses(vec![f1.boxed(), f2.boxed()], Duration::from_millis(50)).await;
         assert!(got.len() == 1, "must return what arrived before the cap");
-        assert!(got[0].broker_id == crabka_audit::NodeId(1));
+        assert!(got[0].broker_id == krabka_audit::NodeId(1));
     }
 
     #[tokio::test]
@@ -558,14 +558,14 @@ mod run_recovery_tests {
     use std::{collections::BTreeSet, net::SocketAddr};
 
     use assert2::assert;
-    use crabka_metadata::{
+    use krabka_metadata::{
         BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
     };
-    use crabka_raft::{
+    use krabka_raft::{
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         UpdateVoter,
     };
-    use crabka_units::secs;
+    use krabka_units::secs;
     use tokio::sync::watch;
     use uuid::Uuid;
 
@@ -611,8 +611,8 @@ mod run_recovery_tests {
         async fn submit_change(
             &self,
             _records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
-            Ok(crabka_raft::SubmitChangeResult::default())
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
+            Ok(krabka_raft::SubmitChangeResult::default())
         }
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
             unimplemented!()
@@ -659,7 +659,7 @@ mod run_recovery_tests {
             leader: NodeId(leader),
             replicas: replicas.iter().copied().map(NodeId).collect(),
             isr: replicas.iter().copied().map(NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(5),
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -685,7 +685,7 @@ mod run_recovery_tests {
     }
 
     async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
-        let l = ControllerLivenessState::new(crabka_units::secs(10));
+        let l = ControllerLivenessState::new(krabka_units::secs(10));
         for &n in alive {
             l.record_heartbeat(n).await;
         }
@@ -701,13 +701,13 @@ mod run_recovery_tests {
             liveness,
             node_id: NodeId(NODE),
             inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
-            listener_protocol: crabka_security::ListenerProtocol::Plaintext,
+            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             metrics: crate::metrics::BrokerMetrics::new(),
             policy: RecoveryPolicy {
                 aggressive_deadline: secs(2),
                 balanced_deadline: secs(30),
                 queue_capacity: 256,
-                listener_protocol: crabka_security::ListenerProtocol::Plaintext,
+                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
                 inter_broker_server_name: "localhost".to_string(),
             },
             in_flight: Arc::new(Mutex::new(HashSet::new())),

@@ -1,9 +1,9 @@
 //! Broker API dispatch registry.
 
 use bytes::Bytes;
-use crabka_protocol::api_key::ApiKey;
-use crabka_units::convert::TimeExt as _;
 use futures_util::future::BoxFuture;
+use krabka_protocol::api_key::ApiKey;
+use krabka_units::convert::TimeExt as _;
 
 use crate::{
     broker::Broker,
@@ -216,7 +216,7 @@ macro_rules! plain_dispatches {
                 assert!(
                     registry.register(DispatchEntry::plain(
                         ApiKey::$api as i16,
-                        crabka_protocol::owned::$request::FLEXIBLE_MIN,
+                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $handler,
                     )),
                     "duplicate dispatch registration for {:?}",
@@ -264,7 +264,7 @@ macro_rules! context_dispatches {
                 assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
-                        crabka_protocol::owned::$request::FLEXIBLE_MIN,
+                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $adapter,
                     )),
                     "duplicate dispatch registration for {:?}",
@@ -329,7 +329,7 @@ macro_rules! sync_context_dispatches {
                 assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
-                        crabka_protocol::owned::$request::FLEXIBLE_MIN,
+                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
                         $adapter,
                     )),
                     "duplicate dispatch registration for {:?}",
@@ -351,10 +351,10 @@ macro_rules! decoded_context_dispatches {
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
                 Box::pin(async move {
-                    use crabka_protocol::Decode;
+                    use krabka_protocol::Decode;
 
                     let mut cur = body;
-                    let req = crabka_protocol::owned::$request_mod::$request_ty::decode(
+                    let req = krabka_protocol::owned::$request_mod::$request_ty::decode(
                         &mut cur, version,
                     )?;
                     $handler(broker, req, ctx, version).await
@@ -367,7 +367,7 @@ macro_rules! decoded_context_dispatches {
                 assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
-                        crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
+                        krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
                     )),
                     "duplicate dispatch registration for {:?}",
@@ -389,9 +389,9 @@ macro_rules! decoded_sync_context_dispatches {
                 ctx: &'a RequestContext<'a>,
             ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
                 Box::pin(std::future::ready((|| {
-                    use crabka_protocol::Decode;
+                    use krabka_protocol::Decode;
                     let mut cur = body;
-                    let req = crabka_protocol::owned::$request_mod::$request_ty::decode(
+                    let req = krabka_protocol::owned::$request_mod::$request_ty::decode(
                         &mut cur, version,
                     )?;
                     $handler(broker, req, ctx, version)
@@ -404,7 +404,7 @@ macro_rules! decoded_sync_context_dispatches {
                 assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
-                        crabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
+                        krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
                         $adapter,
                     )),
                     "duplicate dispatch registration for {:?}",
@@ -476,10 +476,10 @@ fn alter_user_scram_credentials_adapter<'a>(
     ctx: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::alter_user_scram_credentials_request::AlterUserScramCredentialsRequest::decode(
+        let req = krabka_protocol::owned::alter_user_scram_credentials_request::AlterUserScramCredentialsRequest::decode(
             &mut cur,
             version,
         )?;
@@ -496,10 +496,10 @@ fn update_features_adapter<'a>(
     ctx: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::update_features_request::UpdateFeaturesRequest::decode(
+        let req = krabka_protocol::owned::update_features_request::UpdateFeaturesRequest::decode(
             &mut cur, version,
         )?;
         let resp = crate::handlers::update_features::handle(broker, req, version, ctx).await;
@@ -518,7 +518,7 @@ fn alter_replica_log_dirs_adapter<'a>(
     Box::pin(async move {
         use std::collections::BTreeMap;
 
-        use crabka_protocol::{
+        use krabka_protocol::{
             Decode,
             owned::{
                 alter_replica_log_dirs_request::AlterReplicaLogDirsRequest,
@@ -533,9 +533,9 @@ fn alter_replica_log_dirs_adapter<'a>(
         let principal = if let Some(principal) = auth.principal() {
             principal
         } else {
-            anonymous = crabka_security::Principal {
+            anonymous = krabka_security::Principal {
                 name: "ANONYMOUS".to_string(),
-                auth_method: crabka_security::AuthMethod::Anonymous,
+                auth_method: krabka_security::AuthMethod::Anonymous,
                 groups: vec![],
             };
             &anonymous
@@ -547,9 +547,9 @@ fn alter_replica_log_dirs_adapter<'a>(
             &crate::authorizer::AuthorizationRequest {
                 principal,
                 host: peer,
-                resource_type: crabka_metadata::ResourceType::Cluster,
+                resource_type: krabka_metadata::ResourceType::Cluster,
                 resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                operation: crabka_metadata::AclOperation::Alter,
+                operation: krabka_metadata::AclOperation::Alter,
             },
         ) == crate::authorizer::AuthorizationResult::Allow;
 
@@ -600,10 +600,10 @@ fn create_delegation_token_adapter<'a>(
     _peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest::decode(
+        let req = krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest::decode(
             &mut cur,
             version,
         )?;
@@ -633,10 +633,10 @@ fn renew_delegation_token_adapter<'a>(
     _peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::renew_delegation_token_request::RenewDelegationTokenRequest::decode(
+        let req = krabka_protocol::owned::renew_delegation_token_request::RenewDelegationTokenRequest::decode(
             &mut cur,
             version,
         )?;
@@ -665,10 +665,10 @@ fn expire_delegation_token_adapter<'a>(
     _peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::expire_delegation_token_request::ExpireDelegationTokenRequest::decode(
+        let req = krabka_protocol::owned::expire_delegation_token_request::ExpireDelegationTokenRequest::decode(
             &mut cur,
             version,
         )?;
@@ -693,10 +693,10 @@ fn describe_delegation_token_adapter<'a>(
     peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use crabka_protocol::Decode;
+        use krabka_protocol::Decode;
 
         let mut cur = body;
-        let req = crabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenRequest::decode(
+        let req = krabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenRequest::decode(
             &mut cur,
             version,
         )?;
@@ -787,31 +787,31 @@ krabka_private_context_dispatches!(register_krabka_private_context_dispatches;
     (
         alter_barrier_groups_adapter,
         crate::handlers::ALTER_BARRIER_GROUPS_API_KEY,
-        crabka_protocol::krabka::barrier::alter_barrier_groups::FLEXIBLE_MIN,
+        krabka_protocol::krabka::barrier::alter_barrier_groups::FLEXIBLE_MIN,
         crate::barrier::handlers::alter_groups::handle
     ),
     (
         describe_barrier_groups_adapter,
         crate::handlers::DESCRIBE_BARRIER_GROUPS_API_KEY,
-        crabka_protocol::krabka::barrier::describe_barrier_groups::FLEXIBLE_MIN,
+        krabka_protocol::krabka::barrier::describe_barrier_groups::FLEXIBLE_MIN,
         crate::barrier::handlers::describe_groups::handle
     ),
     (
         trigger_barrier_adapter,
         crate::handlers::TRIGGER_BARRIER_API_KEY,
-        crabka_protocol::krabka::barrier::trigger_barrier::FLEXIBLE_MIN,
+        krabka_protocol::krabka::barrier::trigger_barrier::FLEXIBLE_MIN,
         crate::barrier::handlers::trigger::handle
     ),
     (
         list_barrier_cuts_adapter,
         crate::handlers::LIST_BARRIER_CUTS_API_KEY,
-        crabka_protocol::krabka::barrier::list_barrier_cuts::FLEXIBLE_MIN,
+        krabka_protocol::krabka::barrier::list_barrier_cuts::FLEXIBLE_MIN,
         crate::barrier::handlers::list_cuts::handle
     ),
     (
         write_barrier_markers_adapter,
         crate::handlers::WRITE_BARRIER_MARKERS_API_KEY,
-        crabka_protocol::krabka::barrier::write_barrier_markers::FLEXIBLE_MIN,
+        krabka_protocol::krabka::barrier::write_barrier_markers::FLEXIBLE_MIN,
         crate::barrier::handlers::write_markers::handle
     ),
 );
@@ -822,11 +822,11 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     register_plain_dispatches(&mut registry);
 
     registry.register(DispatchEntry::produce(
-        crabka_protocol::owned::produce_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::produce_request::FLEXIBLE_MIN,
         produce_adapter,
     ));
     registry.register(DispatchEntry::fetch(
-        crabka_protocol::owned::fetch_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::fetch_request::FLEXIBLE_MIN,
     ));
     registry.register(DispatchEntry::sasl_metadata(
         ApiKey::SaslHandshake as i16,
@@ -834,7 +834,7 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     ));
     registry.register(DispatchEntry::sasl_metadata(
         ApiKey::SaslAuthenticate as i16,
-        crabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::sasl_authenticate_request::FLEXIBLE_MIN,
     ));
     register_context_dispatches(&mut registry);
     register_sync_context_dispatches(&mut registry);
@@ -843,47 +843,47 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     register_decoded_sync_context_dispatches(&mut registry);
     registry.register(DispatchEntry::context(
         ApiKey::AlterUserScramCredentials as i16,
-        crabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::alter_user_scram_credentials_request::FLEXIBLE_MIN,
         alter_user_scram_credentials_adapter,
     ));
     registry.register(DispatchEntry::context(
         ApiKey::UpdateFeatures as i16,
-        crabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::update_features_request::FLEXIBLE_MIN,
         update_features_adapter,
     ));
     registry.register(DispatchEntry::auth(
         ApiKey::AlterReplicaLogDirs as i16,
-        crabka_protocol::owned::alter_replica_log_dirs_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::alter_replica_log_dirs_request::FLEXIBLE_MIN,
         alter_replica_log_dirs_adapter,
     ));
     registry.register(DispatchEntry::auth(
         ApiKey::CreateDelegationToken as i16,
-        crabka_protocol::owned::create_delegation_token_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::create_delegation_token_request::FLEXIBLE_MIN,
         create_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
         ApiKey::RenewDelegationToken as i16,
-        crabka_protocol::owned::renew_delegation_token_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::renew_delegation_token_request::FLEXIBLE_MIN,
         renew_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
         ApiKey::ExpireDelegationToken as i16,
-        crabka_protocol::owned::expire_delegation_token_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::expire_delegation_token_request::FLEXIBLE_MIN,
         expire_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::auth(
         ApiKey::DescribeDelegationToken as i16,
-        crabka_protocol::owned::describe_delegation_token_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::describe_delegation_token_request::FLEXIBLE_MIN,
         describe_delegation_token_adapter,
     ));
     registry.register(DispatchEntry::telemetry(
         ApiKey::GetTelemetrySubscriptions as i16,
-        crabka_protocol::owned::get_telemetry_subscriptions_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::get_telemetry_subscriptions_request::FLEXIBLE_MIN,
         get_telemetry_subscriptions_adapter,
     ));
     registry.register(DispatchEntry::telemetry(
         ApiKey::PushTelemetry as i16,
-        crabka_protocol::owned::push_telemetry_request::FLEXIBLE_MIN,
+        krabka_protocol::owned::push_telemetry_request::FLEXIBLE_MIN,
         push_telemetry_adapter,
     ));
 
@@ -975,7 +975,7 @@ mod tests {
             ApiKey::EndTxn as i16,
             ApiKey::TxnOffsetCommit as i16,
         ] {
-            let key = api_key as i16;
+            let key = api_key;
             let entry = registry
                 .get(key)
                 .unwrap_or_else(|| panic!("registered api_key {key}"));
@@ -1021,7 +1021,7 @@ mod tests {
             ApiKey::AlterUserScramCredentials as i16,
             ApiKey::UpdateFeatures as i16,
         ] {
-            let key = api_key as i16;
+            let key = api_key;
             let entry = registry
                 .get(key)
                 .unwrap_or_else(|| panic!("registered api_key {key}"));
@@ -1083,7 +1083,7 @@ mod tests {
 
     #[test]
     fn registry_body_flexible_matches_selected_schema_boundaries() {
-        use crabka_protocol::owned;
+        use krabka_protocol::owned;
 
         let registry = build_registry();
         let cases = [

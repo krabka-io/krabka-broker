@@ -21,9 +21,9 @@ use std::{collections::HashSet, sync::Arc};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer};
+use krabka_client_core::Client;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -69,7 +69,7 @@ const CLUSTER_FULL_MASK: i32 = BIT_CREATE
     | BIT_IDEMPOTENT_WRITE;
 
 struct Harness {
-    handle: crabka_broker::BrokerHandle,
+    handle: krabka_broker::BrokerHandle,
     client: Client,
     _tempdir: tempfile::TempDir,
 }
@@ -103,7 +103,7 @@ fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = H
         let handle = Broker::start(cfg).await.expect("broker start");
         let client = Client::builder()
             .bootstrap(handle.listen_addr().to_string())
-            .client_id("crabka-kip-430-test")
+            .client_id("krabka-kip-430-test")
             .build()
             .await
             .expect("client build");
@@ -334,7 +334,7 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
     frame.put_i16(3); // api_key = Metadata
     frame.put_i16(version);
     frame.put_i32(7); // correlation_id
-    let client_id = "crabka-kip-430-v9";
+    let client_id = "krabka-kip-430-v9";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     frame.put_u8(0); // header tagged-fields byte

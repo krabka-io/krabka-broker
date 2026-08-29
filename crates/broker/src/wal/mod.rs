@@ -11,7 +11,7 @@ pub(crate) mod quorum;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_ids::Offset;
+use krabka_ids::Offset;
 #[cfg(test)]
 pub(crate) use local_fsync::LocalFsyncWal;
 pub(crate) use offset_sequencer::{ControllerSequencer, OffsetSequencer};

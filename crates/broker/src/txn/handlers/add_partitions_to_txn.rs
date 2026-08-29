@@ -23,9 +23,9 @@
 use std::net::SocketAddr;
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::PartitionIndex;
-use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use crabka_protocol::{
+use krabka_ids::PartitionIndex;
+use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         add_partitions_to_txn_request::AddPartitionsToTxnRequest,
@@ -39,7 +39,7 @@ use crabka_protocol::{
         },
     },
 };
-use crabka_security::Principal;
+use krabka_security::Principal;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer, authorize_topics},
@@ -136,7 +136,7 @@ async fn handle_v4(
                 coord,
                 TransactionRequest {
                     transactional_id: txn.transactional_id.as_str(),
-                    producer_id: crabka_log::ProducerId(txn.producer_id),
+                    producer_id: krabka_log::ProducerId(txn.producer_id),
                     producer_epoch: txn.producer_epoch,
                     topics: &txn.topics,
                     denied: &denied,
@@ -194,7 +194,7 @@ async fn handle_v3(
             coord,
             TransactionRequest {
                 transactional_id: req.v3_and_below_transactional_id.as_str(),
-                producer_id: crabka_log::ProducerId(req.v3_and_below_producer_id),
+                producer_id: krabka_log::ProducerId(req.v3_and_below_producer_id),
                 producer_epoch: req.v3_and_below_producer_epoch,
                 topics: &req.v3_and_below_topics,
                 denied: &denied,
@@ -253,7 +253,7 @@ fn denied_topics(
 // cargo-mutants: I/O over live txn state + partition registration
 struct TransactionRequest<'a> {
     transactional_id: &'a str,
-    producer_id: crabka_log::ProducerId,
+    producer_id: krabka_log::ProducerId,
     producer_epoch: i16,
     topics: &'a [AddPartitionsToTxnTopic],
     denied: &'a std::collections::HashSet<String>,
@@ -445,8 +445,8 @@ mod tests {
     use std::{collections::HashSet, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::owned::add_partitions_to_txn_request::AddPartitionsToTxnTransaction;
-    use crabka_security::Principal;
+    use krabka_protocol::owned::add_partitions_to_txn_request::AddPartitionsToTxnTransaction;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn verify_only_codes_present_vs_absent() {
-        let mut e = TxnEntry::new_empty("t".into(), crabka_log::ProducerId(1), 0, 30_000, 0);
+        let mut e = TxnEntry::new_empty("t".into(), krabka_log::ProducerId(1), 0, 30_000, 0);
         let present = TopicPartition {
             topic: "a".into(),
             partition: PartitionIndex(0),
@@ -489,17 +489,17 @@ mod tests {
                     |&(partition_index, partition_error_code)| AddPartitionsToTxnPartitionResult {
                         partition_index,
                         partition_error_code,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     },
                 )
                 .collect(),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         }
     }
 
     #[test]
     fn verify_partitions_preserves_topic_and_partition_rows() {
-        let mut e = TxnEntry::new_empty("t".into(), crabka_log::ProducerId(1), 0, 30_000, 0);
+        let mut e = TxnEntry::new_empty("t".into(), krabka_log::ProducerId(1), 0, 30_000, 0);
         e.partitions.insert(TopicPartition {
             topic: "alpha".into(),
             partition: PartitionIndex(1),
@@ -579,10 +579,10 @@ mod tests {
             results_by_transaction: vec![AddPartitionsToTxnResult {
                 transactional_id: "tid-4".into(),
                 topic_results: vec![topic_result("alpha", &[(1, codes::INVALID_TXN_STATE)])],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
             results_by_topic_v3_and_below: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(decoded == expected);
     }
@@ -603,7 +603,7 @@ mod tests {
             error_code: codes::NONE,
             results_by_transaction: vec![],
             results_by_topic_v3_and_below: vec![topic_result("alpha", &[(7, codes::NONE)])],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(decoded == expected);
     }
@@ -656,10 +656,10 @@ mod tests {
                         (2, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
                     ],
                 )],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
             results_by_topic_v3_and_below: vec![],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -702,7 +702,7 @@ mod tests {
                     (4, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
                 ],
             )],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;

@@ -1,12 +1,12 @@
 //! End-to-end GSSAPI (Kerberos) parity tests.
 //!
 //! These tests prove that a stock cp-kafka GSSAPI client authenticates to
-//! Crabka end-to-end against a real MIT KDC. They also prove that two Crabka
+//! Krabka end-to-end against a real MIT KDC. They also prove that two Krabka
 //! brokers authenticate to each other over a GSSAPI inter-broker listener.
 //!
 //! # Topology
 //!
-//! The Crabka broker runs in-process on the host, bound to `0.0.0.0:9092`, and
+//! The Krabka broker runs in-process on the host, bound to `0.0.0.0:9092`, and
 //! advertises `host.docker.internal:9092`. The cp-kafka CLI tools run inside
 //! `mirror.gcr.io/confluentinc/cp-kafka` containers started with
 //! `--add-host=host.docker.internal:host-gateway`, so they reach the host
@@ -30,7 +30,7 @@
 //! # wait for KDC_READY in the logs
 //! KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf \
 //!   SSPI_KDC_URL=tcp://localhost:88 \
-//!   cargo test -p crabka-broker --test gssapi_e2e -- --ignored
+//!   cargo test -p krabka-broker --test gssapi_e2e -- --ignored
 //! ```
 
 mod support;
@@ -42,8 +42,8 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use crabka_security::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
+use krabka_security::{
     ListenerProtocol, SaslMechanism,
     gssapi::{GssapiConfig, name::Rule},
 };
@@ -70,7 +70,7 @@ fn gssapi_fixtures() -> PathBuf {
     manifest_dir().join("tests/fixtures/gssapi")
 }
 
-/// Spawn an in-process Crabka broker on `LISTEN`.
+/// Spawn an in-process Krabka broker on `LISTEN`.
 ///
 /// The broker has one `SASL_PLAINTEXT` listener that advertises `GSSAPI`. The
 /// KDC fixture's `kafka.keytab` backs that listener.
@@ -78,7 +78,7 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -110,11 +110,11 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
         principal_to_local_rules: vec![Rule::Default],
         realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url),
-        max_time_skew: crabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     });
 
     let handle = Broker::start(cfg).await.expect("start gssapi broker");
-    eprintln!("CRABKA[test] gssapi broker started listen={LISTEN} advertised={BOOTSTRAP}");
+    eprintln!("KRABKA[test] gssapi broker started listen={LISTEN} advertised={BOOTSTRAP}");
     (handle, dir)
 }
 
@@ -158,7 +158,7 @@ fn run_gssapi_tool(tool_args: &[&str]) -> std::process::Output {
         .output()
         .expect("spawn docker run");
     eprintln!(
-        "CRABKA[test] gssapi tool {tool_args:?} status={} stderr_len={}",
+        "KRABKA[test] gssapi tool {tool_args:?} status={} stderr_len={}",
         out.status,
         out.stderr.len()
     );
@@ -178,7 +178,7 @@ fn run_gssapi_tool(tool_args: &[&str]) -> std::process::Output {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker + the KDC fixture (docker compose up) + KRB5_CONFIG/SSPI_KDC_URL"]
 async fn cp_kafka_gssapi_client_round_trip() {
-    const TOPIC: &str = "crabka-gssapi-itest";
+    const TOPIC: &str = "krabka-gssapi-itest";
 
     let (broker, _dir) = start_host_gssapi_broker().await;
 

@@ -1,8 +1,8 @@
-//! Topic-backed [`RemoteLogMetadataManager`](crabka_remote_storage::RemoteLogMetadataManager) for Crabka, part of
+//! Topic-backed [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager) for Krabka, part of
 //! the KIP-405 tiered-storage stack.
 //!
 //! This crate ships [`TopicBasedRemoteLogMetadataManager`], the
-//! production replacement for [`crabka_remote_storage::InmemoryRemoteLogMetadataManager`].
+//! production replacement for [`krabka_remote_storage::InmemoryRemoteLogMetadataManager`].
 //! The manager appends remote-segment lifecycle events, which are add,
 //! update, and partition-delete, to an event log. In production that log is
 //! the `__remote_log_metadata` Kafka topic. Every broker rebuilds its local
@@ -12,7 +12,7 @@
 //! ## What this crate provides
 //!
 //! - [`TopicBasedRemoteLogMetadataManager`] — the
-//!   [`RemoteLogMetadataManager`](crabka_remote_storage::RemoteLogMetadataManager)
+//!   [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
 //!   implementation.
 //! - [`MetadataEventLog`] — the publish/subscribe seam between the
 //!   manager and the underlying durable transport.
@@ -26,10 +26,10 @@
 //!   `TopicIdPartition → metadata-topic-partition` hash.
 //! - [`KafkaMetadataEventLog`] — the production [`MetadataEventLog`]
 //!   adapter that wires the trait to
-//!   [`crabka_client_producer`] / [`crabka_client_core`] /
-//!   [`crabka_client_admin`], persisting events in the
+//!   [`krabka_client_producer`] / [`krabka_client_core`] /
+//!   [`krabka_client_admin`], persisting events in the
 //!   `__remote_log_metadata` topic. Reads use manual per-partition
-//!   `Fetch` loops over `crabka_client_core`, with no consumer group.
+//!   `Fetch` loops over `krabka_client_core`, with no consumer group.
 //! - [`SwappableRlmm`] — the hot-swap facade the broker boots behind so
 //!   it can start on the fail-closed `NotReadyRlmm` and upgrade to the
 //!   topic-backed manager once its listener is serving.
@@ -53,7 +53,7 @@
 //! ```no_run
 //! use std::{path::PathBuf, time::Duration};
 //!
-//! use crabka_remote_storage_topic::{
+//! use krabka_remote_storage_topic::{
 //!     InProcessMetadataEventLog, TopicBasedRemoteLogMetadataManager,
 //! };
 //!
@@ -62,7 +62,7 @@
 //! let manager = TopicBasedRemoteLogMetadataManager::start(
 //!     event_log,
 //!     tokio::runtime::Handle::current(),
-//!     PathBuf::from("/var/lib/crabka/rlmm-cache"),
+//!     PathBuf::from("/var/lib/krabka/rlmm-cache"),
 //!     Duration::from_secs(30),
 //! )?;
 //!
@@ -71,7 +71,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/crabka-remote-storage-topic/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage-topic/0.4.0")]
 
 pub mod error;
 pub mod kafka_log;

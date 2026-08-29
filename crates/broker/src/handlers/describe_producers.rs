@@ -22,8 +22,8 @@
 //! open transaction or no marker has established a coordinator epoch yet.
 
 use bytes::Bytes;
-use crabka_metadata::AclOperation;
-use crabka_protocol::{
+use krabka_metadata::AclOperation;
+use krabka_protocol::{
     Decode,
     owned::{
         describe_producers_request::DescribeProducersRequest,
@@ -114,7 +114,7 @@ pub(crate) async fn handle(
                 continue;
             }
 
-            let partition_index = crabka_ids::PartitionIndex(idx);
+            let partition_index = krabka_ids::PartitionIndex(idx);
             let Some(partition) = broker
                 .partitions
                 .get(topic_req.name.as_str(), partition_index)
@@ -143,7 +143,7 @@ pub(crate) async fn handle(
                 .into_iter()
                 .map(|(producer_id, entry)| {
                     let (coordinator_epoch, transaction_start) =
-                        log.producer_transaction_state(crabka_log::ProducerId(producer_id));
+                        log.producer_transaction_state(krabka_log::ProducerId(producer_id));
                     ProducerState {
                         producer_id,
                         producer_epoch: i32::from(entry.epoch),

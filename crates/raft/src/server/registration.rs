@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, HashSet};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::{Bytes, BytesMut};
-use crabka_metadata::{
+use krabka_metadata::{
     BrokerEndpoint, BrokerRegistrationRecord, ControllerRegistrationRecord, MetadataRecord, NodeId,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         broker_heartbeat_request::{self, BrokerHeartbeatRequest},
@@ -18,7 +18,7 @@ use crabka_protocol::{
         controller_registration_response::ControllerRegistrationResponse,
     },
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 
 use crate::{RaftError, kraft::KraftController};
 
@@ -69,7 +69,7 @@ pub(super) async fn dispatch(
             controller_registration(version, body, engine, authorized).await
         }
         _ => Err(RaftError::Protocol(
-            crabka_protocol::ProtocolError::InvalidValue("unknown controller lifecycle API"),
+            krabka_protocol::ProtocolError::InvalidValue("unknown controller lifecycle API"),
         )),
     }
 }
@@ -182,7 +182,7 @@ fn broker_heartbeat(
 /// one without standing up a quorum to hold it.
 fn validate_heartbeat(
     request: &BrokerHeartbeatRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     response: &mut BrokerHeartbeatResponse,
 ) -> i16 {
     let Ok(node) = u64::try_from(request.broker_id).map(NodeId) else {
@@ -363,7 +363,7 @@ fn protocol_from_wire(protocol: i16) -> Option<ListenerProtocol> {
 
 fn features_support_finalized(
     request: &BrokerRegistrationRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> bool {
     image.finalized_features().iter().all(|(name, level)| {
         request.features.iter().any(|feature| {
@@ -454,7 +454,7 @@ mod tests {
     /// returns `Ok`.
     #[test]
     fn registration_responses_carry_what_they_were_given() {
-        use crabka_protocol::{
+        use krabka_protocol::{
             Decode as _,
             owned::{broker_registration_response, controller_registration_response},
         };
@@ -553,7 +553,7 @@ mod tests {
     /// controller's job to keep a lagging replica out of the ISR.
     #[test]
     fn a_heartbeat_is_answered_from_the_registration_on_record() {
-        use crabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord};
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord};
 
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
@@ -640,7 +640,10 @@ mod tests {
     /// in the cluster that will mis-handle records already being written.
     #[test]
     fn a_broker_registers_only_when_it_supports_every_finalized_feature() {
-        use crabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+        use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+
+        /// (what the broker advertises, may it register?)
+        type Case<'a> = (&'a str, &'a [(&'a str, i16, i16)], bool);
 
         fn image_finalizing(name: &str, level: i16) -> MetadataImage {
             let mut image = MetadataImage::new(uuid::Uuid::nil());
@@ -668,7 +671,7 @@ mod tests {
 
         let image = image_finalizing("metadata.version", 20);
         // (what the broker advertises, may it register?)
-        let cases: &[(&str, &[(&str, i16, i16)], bool)] = &[
+        let cases: &[Case<'_>] = &[
             (
                 "a range around the finalized level",
                 &[("metadata.version", 7, 25)],

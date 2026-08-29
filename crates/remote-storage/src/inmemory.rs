@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use crabka_ids::LeaderEpoch;
+use krabka_ids::LeaderEpoch;
 
 use crate::{
     cache::RemoteLogMetadataCache,

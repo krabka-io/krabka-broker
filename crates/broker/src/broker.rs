@@ -9,13 +9,13 @@ use std::{
     },
 };
 
-use crabka_ids::PartitionIndex;
-use crabka_units::{
+use dashmap::DashMap;
+use futures_util::future::BoxFuture;
+use krabka_ids::PartitionIndex;
+use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt},
 };
-use dashmap::DashMap;
-use futures_util::future::BoxFuture;
 use tokio::{
     net::TcpListener,
     task::{JoinHandle, JoinSet},
@@ -31,14 +31,14 @@ use crate::{
     partition_registry::PartitionRegistry,
 };
 
-fn self_registration_record(config: &BrokerConfig) -> crabka_metadata::BrokerRegistrationRecord {
+fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerRegistrationRecord {
     let (host, port) = parse_advertised_host_port(&config.advertised_listener);
     let endpoints = config
         .effective_listeners()
         .iter()
         .map(|listener| {
             let (host, port) = parse_advertised_host_port(&listener.advertised);
-            crabka_metadata::BrokerEndpoint {
+            krabka_metadata::BrokerEndpoint {
                 name: listener.name.clone(),
                 host,
                 port,
@@ -49,7 +49,7 @@ fn self_registration_record(config: &BrokerConfig) -> crabka_metadata::BrokerReg
     let log_dirs = config.all_log_dirs();
     let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs).ids_for(&log_dirs);
 
-    crabka_metadata::BrokerRegistrationRecord {
+    krabka_metadata::BrokerRegistrationRecord {
         node_id: config.node_id,
         broker_epoch: 0,
         incarnation_id: config.incarnation_id,
@@ -58,7 +58,7 @@ fn self_registration_record(config: &BrokerConfig) -> crabka_metadata::BrokerReg
         rack: config.rack.clone(),
         endpoints,
         log_dirs: log_dir_ids,
-        features: crabka_metadata::supported_feature_ranges(),
+        features: krabka_metadata::supported_feature_ranges(),
     }
 }
 
@@ -70,8 +70,8 @@ fn self_registration_record(config: &BrokerConfig) -> crabka_metadata::BrokerReg
 /// tombstone, which clears a flag that an earlier run of the same node id
 /// set. The record always states the current truth, so the role never goes
 /// stale across a restart.
-fn self_witness_record(config: &BrokerConfig) -> crabka_metadata::MetadataRecord {
-    crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
+fn self_witness_record(config: &BrokerConfig) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
         node_id: config.node_id,
         config_name: crate::config_keys::BROKER_WITNESS.to_string(),
         config_value: config
@@ -84,9 +84,9 @@ fn self_witness_record(config: &BrokerConfig) -> crabka_metadata::MetadataRecord
 /// and the witness-role config for the same node id. One batch commits both,
 /// so the controller never sees a registered node whose role it does not
 /// know yet.
-fn broker_registration_batch(config: &BrokerConfig) -> Vec<crabka_metadata::MetadataRecord> {
+fn broker_registration_batch(config: &BrokerConfig) -> Vec<krabka_metadata::MetadataRecord> {
     vec![
-        crabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(config)),
+        krabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(config)),
         self_witness_record(config),
     ]
 }
@@ -95,13 +95,13 @@ fn broker_registration_batch(config: &BrokerConfig) -> Vec<crabka_metadata::Meta
 /// preferred leader site. Site-aware placement reads it from the metadata
 /// image, so every node that later becomes controller pins leadership to the
 /// same site. A node with no stretch profile publishes nothing.
-fn stretch_default_records(config: &BrokerConfig) -> Vec<crabka_metadata::MetadataRecord> {
+fn stretch_default_records(config: &BrokerConfig) -> Vec<krabka_metadata::MetadataRecord> {
     config
         .stretch
         .as_ref()
         .map(|profile| {
-            crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
-                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                 config_name: crate::config_keys::STRETCH_PREFERRED_LEADER_SITE.to_string(),
                 config_value: Some(profile.preferred_leader_site.clone()),
             })
@@ -112,7 +112,7 @@ fn stretch_default_records(config: &BrokerConfig) -> Vec<crabka_metadata::Metada
 
 fn self_controller_registration_record(
     config: &BrokerConfig,
-) -> crabka_metadata::ControllerRegistrationRecord {
+) -> krabka_metadata::ControllerRegistrationRecord {
     let (host, port) = config
         .controller_quorum_voters
         .iter()
@@ -124,17 +124,17 @@ fn self_controller_registration_record(
                 config.controller_listen_addr.port(),
             )
         });
-    crabka_metadata::ControllerRegistrationRecord {
+    krabka_metadata::ControllerRegistrationRecord {
         node_id: config.node_id,
         incarnation_id: config.incarnation_id,
         zk_migration_ready: false,
-        endpoints: vec![crabka_metadata::BrokerEndpoint {
+        endpoints: vec![krabka_metadata::BrokerEndpoint {
             name: "CONTROLLER".into(),
             host,
             port,
             protocol: config.controller_listener_protocol,
         }],
-        features: crabka_metadata::supported_feature_ranges(),
+        features: krabka_metadata::supported_feature_ranges(),
     }
 }
 
@@ -191,7 +191,7 @@ pub struct Broker {
     /// accept loops snapshot the current `Arc<ServerConfig>` with
     /// `current()` and wrap it in a fresh `TlsAcceptor`. The TLS
     /// hot-reload path swaps the inner config without restart.
-    pub(crate) tls_dynamic: Option<Arc<crabka_security::DynamicServerConfig>>,
+    pub(crate) tls_dynamic: Option<Arc<krabka_security::DynamicServerConfig>>,
     /// Linux kTLS (Increment F): `true` when the startup probe confirmed the
     /// kernel supports kTLS TX (kernel ≥ 4.13 + the `tls` module loadable) and
     /// rustls is configured to export secrets. Set ONCE at startup.
@@ -284,13 +284,13 @@ pub struct Broker {
     /// `AuditWriter` background task drains them into the
     /// `KafkaTopicAuditSink`. Disabled (`AuditLog::disabled()`) when
     /// `BrokerConfig::audit_enabled` is `false`.
-    pub(crate) audit_log: std::sync::Arc<crabka_audit::AuditLog>,
+    pub(crate) audit_log: std::sync::Arc<krabka_audit::AuditLog>,
     pub(crate) audit_writer_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     handlers: DispatchRegistry,
 }
 
 struct StartupTransport {
-    tls_dynamic: Option<Arc<crabka_security::DynamicServerConfig>>,
+    tls_dynamic: Option<Arc<krabka_security::DynamicServerConfig>>,
     ktls_enabled: bool,
     inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
 }
@@ -301,7 +301,7 @@ struct DisklessRuntime {
 }
 
 impl DisklessRuntime {
-    fn new(node_id: crabka_raft::NodeId) -> Self {
+    fn new(node_id: krabka_raft::NodeId) -> Self {
         Self {
             hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::default()),
             wal_shards: Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(node_id)),
@@ -310,20 +310,20 @@ impl DisklessRuntime {
 }
 
 struct RaftTransport {
-    controller_cell: Arc<tokio::sync::OnceCell<Arc<crabka_raft::ControllerHandle>>>,
-    handshake: Option<Arc<dyn crabka_raft::RaftListenerHandshake>>,
-    dialer: Option<Arc<dyn crabka_raft::OutboundDialer>>,
+    controller_cell: Arc<tokio::sync::OnceCell<Arc<krabka_raft::ControllerHandle>>>,
+    handshake: Option<Arc<dyn krabka_raft::RaftListenerHandshake>>,
+    dialer: Option<Arc<dyn krabka_raft::OutboundDialer>>,
     admin_router: Option<Arc<crate::controller_admin::BrokerControllerAdminRouter>>,
 }
 
 fn prepare_raft_transport(
     config: &BrokerConfig,
-    tls_dynamic: Option<&Arc<crabka_security::DynamicServerConfig>>,
+    tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
 ) -> RaftTransport {
     let controller_cell = Arc::new(tokio::sync::OnceCell::new());
     let handshake =
-        if config.controller_listener_protocol == crabka_security::ListenerProtocol::Plaintext {
+        if config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext {
             tracing::warn!(
                 "controller listener is PLAINTEXT: raft/controller RPCs are unauthenticated"
             );
@@ -343,7 +343,7 @@ fn prepare_raft_transport(
                 max_frame_bytes: config.socket_request_max.bytes_usize(),
                 authorizer: Arc::clone(&config.authorizer),
             };
-            Some(Arc::new(handshake) as Arc<dyn crabka_raft::RaftListenerHandshake>)
+            Some(Arc::new(handshake) as Arc<dyn krabka_raft::RaftListenerHandshake>)
         };
     let server_name = config
         .controller_server_name
@@ -353,7 +353,7 @@ fn prepare_raft_transport(
         Arc::clone(inter_broker_client),
         config.controller_listener_protocol,
         server_name,
-    )) as Arc<dyn crabka_raft::OutboundDialer>;
+    )) as Arc<dyn krabka_raft::OutboundDialer>;
     RaftTransport {
         controller_cell,
         handshake,
@@ -366,8 +366,8 @@ fn prepare_raft_transport(
 
 fn prepare_initial_voters(
     config: &BrokerConfig,
-    bootstrap_records: &mut Vec<crabka_metadata::MetadataRecord>,
-) -> crabka_metadata::VoterSet {
+    bootstrap_records: &mut Vec<krabka_metadata::MetadataRecord>,
+) -> krabka_metadata::VoterSet {
     let mut voters = crate::bootstrap::initial_voters(bootstrap_records);
     if !voters.is_empty() || config.controller_quorum_voters.is_empty() {
         return voters;
@@ -385,17 +385,17 @@ fn prepare_initial_voters(
         "deriving static KIP-595 voters from controller_quorum_voters"
     );
     // An explicitly formatted bootstrap stream already contains the exact
-    // feature levels selected by `crabka format --feature`. KIP-853 keeps its
+    // feature levels selected by `krabka format --feature`. KIP-853 keeps its
     // voter controls in the checkpoint rather than this stream, so reaching
     // the static discovery fallback does not mean the feature records are
     // absent. Appending release defaults here would replay after the selected
     // levels and overwrite them.
     if !bootstrap_records
         .iter()
-        .any(|record| matches!(record, crabka_metadata::MetadataRecord::V1FeatureLevel(_)))
+        .any(|record| matches!(record, krabka_metadata::MetadataRecord::V1FeatureLevel(_)))
     {
-        bootstrap_records.extend(crabka_metadata::bootstrap_feature_records(
-            crabka_metadata::metadata_version::METADATA_VERSION_MAX,
+        bootstrap_records.extend(krabka_metadata::bootstrap_feature_records(
+            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
         ));
     }
     voters
@@ -403,7 +403,7 @@ fn prepare_initial_voters(
 
 async fn start_metadata_source(
     config: &BrokerConfig,
-    bootstrap_records: &mut Vec<crabka_metadata::MetadataRecord>,
+    bootstrap_records: &mut Vec<krabka_metadata::MetadataRecord>,
     controller_listener: Option<tokio::net::TcpListener>,
     transport: RaftTransport,
     wal_shards: Arc<crate::wal::quorum::registry::WalShardRegistry>,
@@ -421,7 +421,7 @@ async fn start_metadata_source(
         admin_router,
     } = transport;
     if config.is_controller() {
-        let controller_config = crabka_raft::ControllerConfig {
+        let controller_config = krabka_raft::ControllerConfig {
             client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
             client_frame_max: config.client_frame_max,
             node_id: config.node_id,
@@ -439,7 +439,7 @@ async fn start_metadata_source(
             controller_fetch_miss_limit: config.controller_fetch_miss_limit,
             metadata_raft_command_queue_capacity: config.metadata_raft_command_queue_capacity,
             metadata_raft_fetch_max: config.metadata_raft_fetch_max,
-            client_id: format!("crabka-broker-{}-controller", config.broker_id),
+            client_id: format!("krabka-broker-{}-controller", config.broker_id),
             bootstrap_mode: config.bootstrap_mode,
             cluster_id: config.cluster_id,
             dialer,
@@ -449,14 +449,14 @@ async fn start_metadata_source(
             ))),
             admin_router: admin_router
                 .clone()
-                .map(|router| router as Arc<dyn crabka_raft::ControllerAdminRouter>),
+                .map(|router| router as Arc<dyn krabka_raft::ControllerAdminRouter>),
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max: config.metadata_snapshot_fetch_max,
         };
         let controller = Arc::new(
-            crabka_raft::Controller::start_with_listener(controller_config, controller_listener)
+            krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
                 .await
                 .map_err(|error| BrokerError::Startup(error.to_string()))?,
         );
@@ -475,7 +475,7 @@ async fn start_metadata_source(
             client_frame_max: config.client_frame_max,
             voters: config.controller_quorum_voters.clone(),
             dialer: Arc::clone(&dialer),
-            client_id: format!("crabka-broker-{}-observer", config.broker_id),
+            client_id: format!("krabka-broker-{}-observer", config.broker_id),
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
@@ -487,7 +487,7 @@ async fn start_metadata_source(
         client_frame_max: config.client_frame_max,
         voters: config.controller_quorum_voters.clone(),
         dialer,
-        client_id: format!("crabka-broker-{}-writer", config.broker_id),
+        client_id: format!("krabka-broker-{}-writer", config.broker_id),
         leader: observer.watch_leader(),
     };
     Ok((
@@ -552,7 +552,7 @@ async fn wait_for_metadata_leader(
 async fn submit_self_registration(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-    registration: Vec<crabka_metadata::MetadataRecord>,
+    registration: Vec<krabka_metadata::MetadataRecord>,
     role: &str,
 ) -> Result<(), BrokerError> {
     let backoff = exponential_backoff::Backoff::new(
@@ -596,14 +596,14 @@ async fn register_controller(
 }
 
 fn controller_registration_update(
-    image: &crabka_metadata::MetadataImage,
-    registration: &crabka_metadata::ControllerRegistrationRecord,
-) -> Option<crabka_metadata::MetadataRecord> {
+    image: &krabka_metadata::MetadataImage,
+    registration: &krabka_metadata::ControllerRegistrationRecord,
+) -> Option<krabka_metadata::MetadataRecord> {
     let registration_supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= crabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL
+        level >= krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL
     });
     (registration_supported && image.controller(registration.node_id) != Some(registration))
-        .then(|| crabka_metadata::MetadataRecord::V1ControllerRegistration(registration.clone()))
+        .then(|| krabka_metadata::MetadataRecord::V1ControllerRegistration(registration.clone()))
 }
 
 fn spawn_deferred_controller_registration(
@@ -674,7 +674,7 @@ async fn register_broker(
 async fn submit_bootstrap_records(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-    mut records: Vec<crabka_metadata::MetadataRecord>,
+    mut records: Vec<krabka_metadata::MetadataRecord>,
 ) -> Result<(), BrokerError> {
     if !matches!(config.bootstrap_mode, crate::BootstrapMode::Bootstrap) {
         return Ok(());
@@ -682,8 +682,8 @@ async fn submit_bootstrap_records(
     records.retain(|record| {
         !matches!(
             record,
-            crabka_metadata::MetadataRecord::V1Voters(_)
-                | crabka_metadata::MetadataRecord::V1KRaftVersion(_)
+            krabka_metadata::MetadataRecord::V1Voters(_)
+                | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
         )
     });
     if config.is_controller() {
@@ -732,7 +732,7 @@ async fn recover_storage_and_groups(
             let directory = log_dir::partition_dir(&owning_dir, &topic, partition_id);
             let diskless = diskless_topic_config(startup_image.topic_config(&topic));
             let open_config = crate::diskless::recovery::open_config(&config.log_config, diskless);
-            let mut log = crabka_log::Log::open(&directory, open_config)?;
+            let mut log = krabka_log::Log::open(&directory, open_config)?;
             if let Some(stamp_source) = partitions.stamp_source() {
                 log.set_stamp_source(stamp_source)?;
             }
@@ -778,15 +778,15 @@ async fn recover_storage_and_groups(
             let initial_target = if diskless {
                 crate::partition::ReplicationTarget {
                     topic_id,
-                    leader_node_id: crabka_raft::NodeId(0),
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader_node_id: krabka_raft::NodeId(0),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                 }
             } else {
                 startup_image.partition(&topic, partition_id).map_or(
                     crate::partition::ReplicationTarget {
                         topic_id,
-                        leader_node_id: crabka_raft::NodeId(0),
-                        leader_epoch: crabka_metadata::LeaderEpoch(0),
+                        leader_node_id: krabka_raft::NodeId(0),
+                        leader_epoch: krabka_metadata::LeaderEpoch(0),
                     },
                     |record| crate::partition::ReplicationTarget {
                         topic_id,
@@ -891,7 +891,7 @@ async fn start_coordinators(
         .effective_listeners()
         .iter()
         .find(|listener| listener.name == config.inter_broker_listener_name)
-        .map_or(crabka_security::ListenerProtocol::Plaintext, |listener| {
+        .map_or(krabka_security::ListenerProtocol::Plaintext, |listener| {
             listener.protocol
         });
     let mut txn_coordinator = crate::txn::coordinator::TxnCoordinator::new(
@@ -1001,13 +1001,13 @@ async fn start_coordinators(
     }
 }
 
-fn audit_signer(config: &BrokerConfig) -> Option<Arc<crabka_audit::FileEd25519Signer>> {
+fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Signer>> {
     let (Some(path), Some(key_id)) = (&config.audit_signing_key_path, &config.audit_signing_key_id)
     else {
         tracing::info!("no audit signing key configured; checkpoints disabled");
         return None;
     };
-    match crabka_audit::FileEd25519Signer::from_pkcs8_file(path, key_id.clone()) {
+    match krabka_audit::FileEd25519Signer::from_pkcs8_file(path, key_id.clone()) {
         Ok(signer) => Some(Arc::new(signer)),
         Err(error) => {
             tracing::error!(%error, "failed to load audit signing key; checkpoints disabled");
@@ -1016,13 +1016,13 @@ fn audit_signer(config: &BrokerConfig) -> Option<Arc<crabka_audit::FileEd25519Si
     }
 }
 
-fn open_audit_spool(config: &BrokerConfig) -> Option<crabka_audit::Spool> {
+fn open_audit_spool(config: &BrokerConfig) -> Option<krabka_audit::Spool> {
     let directory = if config.audit_spool_dir.is_absolute() {
         config.audit_spool_dir.clone()
     } else {
         config.log_dir.join(&config.audit_spool_dir)
     };
-    match crabka_audit::Spool::open(&directory, config.audit_spool_max) {
+    match krabka_audit::Spool::open(&directory, config.audit_spool_max) {
         Ok(spool) => Some(spool),
         Err(error) => {
             tracing::error!(%error, "failed to open audit spool; spooling disabled");
@@ -1032,8 +1032,8 @@ fn open_audit_spool(config: &BrokerConfig) -> Option<crabka_audit::Spool> {
 }
 
 fn spawn_audit_metrics(
-    stats: Arc<crabka_audit::AuditStats>,
-    log: Arc<crabka_audit::AuditLog>,
+    stats: Arc<krabka_audit::AuditStats>,
+    log: Arc<krabka_audit::AuditLog>,
     metrics: crate::metrics::BrokerMetrics,
     poll_interval: Time,
     shutdown: CancellationToken,
@@ -1079,11 +1079,11 @@ fn start_audit_pipeline(
     supervisor_shutdown: &CancellationToken,
 ) -> (
     Option<PartitionIndex>,
-    Arc<crabka_audit::AuditLog>,
+    Arc<krabka_audit::AuditLog>,
     Option<JoinHandle<()>>,
 ) {
     if !config.audit_enabled {
-        return (None, crabka_audit::AuditLog::disabled(), None);
+        return (None, krabka_audit::AuditLog::disabled(), None);
     }
     let image = controller.current_image();
     let led_partition = (0_i32..)
@@ -1094,7 +1094,7 @@ fn start_audit_pipeline(
         })
         .find(|(_, record)| record.leader == config.node_id)
         .map(|(index, _)| PartitionIndex(index));
-    let (log, receiver) = crabka_audit::AuditLog::new(config.audit_event_queue_capacity);
+    let (log, receiver) = krabka_audit::AuditLog::new(config.audit_event_queue_capacity);
     let writer_handle = if let Some(partition_index) = led_partition {
         let sink = Arc::new(crate::audit_sink::KafkaTopicAuditSink::new(
             Arc::clone(partitions),
@@ -1117,13 +1117,13 @@ fn start_audit_pipeline(
                         )
                     })
             });
-        let chain = resume.map_or_else(crabka_audit::ChainState::new, |(sequence, head)| {
-            crabka_audit::ChainState::resume(sequence, head)
+        let chain = resume.map_or_else(krabka_audit::ChainState::new, |(sequence, head)| {
+            krabka_audit::ChainState::resume(sequence, head)
         });
-        let stats = Arc::new(crabka_audit::AuditStats::new());
-        let writer = crabka_audit::AuditWriter::new(
+        let stats = Arc::new(krabka_audit::AuditStats::new());
+        let writer = krabka_audit::AuditWriter::new(
             receiver,
-            crabka_audit::AuditWriterParams {
+            krabka_audit::AuditWriterParams {
                 sink,
                 product: Broker::audit_product(),
                 signer: audit_signer(config),
@@ -1164,8 +1164,8 @@ fn start_audit_pipeline(
 /// its partitions count as drift. `node_id` leads every partition the count
 /// considers, so one rack lookup covers all of them.
 fn leader_site_drift_partitions(
-    image: &crabka_metadata::MetadataImage,
-    node_id: crabka_metadata::NodeId,
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
 ) -> usize {
     let Some(preferred) = crate::config_keys::resolve_preferred_leader_site(image) else {
         return 0;
@@ -1186,7 +1186,7 @@ fn spawn_broker_gauge_updater(
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     metrics: crate::metrics::BrokerMetrics,
     config: &BrokerConfig,
     shutdown: CancellationToken,
@@ -1309,7 +1309,7 @@ fn spawn_broker_gauge_updater(
 fn spawn_liveness_ticker(
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     metrics: crate::metrics::BrokerMetrics,
     recovery: crate::unclean_recovery::UncleanRecoveryHandle,
     tick_interval: Time,
@@ -1343,10 +1343,10 @@ fn spawn_liveness_ticker(
 async fn on_leadership_wake(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: &crate::heartbeat::controller_state::ControllerLivenessState,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     metrics: &crate::metrics::BrokerMetrics,
-    previous: &mut Option<crabka_metadata::NodeId>,
-    current: Option<crabka_metadata::NodeId>,
+    previous: &mut Option<krabka_metadata::NodeId>,
+    current: Option<krabka_metadata::NodeId>,
 ) {
     if current == *previous {
         return;
@@ -1366,7 +1366,7 @@ async fn on_leadership_wake(
 fn spawn_leadership_watcher(
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     metrics: crate::metrics::BrokerMetrics,
     shutdown: CancellationToken,
 ) {
@@ -1403,7 +1403,7 @@ fn start_liveness_services(
     config: &BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
-    listener_protocol: crabka_security::ListenerProtocol,
+    listener_protocol: krabka_security::ListenerProtocol,
     metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
     log_dirs: (
@@ -1494,8 +1494,8 @@ async fn start_observability(
             )
             .await
             .map_err(|error| match error {
-                crabka_telemetry::profiling::ProfilingError::Io(error) => BrokerError::Io(error),
-                crabka_telemetry::profiling::ProfilingError::Config(error) => {
+                krabka_telemetry::profiling::ProfilingError::Io(error) => BrokerError::Io(error),
+                krabka_telemetry::profiling::ProfilingError::Config(error) => {
                     BrokerError::InvalidRuntimeConfig(error)
                 }
             })?,
@@ -1701,7 +1701,7 @@ fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKickoff> {
     let inter_broker = listeners
         .iter()
         .find(|listener| listener.name == config.inter_broker_listener_name);
-    let protocol = inter_broker.map_or(crabka_security::ListenerProtocol::Plaintext, |listener| {
+    let protocol = inter_broker.map_or(krabka_security::ListenerProtocol::Plaintext, |listener| {
         listener.protocol
     });
     let advertised_host = inter_broker.map_or_else(
@@ -1713,13 +1713,13 @@ fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKickoff> {
             config
                 .tls_config
                 .as_ref()
-                .map(|tls| crabka_client_core::security::TlsConnectorConfig {
+                .map(|tls| krabka_client_core::security::TlsConnectorConfig {
                     trust_roots_pem: tls.trust_roots_path.clone(),
                     server_name: advertised_host.clone(),
                     client_identity: None,
                 })
         });
-        Box::new(crabka_client_core::security::ClientSecurity {
+        Box::new(krabka_client_core::security::ClientSecurity {
             protocol,
             tls: tls.flatten(),
             sasl: config
@@ -1768,7 +1768,7 @@ fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKickoff> {
 
 struct RemoteStorageStartup {
     reader: Option<Arc<crate::remote_reader::RemoteReader>>,
-    swap_target: Option<Arc<crabka_remote_storage_topic::SwappableRlmm>>,
+    swap_target: Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
     diskless_read: Option<Arc<crate::diskless::read::DisklessReadHandle>>,
 }
 
@@ -1777,16 +1777,16 @@ fn build_diskless_read_handle(
 ) -> Result<Arc<crate::diskless::read::DisklessReadHandle>, BrokerError> {
     let store_config = match backend {
         crate::config::RemoteStorageBackend::Local { dir } => {
-            crabka_object_store::ObjectStoreConfig::Local { root: dir.clone() }
+            krabka_object_store::ObjectStoreConfig::Local { root: dir.clone() }
         }
         crate::config::RemoteStorageBackend::S3(config) => {
-            crabka_object_store::ObjectStoreConfig::S3(config.clone())
+            krabka_object_store::ObjectStoreConfig::S3(config.clone())
         }
         crate::config::RemoteStorageBackend::Gcs(config) => {
-            crabka_object_store::ObjectStoreConfig::Gcs(config.clone())
+            krabka_object_store::ObjectStoreConfig::Gcs(config.clone())
         }
     };
-    let store = crabka_object_store::build_object_store(&store_config).map_err(|error| {
+    let store = krabka_object_store::build_object_store(&store_config).map_err(|error| {
         BrokerError::Startup(format!("diskless object store builder failed: {error}"))
     })?;
     Ok(Arc::new(crate::diskless::read::DisklessReadHandle::new(
@@ -1816,13 +1816,13 @@ fn start_remote_storage(
     // local pairing, so the arm below only fires for a config built in code.
     let worm = config.remote_storage_worm.as_ref();
     let archive = crate::remote_log_manager::ArchiveMode::from_worm(worm);
-    let with_worm = |store: crabka_remote_storage::S3RemoteStorage| match worm {
+    let with_worm = |store: krabka_remote_storage::S3RemoteStorage| match worm {
         Some(worm) => store.with_worm(worm).map_err(|error| {
             BrokerError::Startup(format!("remote_storage.worm setup failed: {error}"))
         }),
         None => Ok(store),
     };
-    let storage: Arc<dyn crabka_remote_storage::RemoteStorageManager> = match backend {
+    let storage: Arc<dyn krabka_remote_storage::RemoteStorageManager> = match backend {
         crate::config::RemoteStorageBackend::Local { dir } => {
             // Fail loudly rather than archive without manifests: a local
             // directory cannot enforce write-once, so a WORM deployment that
@@ -1835,30 +1835,30 @@ fn start_remote_storage(
                         .into(),
                 ));
             }
-            Arc::new(crabka_remote_storage::LocalTieredStorage::new(dir))
+            Arc::new(krabka_remote_storage::LocalTieredStorage::new(dir))
         }
         crate::config::RemoteStorageBackend::S3(s3) => Arc::new(with_worm(
-            crabka_remote_storage::S3RemoteStorage::from_s3_config(&s3).map_err(|error| {
+            krabka_remote_storage::S3RemoteStorage::from_s3_config(&s3).map_err(|error| {
                 BrokerError::Startup(format!("remote_storage.s3 builder failed: {error}"))
             })?,
         )?),
         crate::config::RemoteStorageBackend::Gcs(gcs) => Arc::new(with_worm(
-            crabka_remote_storage::S3RemoteStorage::from_gcs_config(&gcs).map_err(|error| {
+            krabka_remote_storage::S3RemoteStorage::from_gcs_config(&gcs).map_err(|error| {
                 BrokerError::Startup(format!("remote_storage.gcs builder failed: {error}"))
             })?,
         )?),
     };
     let (metadata, swap_target): (
-        Arc<dyn crabka_remote_storage::RemoteLogMetadataManager>,
-        Option<Arc<crabka_remote_storage_topic::SwappableRlmm>>,
+        Arc<dyn krabka_remote_storage::RemoteLogMetadataManager>,
+        Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
     ) = match &config.remote_log_metadata {
         crate::config::RlmmKind::TopicBacked(_) => {
-            let not_ready = Arc::new(crabka_remote_storage_topic::NotReadyRlmm::new());
-            let swap = Arc::new(crabka_remote_storage_topic::SwappableRlmm::new(not_ready));
+            let not_ready = Arc::new(krabka_remote_storage_topic::NotReadyRlmm::new());
+            let swap = Arc::new(krabka_remote_storage_topic::SwappableRlmm::new(not_ready));
             (swap.clone(), Some(swap))
         }
         crate::config::RlmmKind::InMemory => (
-            Arc::new(crabka_remote_storage::InmemoryRemoteLogMetadataManager::new()),
+            Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new()),
             None,
         ),
     };
@@ -1894,7 +1894,7 @@ struct RuntimeCaches {
 fn start_runtime_watchers(
     config: &BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    tls_dynamic: Option<&Arc<crabka_security::DynamicServerConfig>>,
+    tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
     txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
     shutdown: &CancellationToken,
@@ -2055,8 +2055,8 @@ async fn emit_broker_started(broker: &Broker, audit_partition: Option<PartitionI
         },
     )
     .await;
-    broker.audit_log.emit(crabka_audit::AuditEvent::Lifecycle {
-        kind: crabka_audit::LifecycleKind::BrokerStarted,
+    broker.audit_log.emit(krabka_audit::AuditEvent::Lifecycle {
+        kind: krabka_audit::LifecycleKind::BrokerStarted,
         node_id: i64::from(broker.config.broker_id),
         time_ms: crate::time_util::now_ms(),
     });
@@ -2064,7 +2064,7 @@ async fn emit_broker_started(broker: &Broker, audit_partition: Option<PartitionI
 
 fn spawn_rlmm_bootstrap(
     broker: &Arc<Broker>,
-    swap_target: Option<&Arc<crabka_remote_storage_topic::SwappableRlmm>>,
+    swap_target: Option<&Arc<krabka_remote_storage_topic::SwappableRlmm>>,
     kickoff: Option<&KafkaSwapKickoff>,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
@@ -2117,7 +2117,7 @@ fn spawn_diskless_bootstrap(
 async fn start_metadata_phase(
     config: &mut BrokerConfig,
     controller_listener: Option<TcpListener>,
-    tls_dynamic: Option<&Arc<crabka_security::DynamicServerConfig>>,
+    tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
     wal_shards: Arc<crate::wal::quorum::registry::WalShardRegistry>,
 ) -> Result<
@@ -2174,7 +2174,7 @@ async fn finish_broker_startup(
     ),
     coordinators: BrokerCoordinatorSet,
     transport: (
-        Option<Arc<crabka_security::DynamicServerConfig>>,
+        Option<Arc<krabka_security::DynamicServerConfig>>,
         bool,
         Arc<crate::network::client::InterBrokerClient>,
     ),
@@ -2305,7 +2305,7 @@ fn spawn_replicator_supervisor(
         .effective_listeners()
         .iter()
         .find(|listener| listener.name == config.inter_broker_listener_name)
-        .map_or(crabka_security::ListenerProtocol::Plaintext, |listener| {
+        .map_or(krabka_security::ListenerProtocol::Plaintext, |listener| {
             listener.protocol
         });
     crate::replicator_supervisor::ReplicatorSupervisor::new(
@@ -2318,7 +2318,7 @@ fn spawn_replicator_supervisor(
             partitions: Arc::clone(partitions),
             log_dirs: storage.log_dir_status.online_subset(&config.all_log_dirs()),
             log_config: config.log_config.clone(),
-            client_id: format!("crabka-broker-{}-replicator", config.broker_id),
+            client_id: format!("krabka-broker-{}-replicator", config.broker_id),
             shutdown: runtime.0.clone(),
             txn_coordinator: Some(Arc::clone(coordinators.0)),
             share_coordinator: Some(Arc::clone(coordinators.1)),
@@ -2359,19 +2359,19 @@ struct BrokerRuntimeStartup {
     remote_reader: Option<Arc<crate::remote_reader::RemoteReader>>,
     diskless_read: Option<Arc<crate::diskless::read::DisklessReadHandle>>,
     client_metrics: Arc<crate::client_metrics::ClientMetrics>,
-    audit_log: Arc<crabka_audit::AuditLog>,
+    audit_log: Arc<krabka_audit::AuditLog>,
     audit_writer_handle: Option<JoinHandle<()>>,
     audit_led_partition: Option<PartitionIndex>,
     kafka_swap_kickoff: Option<KafkaSwapKickoff>,
-    kafka_swap_target: Option<Arc<crabka_remote_storage_topic::SwappableRlmm>>,
-    inter_listener_protocol: crabka_security::ListenerProtocol,
+    kafka_swap_target: Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
+    inter_listener_protocol: krabka_security::ListenerProtocol,
 }
 
 async fn start_broker_runtime(
     config: &mut BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
-    tls_dynamic: Option<&Arc<crabka_security::DynamicServerConfig>>,
+    tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     storage: (
         &Arc<PartitionRegistry>,
         &Arc<crate::producer_state::ProducerState>,
@@ -2393,7 +2393,7 @@ async fn start_broker_runtime(
         .effective_listeners()
         .iter()
         .find(|listener| listener.name == config.inter_broker_listener_name)
-        .map_or(crabka_security::ListenerProtocol::Plaintext, |listener| {
+        .map_or(krabka_security::ListenerProtocol::Plaintext, |listener| {
             listener.protocol
         });
     let (audit_led_partition, audit_log, audit_writer_handle) = start_audit_pipeline(
@@ -2501,7 +2501,7 @@ async fn prepare_startup_transport(config: &BrokerConfig) -> Result<StartupTrans
     let tls_dynamic = config
         .tls_config
         .as_ref()
-        .map(crabka_security::DynamicServerConfig::from_tls_config)
+        .map(krabka_security::DynamicServerConfig::from_tls_config)
         .transpose()
         .map_err(|error| BrokerError::Tls(error.to_string()))?;
     let ktls_enabled = if tls_dynamic.is_some() {
@@ -2521,7 +2521,7 @@ async fn prepare_startup_transport(config: &BrokerConfig) -> Result<StartupTrans
     let tls_connector = config
         .tls_config
         .as_ref()
-        .map(crabka_security::TlsConfig::build_client_config_with_identity)
+        .map(krabka_security::TlsConfig::build_client_config_with_identity)
         .transpose()
         .map_err(|error| BrokerError::Tls(error.to_string()))?
         .map(tokio_rustls::TlsConnector::from);
@@ -2543,10 +2543,10 @@ impl Broker {
         &self.handlers
     }
 
-    pub(crate) fn audit_product() -> crabka_audit::ProductInfo {
-        crabka_audit::ProductInfo {
-            vendor_name: "Crabka".to_string(),
-            name: "crabka-broker".to_string(),
+    pub(crate) fn audit_product() -> krabka_audit::ProductInfo {
+        krabka_audit::ProductInfo {
+            vendor_name: "Krabka".to_string(),
+            name: "krabka-broker".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
@@ -2642,19 +2642,19 @@ impl BrokerHandle {
 
     /// Current Raft leader id as observed by this broker's controller.
     /// Returns `None` before the first leader is elected. Trivial
-    /// passthrough to [`crabka_raft::ControllerHandle::watch_leader`].
+    /// passthrough to [`krabka_raft::ControllerHandle::watch_leader`].
     #[must_use]
-    pub fn controller_leader_id(&self) -> Option<crabka_raft::NodeId> {
+    pub fn controller_leader_id(&self) -> Option<krabka_raft::NodeId> {
         *self.broker.controller.watch_leader().borrow()
     }
 
     /// Test-only: the controller's current quorum state (leader epoch, HWM,
     /// per-voter matched index). Used by the mixed-quorum acceptance test to
-    /// observe whether the Crabka leader commits/advances and whether a peer
+    /// observe whether the Krabka leader commits/advances and whether a peer
     /// voter (e.g. a JVM follower) is fetching.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn controller_quorum_state_for_test(&self) -> crabka_raft::QuorumState {
+    pub fn controller_quorum_state_for_test(&self) -> krabka_raft::QuorumState {
         self.broker.controller.quorum_state()
     }
 
@@ -2667,13 +2667,13 @@ impl BrokerHandle {
     }
 
     /// This broker's own registration endpoints, as stored in the
-    /// quorum-replicated [`crabka_metadata::MetadataImage`]. Integration
+    /// quorum-replicated [`krabka_metadata::MetadataImage`]. Integration
     /// tests verify that the broker projected the per-listener endpoints
     /// from `BrokerConfig::effective_listeners()` onto the
     /// self-registration record. Returns the cloned endpoint list, or an
     /// empty list if the broker has not yet self-registered.
     #[must_use]
-    pub fn self_registration_endpoints(&self) -> Vec<crabka_metadata::BrokerEndpoint> {
+    pub fn self_registration_endpoints(&self) -> Vec<krabka_metadata::BrokerEndpoint> {
         let node_id = self.broker.config.node_id;
         self.broker
             .controller
@@ -2688,14 +2688,14 @@ impl BrokerHandle {
     /// invoke this on the broker that's currently the openraft leader, or
     /// the call returns [`BrokerError::Replication`] with the underlying
     /// `RaftError::NotLeader` rendered into the message. See
-    /// [`crabka_raft::ControllerHandle::change_membership`] for full semantics.
+    /// [`krabka_raft::ControllerHandle::change_membership`] for full semantics.
     ///
     /// # Errors
     ///
     /// Forwards the underlying raft errors as [`BrokerError::Replication`].
     pub async fn change_membership(
         &self,
-        new_voters: std::collections::BTreeSet<crabka_raft::NodeId>,
+        new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
     ) -> Result<(), BrokerError> {
         self.broker
             .controller
@@ -2713,21 +2713,21 @@ impl BrokerHandle {
     /// Forwards the underlying raft errors as [`BrokerError::Replication`].
     pub async fn add_learner(
         &self,
-        node_id: crabka_raft::NodeId,
+        node_id: krabka_raft::NodeId,
         addr: std::net::SocketAddr,
     ) -> Result<(), BrokerError> {
         // KIP-853: openraft membership now keys on the full `Node` identity.
         // This `SocketAddr`-shaped convenience wrapper (used by integration
         // tests) synthesizes a single CONTROLLER endpoint and derives the
         // directory id from the node id, matching the `for_tests` convention.
-        let node = crabka_raft::Node {
+        let node = krabka_raft::Node {
             directory_id: uuid::Uuid::from_u128(u128::from(node_id.0)),
-            endpoints: vec![crabka_metadata::VoterEndpoint {
+            endpoints: vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".into(),
                 host: addr.ip().to_string(),
                 port: addr.port(),
             }],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         };
         self.broker
             .controller
@@ -2787,7 +2787,7 @@ impl BrokerHandle {
                     "partition {topic}-{partition} not local"
                 ))
             })?;
-        part.truncate_to(crabka_log::Offset(offset)).await?;
+        part.truncate_to(krabka_log::Offset(offset)).await?;
         // Mirror the production truncation path (the replicator): a log
         // truncation also reverts idempotent-producer dedup entries for the
         // dropped offsets, so a retried batch from the truncated tail re-appends
@@ -2824,7 +2824,7 @@ impl BrokerHandle {
                     "partition {topic}-{partition} not local"
                 ))
             })?;
-        part.test_set_log_start(crabka_log::Offset(new_start)).await
+        part.test_set_log_start(krabka_log::Offset(new_start)).await
     }
 
     /// Test-only: directly set `current_leader_epoch` on a locally-hosted
@@ -3175,7 +3175,7 @@ impl BrokerHandle {
     // ── partition log helpers ──────────────────────────────────────────────────
 
     /// Test-only: return the `log_start_offset` of `(topic, partition)` as
-    /// reported by its underlying [`crabka_log::Log`]. Returns `None` if the
+    /// reported by its underlying [`krabka_log::Log`]. Returns `None` if the
     /// partition is not hosted on this broker.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
@@ -3204,7 +3204,7 @@ impl BrokerHandle {
             .partitions
             .get(topic, PartitionIndex(partition))?;
         let snap = part.log.lock().ok()?.config_snapshot();
-        // `crabka-log` holds this as a `Time` now, but the helper's signature is
+        // `krabka-log` holds this as a `Time` now, but the helper's signature is
         // public under `test-helpers`, so the extent converts back at the seam
         // rather than churning the callers.
         Some(snap.retention.map(TimeExt::to_std))
@@ -3221,7 +3221,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-    ) -> Option<crabka_log::LogConfig> {
+    ) -> Option<krabka_log::LogConfig> {
         let part = self
             .broker
             .partitions
@@ -3259,9 +3259,9 @@ impl BrokerHandle {
         let leader_epoch = part.current_leader_epoch.load(Ordering::Acquire);
         let mut last_offset = 0i64;
         for i in 0..n {
-            let batch = crabka_protocol::records::RecordBatch {
+            let batch = krabka_protocol::records::RecordBatch {
                 partition_leader_epoch: leader_epoch,
-                records: vec![crabka_protocol::records::Record {
+                records: vec![krabka_protocol::records::Record {
                     offset_delta: 0,
                     value: Some(bytes::Bytes::from(format!("test-record-{i}").into_bytes())),
                     ..Default::default()
@@ -3276,7 +3276,7 @@ impl BrokerHandle {
 
     /// Test-only: read the `tiered_storage_rlmm_topic_backed` gauge. `1`
     /// once the bootstrap task has swapped the fail-closed `NotReadyRlmm`
-    /// for the topic-backed [`crabka_remote_storage::RemoteLogMetadataManager`],
+    /// for the topic-backed [`krabka_remote_storage::RemoteLogMetadataManager`],
     /// `0` before the swap completes, or when `remote_log_metadata` is
     /// `RlmmKind::InMemory`.
     #[cfg(any(test, feature = "test-helpers"))]
@@ -3368,7 +3368,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-        expected_leader: crabka_raft::NodeId,
+        expected_leader: krabka_raft::NodeId,
         expected_voters: usize,
     ) -> bool {
         let image = self.broker.controller.current_image();
@@ -3390,7 +3390,7 @@ impl BrokerHandle {
                 == expected_voters.saturating_sub(1)
     }
 
-    /// Test-only: submit a [`crabka_metadata::MetadataRecord`] directly to
+    /// Test-only: submit a [`krabka_metadata::MetadataRecord`] directly to
     /// this broker's controller, bypassing the public Kafka APIs. Used by
     /// integration tests to provision a SCRAM credential before the
     /// `AlterUserScramCredentials` handler exists. Returns an
@@ -3403,7 +3403,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn submit_metadata_record_for_test(
         &self,
-        rec: crabka_metadata::MetadataRecord,
+        rec: krabka_metadata::MetadataRecord,
     ) -> Result<(), crate::error::BrokerError> {
         self.broker
             .controller
@@ -3482,7 +3482,7 @@ impl BrokerHandle {
     /// `topic_config` directly without adding per-field accessors.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn controller_image_for_test(&self) -> std::sync::Arc<crabka_metadata::MetadataImage> {
+    pub fn controller_image_for_test(&self) -> std::sync::Arc<krabka_metadata::MetadataImage> {
         self.broker.controller.current_image()
     }
 
@@ -3493,7 +3493,7 @@ impl BrokerHandle {
     /// broker-only node is absent from the controller's voters.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn quorum_voters_for_test(&self) -> Vec<crabka_raft::NodeId> {
+    pub fn quorum_voters_for_test(&self) -> Vec<krabka_raft::NodeId> {
         self.broker.controller.quorum_state().voters
     }
 
@@ -3527,7 +3527,7 @@ impl BrokerHandle {
     /// to pick a follower to remove.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn voter_ids_for_test(&self) -> std::collections::BTreeSet<crabka_raft::NodeId> {
+    pub fn voter_ids_for_test(&self) -> std::collections::BTreeSet<krabka_raft::NodeId> {
         self.broker.controller.current_image().voters().ids()
     }
 
@@ -3536,7 +3536,7 @@ impl BrokerHandle {
     /// voter's directory id to disambiguate.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn voter_directory_id_for_test(&self, id: crabka_raft::NodeId) -> Option<uuid::Uuid> {
+    pub fn voter_directory_id_for_test(&self, id: krabka_raft::NodeId) -> Option<uuid::Uuid> {
         self.broker
             .controller
             .current_image()
@@ -3555,8 +3555,8 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn remove_voter_for_test(
         &self,
-        req: crabka_raft::reconfig::RemoveVoter,
-    ) -> Result<crabka_raft::reconfig::ReconfigOutcome, crabka_raft::RaftError> {
+        req: krabka_raft::reconfig::RemoveVoter,
+    ) -> Result<krabka_raft::reconfig::ReconfigOutcome, krabka_raft::RaftError> {
         self.broker.controller.remove_voter(req).await
     }
 
@@ -3568,7 +3568,7 @@ impl BrokerHandle {
     pub async fn finalize_kraft_version_for_test(
         &self,
         version: u16,
-    ) -> Result<crabka_raft::reconfig::ReconfigOutcome, crabka_raft::RaftError> {
+    ) -> Result<krabka_raft::reconfig::ReconfigOutcome, krabka_raft::RaftError> {
         self.broker.controller.finalize_kraft_version(version).await
     }
 
@@ -3580,7 +3580,7 @@ impl BrokerHandle {
     ///
     /// Propagates any error from the underlying raft trigger.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn trigger_snapshot_for_test(&self) -> Result<(), crabka_raft::RaftError> {
+    pub async fn trigger_snapshot_for_test(&self) -> Result<(), krabka_raft::RaftError> {
         self.broker.controller.trigger_snapshot().await
     }
 
@@ -3593,7 +3593,7 @@ impl BrokerHandle {
     pub fn partition_leader_for_test(&self, topic: &str, partition: i32) -> Option<u64> {
         let img = self.broker.controller.current_image();
         let p = img.partition(topic, partition)?;
-        if p.leader == crabka_raft::NodeId(0) {
+        if p.leader == krabka_raft::NodeId(0) {
             None
         } else {
             Some(p.leader.0)
@@ -3611,7 +3611,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-        leader: crabka_raft::NodeId,
+        leader: krabka_raft::NodeId,
     ) {
         let result = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
@@ -3652,8 +3652,8 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-        leader: crabka_raft::NodeId,
-        leader_epoch: crabka_metadata::LeaderEpoch,
+        leader: krabka_raft::NodeId,
+        leader_epoch: krabka_metadata::LeaderEpoch,
     ) {
         let result = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
@@ -3698,7 +3698,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-    ) -> Option<crabka_metadata::PartitionRecord> {
+    ) -> Option<krabka_metadata::PartitionRecord> {
         self.broker
             .controller
             .current_image()
@@ -3712,7 +3712,7 @@ impl BrokerHandle {
     #[must_use]
     pub fn watch_leader_for_test(
         &self,
-    ) -> tokio::sync::watch::Receiver<Option<crabka_raft::NodeId>> {
+    ) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
         self.broker.controller.watch_leader()
     }
 
@@ -3723,7 +3723,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_for_image<F>(&self, pred: F)
     where
-        F: Fn(&crabka_metadata::MetadataImage) -> bool,
+        F: Fn(&krabka_metadata::MetadataImage) -> bool,
     {
         let mut rx = self.broker.controller.watch_image();
         let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
@@ -3791,24 +3791,24 @@ impl BrokerHandle {
     /// Test-only: await until a non-zero controller leader is elected.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_controller_leader(&self) -> crabka_raft::NodeId {
+    pub async fn wait_until_controller_leader(&self) -> krabka_raft::NodeId {
         let mut rx = self.watch_leader_for_test();
         let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
                 if let Some(id) = *rx.borrow_and_update()
-                    && id != crabka_raft::NodeId(0)
+                    && id != krabka_raft::NodeId(0)
                 {
                     return id;
                 }
                 if rx.changed().await.is_err() {
-                    return crabka_raft::NodeId(0);
+                    return krabka_raft::NodeId(0);
                 }
             }
         })
         .await;
         let id = res.expect("wait_until_controller_leader timed out after 30s");
         assert!(
-            id != crabka_raft::NodeId(0),
+            id != krabka_raft::NodeId(0),
             "leader channel closed before a leader was elected"
         );
         id
@@ -3837,13 +3837,13 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-        exclude: crabka_raft::NodeId,
+        exclude: krabka_raft::NodeId,
     ) {
         self.wait_for_image(|img| {
             img.partition(topic, partition).is_some_and(|p| {
-                p.leader != crabka_raft::NodeId(0)
+                p.leader != krabka_raft::NodeId(0)
                     && p.leader != exclude
-                    && p.leader_epoch > crabka_metadata::LeaderEpoch(0)
+                    && p.leader_epoch > krabka_metadata::LeaderEpoch(0)
             })
         })
         .await;
@@ -3872,7 +3872,7 @@ impl BrokerHandle {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notified = part.append_notify.notified();
-                    if part.log_end_offset() >= crabka_log::Offset(min) {
+                    if part.log_end_offset() >= krabka_log::Offset(min) {
                         return;
                     }
                     notified.await;
@@ -3901,7 +3901,7 @@ impl BrokerHandle {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notified = part.hw_advance_notify.notified();
-                    if part.high_watermark().await >= crabka_log::Offset(min) {
+                    if part.high_watermark().await >= krabka_log::Offset(min) {
                         return;
                     }
                     notified.await;
@@ -3942,7 +3942,7 @@ impl BrokerHandle {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notified = part.append_notify.notified();
-                    if part.log_end_offset() == crabka_log::Offset(target) {
+                    if part.log_end_offset() == krabka_log::Offset(target) {
                         return;
                     }
                     // Truncation does not fire append_notify; fall back to a short
@@ -4178,8 +4178,8 @@ impl BrokerHandle {
         }
         self.broker
             .audit_log
-            .emit(crabka_audit::AuditEvent::Lifecycle {
-                kind: crabka_audit::LifecycleKind::BrokerStopping,
+            .emit(krabka_audit::AuditEvent::Lifecycle {
+                kind: krabka_audit::LifecycleKind::BrokerStopping,
                 node_id: i64::from(self.broker.config.broker_id),
                 time_ms: crate::time_util::now_ms(),
             });
@@ -4223,12 +4223,12 @@ impl Drop for BrokerHandle {
     }
 }
 
-/// Wraps a real [`crabka_raft::ControllerHandle`] so it can satisfy the
+/// Wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
 /// [`crate::leader_rebalance::ControllerLike`] trait required by the
 /// auto-rebalance background task.
 struct ControllerAdapter {
     handle: Arc<dyn crate::metadata_source::MetadataSource>,
-    node_id: crabka_raft::NodeId,
+    node_id: krabka_raft::NodeId,
 }
 
 #[async_trait::async_trait]
@@ -4237,13 +4237,13 @@ impl crate::leader_rebalance::ControllerLike for ControllerAdapter {
         *self.handle.watch_leader().borrow() == Some(self.node_id)
     }
 
-    fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.handle.current_image()
     }
 
     async fn submit_change(
         &self,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<(), String> {
         self.handle
             .submit_change(records)
@@ -4253,12 +4253,12 @@ impl crate::leader_rebalance::ControllerLike for ControllerAdapter {
     }
 }
 
-/// Wraps a real [`crabka_raft::ControllerHandle`] so it can satisfy the
+/// Wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
 /// [`crate::reassignment::ReassignmentController`] trait required by the
 /// reassignment-completion background task.
 struct ReassignmentControllerAdapter {
     handle: Arc<dyn crate::metadata_source::MetadataSource>,
-    node_id: crabka_raft::NodeId,
+    node_id: krabka_raft::NodeId,
 }
 
 #[async_trait::async_trait]
@@ -4267,17 +4267,17 @@ impl crate::reassignment::ReassignmentController for ReassignmentControllerAdapt
         *self.handle.watch_leader().borrow() == Some(self.node_id)
     }
 
-    fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.handle.current_image()
     }
 
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>> {
+    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>> {
         self.handle.watch_image()
     }
 
     async fn submit_change(
         &self,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<(), String> {
         self.handle
             .submit_change(records)
@@ -4287,7 +4287,7 @@ impl crate::reassignment::ReassignmentController for ReassignmentControllerAdapt
     }
 }
 
-/// KIP-48: wraps a real [`crabka_raft::ControllerHandle`] so it
+/// KIP-48: wraps a real [`krabka_raft::ControllerHandle`] so it
 /// can satisfy the [`crate::delegation_token_cleanup::DelegationTokenController`]
 /// trait required by the delegation-token expiry sweep. Every broker runs
 /// the sweep. Raft serializes duplicate tombstones, so each becomes a no-op.
@@ -4299,13 +4299,13 @@ struct DelegationTokenCleanupControllerAdapter {
 impl crate::delegation_token_cleanup::DelegationTokenController
     for DelegationTokenCleanupControllerAdapter
 {
-    fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.handle.current_image()
     }
 
     async fn submit_change(
         &self,
-        records: Vec<crabka_metadata::MetadataRecord>,
+        records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<(), String> {
         self.handle
             .submit_change(records)
@@ -4344,7 +4344,7 @@ impl Broker {
     /// listeners instead of binding their addresses itself:
     ///
     /// * `controller_listener`: threaded through to
-    ///   [`crabka_raft::Controller::start_with_listener`]. Its local address
+    ///   [`krabka_raft::Controller::start_with_listener`]. Its local address
     ///   MUST equal `config.controller_listen_addr`.
     /// * `data_plane_listeners`: each listener is adopted for the data-plane
     ///   [`ListenerSpec`] whose `bind_addr` equals its local address (for the
@@ -4605,15 +4605,15 @@ struct KafkaSwapKickoff {
 /// that covers a user-topic-partition this node leads or follows, for the
 /// metadata topic's `partition_count`.
 fn needed_metadata_partitions(
-    image: &crabka_metadata::MetadataImage,
-    node_id: crabka_metadata::NodeId,
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
     partition_count: i32,
 ) -> Vec<i32> {
-    let mut tps: Vec<crabka_remote_storage::TopicIdPartition> = Vec::new();
+    let mut tps: Vec<krabka_remote_storage::TopicIdPartition> = Vec::new();
     for topic in image.topics() {
         for p in image.partitions_of(&topic.name) {
             if p.leader == node_id || p.replicas.contains(&node_id) {
-                tps.push(crabka_remote_storage::TopicIdPartition::new(
+                tps.push(krabka_remote_storage::TopicIdPartition::new(
                     topic.topic_id,
                     topic.name.clone(),
                     p.partition,
@@ -4621,7 +4621,7 @@ fn needed_metadata_partitions(
             }
         }
     }
-    crabka_remote_storage_topic::metadata_partitions_for(tps.iter(), partition_count)
+    krabka_remote_storage_topic::metadata_partitions_for(tps.iter(), partition_count)
 }
 
 /// Next backoff after a failed RLMM bootstrap attempt: double, capped.
@@ -4664,17 +4664,17 @@ async fn rlmm_bootstrap_backoff(
 }
 
 /// Construct the topic-backed
-/// [`crabka_remote_storage::RemoteLogMetadataManager`] against the
+/// [`krabka_remote_storage::RemoteLogMetadataManager`] against the
 /// broker's loopback listener and swap it into `swap`. Retries with
 /// bounded backoff until it succeeds or shutdown fires. The broker stays on
-/// the fail-closed [`crabka_remote_storage_topic::NotReadyRlmm`] placeholder
+/// the fail-closed [`krabka_remote_storage_topic::NotReadyRlmm`] placeholder
 /// until then.
 fn metadata_log_config(
     config: &crate::config::KafkaRlmmConfig,
     topic: String,
     client_id: String,
-) -> crabka_remote_storage_topic::KafkaMetadataLogConfig {
-    crabka_remote_storage_topic::KafkaMetadataLogConfig {
+) -> krabka_remote_storage_topic::KafkaMetadataLogConfig {
+    krabka_remote_storage_topic::KafkaMetadataLogConfig {
         dispatch_queue_capacity: config.dispatch_queue_capacity,
         frame_max: config.frame_max,
         bootstrap: config.bootstrap.clone(),
@@ -4692,18 +4692,18 @@ fn metadata_log_config(
 }
 
 async fn bootstrap_topic_rlmm(
-    swap: Arc<crabka_remote_storage_topic::SwappableRlmm>,
+    swap: Arc<krabka_remote_storage_topic::SwappableRlmm>,
     cfg: KafkaSwapKickoff,
     runtime: tokio::runtime::Handle,
     metrics: crate::metrics::BrokerMetrics,
-    node_id: crabka_metadata::NodeId,
-    mut image_rx: tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>>,
+    node_id: krabka_metadata::NodeId,
+    mut image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     shutdown: CancellationToken,
 ) {
     let log_cfg = metadata_log_config(
         &cfg.cfg,
-        crabka_remote_storage_topic::METADATA_TOPIC.to_owned(),
-        format!("crabka-rlmm-broker-{}", cfg.broker_id),
+        krabka_remote_storage_topic::METADATA_TOPIC.to_owned(),
+        format!("krabka-rlmm-broker-{}", cfg.broker_id),
     );
 
     // Retry the topic-backed bootstrap with bounded backoff until it succeeds
@@ -4727,7 +4727,7 @@ async fn bootstrap_topic_rlmm(
                 tracing::debug!("topic-backed RLMM bootstrap cancelled during attempt");
                 return;
             }
-            res = crabka_remote_storage_topic::KafkaMetadataEventLog::start(log_cfg.clone()) => res,
+            res = krabka_remote_storage_topic::KafkaMetadataEventLog::start(log_cfg.clone()) => res,
         };
         let log = match started {
             Ok(l) => l,
@@ -4741,7 +4741,7 @@ async fn bootstrap_topic_rlmm(
                 continue;
             }
         };
-        let manager = match crabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
+        let manager = match krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
             log.clone(),
             runtime.clone(),
             cfg.cfg.snapshot_dir.clone(),
@@ -4788,9 +4788,9 @@ async fn bootstrap_topic_rlmm(
 
 struct DisklessFlusherStartup {
     partitions: Arc<PartitionRegistry>,
-    image_rx: tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>>,
+    image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     object_store: Arc<dyn object_store::ObjectStore>,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     broker_id: i32,
     flush_config: crate::diskless::flusher::FlushConfig,
     ready: Arc<AtomicBool>,
@@ -4805,18 +4805,18 @@ async fn bootstrap_diskless_index_log(
     let log_config = metadata_log_config(
         &config.cfg,
         crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
-        format!("crabka-diskless-index-broker-{}", config.broker_id),
+        format!("krabka-diskless-index-broker-{}", config.broker_id),
     );
     let mut backoff = config.bootstrap_backoff_initial;
     loop {
         let started = tokio::select! {
             biased;
             () = shutdown.cancelled() => return,
-            result = crabka_remote_storage_topic::KafkaMetadataEventLog::start(log_config.clone()) => result,
+            result = krabka_remote_storage_topic::KafkaMetadataEventLog::start(log_config.clone()) => result,
         };
         match started {
             Ok(log) => {
-                let log: Arc<dyn crabka_remote_storage_topic::MetadataEventLog> = log;
+                let log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> = log;
                 let index_log =
                     crate::diskless::index_log::DisklessIndexLog::start_with_cache(log, cache);
                 tracing::info!(
@@ -4853,9 +4853,9 @@ async fn bootstrap_diskless_index_log(
 }
 
 async fn watch_rlmm_needed_partitions(
-    mut image_rx: tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>>,
+    mut image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     set_tx: tokio::sync::watch::Sender<Vec<i32>>,
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     partition_count: i32,
     shutdown: CancellationToken,
 ) {
@@ -4894,7 +4894,7 @@ async fn watch_rlmm_needed_partitions(
 /// `reconcile_assignment` is idempotent for partitions already
 /// assigned-and-ready, so the periodic re-apply is cheap.
 async fn run_rlmm_reconciler(
-    manager: Arc<crabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager>,
+    manager: Arc<krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager>,
     mut set_rx: tokio::sync::watch::Receiver<Vec<i32>>,
     reconcile_tick: std::time::Duration,
     shutdown: CancellationToken,
@@ -4925,20 +4925,20 @@ pub(crate) fn diskless_topic_config(
     config: Option<&std::collections::BTreeMap<String, String>>,
 ) -> bool {
     config
-        .and_then(|config| config.get("crabka.diskless"))
+        .and_then(|config| config.get("krabka.diskless"))
         .is_some_and(|value| value == "true")
 }
 
 type PartitionWal = (
     Option<crate::wal::SharedWal>,
-    Option<crabka_log::Offset>,
+    Option<krabka_log::Offset>,
     Option<Arc<crate::wal::quorum::engine::WalShardEngine>>,
 );
 
 fn partition_wal(
     identity: (&str, Option<uuid::Uuid>, PartitionIndex),
     log_dir: &std::path::Path,
-    log: Arc<Mutex<crabka_log::Log>>,
+    log: Arc<Mutex<krabka_log::Log>>,
     diskless: bool,
     hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
     wal_shards: Option<Arc<crate::wal::quorum::registry::WalShardRegistry>>,
@@ -4998,7 +4998,7 @@ pub(crate) fn spawn_partition(
     topic: String,
     partition_id: PartitionIndex,
     log_dir: std::path::PathBuf,
-    log: crabka_log::Log,
+    log: krabka_log::Log,
     log_dir_status: crate::log_dir_status::LogDirRegistry,
     producer_state: Arc<crate::producer_state::ProducerState>,
     diskless: bool,
@@ -5007,8 +5007,8 @@ pub(crate) fn spawn_partition(
         topic,
         crate::partition::ReplicationTarget {
             topic_id: None,
-            leader_node_id: crabka_raft::NodeId(0),
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader_node_id: krabka_raft::NodeId(0),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
         },
         partition_id,
         log_dir,
@@ -5025,7 +5025,7 @@ pub(crate) fn spawn_partition_with_replication_target(
     replication_target: crate::partition::ReplicationTarget,
     partition_id: PartitionIndex,
     log_dir: std::path::PathBuf,
-    log: crabka_log::Log,
+    log: krabka_log::Log,
     log_dir_status: crate::log_dir_status::LogDirRegistry,
     producer_state: Arc<crate::producer_state::ProducerState>,
     diskless: bool,
@@ -5059,7 +5059,7 @@ pub(crate) struct PartitionSpawnConfig {
     pub topic_id: Option<uuid::Uuid>,
     pub partition_id: PartitionIndex,
     pub log_dir: std::path::PathBuf,
-    pub log: crabka_log::Log,
+    pub log: krabka_log::Log,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
     pub producer_state: Arc<crate::producer_state::ProducerState>,
     pub producer_id_expiration: Time,
@@ -5077,8 +5077,8 @@ pub(crate) fn try_spawn_partition_with_sequencer(
 ) -> Result<Arc<Partition>, BrokerError> {
     let initial_target = crate::partition::ReplicationTarget {
         topic_id: config.topic_id,
-        leader_node_id: crabka_raft::NodeId(0),
-        leader_epoch: crabka_metadata::LeaderEpoch(0),
+        leader_node_id: krabka_raft::NodeId(0),
+        leader_epoch: krabka_metadata::LeaderEpoch(0),
     };
     try_spawn_partition_with_replication_target(config, initial_target)
 }
@@ -5123,7 +5123,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
     delivery.publish_now(&log);
     let mut initial_replica_state = crate::replica_state::ReplicaState::new();
     initial_replica_state.current_leader_epoch =
-        crabka_ids::LeaderEpoch(initial_target.leader_epoch.0);
+        krabka_ids::LeaderEpoch(initial_target.leader_epoch.0);
     if let Some(durable_watermark) = recovered_durable_watermark {
         initial_replica_state.recompute_hw_for_wal_durable(durable_watermark);
     }
@@ -5213,7 +5213,7 @@ fn parse_advertised_host_port(addr: &str) -> (String, u16) {
     )
 }
 
-/// Build the KIP-595 static controller [`VoterSet`](crabka_metadata::VoterSet)
+/// Build the KIP-595 static controller [`VoterSet`](krabka_metadata::VoterSet)
 /// from the configured `controller_quorum_voters` (`(id, "<host>:<port>")`).
 ///
 /// Peer endpoint hosts stay as their configured **DNS names**. They are NOT
@@ -5231,11 +5231,11 @@ fn parse_advertised_host_port(addr: &str) -> (String, u16) {
 /// placeholder (verified against `kraft/network.rs::controller_addr` and
 /// `kraft/core.rs`).
 fn static_controller_voter_set(
-    quorum_voters: &[(crabka_raft::NodeId, String)],
-    self_node_id: crabka_raft::NodeId,
+    quorum_voters: &[(krabka_raft::NodeId, String)],
+    self_node_id: krabka_raft::NodeId,
     self_directory_id: uuid::Uuid,
     _self_controller_listen: std::net::SocketAddr,
-) -> crabka_metadata::VoterSet {
+) -> krabka_metadata::VoterSet {
     // Split a configured "<host>:<port>" into (host, port), keeping the host
     // verbatim (a DNS name resolved later, per dial). `file_config`
     // (`parse_quorum_voter`) validates the shape, so a parse miss here is not
@@ -5247,24 +5247,24 @@ fn static_controller_voter_set(
         }
     }
     fn voter(
-        id: crabka_raft::NodeId,
+        id: krabka_raft::NodeId,
         directory_id: uuid::Uuid,
         host: String,
         port: u16,
-    ) -> crabka_metadata::Voter {
-        crabka_metadata::Voter {
+    ) -> krabka_metadata::Voter {
+        krabka_metadata::Voter {
             id,
             directory_id,
-            endpoints: vec![crabka_metadata::VoterEndpoint {
+            endpoints: vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".to_string(),
                 host,
                 port,
             }],
-            kraft_version: crabka_metadata::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
         }
     }
 
-    let voters: Vec<crabka_metadata::Voter> = quorum_voters
+    let voters: Vec<krabka_metadata::Voter> = quorum_voters
         .iter()
         .map(|(node_id, host_port)| {
             let (configured_host, configured_port) = split_host_port(host_port);
@@ -5276,7 +5276,7 @@ fn static_controller_voter_set(
             voter(*node_id, directory_id, host, port)
         })
         .collect();
-    crabka_metadata::VoterSet::from_voters(voters)
+    krabka_metadata::VoterSet::from_voters(voters)
 }
 
 /// Live-connection accounting backing the `max.connections` (global) and
@@ -5524,8 +5524,8 @@ fn tune_accepted_socket(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::{kibibytes, mebibytes, millis, minutes, secs};
     use futures_util::future::BoxFuture;
+    use krabka_units::{kibibytes, mebibytes, millis, minutes, secs};
     use tempfile::tempdir;
 
     use super::*;
@@ -5552,8 +5552,8 @@ mod tests {
 
     #[tokio::test]
     async fn audit_metrics_cancellation_releases_log_before_next_poll() {
-        let stats = Arc::new(crabka_audit::AuditStats::new());
-        let (log, _receiver) = crabka_audit::AuditLog::new(1);
+        let stats = Arc::new(krabka_audit::AuditStats::new());
+        let (log, _receiver) = krabka_audit::AuditLog::new(1);
         let weak_log = Arc::downgrade(&log);
         let shutdown = CancellationToken::new();
         spawn_audit_metrics(
@@ -5578,12 +5578,12 @@ mod tests {
     }
 
     struct MockMetadataSource {
-        image: Arc<crabka_metadata::MetadataImage>,
-        leader_tx: tokio::sync::watch::Sender<Option<crabka_raft::NodeId>>,
+        image: Arc<krabka_metadata::MetadataImage>,
+        leader_tx: tokio::sync::watch::Sender<Option<krabka_raft::NodeId>>,
     }
 
     impl MockMetadataSource {
-        fn new(image: crabka_metadata::MetadataImage, leader: Option<crabka_raft::NodeId>) -> Self {
+        fn new(image: krabka_metadata::MetadataImage, leader: Option<krabka_raft::NodeId>) -> Self {
             let (leader_tx, _) = tokio::sync::watch::channel(leader);
             Self {
                 image: Arc::new(image),
@@ -5594,21 +5594,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::metadata_source::MetadataSource for MockMetadataSource {
-        fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
+        fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
             self.image.clone()
         }
 
-        fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>> {
+        fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>> {
             let (_, rx) = tokio::sync::watch::channel(self.image.clone());
             rx
         }
 
-        fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<crabka_raft::NodeId>> {
+        fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
             self.leader_tx.subscribe()
         }
 
-        fn quorum_state(&self) -> crabka_raft::QuorumState {
-            crabka_raft::QuorumState {
+        fn quorum_state(&self) -> krabka_raft::QuorumState {
+            krabka_raft::QuorumState {
                 current_term: 0,
                 last_applied_index: 0,
                 current_leader: *self.leader_tx.borrow(),
@@ -5620,24 +5620,24 @@ mod tests {
 
         async fn submit_change(
             &self,
-            _records: Vec<crabka_metadata::MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _records: Vec<krabka_metadata::MetadataRecord>,
+        ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn change_membership(
             &self,
-            _new_voters: std::collections::BTreeSet<crabka_raft::NodeId>,
-        ) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
+        ) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn add_learner(
             &self,
-            _node_id: crabka_raft::NodeId,
-            _node: crabka_raft::Node,
-        ) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _node_id: krabka_raft::NodeId,
+            _node: krabka_raft::Node,
+        ) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         fn controller_bound_addr(&self) -> std::net::SocketAddr {
@@ -5648,33 +5648,33 @@ mod tests {
             &self,
             _position: i64,
             _max_bytes: i32,
-        ) -> crabka_raft::SnapshotRange {
-            crabka_raft::SnapshotRange::NoSnapshot
+        ) -> krabka_raft::SnapshotRange {
+            krabka_raft::SnapshotRange::NoSnapshot
         }
 
-        async fn trigger_snapshot(&self) -> Result<(), crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+        async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn add_voter(
             &self,
-            _req: crabka_raft::AddVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _req: krabka_raft::AddVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn remove_voter(
             &self,
-            _req: crabka_raft::RemoveVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _req: krabka_raft::RemoveVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn update_voter(
             &self,
-            _req: crabka_raft::UpdateVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
-            Err(crabka_raft::RaftError::Unsupported("mock metadata source"))
+            _req: krabka_raft::UpdateVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
+            Err(krabka_raft::RaftError::Unsupported("mock metadata source"))
         }
 
         async fn cancel(&self) {}
@@ -5682,24 +5682,24 @@ mod tests {
 
     #[tokio::test]
     async fn broker_gauge_uses_configured_default_min_isr() {
-        let node_id = crabka_metadata::NodeId(1);
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&crabka_metadata::MetadataRecord::V1Topic(
-            crabka_metadata::TopicRecord {
+        let node_id = krabka_metadata::NodeId(1);
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
                 name: "gauge-topic".into(),
                 topic_id: uuid::Uuid::nil(),
                 partitions: 1,
                 replication_factor: 1,
             },
         ));
-        image.apply(&crabka_metadata::MetadataRecord::V1Partition(
-            crabka_metadata::PartitionRecord {
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
                 topic: "gauge-topic".into(),
                 partition: 0,
                 leader: node_id,
                 replicas: vec![node_id],
                 isr: vec![node_id],
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: Vec::new(),
                 removing_replicas: Vec::new(),
                 directories: Vec::new(),
@@ -5733,11 +5733,11 @@ mod tests {
         shutdown.cancel();
     }
 
-    fn image_with_registered_broker(node_id: u64) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&crabka_metadata::MetadataRecord::V1BrokerRegistration(
-            crabka_metadata::BrokerRegistrationRecord {
-                node_id: crabka_raft::NodeId(node_id),
+    fn image_with_registered_broker(node_id: u64) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_raft::NodeId(node_id),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
                 host: "127.0.0.1".to_string(),
@@ -5756,7 +5756,7 @@ mod tests {
         use crate::heartbeat::controller_state::{
             ControllerLivenessState, LivenessTransition, TestClock,
         };
-        let me = crabka_raft::NodeId(7);
+        let me = krabka_raft::NodeId(7);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
             MockMetadataSource::new(image_with_registered_broker(1), Some(me)),
         );
@@ -5785,7 +5785,7 @@ mod tests {
         assert!(metrics.controller_leader_changes_total.get() == 0);
 
         // A change to another leader counts, but does not seed here.
-        let other = crabka_raft::NodeId(8);
+        let other = krabka_raft::NodeId(8);
         on_leadership_wake(
             &controller,
             &liveness,
@@ -5820,13 +5820,13 @@ mod tests {
     #[tokio::test]
     async fn leadership_watcher_seeds_liveness_when_this_node_takes_the_lead() {
         use crate::heartbeat::controller_state::ControllerLivenessState;
-        let me = crabka_raft::NodeId(7);
+        let me = krabka_raft::NodeId(7);
         let mock = Arc::new(MockMetadataSource::new(
             image_with_registered_broker(1),
             None,
         ));
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = mock.clone();
-        let liveness = Arc::new(ControllerLivenessState::new(crabka_units::secs(60)));
+        let liveness = Arc::new(ControllerLivenessState::new(krabka_units::secs(60)));
         let metrics = crate::metrics::BrokerMetrics::new();
         let shutdown = CancellationToken::new();
         spawn_leadership_watcher(
@@ -5889,7 +5889,7 @@ mod tests {
     ) -> Arc<Partition> {
         let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
         std::fs::create_dir_all(&part_dir).expect("create partition dir");
-        let log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default())
+        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
             .expect("open partition log");
         let part = spawn_partition(
             topic.to_string(),
@@ -5901,12 +5901,12 @@ mod tests {
             false,
         );
         if !values.is_empty() {
-            let mut batch = crabka_protocol::records::RecordBatch {
+            let mut batch = krabka_protocol::records::RecordBatch {
                 last_offset_delta: i32::try_from(values.len() - 1).expect("record count fits"),
                 records: values
                     .iter()
                     .enumerate()
-                    .map(|(idx, value)| crabka_protocol::records::Record {
+                    .map(|(idx, value)| krabka_protocol::records::Record {
                         offset_delta: i32::try_from(idx).expect("offset delta fits"),
                         value: Some(bytes::Bytes::from_static(value)),
                         ..Default::default()
@@ -5931,7 +5931,7 @@ mod tests {
             topic_id: None,
             partition_id: PartitionIndex(0),
             log_dir: dir.path().to_path_buf(),
-            log: crabka_log::Log::open(dir.path(), crabka_log::LogConfig::default())
+            log: krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default())
                 .expect("open log"),
             log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
             producer_state: Arc::new(crate::producer_state::ProducerState::new()),
@@ -5972,13 +5972,13 @@ mod tests {
         assert!(!diskless_topic_config(None));
 
         let mut config = std::collections::BTreeMap::new();
-        config.insert("crabka.diskless".to_string(), "false".to_string());
+        config.insert("krabka.diskless".to_string(), "false".to_string());
         assert!(!diskless_topic_config(Some(&config)));
 
-        config.insert("crabka.diskless".to_string(), "TRUE".to_string());
+        config.insert("krabka.diskless".to_string(), "TRUE".to_string());
         assert!(!diskless_topic_config(Some(&config)));
 
-        config.insert("crabka.diskless".to_string(), "true".to_string());
+        config.insert("krabka.diskless".to_string(), "true".to_string());
         assert!(diskless_topic_config(Some(&config)));
     }
 
@@ -5986,7 +5986,7 @@ mod tests {
     fn partition_wal_is_created_only_for_diskless_partitions() {
         let dir = tempdir().expect("tempdir");
         let log = Arc::new(Mutex::new(
-            crabka_log::Log::open(dir.path(), crabka_log::LogConfig::default()).expect("open log"),
+            krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).expect("open log"),
         ));
 
         assert!(
@@ -6025,12 +6025,12 @@ mod tests {
         let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
         std::fs::create_dir_all(&partition_dir).expect("partition directory");
         let mut log =
-            crabka_log::Log::open(&partition_dir, crabka_log::LogConfig::default()).unwrap();
-        let mut batch = crabka_protocol::records::RecordBatch {
+            krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
+        let mut batch = krabka_protocol::records::RecordBatch {
             last_offset_delta: 1,
             records: vec![
-                crabka_protocol::records::Record::default(),
-                crabka_protocol::records::Record {
+                krabka_protocol::records::Record::default(),
+                krabka_protocol::records::Record {
                     offset_delta: 1,
                     ..Default::default()
                 },
@@ -6058,7 +6058,7 @@ mod tests {
         })
         .expect("spawn recovered partition");
 
-        assert!(partition.high_watermark().await == crabka_log::Offset(2));
+        assert!(partition.high_watermark().await == krabka_log::Offset(2));
         partition
             .take_writer_handle()
             .expect("partition writer handle")
@@ -6074,25 +6074,25 @@ mod tests {
             partition: PartitionIndex(0),
         };
         let registry = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
-            crabka_raft::NodeId(1),
+            krabka_raft::NodeId(1),
         ));
         registry.replace_placements(&std::collections::HashMap::from([(
             shard,
             vec![
-                crabka_raft::NodeId(1),
-                crabka_raft::NodeId(2),
-                crabka_raft::NodeId(3),
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
             ],
         )]));
         let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
         std::fs::create_dir_all(&partition_dir).expect("partition directory");
         let mut log =
-            crabka_log::Log::open(&partition_dir, crabka_log::LogConfig::default()).unwrap();
-        let mut batch = crabka_protocol::records::RecordBatch {
+            krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
+        let mut batch = krabka_protocol::records::RecordBatch {
             last_offset_delta: 1,
             records: vec![
-                crabka_protocol::records::Record::default(),
-                crabka_protocol::records::Record {
+                krabka_protocol::records::Record::default(),
+                krabka_protocol::records::Record {
                     offset_delta: 1,
                     ..Default::default()
                 },
@@ -6118,14 +6118,14 @@ mod tests {
             sequencer: None,
         })
         .expect("spawn recovered partition");
-        assert!(partition.high_watermark().await == crabka_log::Offset(0));
+        assert!(partition.high_watermark().await == krabka_log::Offset(0));
 
         let acknowledgement = crate::wal::quorum::wire::fetch_request(
             crate::wal::quorum::wire::QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
-            crabka_raft::NodeId(2),
+            krabka_raft::NodeId(2),
             0,
             2,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         );
         registry
             .route_fetch_request(&acknowledgement)
@@ -6134,7 +6134,7 @@ mod tests {
 
         partition
             .await_hw_at_least(
-                crabka_log::Offset(2),
+                krabka_log::Offset(2),
                 std::time::Instant::now() + std::time::Duration::from_secs(2),
             )
             .await
@@ -6309,8 +6309,8 @@ mod tests {
         );
     }
 
-    fn metadata_topic_record(topic: &str, topic_id: u128) -> crabka_metadata::MetadataRecord {
-        crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+    fn metadata_topic_record(topic: &str, topic_id: u128) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: topic.to_string(),
             topic_id: uuid::Uuid::from_u128(topic_id),
             partitions: 1,
@@ -6325,14 +6325,14 @@ mod tests {
         replicas: &[u64],
         isr: &[u64],
         leader_epoch: i32,
-    ) -> crabka_metadata::PartitionRecord {
-        crabka_metadata::PartitionRecord {
+    ) -> krabka_metadata::PartitionRecord {
+        krabka_metadata::PartitionRecord {
             topic: topic.to_string(),
             partition,
-            leader: crabka_audit::NodeId(leader),
-            replicas: replicas.iter().copied().map(crabka_audit::NodeId).collect(),
-            isr: isr.iter().copied().map(crabka_audit::NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(leader_epoch),
+            leader: krabka_audit::NodeId(leader),
+            replicas: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
+            isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
+            leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
             adding_replicas: Vec::new(),
             removing_replicas: Vec::new(),
             directories: vec![uuid::Uuid::nil(); replicas.len()],
@@ -6357,7 +6357,7 @@ mod tests {
         let partition_record =
             metadata_partition_record(topic, partition, leader, replicas, isr, leader_epoch);
         handle
-            .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1Partition(
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
                 partition_record.clone(),
             ))
             .await
@@ -6377,14 +6377,14 @@ mod tests {
     ) -> BrokerConfig {
         let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
         config.broker_id = i32::try_from(node_id).expect("node id fits broker id");
-        config.node_id = crabka_raft::NodeId(node_id);
+        config.node_id = krabka_raft::NodeId(node_id);
         config.listen_addr = listen_addr;
         config.advertised_listener = listen_addr.to_string();
         config.controller_listen_addr = controller_addr;
         config.directory_id = uuid::Uuid::from_u128(u128::from(node_id));
         config.controller_quorum_voters = voters
             .iter()
-            .map(|(id, addr)| (crabka_raft::NodeId(*id), addr.to_string()))
+            .map(|(id, addr)| (krabka_raft::NodeId(*id), addr.to_string()))
             .collect();
         config
     }
@@ -6400,23 +6400,23 @@ mod tests {
         // `BeginQuorumEpoch`, never learned the leader, and never opened :9092.
         let quorum = vec![
             (
-                crabka_raft::NodeId(0),
+                krabka_raft::NodeId(0),
                 "demo-broker-0-0.demo-broker-headless.default.svc.cluster.local:9093".to_string(),
             ),
             (
-                crabka_raft::NodeId(1),
+                krabka_raft::NodeId(1),
                 "demo-broker-1-0.demo-broker-headless.default.svc.cluster.local:9093".to_string(),
             ),
         ];
         let self_dir = uuid::Uuid::from_u128(7);
         let set = static_controller_voter_set(
             &quorum,
-            crabka_audit::NodeId(0),
+            krabka_audit::NodeId(0),
             self_dir,
             "0.0.0.0:9093".parse().unwrap(),
         );
 
-        let v0 = set.get(crabka_audit::NodeId(0)).expect("voter 0 present");
+        let v0 = set.get(krabka_audit::NodeId(0)).expect("voter 0 present");
         let ep0 = v0
             .endpoints
             .iter()
@@ -6429,7 +6429,7 @@ mod tests {
         check!(ep0.port == 9093);
         check!(v0.directory_id == self_dir);
 
-        let v1 = set.get(crabka_audit::NodeId(1)).expect("voter 1 present");
+        let v1 = set.get(krabka_audit::NodeId(1)).expect("voter 1 present");
         let ep1 = v1
             .endpoints
             .iter()
@@ -6443,17 +6443,17 @@ mod tests {
     fn static_voter_set_single_self_voter_uses_configured_addr() {
         // The configured endpoint is the advertised address. It can differ
         // from the bind address when the controller runs behind DNS or NAT.
-        let quorum = vec![(crabka_raft::NodeId(3), "127.0.0.1:9093".to_string())];
+        let quorum = vec![(krabka_raft::NodeId(3), "127.0.0.1:9093".to_string())];
         let self_dir = uuid::Uuid::from_u128(3);
         let set = static_controller_voter_set(
             &quorum,
-            crabka_audit::NodeId(3),
+            krabka_audit::NodeId(3),
             self_dir,
             "192.168.1.5:9099".parse().unwrap(),
         );
         assert!(set.len() == 1);
         let v = set
-            .get(crabka_audit::NodeId(3))
+            .get(krabka_audit::NodeId(3))
             .expect("self voter present");
         let ep = v.endpoints.iter().find(|e| e.name == "CONTROLLER").unwrap();
         assert!(ep.host == "127.0.0.1");
@@ -6543,15 +6543,15 @@ protocol = "Plaintext"
         roles: Vec<crate::config::NodeRole>,
     ) -> BrokerConfig {
         BrokerConfig {
-            node_id: crabka_metadata::NodeId(4),
+            node_id: krabka_metadata::NodeId(4),
             roles,
             ..BrokerConfig::for_tests(log_dir.to_path_buf())
         }
     }
 
-    fn broker_witness_record(node_id: u64, value: Option<&str>) -> crabka_metadata::MetadataRecord {
-        crabka_metadata::MetadataRecord::V1BrokerConfig(crabka_metadata::BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(node_id),
+    fn broker_witness_record(node_id: u64, value: Option<&str>) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
+            node_id: krabka_metadata::NodeId(node_id),
             config_name: "broker.witness".into(),
             config_value: value.map(str::to_string),
         })
@@ -6572,7 +6572,7 @@ protocol = "Plaintext"
         assert!(
             broker_registration_batch(&config)
                 == vec![
-                    crabka_metadata::MetadataRecord::V1BrokerRegistration(
+                    krabka_metadata::MetadataRecord::V1BrokerRegistration(
                         self_registration_record(&config)
                     ),
                     broker_witness_record(4, Some("true")),
@@ -6594,7 +6594,7 @@ protocol = "Plaintext"
         assert!(
             broker_registration_batch(&config)
                 == vec![
-                    crabka_metadata::MetadataRecord::V1BrokerRegistration(
+                    krabka_metadata::MetadataRecord::V1BrokerRegistration(
                         self_registration_record(&config)
                     ),
                     broker_witness_record(4, None),
@@ -6611,9 +6611,9 @@ protocol = "Plaintext"
 
         assert!(
             stretch_default_records(&config)
-                == vec![crabka_metadata::MetadataRecord::V1BrokerConfig(
-                    crabka_metadata::BrokerConfigRecord {
-                        node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                == vec![krabka_metadata::MetadataRecord::V1BrokerConfig(
+                    krabka_metadata::BrokerConfigRecord {
+                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                         config_name: "stretch.preferred.leader.site".into(),
                         config_value: Some("dc-a".into()),
                     }
@@ -6630,12 +6630,12 @@ protocol = "Plaintext"
 
     /// An image where node 1 sits in `rack` and leads `led` partitions of one
     /// topic, and node 2 sits in `dc-a` and leads one more.
-    fn stretch_image(rack: &str, led: i32) -> crabka_metadata::MetadataImage {
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    fn stretch_image(rack: &str, led: i32) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         for (node_id, node_rack) in [(1_u64, rack), (2_u64, "dc-a")] {
-            image.apply(&crabka_metadata::MetadataRecord::V1BrokerRegistration(
-                crabka_metadata::BrokerRegistrationRecord {
-                    node_id: crabka_metadata::NodeId(node_id),
+            image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_metadata::NodeId(node_id),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::nil(),
                     host: "127.0.0.1".into(),
@@ -6647,23 +6647,23 @@ protocol = "Plaintext"
                 },
             ));
         }
-        image.apply(&crabka_metadata::MetadataRecord::V1BrokerConfig(
-            crabka_metadata::BrokerConfigRecord {
-                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                 config_name: "stretch.preferred.leader.site".into(),
                 config_value: Some("dc-a".into()),
             },
         ));
         for partition in 0..=led {
             let leader = if partition < led { 1 } else { 2 };
-            image.apply(&crabka_metadata::MetadataRecord::V1Partition(
-                crabka_metadata::PartitionRecord {
+            image.apply(&krabka_metadata::MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
                     topic: "stretch-topic".into(),
                     partition,
-                    leader: crabka_metadata::NodeId(leader),
-                    replicas: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
-                    isr: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader: krabka_metadata::NodeId(leader),
+                    replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+                    isr: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: Vec::new(),
                     removing_replicas: Vec::new(),
                     directories: Vec::new(),
@@ -6680,13 +6680,13 @@ protocol = "Plaintext"
             let image = stretch_image(rack, led);
 
             check!(
-                leader_site_drift_partitions(&image, crabka_metadata::NodeId(1)) == expected,
+                leader_site_drift_partitions(&image, krabka_metadata::NodeId(1)) == expected,
                 "rack {rack}"
             );
             // Node 2 leads one partition from the preferred site, so it never
             // drifts whatever node 1 does.
             check!(
-                leader_site_drift_partitions(&image, crabka_metadata::NodeId(2)) == 0,
+                leader_site_drift_partitions(&image, krabka_metadata::NodeId(2)) == 0,
                 "rack {rack}"
             );
         }
@@ -6695,42 +6695,42 @@ protocol = "Plaintext"
     #[test]
     fn leader_site_drift_is_zero_when_the_cluster_pins_no_leader_site() {
         let mut image = stretch_image("dc-b", 2);
-        image.apply(&crabka_metadata::MetadataRecord::V1BrokerConfig(
-            crabka_metadata::BrokerConfigRecord {
-                node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
                 config_name: "stretch.preferred.leader.site".into(),
                 config_value: None,
             },
         ));
 
-        assert!(leader_site_drift_partitions(&image, crabka_metadata::NodeId(1)) == 0);
+        assert!(leader_site_drift_partitions(&image, krabka_metadata::NodeId(1)) == 0);
     }
 
     #[test]
     fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
         let config = BrokerConfig {
-            node_id: crabka_metadata::NodeId(7),
+            node_id: krabka_metadata::NodeId(7),
             incarnation_id: uuid::Uuid::from_u128(0xCAFE),
             controller_quorum_voters: vec![(
-                crabka_metadata::NodeId(7),
+                krabka_metadata::NodeId(7),
                 "controller.example:19093".into(),
             )],
-            controller_listener_protocol: crabka_security::ListenerProtocol::Ssl,
+            controller_listener_protocol: krabka_security::ListenerProtocol::Ssl,
             ..Default::default()
         };
 
         let registration = self_controller_registration_record(&config);
 
-        assert!(registration.node_id == crabka_metadata::NodeId(7));
+        assert!(registration.node_id == krabka_metadata::NodeId(7));
         assert!(registration.incarnation_id == uuid::Uuid::from_u128(0xCAFE));
-        assert!(registration.features == crabka_metadata::supported_feature_ranges());
+        assert!(registration.features == krabka_metadata::supported_feature_ranges());
         assert!(
             registration.endpoints
-                == vec![crabka_metadata::BrokerEndpoint {
+                == vec![krabka_metadata::BrokerEndpoint {
                     name: "CONTROLLER".into(),
                     host: "controller.example".into(),
                     port: 19093,
-                    protocol: crabka_security::ListenerProtocol::Ssl,
+                    protocol: krabka_security::ListenerProtocol::Ssl,
                 }]
         );
     }
@@ -6739,20 +6739,20 @@ protocol = "Plaintext"
     fn controller_registration_starts_at_kip_919_floor_and_is_idempotent() {
         let config = BrokerConfig::default();
         let registration = self_controller_registration_record(&config);
-        let mut image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&crabka_metadata::MetadataRecord::V1FeatureLevel(
-            crabka_metadata::FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                level: crabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL - 1,
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL - 1,
             },
         ));
 
         assert!(controller_registration_update(&image, &registration).is_none());
 
-        image.apply(&crabka_metadata::MetadataRecord::V1FeatureLevel(
-            crabka_metadata::FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                level: crabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
+        image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
             },
         ));
         let update = controller_registration_update(&image, &registration)
@@ -6891,17 +6891,17 @@ protocol = "Plaintext"
     fn controller_adapters_report_leadership_from_leader_watch() {
         let source: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(MockMetadataSource::new(
-                crabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-                Some(crabka_raft::NodeId(7)),
+                krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
+                Some(krabka_raft::NodeId(7)),
             ));
 
         let leader_adapter = ControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(7),
+            node_id: krabka_raft::NodeId(7),
         };
         let follower_adapter = ControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(8),
+            node_id: krabka_raft::NodeId(8),
         };
         assert!(crate::leader_rebalance::ControllerLike::is_leader(
             &leader_adapter
@@ -6912,11 +6912,11 @@ protocol = "Plaintext"
 
         let leader_adapter = ReassignmentControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(7),
+            node_id: krabka_raft::NodeId(7),
         };
         let follower_adapter = ReassignmentControllerAdapter {
             handle: source,
-            node_id: crabka_raft::NodeId(8),
+            node_id: krabka_raft::NodeId(8),
         };
         assert!(crate::reassignment::ReassignmentController::is_leader(
             &leader_adapter
@@ -6931,13 +6931,13 @@ protocol = "Plaintext"
         let cluster_id = uuid::Uuid::from_u128(0x5150);
         let source: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(MockMetadataSource::new(
-                crabka_metadata::MetadataImage::new(cluster_id),
-                Some(crabka_raft::NodeId(1)),
+                krabka_metadata::MetadataImage::new(cluster_id),
+                Some(krabka_raft::NodeId(1)),
             ));
 
         let leader = ControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(1),
+            node_id: krabka_raft::NodeId(1),
         };
         assert!(
             crate::leader_rebalance::ControllerLike::current_image(&leader).cluster_id()
@@ -6946,7 +6946,7 @@ protocol = "Plaintext"
 
         let reassignment = ReassignmentControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(1),
+            node_id: krabka_raft::NodeId(1),
         };
         assert!(
             crate::reassignment::ReassignmentController::current_image(&reassignment).cluster_id()
@@ -6968,14 +6968,14 @@ protocol = "Plaintext"
     async fn controller_adapters_forward_submit_errors() {
         let source: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(MockMetadataSource::new(
-                crabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-                Some(crabka_raft::NodeId(1)),
+                krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
+                Some(krabka_raft::NodeId(1)),
             ));
         let record = metadata_topic_record("adapter-submit-mutant-topic", 0xADAD);
 
         let leader = ControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(1),
+            node_id: krabka_raft::NodeId(1),
         };
         assert!(
             crate::leader_rebalance::ControllerLike::submit_change(&leader, vec![record.clone()])
@@ -6985,7 +6985,7 @@ protocol = "Plaintext"
 
         let reassignment = ReassignmentControllerAdapter {
             handle: source.clone(),
-            node_id: crabka_raft::NodeId(1),
+            node_id: krabka_raft::NodeId(1),
         };
         assert!(
             crate::reassignment::ReassignmentController::submit_change(
@@ -7043,10 +7043,10 @@ protocol = "Plaintext"
 
     #[tokio::test]
     async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
-        let log: Arc<dyn crabka_remote_storage_topic::MetadataEventLog> =
-            crabka_remote_storage_topic::InProcessMetadataEventLog::new(3);
+        let log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> =
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(3);
         let snapshot_dir = tempfile::tempdir().expect("snapshot tempdir");
-        let manager = crabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
+        let manager = krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
             log,
             tokio::runtime::Handle::current(),
             snapshot_dir.path().join("rlmm-manager"),
@@ -7116,14 +7116,14 @@ protocol = "Plaintext"
         );
         check!(
             handle
-                .change_membership([crabka_raft::NodeId(1)].into_iter().collect())
+                .change_membership([krabka_raft::NodeId(1)].into_iter().collect())
                 .await
                 .is_ok()
         );
 
         let leader = handle.wait_until_controller_leader().await;
-        assert!(leader == crabka_raft::NodeId(handle.node_id()));
-        assert!(handle.controller_leader_id() == Some(crabka_raft::NodeId(handle.node_id())));
+        assert!(leader == krabka_raft::NodeId(handle.node_id()));
+        assert!(handle.controller_leader_id() == Some(krabka_raft::NodeId(handle.node_id())));
 
         let mut endpoints = handle.self_registration_endpoints();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -7134,20 +7134,20 @@ protocol = "Plaintext"
         assert!(!endpoints.is_empty());
 
         handle
-            .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1BrokerRegistration(
-                crabka_metadata::BrokerRegistrationRecord {
-                    node_id: crabka_raft::NodeId(handle.node_id() + 1),
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_raft::NodeId(handle.node_id() + 1),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::from_u128(0xBEEF),
                     host: "127.0.0.1".to_string(),
                     port: 19_092,
                     rack: None,
                     log_dirs: vec![],
-                    endpoints: vec![crabka_metadata::BrokerEndpoint {
+                    endpoints: vec![krabka_metadata::BrokerEndpoint {
                         name: "PLAINTEXT".to_string(),
                         host: "127.0.0.1".to_string(),
                         port: 19_092,
-                        protocol: crabka_security::ListenerProtocol::Plaintext,
+                        protocol: krabka_security::ListenerProtocol::Plaintext,
                     }],
                     features: std::collections::BTreeMap::new(),
                 },
@@ -7157,7 +7157,7 @@ protocol = "Plaintext"
         assert!(
             handle
                 .controller_image_for_test()
-                .broker(crabka_raft::NodeId(handle.node_id() + 1))
+                .broker(krabka_raft::NodeId(handle.node_id() + 1))
                 .is_some()
         );
         handle.wait_until_brokers_registered(2).await;
@@ -7183,21 +7183,21 @@ protocol = "Plaintext"
         let observed_partition = handle
             .partition_record_for_test(topic, 0)
             .expect("partition record");
-        let expected_partition = crabka_metadata::PartitionRecord {
+        let expected_partition = krabka_metadata::PartitionRecord {
             topic: topic.to_string(),
             partition: 0,
-            leader: crabka_audit::NodeId(partition_leader),
+            leader: krabka_audit::NodeId(partition_leader),
             replicas: partition_isr
                 .iter()
                 .copied()
-                .map(crabka_audit::NodeId)
+                .map(krabka_audit::NodeId)
                 .collect(),
             isr: partition_isr
                 .iter()
                 .copied()
-                .map(crabka_audit::NodeId)
+                .map(krabka_audit::NodeId)
                 .collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(3),
+            leader_epoch: krabka_metadata::LeaderEpoch(3),
             adding_replicas: Vec::new(),
             removing_replicas: Vec::new(),
             directories: vec![uuid::Uuid::nil(); partition_isr.len()],
@@ -7213,7 +7213,7 @@ protocol = "Plaintext"
                 handle.wait_until_partition_leader_changed(
                     topic,
                     0,
-                    crabka_raft::NodeId(handle.node_id())
+                    krabka_raft::NodeId(handle.node_id())
                 ),
             )
             .await
@@ -7223,7 +7223,7 @@ protocol = "Plaintext"
         assert!(
             matches!(
                 broker.controller.read_snapshot_range(0, 1),
-                crabka_raft::SnapshotRange::NoSnapshot
+                krabka_raft::SnapshotRange::NoSnapshot
             ),
             "test should start without a metadata snapshot"
         );
@@ -7231,7 +7231,7 @@ protocol = "Plaintext"
             .trigger_snapshot_for_test()
             .await
             .expect("trigger metadata snapshot");
-        let crabka_raft::SnapshotRange::Slice(snapshot) =
+        let krabka_raft::SnapshotRange::Slice(snapshot) =
             broker.controller.read_snapshot_range(0, 1)
         else {
             panic!("trigger_snapshot_for_test should write a readable snapshot");
@@ -7275,7 +7275,7 @@ protocol = "Plaintext"
 
         let helper_topic = "handle-partition-helper-mutant-topic";
         let helper_part = local_partition_with_records(dir.path(), helper_topic, 0, &[]);
-        let helper_config = crabka_log::LogConfig {
+        let helper_config = krabka_log::LogConfig {
             retention: Some(secs(123)),
             segment_size: kibibytes(4),
             ..Default::default()
@@ -7317,9 +7317,9 @@ protocol = "Plaintext"
             .log
             .lock()
             .expect("helper partition log lock")
-            .read(crabka_log::Offset(2), mebibytes(1))
+            .read(krabka_log::Offset(2), mebibytes(1))
             .expect("read helper partition records");
-        assert!(read.start_offset == crabka_log::Offset(2));
+        assert!(read.start_offset == krabka_log::Offset(2));
         assert!(!read.batches.is_empty());
         let records: Vec<_> = read
             .batches
@@ -7410,7 +7410,7 @@ protocol = "Plaintext"
                 share_topic_id,
                 share_partition,
                 11,
-                crabka_log::Offset(90),
+                krabka_log::Offset(90),
             )
             .await
             .expect("initialize share state");
@@ -7421,10 +7421,10 @@ protocol = "Plaintext"
                 share_topic_id,
                 share_partition,
                 (12, 2),
-                (crabka_log::Offset(95), 7),
+                (krabka_log::Offset(95), 7),
                 vec![crate::share_coordinator::persistence::StateBatch {
-                    first_offset: crabka_log::Offset(95),
-                    last_offset: crabka_log::Offset(99),
+                    first_offset: krabka_log::Offset(95),
+                    last_offset: krabka_log::Offset(99),
                     delivery_state: 0,
                     delivery_count: 1,
                 }],
@@ -7475,7 +7475,7 @@ protocol = "Plaintext"
         );
         {
             let mut state = acquired_cell.lock().await;
-            state.materialize(crabka_log::Offset(3), 10);
+            state.materialize(krabka_log::Offset(3), 10);
             let acquired = state.acquire(
                 "member-1",
                 3,
@@ -7502,18 +7502,18 @@ protocol = "Plaintext"
         drop(closed_listener);
         let add_learner = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            handle.add_learner(crabka_raft::NodeId(handle.node_id() + 10), closed_addr),
+            handle.add_learner(krabka_raft::NodeId(handle.node_id() + 10), closed_addr),
         )
         .await
         .expect("add_learner returned before timeout");
         assert!(add_learner.is_ok());
 
         let own_directory = handle
-            .voter_directory_id_for_test(crabka_raft::NodeId(handle.node_id()))
+            .voter_directory_id_for_test(krabka_raft::NodeId(handle.node_id()))
             .expect("own voter directory id");
         check!(own_directory != uuid::Uuid::nil());
         check!(
-            handle.voter_directory_id_for_test(crabka_raft::NodeId(handle.node_id() + 10_000))
+            handle.voter_directory_id_for_test(krabka_raft::NodeId(handle.node_id() + 10_000))
                 == None
         );
 
@@ -7687,7 +7687,7 @@ protocol = "Plaintext"
         let leader = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if let Some(leader) = handle7.controller_leader_id()
-                    && leader != crabka_raft::NodeId(0)
+                    && leader != krabka_raft::NodeId(0)
                 {
                     return leader;
                 }
@@ -7696,7 +7696,7 @@ protocol = "Plaintext"
         })
         .await
         .expect("two-voter cluster leader");
-        assert!(leader == crabka_raft::NodeId(7) || leader == crabka_raft::NodeId(8));
+        assert!(leader == krabka_raft::NodeId(7) || leader == krabka_raft::NodeId(8));
         handle7.wait_for_image(|img| img.voters().len() == 2).await;
         handle8.wait_for_image(|img| img.voters().len() == 2).await;
 
@@ -7708,14 +7708,14 @@ protocol = "Plaintext"
                 .quorum_voters_for_test()
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>()
-                == [crabka_raft::NodeId(7), crabka_raft::NodeId(8)]
+                == [krabka_raft::NodeId(7), krabka_raft::NodeId(8)]
                     .into_iter()
                     .collect::<std::collections::BTreeSet<_>>()
         );
         check!(handle7.voter_count_for_test() == 2);
         check!(
             handle7.voter_ids_for_test()
-                == [crabka_raft::NodeId(7), crabka_raft::NodeId(8)]
+                == [krabka_raft::NodeId(7), krabka_raft::NodeId(8)]
                     .into_iter()
                     .collect::<std::collections::BTreeSet<_>>()
         );
@@ -7807,7 +7807,7 @@ protocol = "Plaintext"
                         .wait_until_partition_leader_changed(
                             "missing-mutant-topic",
                             0,
-                            crabka_raft::NodeId(1),
+                            krabka_raft::NodeId(1),
                         )
                         .await;
                 }),
@@ -7865,7 +7865,7 @@ protocol = "Plaintext"
                     handle.wait_until_partition_leader_changed(
                         topic,
                         0,
-                        crabka_raft::NodeId(excluded)
+                        krabka_raft::NodeId(excluded)
                     ),
                 )
                 .await
@@ -7904,9 +7904,9 @@ protocol = "Plaintext"
 
     #[test]
     fn needed_metadata_partitions_covers_led_and_followed() {
-        use crabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-        use crabka_remote_storage::TopicIdPartition;
-        use crabka_remote_storage_topic::metadata_partition_for;
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        use krabka_remote_storage::TopicIdPartition;
+        use krabka_remote_storage_topic::metadata_partition_for;
         use uuid::Uuid;
 
         let topic_id = Uuid::from_u128(0xABCD);
@@ -7926,10 +7926,10 @@ protocol = "Plaintext"
             image.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: "orders".into(),
                 partition,
-                leader: crabka_audit::NodeId(leader),
-                replicas: replicas.iter().copied().map(crabka_audit::NodeId).collect(),
-                isr: replicas.iter().copied().map(crabka_audit::NodeId).collect(),
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader: krabka_audit::NodeId(leader),
+                replicas: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
+                isr: replicas.iter().copied().map(krabka_audit::NodeId).collect(),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -7937,7 +7937,7 @@ protocol = "Plaintext"
             }));
         }
 
-        let got = needed_metadata_partitions(&image, crabka_audit::NodeId(7), 50);
+        let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50);
 
         let mut expected = vec![
             metadata_partition_for(&TopicIdPartition::new(topic_id, "orders", 0), 50),
@@ -8104,9 +8104,9 @@ protocol = "Plaintext"
     #[test]
     fn metadata_log_config_copies_shared_transport_policy() {
         let policy = crate::config::KafkaRlmmConfig {
-            dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity::new(7)
+            dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity::new(7)
                 .unwrap(),
-            frame_max: crabka_client_core::ClientFrameMax::try_from(crabka_units::kibibytes(32))
+            frame_max: krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32))
                 .unwrap(),
             bootstrap: "broker-0:9094".into(),
             num_partitions: 8,
@@ -8115,7 +8115,7 @@ protocol = "Plaintext"
             fetch_max_wait: millis(750),
             fetch_max_bytes: mebibytes(2),
             fetch_retry_backoff: millis(300),
-            event_queue_capacity: crabka_remote_storage_topic::MetadataEventQueueCapacity::new(
+            event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity::new(
                 2048,
             )
             .unwrap(),
@@ -8124,7 +8124,7 @@ protocol = "Plaintext"
 
         let rlmm = metadata_log_config(
             &policy,
-            crabka_remote_storage_topic::METADATA_TOPIC.to_owned(),
+            krabka_remote_storage_topic::METADATA_TOPIC.to_owned(),
             "rlmm-client".to_owned(),
         );
         let diskless = metadata_log_config(
@@ -8143,9 +8143,9 @@ protocol = "Plaintext"
             check!(config.fetch_retry_backoff == millis(300));
             check!(config.event_queue_capacity.capacity() == 2048);
             check!(config.dispatch_queue_capacity.get() == 7);
-            check!(config.frame_max.size() == crabka_units::kibibytes(32));
+            check!(config.frame_max.size() == krabka_units::kibibytes(32));
         }
-        check!(rlmm.topic == crabka_remote_storage_topic::METADATA_TOPIC);
+        check!(rlmm.topic == krabka_remote_storage_topic::METADATA_TOPIC);
         check!(rlmm.client_id == "rlmm-client");
         check!(diskless.topic == crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC);
         check!(diskless.client_id == "diskless-client");
@@ -8161,8 +8161,8 @@ protocol = "Plaintext"
         let bootstrap = listener.local_addr().unwrap().to_string();
         drop(listener);
 
-        let swap = Arc::new(crabka_remote_storage_topic::SwappableRlmm::new(Arc::new(
-            crabka_remote_storage_topic::NotReadyRlmm::new(),
+        let swap = Arc::new(krabka_remote_storage_topic::SwappableRlmm::new(Arc::new(
+            krabka_remote_storage_topic::NotReadyRlmm::new(),
         )));
         let snapshot_dir = tempdir().unwrap();
         let cfg = KafkaSwapKickoff {
@@ -8182,7 +8182,7 @@ protocol = "Plaintext"
         };
         let metrics = crate::metrics::BrokerMetrics::new();
         let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(
-            crabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
+            krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
         ));
         let shutdown = CancellationToken::new();
         shutdown.cancel();
@@ -8194,7 +8194,7 @@ protocol = "Plaintext"
                 cfg,
                 tokio::runtime::Handle::current(),
                 metrics.clone(),
-                crabka_raft::NodeId(7),
+                krabka_raft::NodeId(7),
                 image_rx,
                 shutdown,
             ),
@@ -8229,13 +8229,13 @@ protocol = "Plaintext"
             reconcile_tick: std::time::Duration::from_secs(1),
         };
         let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(
-            crabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
+            krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
         ));
         let flusher = DisklessFlusherStartup {
             partitions: Arc::new(PartitionRegistry::new()),
             image_rx,
             object_store: Arc::new(object_store::memory::InMemory::new()),
-            node_id: crabka_raft::NodeId(7),
+            node_id: krabka_raft::NodeId(7),
             broker_id: 1,
             flush_config: crate::diskless::flusher::FlushConfig::default(),
             ready: Arc::new(AtomicBool::new(false)),
@@ -8269,7 +8269,7 @@ protocol = "Plaintext"
         let part_dir = dir.path().join("foo-0");
         std::fs::create_dir(&part_dir).unwrap();
         {
-            let _log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default()).unwrap();
+            let _log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         }
 
         let config = BrokerConfig::for_tests(dir.path().to_path_buf());

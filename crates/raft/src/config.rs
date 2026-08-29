@@ -3,8 +3,8 @@
 use std::{fmt, future::Future, net::SocketAddr, path::PathBuf, pin::Pin, str::FromStr, sync::Arc};
 
 use bytes::Bytes;
-use crabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX;
-use crabka_units::{
+use krabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX;
+use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _, Time, hours, mebibytes, millis, secs},
 };
@@ -174,7 +174,7 @@ impl FromStr for MetadataRaftFetchMax {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        crabka_units::parse::byte_size(value)
+        krabka_units::parse::byte_size(value)
             .map_err(|error| error.to_string())?
             .try_into()
     }
@@ -214,7 +214,7 @@ pub struct ControllerAdminRequest {
     pub client_id: Option<String>,
     pub body: Bytes,
     pub peer: SocketAddr,
-    pub principal: Option<crabka_security::Principal>,
+    pub principal: Option<krabka_security::Principal>,
     pub authenticated_via_token: bool,
 }
 
@@ -274,9 +274,9 @@ pub enum BootstrapMode {
 #[derive(Clone)]
 pub struct ControllerConfig {
     /// Capacity used by outbound controller client connections.
-    pub client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
+    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     /// Maximum frame size used by outbound controller client connections.
-    pub client_frame_max: crabka_client_core::ClientFrameMax,
+    pub client_frame_max: krabka_client_core::ClientFrameMax,
     pub node_id: NodeId,
     /// Endpoints used only to discover the leader at cold start (KIP-853 dynamic).
     pub bootstrap_servers: Vec<String>,
@@ -287,7 +287,7 @@ pub struct ControllerConfig {
     /// Max allowed lag (in log entries) for an observer to be promotable.
     pub observer_lag_bound: u64,
     /// Initial voter set for the bootstrapping node only; empty for joiners.
-    pub initial_voters: crabka_metadata::VoterSet,
+    pub initial_voters: krabka_metadata::VoterSet,
     pub controller_listen_addr: SocketAddr,
     pub log_dir: PathBuf,
     pub election_timeout: Time,
@@ -403,22 +403,22 @@ impl ControllerConfig {
         let directory_id = Uuid::from_u128(u128::from(node_id.0));
         Self {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             node_id,
             bootstrap_servers: vec![],
             directory_id,
             auto_join: false,
             observer_lag_bound: 1000,
-            initial_voters: crabka_metadata::VoterSet::from_voters([crabka_metadata::Voter {
+            initial_voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
                 id: node_id,
                 directory_id,
-                endpoints: vec![crabka_metadata::VoterEndpoint {
+                endpoints: vec![krabka_metadata::VoterEndpoint {
                     name: "CONTROLLER".into(),
                     host: listen.ip().to_string(),
                     port: listen.port(),
                 }],
-                kraft_version: crabka_metadata::KRaftVersionRange::default(),
+                kraft_version: krabka_metadata::KRaftVersionRange::default(),
             }]),
             controller_listen_addr: listen,
             log_dir,
@@ -427,7 +427,7 @@ impl ControllerConfig {
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
-            client_id: "crabka-controller-test".into(),
+            client_id: "krabka-controller-test".into(),
             bootstrap_mode: BootstrapMode::Bootstrap,
             cluster_id: None,
             dialer: None,
@@ -445,7 +445,7 @@ impl ControllerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::prelude::{ByteSizeExt as _, TimeExt as _};
+    use krabka_units::prelude::{ByteSizeExt as _, TimeExt as _};
 
     use super::*;
 
@@ -519,7 +519,7 @@ mod tests {
         for needle in [
             "ControllerConfig",
             "node_id: 7",
-            "client_id: \"crabka-controller-test\"",
+            "client_id: \"krabka-controller-test\"",
             "dialer: false",
             "handshake: false",
             // Quantities render in the operator form, so 20 MiB reads as `20MiB`

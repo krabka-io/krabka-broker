@@ -16,7 +16,7 @@
 //! bare UUID string, byte-identical to the previous `Uuid` field.
 //! [`DirectoryId`] is never serialized as a whole value, so it needs no
 //! serde. The code writes it with `to_string()` into a hand-built JSON
-//! object, and unwraps it to the raw `Uuid` at the `crabka_voters::Voter`
+//! object, and unwraps it to the raw `Uuid` at the `krabka_voters::Voter`
 //! boundary.
 
 use derive_more::{Display, From, Into};

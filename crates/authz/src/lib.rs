@@ -14,9 +14,9 @@
 //! ```rust
 //! use std::net::SocketAddr;
 //!
-//! use crabka_authz::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer};
-//! use crabka_metadata::{AclOperation, MetadataImage, ResourceType};
-//! use crabka_security::{AuthMethod, Principal};
+//! use krabka_authz::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer};
+//! use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+//! use krabka_security::{AuthMethod, Principal};
 //! use uuid::Uuid;
 //!
 //! let image = MetadataImage::new(Uuid::nil());
@@ -52,8 +52,8 @@ use std::net::SocketAddr;
 
 pub use allow_all::AllowAllAuthorizer;
 pub use cache::AclCache;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_security::Principal;
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_security::Principal;
 pub use simple::SimpleAclAuthorizer;
 pub use source::AclSource;
 

@@ -1,7 +1,7 @@
 //! KIP-13 + KIP-124 + KIP-257 client quotas.
 
-use crabka_metadata::{EntityKey, MetadataImage};
-use crabka_units::{
+use krabka_metadata::{EntityKey, MetadataImage};
+use krabka_units::{
     ByteRate, Time,
     convert::{ByteRateExt as _, TimeExt},
 };
@@ -115,7 +115,7 @@ pub(crate) fn u64_to_f64(value: u64) -> f64 {
 
 #[cfg(test)]
 mod test_support {
-    use crabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+    use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
 
     pub(super) fn image_with_quota(
         entity: Vec<(&str, Option<&str>)>,
@@ -160,7 +160,7 @@ mod tests {
     };
 
     use assert2::{assert, check};
-    use crabka_units::secs;
+    use krabka_units::secs;
 
     use super::{test_support::image_with_quota, *};
 
@@ -169,12 +169,12 @@ mod tests {
     #[test]
     fn throttle_time_ms_truncates_toward_zero() {
         let cases = [
-            (crabka_units::micros(0), 0),
-            (crabka_units::micros(400), 0),
-            (crabka_units::micros(999), 0),
-            (crabka_units::millis(1), 1),
-            (crabka_units::micros(1_600), 1),
-            (crabka_units::micros(1_999), 1),
+            (krabka_units::micros(0), 0),
+            (krabka_units::micros(400), 0),
+            (krabka_units::micros(999), 0),
+            (krabka_units::millis(1), 1),
+            (krabka_units::micros(1_600), 1),
+            (krabka_units::micros(1_999), 1),
             (secs(1), 1_000),
         ];
         for (delay, want) in cases {
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn throttle_time_ms_saturates_past_i32_milliseconds() {
-        assert!(throttle_time_ms(crabka_units::days(36_500)) == i32::MAX);
+        assert!(throttle_time_ms(krabka_units::days(36_500)) == i32::MAX);
     }
 
     #[test]

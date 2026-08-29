@@ -1,19 +1,19 @@
-# crabka-records-legacy
+# krabka-records-legacy
 
-[![Crates.io](https://img.shields.io/crates/v/crabka-records-legacy.svg)](https://crates.io/crates/crabka-records-legacy)
-[![Docs.rs](https://docs.rs/crabka-records-legacy/badge.svg)](https://docs.rs/crabka-records-legacy)
+[![Crates.io](https://img.shields.io/crates/v/krabka-records-legacy.svg)](https://crates.io/crates/krabka-records-legacy)
+[![Docs.rs](https://docs.rs/krabka-records-legacy/badge.svg)](https://docs.rs/krabka-records-legacy)
 [![CI](https://github.com/robot-head/crabka/actions/workflows/ci.yml/badge.svg)](https://github.com/robot-head/crabka/actions/workflows/ci.yml)
 
 Apache Kafka legacy (v0/v1) `MessageSet` codec, with bridges to and from the v2 `RecordBatch` types.
 
 See the [Kafka message format docs](https://kafka.apache.org/43/implementation/message-format/) for the wire layout that this crate implements. v0 carries no per-message timestamp. v1 adds an `i64` timestamp to each message (KIP-32). Both formats signal compression in the low 3 bits of the per-message `attributes` byte. The compressed payload is a single outer message. The `value` of that outer message is a nested, uncompressed MessageSet.
 
-This crate is part of [Crabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
+This crate is part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of Kafka-compatible infrastructure and clients.
 
 ## Install
 
 ```sh
-cargo add crabka-records-legacy
+cargo add krabka-records-legacy
 ```
 
 For workspace development, use the path dependency from this repository instead.
@@ -24,7 +24,7 @@ Encode and decode a Kafka v1 MessageSet:
 
 ```rust
 use bytes::{Bytes, BytesMut};
-use crabka_records_legacy::{
+use krabka_records_legacy::{
     Magic, ParsedRecord, decode_message_set, encode_flat_message_set,
 };
 
@@ -44,7 +44,7 @@ assert_eq!(decoded[0].offset, 42);
 ## Compression
 
 Every legacy compression codec is always available: the crate depends on
-`crabka-compression` with `gzip`, `snappy`, `lz4` and `zstd` enabled, and
+`krabka-compression` with `gzip`, `snappy`, `lz4` and `zstd` enabled, and
 exposes no cargo features of its own.
 
 ## MSRV
@@ -53,7 +53,7 @@ Rust 1.95.0.
 
 ## Documentation
 
-Read the API documentation at [docs.rs/crabka-records-legacy](https://docs.rs/crabka-records-legacy). The repository README contains the project-wide setup, development, and release notes.
+Read the API documentation at [docs.rs/krabka-records-legacy](https://docs.rs/krabka-records-legacy). The repository README contains the project-wide setup, development, and release notes.
 
 ## License
 

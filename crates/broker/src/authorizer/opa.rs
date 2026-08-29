@@ -22,9 +22,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crabka_authz::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_units::{Time, convert::TimeExt as _, fmt::Human as _};
+use krabka_authz::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_units::{Time, convert::TimeExt as _, fmt::Human as _};
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
@@ -363,9 +363,9 @@ mod tests {
     use std::{net::SocketAddr, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::MetadataImage;
-    use crabka_security::{AuthMethod, Principal};
-    use crabka_units::{millis, minutes, secs};
+    use krabka_metadata::MetadataImage;
+    use krabka_security::{AuthMethod, Principal};
+    use krabka_units::{millis, minutes, secs};
     use uuid::Uuid;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 

@@ -16,8 +16,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle, metrics::PartitionLabel};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, metrics::PartitionLabel};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
@@ -42,7 +42,7 @@ use tokio::{
 // Wire helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CLIENT_ID: &str = "crabka-compaction-test";
+const CLIENT_ID: &str = "krabka-compaction-test";
 
 async fn round_trip(
     stream: &mut TcpStream,
@@ -96,7 +96,7 @@ async fn round_trip(
 async fn start_broker_with_fast_cleaner() -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.cleaner_interval_override = Some(crabka_units::secs(1));
+    cfg.cleaner_interval_override = Some(krabka_units::secs(1));
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
     (handle, log_dir, addr)
@@ -390,8 +390,8 @@ async fn compaction_dedupes_via_native_client() {
                 handle
                     .partition_log_config_for_test("compacted", 0)
                     .is_some_and(|cfg| {
-                        cfg.cleanup_policy == crabka_log::CleanupPolicy::Compact
-                            && cfg.segment_size == crabka_units::bytes(256)
+                        cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
+                            && cfg.segment_size == krabka_units::bytes(256)
                     })
             },
         )

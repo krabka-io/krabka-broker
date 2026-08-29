@@ -13,5 +13,5 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    std::process::exit(crabka_restore::run_from_args(std::env::args_os()).await);
+    std::process::exit(krabka_restore::run_from_args(std::env::args_os()).await);
 }

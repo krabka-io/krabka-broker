@@ -13,8 +13,8 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig};
 use jvm_acceptance::*;
+use krabka_broker::{Broker, BrokerConfig};
 
 // `flavor = "multi_thread"` is essential here. The test bodies make
 // synchronous blocking `Command::output()` calls for each `docker run`.
@@ -26,7 +26,7 @@ use jvm_acceptance::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn console_producer_round_trip() {
-    const TOPIC: &str = "crabka-broker-itest";
+    const TOPIC: &str = "krabka-broker-itest";
 
     let (broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -155,9 +155,9 @@ async fn kafka_topics_describe_smokes_metadata() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn rust_producer_to_console_consumer() {
-    use crabka_client_producer::{Acks, Compression, Producer, ProducerRecord};
+    use krabka_client_producer::{Acks, Compression, Producer, ProducerRecord};
 
-    const TOPIC: &str = "crabka-rust-producer-itest";
+    const TOPIC: &str = "krabka-rust-producer-itest";
 
     let (broker, _dir) = start_host_broker().await;
 
@@ -228,7 +228,7 @@ async fn rust_producer_to_console_consumer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn console_consumer_with_group_round_trip() {
-    const TOPIC: &str = "crabka-broker-grp-itest";
+    const TOPIC: &str = "krabka-broker-grp-itest";
 
     let (broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -292,7 +292,7 @@ async fn console_consumer_with_group_round_trip() {
         TOPIC,
         "--from-beginning",
         "--group",
-        "crabka-acceptance-group",
+        "krabka-acceptance-group",
         "--max-messages",
         "3",
         "--timeout-ms",
@@ -316,8 +316,8 @@ async fn console_consumer_with_group_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn console_consumer_with_static_membership() {
-    const TOPIC: &str = "crabka-broker-static-itest";
-    const GROUP: &str = "crabka-static-grp";
+    const TOPIC: &str = "krabka-broker-static-itest";
+    const GROUP: &str = "krabka-static-grp";
     const INSTANCE: &str = "client-static-1";
 
     let (broker, _dir) = start_host_broker().await;
@@ -418,7 +418,7 @@ async fn console_consumer_with_static_membership() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_configs_alter_round_trip() {
-    const TOPIC: &str = "crabka-cfg-alter-itest";
+    const TOPIC: &str = "krabka-cfg-alter-itest";
 
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -473,7 +473,7 @@ async fn kafka_configs_alter_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_topics_alter_partitions() {
-    const TOPIC: &str = "crabka-alter-parts-itest";
+    const TOPIC: &str = "krabka-alter-parts-itest";
 
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -523,7 +523,7 @@ async fn kafka_topics_alter_partitions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_delete_records_trims_log() {
-    const TOPIC: &str = "crabka-delete-recs-itest";
+    const TOPIC: &str = "krabka-delete-recs-itest";
 
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -631,8 +631,8 @@ async fn kafka_delete_records_trims_log() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_consumer_groups_list_describe() {
-    const TOPIC: &str = "crabka-cg-list-itest";
-    const GROUP: &str = "crabka-cg-list-grp";
+    const TOPIC: &str = "krabka-cg-list-itest";
+    const GROUP: &str = "krabka-cg-list-grp";
 
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -726,8 +726,8 @@ async fn kafka_consumer_groups_list_describe() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_consumer_groups_delete_offsets() {
-    const TOPIC: &str = "crabka-cg-delete-offsets-itest";
-    const GROUP: &str = "crabka-cg-delete-offsets-grp";
+    const TOPIC: &str = "krabka-cg-delete-offsets-itest";
+    const GROUP: &str = "krabka-cg-delete-offsets-grp";
 
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
@@ -932,7 +932,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=debug,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
         )
         .with_test_writer()
         .try_init();
@@ -945,23 +945,23 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         listen_addr,
         advertised_listener: broker0_advertised().into(),
         log_dir: dir.path().to_path_buf(),
-        log_config: crabka_log::LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        log_config: krabka_log::LogConfig::default(),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         // 3s cleaner tick so we don't have to wait the full 30s default.
-        cleaner_interval_override: Some(crabka_units::secs(3)),
+        cleaner_interval_override: Some(krabka_units::secs(3)),
         ..BrokerConfig::default()
     };
     let broker = Broker::start(config).await.expect("start broker");
     eprintln!(
-        "CRABKA[test] compaction broker started listen={listen} advertised={bootstrap}",
+        "KRABKA[test] compaction broker started listen={listen} advertised={bootstrap}",
         bootstrap = broker0_advertised(),
         listen = broker0_listen()
     );
@@ -995,8 +995,8 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     let cfg_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if let Some(cfg) = broker.partition_log_config_for_test(TOPIC, 0)
-            && cfg.cleanup_policy == crabka_log::CleanupPolicy::Compact
-            && cfg.segment_size == crabka_units::bytes(256)
+            && cfg.cleanup_policy == krabka_log::CleanupPolicy::Compact
+            && cfg.segment_size == krabka_units::bytes(256)
         {
             break;
         }
@@ -1067,7 +1067,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "producer failed: {}",
         String::from_utf8_lossy(&producer_out.stderr)
     );
-    eprintln!("CRABKA[test] produced 5 records; waiting for cleaner to compact...");
+    eprintln!("KRABKA[test] produced 5 records; waiting for cleaner to compact...");
 
     // 3. Wait until the cleaner completes at least two compaction passes over
     //    this partition *after* the records landed (per-partition counter
@@ -1077,7 +1077,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     let compactions_before = broker
         .metrics()
         .log_compactions_total
-        .get_or_create(&crabka_broker::metrics::PartitionLabel {
+        .get_or_create(&krabka_broker::metrics::PartitionLabel {
             topic: TOPIC.to_string(),
             partition: 0,
         })
@@ -1085,7 +1085,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     broker
         .wait_for_metrics("partition compacted after produce", |m| {
             m.log_compactions_total
-                .get_or_create(&crabka_broker::metrics::PartitionLabel {
+                .get_or_create(&krabka_broker::metrics::PartitionLabel {
                     topic: TOPIC.to_string(),
                     partition: 0,
                 })
@@ -1108,7 +1108,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         "5000",
     ]);
     let stdout = String::from_utf8_lossy(&consumer_out.stdout);
-    eprintln!("CRABKA[test] consumer stdout: {stdout:?}");
+    eprintln!("KRABKA[test] consumer stdout: {stdout:?}");
 
     // Latest values for each key must be present.
     for needle in ["v4", "v3", "v5"] {
@@ -1129,8 +1129,8 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
 }
 
 /// KIP-429 JVM acceptance: drive `kafka-console-consumer` with the JVM
-/// `CooperativeStickyAssignor` against Crabka. The test validates that
-/// Crabka's `JoinGroup` vote rule accepts `cooperative-sticky` and that the
+/// `CooperativeStickyAssignor` against Krabka. The test validates that
+/// Krabka's `JoinGroup` vote rule accepts `cooperative-sticky` and that the
 /// broker forwards the negotiated `protocol_name` correctly, so the JVM
 /// client's `AbstractCoordinator.onJoinComplete` accepts the response.
 ///

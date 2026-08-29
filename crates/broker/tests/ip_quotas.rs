@@ -14,8 +14,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
@@ -25,7 +25,7 @@ use crabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -53,7 +53,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-ip-quota-test";
+    let client_id = "krabka-ip-quota-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -164,7 +164,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -192,7 +192,7 @@ fn start_single_broker_sasl_plaintext_with_users(
 /// `(handle, _dir, addr)`.
 async fn start_single_broker_plaintext() -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
-    let cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
     (handle, log_dir, addr)
@@ -210,7 +210,7 @@ async fn drive_alter_client_quotas_sasl(
     entries: QuotaEntries,
     validate_only: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
         alter_client_quotas_response::AlterClientQuotasResponse,
     };
@@ -283,7 +283,7 @@ async fn drive_describe_client_quotas_sasl(
     components: Vec<(String, i8, Option<String>)>,
     strict: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, Vec<(String, f64)>)> {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
         describe_client_quotas_response::DescribeClientQuotasResponse,
     };
@@ -362,7 +362,7 @@ async fn ip_quota_alter_then_describe_round_trip() {
     // Wait until the quota is visible in the image.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
+            let key: krabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|cfgs| cfgs.get("connection_creation_rate"))
@@ -410,8 +410,8 @@ async fn connection_creation_rate_throttles_accept() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
     // Seed rate=1 connection/sec for 127.0.0.1 directly into the image.
-    let rec = crabka_metadata::MetadataRecord::V1ClientQuota(crabka_metadata::ClientQuotaRecord {
-        entity: vec![crabka_metadata::QuotaEntity {
+    let rec = krabka_metadata::MetadataRecord::V1ClientQuota(krabka_metadata::ClientQuotaRecord {
+        entity: vec![krabka_metadata::QuotaEntity {
             entity_type: "ip".into(),
             entity_name: Some("127.0.0.1".into()),
         }],
@@ -426,7 +426,7 @@ async fn connection_creation_rate_throttles_accept() {
     // Wait until the quota is visible in the image.
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
+            let key: krabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|m| m.get("connection_creation_rate"))
@@ -500,7 +500,7 @@ async fn start_single_broker_plaintext_with_conn_caps(
     max_connections_per_ip: usize,
 ) -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.max_connections = max_connections;
     cfg.max_connections_per_ip = max_connections_per_ip;
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -513,7 +513,7 @@ async fn start_single_broker_plaintext_with_conn_caps(
 /// closes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn max_connections_per_ip_refuses_excess_and_frees_on_close() {
-    use crabka_protocol::{Encode, owned::api_versions_request::ApiVersionsRequest};
+    use krabka_protocol::{Encode, owned::api_versions_request::ApiVersionsRequest};
 
     let (_handle, _dir, addr) = start_single_broker_plaintext_with_conn_caps(usize::MAX, 1).await;
 

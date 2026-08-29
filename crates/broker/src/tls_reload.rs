@@ -1,9 +1,9 @@
 //! Background TLS hot-reload watcher.
 //!
 //! The watcher polls the cert / key / client-CA paths configured on the
-//! broker's [`crabka_security::TlsConfig`]. On any mtime change it rebuilds
+//! broker's [`krabka_security::TlsConfig`]. On any mtime change it rebuilds
 //! the `ServerConfig` and swaps it into the shared
-//! [`crabka_security::DynamicServerConfig`]. New TLS handshakes get the swap
+//! [`krabka_security::DynamicServerConfig`]. New TLS handshakes get the swap
 //! on the next `accept`. The swap does not affect in-flight handshakes.
 //!
 //! If a rebuild fails, the watcher logs the error at `warn` and the previous
@@ -12,8 +12,8 @@
 
 use std::{path::Path, sync::Arc, time::SystemTime};
 
-use crabka_security::{DynamicServerConfig, TlsConfig};
-use crabka_units::{Time, convert::TimeExt};
+use krabka_security::{DynamicServerConfig, TlsConfig};
+use krabka_units::{Time, convert::TimeExt};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -89,8 +89,8 @@ mod tests {
     };
 
     use assert2::assert;
-    use crabka_security::ClientAuthMode;
-    use crabka_units::secs;
+    use krabka_security::ClientAuthMode;
+    use krabka_units::secs;
 
     use super::*;
 

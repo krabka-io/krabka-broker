@@ -1,4 +1,4 @@
-//! Pure, safety-critical decision kernels used by `crabka-broker`.
+//! Pure, safety-critical decision kernels used by `krabka-broker`.
 //!
 //! Keeping these small arithmetic decisions here lets Creusot prove the exact
 //! executable bodies used by the asynchronous broker.

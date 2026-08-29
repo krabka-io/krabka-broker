@@ -22,15 +22,15 @@ use std::{io, sync::Arc};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     },
 };
-use crabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -251,7 +251,7 @@ where
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-mtls-test";
+    let client_id = "krabka-mtls-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     if flexible {

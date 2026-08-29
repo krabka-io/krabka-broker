@@ -10,8 +10,8 @@
 //! response.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         offset_fetch_request::OffsetFetchRequest,
@@ -422,8 +422,8 @@ async fn handle_groups(
 fn group_named_topics(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
-    image: &crabka_metadata::MetadataImage,
-    requested: &[crabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics],
+    image: &krabka_metadata::MetadataImage,
+    requested: &[krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics],
     committed: &std::collections::HashMap<
         (String, i32),
         crate::coordinator::unified::classic_state::OffsetEntry,
@@ -499,7 +499,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_log::Offset;
+    use krabka_log::Offset;
 
     use super::*;
     use crate::{
@@ -555,7 +555,7 @@ mod tests {
         let req = OffsetFetchRequest {
             group_id: "grp".into(),
             topics: Some(vec![
-                crabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
                     name: "orders".into(),
                     partition_indexes: vec![0],
                     ..Default::default()

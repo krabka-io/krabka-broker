@@ -32,7 +32,7 @@ The broker has no clock abstraction that could report confidence. A grep for a `
 
 `crates/broker/src/delivery/` and `crates/broker/tests/deliver_at_time.rs` use the external `qubit_clock::Clock` trait. `crates/broker/src/fetch_session.rs` and `crates/throttle/src/runtime.rs` use `qubit_clock::NanoMonotonicClock`. `crates/broker/src/heartbeat/controller_state.rs` declares a private `enum Clock` with a `Real` variant and a test variant, for liveness tracking alone. Each of them returns an instant. None of them returns how good that instant is.
 
-Until this KFC the broker also published nothing an alert could compare against. `crabka-telemetry` builds an OTLP pipeline for spans and logs, and its `opentelemetry-otlp` dependency names the `trace` and `logs` features and not `metrics`. Broker metrics go out through `prometheus_client` in `crates/broker/src/metrics.rs`, and no series there carried the declared bound. This KFC adds one, so a rule reads the bound the broker relies on instead of a copy of it.
+Until this KFC the broker also published nothing an alert could compare against. `krabka-telemetry` builds an OTLP pipeline for spans and logs, and its `opentelemetry-otlp` dependency names the `trace` and `logs` features and not `metrics`. Broker metrics go out through `prometheus_client` in `crates/broker/src/metrics.rs`, and no series there carried the declared bound. This KFC adds one, so a rule reads the bound the broker relies on instead of a copy of it.
 
 So two shipped designs rest on a number that an operator typed into a config file, and no code in the project ever compares that number against a clock. This KFC measures it.
 
@@ -115,7 +115,7 @@ The broker gains one series, on the registry it already runs in `crates/broker/s
 | :--- | :--- | :--- |
 | `delivery_clock_uncertainty_seconds` | gauge | The bound this broker declares, in seconds. It is `delivery_clock_uncertainty`, the extent KFC-1 adds to a batch's timestamp before the batch activates. |
 
-The registry prefixes every broker series, so the exported name is `crabka_broker_delivery_clock_uncertainty_seconds`.
+The registry prefixes every broker series, so the exported name is `krabka_broker_delivery_clock_uncertainty_seconds`.
 
 The value is a constant of a running broker, and no topic config overrides it. The broker publishes it once at startup, beside the delivery scheduler that reads the same config. It is the declared half of the comparison this KFC exists to make, and the measured half is `krabka_clock_uncertainty_seconds`.
 
@@ -127,7 +127,7 @@ groups:
     interval: 1m
     rules:
       - record: krabka_clock:declared_bound_seconds
-        expr: max(crabka_broker_delivery_clock_uncertainty_seconds)
+        expr: max(krabka_broker_delivery_clock_uncertainty_seconds)
       - record: krabka_clock:uncertainty_seconds:max
         expr: max(krabka_clock_uncertainty_seconds)
       - record: krabka_clock:fleet_skew_bound_seconds
@@ -142,7 +142,7 @@ groups:
 
 `krabka_clock:fleet_skew_bound_seconds` is the number the whole signal exists to produce. Each clock claims an interval from its offset minus its uncertainty to its offset plus its uncertainty. The largest upper end minus the smallest lower end is the largest difference between any two clocks in the cluster that the fleet's own uncertainty admits. That is the number an operator compares `delivery_clock_uncertainty` and `coordination.clock.uncertainty.ms` against. Two clocks each inside a bound `e` differ by at most `2e`, so a fleet bound above twice the declared bound says the declaration is false.
 
-`krabka_clock:declared_bound_seconds` reads `crabka_broker_delivery_clock_uncertainty_seconds`, the gauge this KFC adds to the broker. The bound is a constant of a running broker and no topic config overrides it, so the broker publishes it once at startup. The rule takes the maximum across brokers, because a rolling config change leaves the cluster with two values for a short time and the larger one is the weaker promise. An operator who retunes `delivery_clock_uncertainty` changes nothing in the rule file, and the alert follows the broker.
+`krabka_clock:declared_bound_seconds` reads `krabka_broker_delivery_clock_uncertainty_seconds`, the gauge this KFC adds to the broker. The bound is a constant of a running broker and no topic config overrides it, so the broker publishes it once at startup. The rule takes the maximum across brokers, because a rolling config change leaves the cluster with two values for a short time and the larger one is the weaker promise. An operator who retunes `delivery_clock_uncertainty` changes nothing in the rule file, and the alert follows the broker.
 
 ### The Shipped Alerting Rules
 
@@ -167,7 +167,7 @@ groups:
 | Interface | Value |
 | :--- | :--- |
 | Flag | `--ruler-bundled-rules <PATH>` |
-| Environment variable | `CRABKA_METRICS_RULER_BUNDLED_RULES` |
+| Environment variable | `KRABKA_METRICS_RULER_BUNDLED_RULES` |
 | Read by | The ruler role, and no other role |
 | Default | Unset. The ruler then installs no bundled group. |
 
@@ -215,7 +215,7 @@ The ingester stores a reading whose host timestamp is far from the receive insta
 
 The metrics store lives in the observability repository, and every path in this section is a path there. `MetricBlockKind` in `crates/metrics/src/compactor.rs` names four block kinds today: `Float`, `NativeHistograms`, `Exemplars`, and `Metadata`. This design adds a fifth for clock readings, with its own columnar schema beside the ones in `crates/metrics/src/schema.rs` and its own object path in the deterministic key layout.
 
-A new block kind is cheap because everything around it is shared. Ingest appends to the same metrics WAL topic, `__crabka_metrics_wal`. The compactor writes the same block and index sidecar pair, and it commits the same manifest. Tenancy and the limits enforcement apply with no new code.
+A new block kind is cheap because everything around it is shared. Ingest appends to the same metrics WAL topic, `__krabka_metrics_wal`. The compactor writes the same block and index sidecar pair, and it commits the same manifest. Tenancy and the limits enforcement apply with no new code.
 
 One row holds one reading. The offset, the half-width, the sync state and the reference identity stay together in that row, and no query can separate them. That atomicity is the single property the new block kind exists for, and it is the property that a set of independent float series cannot give.
 

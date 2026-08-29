@@ -21,11 +21,11 @@
 use std::{collections::HashSet, sync::Arc};
 
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_metadata::MetadataImage;
-use crabka_protocol::records::{Record, RecordBatch};
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_metadata::MetadataImage;
+use krabka_protocol::records::{Record, RecordBatch};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
@@ -82,7 +82,7 @@ pub(crate) const UNINITIALIZED_START_OFFSET: i64 = -1;
 /// `Broker::start` constructs the coordinator and shares it with the
 /// share-state wire handlers through an `Arc`.
 pub(crate) struct ShareCoordinator {
-    pub(crate) node_id: crabka_metadata::NodeId,
+    pub(crate) node_id: krabka_metadata::NodeId,
     pub(crate) partitions: Arc<PartitionRegistry>,
     /// Live in-memory state: `(group, topicId, partition)` → locked state.
     state: DashMap<ShareStateKey3, Arc<Mutex<SharePartitionState>>>,
@@ -93,7 +93,7 @@ pub(crate) struct ShareCoordinator {
 
 impl ShareCoordinator {
     pub(crate) fn new(
-        node_id: crabka_metadata::NodeId,
+        node_id: krabka_metadata::NodeId,
         partitions: Arc<PartitionRegistry>,
         config: ShareCoordinatorConfig,
     ) -> Self {
@@ -612,7 +612,7 @@ mod tests {
     use std::path::Path;
 
     use assert2::{assert, check};
-    use crabka_log::{Log, LogConfig};
+    use krabka_log::{Log, LogConfig};
     use tempfile::tempdir;
 
     use super::*;
@@ -655,7 +655,7 @@ mod tests {
             open_state_partition(&reg, dir, p);
         }
         let coord = ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg.clone(),
             ShareCoordinatorConfig::default(),
         );
@@ -709,19 +709,19 @@ mod tests {
         let image = MetadataImage::from_records(
             uuid::Uuid::nil(),
             &[
-                crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+                krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
                     name: bootstrap::TOPIC.to_string(),
                     topic_id: uuid::Uuid::from_bytes([43; 16]),
                     partitions: 1,
                     replication_factor: 1,
                 }),
-                crabka_metadata::MetadataRecord::V1Partition(crabka_metadata::PartitionRecord {
+                krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
                     topic: bootstrap::TOPIC.to_string(),
                     partition: 0,
-                    leader: crabka_metadata::NodeId(1),
-                    replicas: vec![crabka_metadata::NodeId(1)],
-                    isr: vec![crabka_metadata::NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader: krabka_metadata::NodeId(1),
+                    replicas: vec![krabka_metadata::NodeId(1)],
+                    isr: vec![krabka_metadata::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![],
@@ -730,10 +730,10 @@ mod tests {
             ],
         );
         let bounded = ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             Arc::clone(&registry),
             ShareCoordinatorConfig {
-                recovery_read_max: crabka_units::bytes(700),
+                recovery_read_max: krabka_units::bytes(700),
                 ..ShareCoordinatorConfig::default()
             },
         );
@@ -741,10 +741,10 @@ mod tests {
         assert!(bounded.read("bounded", topic_id, 0).await.is_none());
 
         let unbounded = ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             registry,
             ShareCoordinatorConfig {
-                recovery_read_max: crabka_units::kibibytes(4),
+                recovery_read_max: krabka_units::kibibytes(4),
                 ..ShareCoordinatorConfig::default()
             },
         );
@@ -866,7 +866,7 @@ mod tests {
             snapshot_update_records_per_snapshot: 3,
             ..ShareCoordinatorConfig::default()
         };
-        let coord = ShareCoordinator::new(crabka_audit::NodeId(1), reg.clone(), cfg);
+        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), cfg);
         lead_all(&coord).await;
         let tid = uuid::Uuid::from_bytes([9; 16]);
 
@@ -903,7 +903,7 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([10; 16]);
         {
             let coord = ShareCoordinator::new(
-                crabka_audit::NodeId(1),
+                krabka_audit::NodeId(1),
                 reg.clone(),
                 ShareCoordinatorConfig::default(),
             );
@@ -918,7 +918,7 @@ mod tests {
         // New coordinator over the SAME registry (same open logs); recover
         // replays the records written above.
         let recovered = ShareCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             reg.clone(),
             ShareCoordinatorConfig::default(),
         );
@@ -1134,7 +1134,7 @@ mod tests {
             snapshot_update_records_per_snapshot: 2,
             ..ShareCoordinatorConfig::default()
         };
-        let coord = ShareCoordinator::new(crabka_audit::NodeId(1), reg.clone(), cfg);
+        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), cfg);
         lead_all(&coord).await;
         let tid = uuid::Uuid::from_bytes([13; 16]);
         let state_partition = coord.state_partition_for("g", &tid, 0);

@@ -9,19 +9,19 @@ use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_log::{Offset, ProducerId};
-use crabka_metadata::MetadataImage;
-use crabka_protocol::{
+use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_log::{Offset, ProducerId};
+use krabka_metadata::MetadataImage;
+use krabka_protocol::{
     owned::{
         add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
         common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
     },
     records::{Record, RecordBatch},
 };
-use crabka_security::ListenerProtocol;
-use crabka_units::ByteSize;
-use dashmap::DashMap;
+use krabka_security::ListenerProtocol;
+use krabka_units::ByteSize;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
@@ -194,7 +194,7 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
 /// Per-broker transaction coordinator. `Broker::start` constructs it and
 /// shares it with the transaction wire handlers through an `Arc`.
 pub(crate) struct TxnCoordinator {
-    pub(crate) node_id: crabka_metadata::NodeId,
+    pub(crate) node_id: krabka_metadata::NodeId,
     pub(crate) partitions: Arc<PartitionRegistry>,
     pub(crate) producer_ids: Arc<crate::producer_id_manager::ProducerIdManager>,
     num_partitions: i32,
@@ -220,7 +220,7 @@ struct MarkerTransport {
 
 impl TxnCoordinator {
     pub(crate) fn new(
-        node_id: crabka_metadata::NodeId,
+        node_id: krabka_metadata::NodeId,
         partitions: Arc<PartitionRegistry>,
         producer_ids: Arc<crate::producer_id_manager::ProducerIdManager>,
         num_partitions: i32,
@@ -495,8 +495,8 @@ impl TxnCoordinator {
             v3_and_below_topics: vec![topic],
             ..Default::default()
         };
-        let options = crabka_client_core::ConnectionOptions {
-            client_id: format!("crabka-broker-txn-{}", self.node_id),
+        let options = krabka_client_core::ConnectionOptions {
+            client_id: format!("krabka-broker-txn-{}", self.node_id),
             ..Default::default()
         };
         let connection = match transport
@@ -881,11 +881,11 @@ mod tests {
 
     fn test_coordinator_with_partitions(num_partitions: i32) -> TxnCoordinator {
         TxnCoordinator::new(
-            crabka_metadata::NodeId(1),
+            krabka_metadata::NodeId(1),
             Arc::new(PartitionRegistry::new()),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             num_partitions,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         )
     }
 

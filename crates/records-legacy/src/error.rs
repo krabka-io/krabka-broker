@@ -26,5 +26,5 @@ pub enum LegacyRecordsError {
     Malformed(String),
 
     #[error(transparent)]
-    Compression(#[from] crabka_compression::CompressionError),
+    Compression(#[from] krabka_compression::CompressionError),
 }

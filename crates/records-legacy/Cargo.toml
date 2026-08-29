@@ -1,15 +1,15 @@
 [package]
-name = "crabka-records-legacy"
+name = "krabka-records-legacy"
 publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license = "Apache-2.0"
-authors = ["The Crabka Authors"]
+authors = ["The Krabka Authors"]
 description = "Kafka v0/v1 MessageSet (legacy) codec and v2 RecordBatch bridge"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-records-legacy"
+documentation = "https://docs.rs/krabka-records-legacy"
 readme = "../../README.md"
 keywords = ["kafka", "wire-protocol", "messageset", "down-conversion"]
 categories = ["encoding", "parser-implementations"]
@@ -33,15 +33,15 @@ assert2 = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
-crabka-compression = { version = "0.4.0", default-features = false, features = [
+krabka-compression = { version = "0.4.0", default-features = false, features = [
     "gzip",
     "snappy",
     "lz4",
     "zstd",
 ] }
-crabka-ids = { version = "0.4.0" }
-crabka-protocol = { version = "0.4.0", default-features = false }
-crabka-units = { workspace = true }
+krabka-ids = { version = "0.4.0" }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-units = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

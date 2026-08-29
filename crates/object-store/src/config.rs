@@ -1,4 +1,4 @@
-//! Object-store connection config types shared across Crabka.
+//! Object-store connection config types shared across Krabka.
 
 /// Default threshold above which a segment upload changes from a single PUT to
 /// a streaming multipart upload. The threshold is 100 MiB, well below AWS's

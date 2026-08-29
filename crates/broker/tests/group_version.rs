@@ -9,7 +9,7 @@
 use assert2::assert;
 mod support;
 
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };

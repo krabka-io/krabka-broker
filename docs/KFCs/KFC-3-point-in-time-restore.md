@@ -4,7 +4,7 @@ An offline tool that rebuilds a bootable krabka cluster from a KIP-405 archive, 
 
 ## Status
 
-**Adopted.** The implementation is the `crabka-restore` crate and the `krabka-restore` binary, merged in [#4](https://github.com/krabka-io/krabka-broker/pull/4). This document lands on branch `claude/point-in-time-restore-cli-9opk3c`.
+**Adopted.** The implementation is the `krabka-restore` crate and the `krabka-restore` binary, merged in [#4](https://github.com/krabka-io/krabka-broker/pull/4). This document lands on branch `claude/point-in-time-restore-cli-9opk3c`.
 
 No KIP defines restore, so this document is the specification for it. [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) defines the archive that the restore reads, and the sections below state where the restore's behaviour sits next to it.
 
@@ -32,9 +32,9 @@ The feature adds one command. It adds no API key, no error code, no broker confi
 
 ### The Command
 
-`krabka restore` is the operator's spelling. The binary is named `krabka-restore`, because the `krabka` CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. That spelling deliberately breaks the `crabka-` prefix the rest of the workspace uses, and it is the whole dispatch mechanism.
+`krabka restore` is the operator's spelling. The binary is named `krabka-restore`, because the `krabka` CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. That spelling deliberately breaks the `krabka-` prefix the rest of the workspace uses, and it is the whole dispatch mechanism.
 
-The crate is a library as well as a binary. `crabka_restore::restore` returns the structured report and the structured error, and only `run` and the binary turn an error into an exit code. A runbook that wraps the restore gets an exit code. A tool that embeds it keeps the error.
+The crate is a library as well as a binary. `krabka_restore::restore` returns the structured report and the structured error, and only `run` and the binary turn an error into an exit code. A runbook that wraps the restore gets an exit code. A tool that embeds it keeps the error.
 
 ### Where the Archive Is
 
@@ -137,9 +137,9 @@ The `.log` is fetched exactly once. The verified bytes are handed forward, and t
 
 A CRC proves that bytes did not rot. It does not prove that an attacker did not rewrite a segment and recompute the CRC over the result, and the motivation for this tool names two incidents where an attacker held a credential.
 
-The archive answers that separately. `crabka-remote-storage`'s WORM mode signs a per-segment manifest, hash-chains it per partition, and `crabka-worm-verify` checks the chain and the signatures with read-only credentials against a key the auditor holds. Verification of that kind belongs to an auditor who does not hold the writer's keys, and it is already a tool of its own.
+The archive answers that separately. `krabka-remote-storage`'s WORM mode signs a per-segment manifest, hash-chains it per partition, and `krabka-worm-verify` checks the chain and the signatures with read-only credentials against a key the auditor holds. Verification of that kind belongs to an auditor who does not hold the writer's keys, and it is already a tool of its own.
 
-`krabka restore` does not consult those manifests today. A WORM archive's `.manifest` objects reach the discover stage as unrecognized keys, and the report does not render them. An operator restoring after a credential compromise should run `crabka-worm-verify` against the archive first, and treat the restore's own checks as an integrity check and not as an authenticity check. Folding the chain check into the verify stage, behind a flag that names a trusted key, is the obvious follow-up, and it is a change to this document rather than a new one.
+`krabka restore` does not consult those manifests today. A WORM archive's `.manifest` objects reach the discover stage as unrecognized keys, and the report does not render them. An operator restoring after a credential compromise should run `krabka-worm-verify` against the archive first, and treat the restore's own checks as an integrity check and not as an authenticity check. Folding the chain check into the verify stage, behind a flag that names a trusted key, is the obvious follow-up, and it is a change to this document rather than a new one.
 
 ### Offsets Are the Contract
 
@@ -187,9 +187,9 @@ The workspace also carries a `java_regex` crate for the KIP-664 `ListTransaction
 
 ### Materialize Writes Through the Formatter, Not Around It
 
-The materialize stage formats the target through `crabka-format`'s own entry point, forwarding the target-side flags unchanged, and seeds the topic and partition records the archive scan recovered into the same bootstrap stream. The restored cluster boots with its topics already present, with the topic ids the archive recorded, and with a partition count derived from the partitions that were found.
+The materialize stage formats the target through `krabka-format`'s own entry point, forwarding the target-side flags unchanged, and seeds the topic and partition records the archive scan recovered into the same bootstrap stream. The restored cluster boots with its topics already present, with the topic ids the archive recorded, and with a partition count derived from the partitions that were found.
 
-Seeding rides an entry point that `crabka-format` grew for this: a caller that recovered metadata hands records into the stream that reaches both the bootstrap records and the offset-zero checkpoint. The alternative was a second writer for the same on-disk format inside the restore crate, which is one format with two implementations and a guarantee that they will diverge.
+Seeding rides an entry point that `krabka-format` grew for this: a caller that recovered metadata hands records into the stream that reaches both the bootstrap records and the offset-zero checkpoint. The alternative was a second writer for the same on-disk format inside the restore crate, which is one format with two implementations and a guarantee that they will diverge.
 
 Each restored partition names the target node as leader, sole replica, and sole in-sync replica, at leader epoch 0 and partition epoch 0. A restored cluster is a single node by construction, and growing it afterwards is an ordinary reassignment.
 

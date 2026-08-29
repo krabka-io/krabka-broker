@@ -1,7 +1,7 @@
-//! Producer-byte quota enforcement with Crabka QoS-tier bucket partitioning.
+//! Producer-byte quota enforcement with Krabka QoS-tier bucket partitioning.
 
-use crabka_metadata::MetadataImage;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_metadata::MetadataImage;
+use krabka_units::{Time, convert::TimeExt as _};
 use num_traits::cast::ToPrimitive as _;
 
 use super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota, u64_to_f64};
@@ -46,8 +46,8 @@ fn quota_rate_to_bucket_rate(rate: f64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_metadata::MetadataImage;
-    use crabka_units::{Time, convert::TimeExt, millis, secs};
+    use krabka_metadata::MetadataImage;
+    use krabka_units::{Time, convert::TimeExt, millis, secs};
 
     use super::consume_producer_quota;
     use crate::quota::{QuotaBuckets, test_support::image_with_quota as quota_image};

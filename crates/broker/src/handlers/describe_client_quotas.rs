@@ -1,8 +1,8 @@
 //! `DescribeClientQuotas` (`api_key` 48, KIP-13/124).
 
 use bytes::Bytes;
-use crabka_metadata::{EntityKey, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{EntityKey, ResourceType};
+use krabka_protocol::{
     Encode,
     owned::{
         describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
@@ -47,7 +47,7 @@ pub(crate) fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Describe,
+            operation: krabka_metadata::AclOperation::Describe,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
@@ -134,7 +134,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use crabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
+    use krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
 
     use super::*;
     use crate::{
@@ -257,7 +257,7 @@ mod tests {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("describe-client-quotas denied".into()),
             entries: None,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -347,7 +347,7 @@ mod tests {
             error_code: 0,
             error_message: None,
             entries: Some(Vec::new()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;

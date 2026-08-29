@@ -13,8 +13,8 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_transactions_request::DescribeTransactionsRequest,
@@ -155,18 +155,18 @@ mod tests {
     use crate::txn::state::TopicPartition;
 
     fn entry() -> TxnEntry {
-        let mut e = TxnEntry::new_empty("tx".into(), crabka_log::ProducerId(100), 0, 60_000, 1_000);
+        let mut e = TxnEntry::new_empty("tx".into(), krabka_log::ProducerId(100), 0, 60_000, 1_000);
         e.partitions.insert(TopicPartition {
             topic: "b".into(),
-            partition: crabka_ids::PartitionIndex(2),
+            partition: krabka_ids::PartitionIndex(2),
         });
         e.partitions.insert(TopicPartition {
             topic: "b".into(),
-            partition: crabka_ids::PartitionIndex(0),
+            partition: krabka_ids::PartitionIndex(0),
         });
         e.partitions.insert(TopicPartition {
             topic: "a".into(),
-            partition: crabka_ids::PartitionIndex(1),
+            partition: krabka_ids::PartitionIndex(1),
         });
         e
     }
@@ -180,12 +180,12 @@ mod tests {
             TopicData {
                 topic: "a".to_string(),
                 partitions: vec![1],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
             TopicData {
                 topic: "b".to_string(),
                 partitions: vec![0, 2],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
         ];
         assert!(t == expected);

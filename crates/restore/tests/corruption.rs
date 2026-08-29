@@ -5,11 +5,11 @@
 //! corruption case in isolation, against hand-built fixture bytes. This file
 //! does not repeat that: it builds a real archive the way the broker's
 //! remote-log-manager actually would -- append real batches to a real
-//! `crabka_log::Log`, roll a segment, and archive it through
+//! `krabka_log::Log`, roll a segment, and archive it through
 //! `LocalTieredStorage::copy_log_segment_data`, the same path
 //! `crates/remote-storage/tests/jvm_tiered_storage.rs` exercises -- then
 //! damages one archived artifact on disk and drives the damage through
-//! `crabka_restore::restore`, the crate's structured top-level entry point.
+//! `krabka_restore::restore`, the crate's structured top-level entry point.
 //! What's under test is the pipeline's *reaction*: the right
 //! [`RestoreError`] variant, the right exit code, the right object named, and
 //! -- under `--continue-on-corrupt` -- the right segment skipped while
@@ -20,25 +20,25 @@ use std::{collections::BTreeMap, path::Path as StdPath};
 use assert2::{assert, check};
 use bytes::Bytes;
 use clap::Parser as _;
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_log::{Log, LogConfig, name};
-use crabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch};
-use crabka_remote_storage::{
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_log::{Log, LogConfig, name};
+use krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch};
+use krabka_remote_storage::{
     LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition,
 };
-use crabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore};
+use krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore};
 use uuid::Uuid;
 
 /// A `LogConfig` whose `segment_size` is shrunk to a 1-byte equivalent, so a
 /// second `append` always rolls the first batch into its own sealed segment
 /// that [`Log::tierable_segments`] will hand back.
 ///
-/// `crabka-restore` depends on `crabka-log` but not on `crabka-units`
-/// directly, so this crate has no path to name `crabka_units::ByteSize` or
-/// call `crabka_units::prelude::bytes`. Scaling the default 1 GiB
+/// `krabka-restore` depends on `krabka-log` but not on `krabka-units`
+/// directly, so this crate has no path to name `krabka_units::ByteSize` or
+/// call `krabka_units::prelude::bytes`. Scaling the default 1 GiB
 /// `segment_size` down through `Div<f64>` -- implemented on every `uom`
-/// quantity `crabka-units` wraps, and reachable here purely through operator
+/// quantity `krabka-units` wraps, and reachable here purely through operator
 /// syntax without naming the type -- gets the same tiny segment size the
 /// sibling `jvm_tiered_storage.rs` fixture builds with `bytes(1)`.
 fn tiny_segment_config() -> LogConfig {

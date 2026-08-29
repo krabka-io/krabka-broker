@@ -1,6 +1,6 @@
 //! Kafka-compatible `__consumer_offsets` partition selection.
 
-use crabka_metadata::MetadataImage;
+use krabka_metadata::MetadataImage;
 
 use super::bootstrap::{OFFSETS_NUM_PARTITIONS, OFFSETS_TOPIC};
 
@@ -48,7 +48,7 @@ pub(crate) fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 
 /// leader. Group RPC handlers use this before they create or access actors.
 pub(crate) fn local_partition_for_group(
     image: &MetadataImage,
-    node_id: crabka_raft::NodeId,
+    node_id: krabka_raft::NodeId,
     group_id: &str,
 ) -> Result<i32, GroupRoutingError> {
     let partition = partition_for_group(image, group_id);

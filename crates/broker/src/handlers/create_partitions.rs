@@ -10,16 +10,16 @@
 //! `kafka-topics --alter --partitions N --replica-assignment 0:1,1:2,...`.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, MetadataRecord, PartitionRecord};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, MetadataRecord, PartitionRecord};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_partitions_request::{CreatePartitionsAssignment, CreatePartitionsRequest},
         create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
     },
 };
-use crabka_raft::{NodeId, RaftError};
-use crabka_units::{Time, convert::TimeExt};
+use krabka_raft::{NodeId, RaftError};
+use krabka_units::{Time, convert::TimeExt};
 
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
@@ -355,7 +355,7 @@ fn partition_records(
                 leader: replicas[0],
                 replicas: replicas.clone(),
                 isr: replicas.clone(),
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -369,7 +369,7 @@ fn partition_records(
 struct MaterializeContext<'a> {
     partitions: &'a std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     log_dirs: &'a [std::path::PathBuf],
-    log_config: &'a crabka_log::LogConfig,
+    log_config: &'a krabka_log::LogConfig,
     log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
     producer_state: &'a std::sync::Arc<crate::producer_state::ProducerState>,
     producer_id_expiration: Time,
@@ -424,7 +424,7 @@ async fn materialize_new_partitions(
         }
         let Some(partition) = context
             .partitions
-            .get(topic, crabka_ids::PartitionIndex(*index))
+            .get(topic, krabka_ids::PartitionIndex(*index))
         else {
             continue;
         };
@@ -438,7 +438,7 @@ async fn materialize_new_partitions(
 
 fn partition_mutation_count(
     request: &CreatePartitionsRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> u64 {
     request
         .topics
@@ -454,8 +454,8 @@ fn partition_mutation_count(
 
 fn denied_topics(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     peer: &std::net::SocketAddr,
     request: &CreatePartitionsRequest,
 ) -> std::collections::HashSet<String> {
@@ -490,11 +490,11 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::{assert, check};
-    use crabka_metadata::TopicRecord;
-    use crabka_protocol::owned::create_partitions_request::{
+    use krabka_metadata::TopicRecord;
+    use krabka_protocol::owned::create_partitions_request::{
         CreatePartitionsAssignment, CreatePartitionsTopic,
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use crate::{
         broker::{Broker, BrokerHandle},
@@ -607,7 +607,7 @@ mod tests {
                 leader: NodeId(handle.node_id()),
                 replicas: replicas.clone(),
                 isr: replicas.clone(),
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -627,13 +627,13 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1ClientQuota(
-                crabka_metadata::ClientQuotaRecord {
+                krabka_metadata::ClientQuotaRecord {
                     entity: vec![
-                        crabka_metadata::QuotaEntity {
+                        krabka_metadata::QuotaEntity {
                             entity_type: "user".into(),
                             entity_name: Some("admin".into()),
                         },
-                        crabka_metadata::QuotaEntity {
+                        krabka_metadata::QuotaEntity {
                             entity_type: "client-id".into(),
                             entity_name: Some("admin-client".into()),
                         },
@@ -912,9 +912,9 @@ mod tests {
                 name: "orders".into(),
                 error_code: codes::INVALID_PARTITIONS,
                 error_message: Some("bad count".into()),
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
     }
@@ -957,16 +957,16 @@ mod tests {
                     name: "orders".into(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
                 CreatePartitionsTopicResult {
                     name: "payments".into(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                     error_message: None,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -994,7 +994,7 @@ mod tests {
                     name: "missing".into(),
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                     error_message: Some("unknown topic `missing`".into()),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
                 CreatePartitionsTopicResult {
                     name: "stable".into(),
@@ -1002,10 +1002,10 @@ mod tests {
                     error_message: Some(
                         "topic `stable` already has 2 partitions; cannot decrease to 2".into(),
                     ),
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         assert!(
@@ -1036,9 +1036,9 @@ mod tests {
                 name: "dry-run".into(),
                 error_code: codes::NONE,
                 error_message: None,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         assert!(
@@ -1072,9 +1072,9 @@ mod tests {
                 name: "grow".into(),
                 error_code: codes::NONE,
                 error_message: None,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
         assert!(
@@ -1106,9 +1106,9 @@ mod tests {
                 name: "metered".into(),
                 error_code: codes::NONE,
                 error_message: None,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields::default(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
 

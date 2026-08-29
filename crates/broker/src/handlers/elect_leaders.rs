@@ -11,15 +11,15 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use crabka_metadata::MetadataRecord;
-use crabka_protocol::{
+use krabka_metadata::MetadataRecord;
+use krabka_protocol::{
     Encode,
     owned::{
         elect_leaders_request::ElectLeadersRequest,
         elect_leaders_response::{ElectLeadersResponse, PartitionResult, ReplicaElectionResult},
     },
 };
-use crabka_units::convert::TimeExt as _;
+use krabka_units::convert::TimeExt as _;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -169,7 +169,7 @@ pub(crate) async fn handle(
 }
 
 fn resolve_targets(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     request: &ElectLeadersRequest,
 ) -> Vec<(String, Vec<i32>)> {
     request.topic_partitions.as_ref().map_or_else(

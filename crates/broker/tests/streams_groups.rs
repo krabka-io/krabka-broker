@@ -1,6 +1,6 @@
 //! End-to-end integration tests for KIP-1071 streams-group membership (the
-//! Streams Rebalance Protocol), driven against an in-process Crabka broker
-//! through `crabka-client-core`.
+//! Streams Rebalance Protocol), driven against an in-process Krabka broker
+//! through `krabka-client-core`.
 //!
 //! The typed client works because `ApiVersions` advertises `api_keys` 88/89.
 //! `StreamsGroupHeartbeatRequest` and `StreamsGroupDescribeRequest` implement
@@ -17,9 +17,9 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     common::streams_group_heartbeat_request::{
         task_ids::TaskIds as ReqTaskIds, topic_info::TopicInfo,
     },
@@ -31,7 +31,7 @@ use crabka_protocol::owned::{
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -173,7 +173,7 @@ fn status_codes(resp: &StreamsGroupHeartbeatResponse) -> Vec<i8> {
 async fn describe(
     client: &Client,
     group: &str,
-) -> crabka_protocol::owned::streams_group_describe_response::StreamsGroupDescribeResponse {
+) -> krabka_protocol::owned::streams_group_describe_response::StreamsGroupDescribeResponse {
     client
         .send(StreamsGroupDescribeRequest {
             group_ids: vec![group.into()],

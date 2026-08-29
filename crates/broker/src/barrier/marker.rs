@@ -6,7 +6,7 @@
 //! across live topics without disturbing anything that reads them.
 //!
 //! The record key follows Kafka's control-record layout, and the type code
-//! sits beyond Kafka's assigned range. See [`crabka_log::BARRIER_CONTROL_TYPE`].
+//! sits beyond Kafka's assigned range. See [`krabka_log::BARRIER_CONTROL_TYPE`].
 //!
 //! Wire, in field order:
 //!
@@ -28,8 +28,8 @@
 //! bookkeeping, and what make compaction keep it.
 
 use bytes::Bytes;
-use crabka_log::{BARRIER_CONTROL_TYPE, Offset};
-use crabka_protocol::{
+use krabka_log::{BARRIER_CONTROL_TYPE, Offset};
+use krabka_protocol::{
     ProtocolError,
     primitives::{
         fixed::{get_i16, get_i64, put_i16, put_i64},
@@ -102,7 +102,7 @@ pub(crate) fn build_barrier_batch(
 
 /// Read the contents of a barrier marker back out of its record.
 ///
-/// The `crabka barrier verify` path uses this function to prove that the
+/// The `krabka barrier verify` path uses this function to prove that the
 /// marker at a cut's offset is the one the cut names.
 ///
 /// # Errors
@@ -227,13 +227,13 @@ mod tests {
         assert!(&key[..] == &expected[..]);
     }
 
-    /// The builder here and the classifier in `crabka-log` each encode the
+    /// The builder here and the classifier in `krabka-log` each encode the
     /// control-record key themselves. This test is the seam between them: it
     /// appends a real marker to a real log and checks that the log treats it
     /// as a barrier and not as a transaction marker.
     #[test]
     fn the_log_classifies_a_built_marker_as_a_barrier() {
-        use crabka_log::{Log, LogConfig, ProducerId};
+        use krabka_log::{Log, LogConfig, ProducerId};
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
@@ -256,7 +256,7 @@ mod tests {
 
         assert!(log.lso() == lso_before);
         let read = log
-            .read(assigned, crabka_units::mebibytes(1))
+            .read(assigned, krabka_units::mebibytes(1))
             .expect("read back");
         let marker = read
             .batches
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn parsing_rejects_a_transaction_marker() {
         let commit = crate::txn::marker::build_marker_batch(
-            crabka_log::ProducerId(1000),
+            krabka_log::ProducerId(1000),
             0,
             Offset(0),
             crate::txn::marker::MarkerType::Commit,

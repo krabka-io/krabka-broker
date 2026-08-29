@@ -4,7 +4,7 @@
 //! renders each group from the actor's `Describe` view.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         consumer_group_describe_request::ConsumerGroupDescribeRequest,
@@ -46,9 +46,9 @@ pub(crate) async fn handle(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            crabka_metadata::ResourceType::Group,
+            krabka_metadata::ResourceType::Group,
             group_id,
-            crabka_metadata::AclOperation::Describe,
+            krabka_metadata::AclOperation::Describe,
         ) {
             row.error_code = codes::GROUP_AUTHORIZATION_FAILED;
             described.push(row);
@@ -118,10 +118,10 @@ fn ok_row(group_id: &str) -> DescribedGroup {
     }
 }
 
-fn group_version_disabled(image: &crabka_metadata::MetadataImage) -> bool {
+fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> bool {
     !crate::features::feature_enabled(
         image,
-        crabka_metadata::group_version::GROUP_VERSION_FEATURE,
+        krabka_metadata::group_version::GROUP_VERSION_FEATURE,
         NEXT_GEN_MIN_GROUP_VERSION,
     )
 }
@@ -148,12 +148,12 @@ fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
-    use crabka_protocol::Encode;
+    use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+    use krabka_protocol::Encode;
 
     use super::*;
 
-    const VERSION: i16 = crabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
+    const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
 
     fn request(group_ids: Vec<&str>) -> Bytes {
         let req = ConsumerGroupDescribeRequest {
@@ -177,7 +177,7 @@ mod tests {
     fn image_with_group_version(level: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+            name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
             level,
         }));
         image
@@ -245,7 +245,7 @@ mod tests {
                     assignor_name: String::new(),
                     members: vec![],
                     authorized_operations: -2_147_483_648,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
                 DescribedGroup {
                     error_code: codes::UNSUPPORTED_VERSION,
@@ -257,10 +257,10 @@ mod tests {
                     assignor_name: String::new(),
                     members: vec![],
                     authorized_operations: -2_147_483_648,
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 },
             ],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
     }
@@ -291,9 +291,9 @@ mod tests {
                 assignor_name: String::new(),
                 members: vec![],
                 authorized_operations: -2_147_483_648,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
 

@@ -2,8 +2,8 @@
 //! producer-ID block for a registered broker.
 
 use bytes::Bytes;
-use crabka_metadata::NodeId;
-use crabka_protocol::{
+use krabka_metadata::NodeId;
+use krabka_protocol::{
     Decode,
     owned::{
         allocate_producer_ids_request::AllocateProducerIdsRequest,

@@ -14,7 +14,7 @@
 
 use std::time::{Duration, Instant};
 
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 use crate::share_coordinator::persistence::StateBatch;
 

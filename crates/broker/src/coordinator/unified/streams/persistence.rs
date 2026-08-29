@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_protocol::{ProtocolError, records::RecordBatch};
+use krabka_protocol::{ProtocolError, records::RecordBatch};
 
 use crate::{
     coordinator::unified::{

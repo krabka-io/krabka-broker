@@ -10,8 +10,9 @@
 //! `NOT_CONTROLLER`. This mirrors `alter_partition`.
 
 use bytes::Bytes;
-use crabka_metadata::{MetadataImage, MetadataRecord, PartitionDirAssignmentRecord};
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionDirAssignmentRecord};
+use krabka_protocol::{
     Decode,
     owned::{
         assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
@@ -21,7 +22,6 @@ use crabka_protocol::{
         },
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -51,7 +51,7 @@ pub(crate) fn handle(
         };
         let image = controller.current_image();
         if image.finalized_metadata_version().is_some_and(|level| {
-            level < crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
+            level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
         }) {
             return encode_resp(
                 version,
@@ -189,7 +189,7 @@ fn assignment_changes(
         PartitionDirAssignmentRecord {
             topic: topic_name,
             partition,
-            replica: crabka_metadata::NodeId(broker_id),
+            replica: krabka_metadata::NodeId(broker_id),
             directory: dir_uuid,
         },
     )]
@@ -206,10 +206,10 @@ fn encode_resp(
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_metadata::{
+    use krabka_metadata::{
         FeatureLevelRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
     };
-    use crabka_protocol::{
+    use krabka_protocol::{
         Encode,
         owned::assign_replicas_to_dirs_request::{
             DirectoryData as ReqDirData, PartitionData as ReqPartData, TopicData as ReqTopicData,
@@ -321,13 +321,13 @@ mod tests {
                     partitions: vec![RespPartData {
                         partition_index: 3,
                         error_code: codes::NONE,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     }],
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(decoded == expected, "{decoded:?}");
     }
@@ -356,13 +356,13 @@ mod tests {
                     partitions: vec![RespPartData {
                         partition_index: 7,
                         error_code: codes::NONE,
-                        unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     }],
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
 
@@ -388,10 +388,10 @@ mod tests {
                 MetadataRecord::V1Partition(PartitionRecord {
                     topic: "t".into(),
                     partition: 0,
-                    leader: crabka_audit::NodeId(1),
-                    replicas: vec![crabka_audit::NodeId(1)],
-                    isr: vec![crabka_audit::NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader: krabka_audit::NodeId(1),
+                    replicas: vec![krabka_audit::NodeId(1)],
+                    isr: vec![krabka_audit::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
@@ -424,8 +424,8 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                level: crabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
             })])
             .await
             .expect("seed downgraded metadata version");
@@ -441,10 +441,10 @@ mod tests {
                 MetadataRecord::V1Partition(PartitionRecord {
                     topic: "t".into(),
                     partition: 0,
-                    leader: crabka_audit::NodeId(1),
-                    replicas: vec![crabka_audit::NodeId(1)],
-                    isr: vec![crabka_audit::NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader: krabka_audit::NodeId(1),
+                    replicas: vec![krabka_audit::NodeId(1)],
+                    isr: vec![krabka_audit::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
@@ -492,10 +492,10 @@ mod tests {
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![uuid::Uuid::nil(), uuid::Uuid::nil()],
@@ -509,7 +509,7 @@ mod tests {
         let expected = PartitionDirAssignmentRecord {
             topic: "t".into(),
             partition: 0,
-            replica: crabka_audit::NodeId(2),
+            replica: krabka_audit::NodeId(2),
             directory: dir,
         };
         assert!(*r == expected);
@@ -529,10 +529,10 @@ mod tests {
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![uuid::Uuid::nil(), dir],
@@ -554,10 +554,10 @@ mod tests {
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![uuid::Uuid::nil(), uuid::Uuid::nil()],
@@ -585,10 +585,10 @@ mod tests {
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(1),
-            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(1),
+            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![uuid::Uuid::nil(), uuid::Uuid::nil()],
@@ -635,7 +635,7 @@ mod tests {
         let expected = PartitionDirAssignmentRecord {
             topic: "t".into(),
             partition: 0,
-            replica: crabka_audit::NodeId(2),
+            replica: krabka_audit::NodeId(2),
             directory: dir_uuid,
         };
         assert!(*r == expected);
@@ -718,19 +718,19 @@ mod tests {
                         RespPartData {
                             partition_index: 0,
                             error_code: 0,
-                            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                         },
                         RespPartData {
                             partition_index: 1,
                             error_code: 0,
-                            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                         },
                     ],
-                    unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                 }],
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             }],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
     }

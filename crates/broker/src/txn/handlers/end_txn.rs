@@ -20,9 +20,9 @@
 use std::{collections::HashMap, sync::atomic::Ordering};
 
 use bytes::{Bytes, BytesMut};
-use crabka_log::ProducerId;
-use crabka_metadata::{AclOperation, MetadataImage, NodeId, ResourceType};
-use crabka_protocol::{
+use krabka_log::ProducerId;
+use krabka_metadata::{AclOperation, MetadataImage, NodeId, ResourceType};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         end_txn_request::EndTxnRequest,
@@ -33,7 +33,7 @@ use crabka_protocol::{
         write_txn_markers_response::WriteTxnMarkersResponse,
     },
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -648,7 +648,7 @@ pub(crate) async fn dispatch_markers(
 /// Dials through the shared [`InterBrokerClient`] so the connection
 /// terminates TLS and runs the SASL client handshake whenever the
 /// inter-broker listener demands them. A one-shot
-/// `crabka_client_core::Client` per call would carry no TLS
+/// `krabka_client_core::Client` per call would carry no TLS
 /// connector and no inter-broker credentials. Marker fan-out would then
 /// succeed only against a PLAINTEXT inter-broker listener, and it would
 /// silently break transactions that span remote-led partitions on any
@@ -698,9 +698,9 @@ async fn send_write_txn_markers(
 
     let req = build_write_txn_markers_request(entry, marker_type, tps, coordinator_epoch);
 
-    let opts = crabka_client_core::ConnectionOptions {
-        client_id: format!("crabka-broker-txn-{my_node_id}"),
-        ..crabka_client_core::ConnectionOptions::default()
+    let opts = krabka_client_core::ConnectionOptions {
+        client_id: format!("krabka-broker-txn-{my_node_id}"),
+        ..krabka_client_core::ConnectionOptions::default()
     };
     let conn = inter_broker_client
         .connect_as_connection(
@@ -846,9 +846,9 @@ fn encode_response(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_ids::PartitionIndex;
-    use crabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord};
-    use crabka_protocol::{
+    use krabka_ids::PartitionIndex;
+    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord};
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             end_txn_response::EndTxnResponse,
@@ -1216,7 +1216,7 @@ mod tests {
 
     #[tokio::test]
     async fn marker_dispatch_marks_materialized_partition_missing_from_image() {
-        use crabka_log::{Log, LogConfig, Offset};
+        use krabka_log::{Log, LogConfig, Offset};
 
         let image = MetadataImage::default();
         let client = plaintext_client();

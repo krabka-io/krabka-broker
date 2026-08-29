@@ -23,10 +23,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use crabka_ids::PartitionIndex;
-use crabka_log::Offset;
-use crabka_metadata::NodeId;
-use crabka_protocol::{
+use krabka_ids::PartitionIndex;
+use krabka_log::Offset;
+use krabka_metadata::NodeId;
+use krabka_protocol::{
     owned::{
         delete_share_group_state_request::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePartitionData,
@@ -45,7 +45,7 @@ use crabka_protocol::{
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 
 use crate::{
     error::BrokerError,
@@ -398,7 +398,7 @@ impl SharePersister {
     async fn connect_to_leader(
         &self,
         state_partition: PartitionIndex,
-    ) -> Result<crabka_client_core::Connection, BrokerError> {
+    ) -> Result<krabka_client_core::Connection, BrokerError> {
         let image = self.controller.current_image();
         let pr = image
             .partition(bootstrap::TOPIC, state_partition.get())
@@ -423,9 +423,9 @@ impl SharePersister {
                 |e| (e.host.clone(), e.port),
             );
 
-        let opts = crabka_client_core::ConnectionOptions {
-            client_id: format!("crabka-broker-share-{}", self.node_id),
-            ..crabka_client_core::ConnectionOptions::default()
+        let opts = krabka_client_core::ConnectionOptions {
+            client_id: format!("krabka-broker-share-{}", self.node_id),
+            ..krabka_client_core::ConnectionOptions::default()
         };
         self.inter_broker_client
             .connect_as_connection(
@@ -446,7 +446,7 @@ impl SharePersister {
         req: R,
     ) -> Result<(), BrokerError>
     where
-        R: crabka_client_core::ProtocolRequest,
+        R: krabka_client_core::ProtocolRequest,
     {
         let conn = self.connect_to_leader(state_partition).await?;
         let _resp = conn
@@ -465,7 +465,7 @@ impl SharePersister {
         req: R,
     ) -> Result<R::Response, BrokerError>
     where
-        R: crabka_client_core::ProtocolRequest,
+        R: krabka_client_core::ProtocolRequest,
     {
         let conn = self.connect_to_leader(state_partition).await?;
         let resp = conn

@@ -1,4 +1,4 @@
-//! `crabka-worm-verify` — verify a WORM archive with read-only credentials.
+//! `krabka-worm-verify` — verify a WORM archive with read-only credentials.
 //!
 //! The auditor runs this against a bucket or a directory with no broker and no
 //! cluster: everything it checks is written into the archive. It reads the
@@ -14,9 +14,9 @@
 use std::{fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
-use crabka_audit::chain::from_hex32;
-use crabka_object_store::{ObjectStoreConfig, S3Config, build_object_store};
-use crabka_remote_storage::{
+use krabka_audit::chain::from_hex32;
+use krabka_object_store::{ObjectStoreConfig, S3Config, build_object_store};
+use krabka_remote_storage::{
     ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyDepth,
     VerifyRequest, verify_archive,
 };
@@ -26,8 +26,8 @@ const ORPHANS_SHOWN: usize = 10;
 
 #[derive(Parser)]
 #[command(
-    name = "crabka-worm-verify",
-    about = "Verify a Crabka WORM archive with read-only credentials"
+    name = "krabka-worm-verify",
+    about = "Verify a Krabka WORM archive with read-only credentials"
 )]
 struct Cli {
     #[command(subcommand)]

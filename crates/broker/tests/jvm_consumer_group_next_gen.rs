@@ -1,5 +1,5 @@
 //! JVM-acceptance tests for KIP-848. They drive the GA Kafka 4.0 client
-//! against an in-process Crabka broker. `group.protocol=consumer`
+//! against an in-process Krabka broker. `group.protocol=consumer`
 //! activates the next-gen heartbeat path on the client.
 
 mod support;
@@ -7,8 +7,8 @@ mod support;
 use std::process::{Command, Stdio};
 
 use assert2::assert;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_log::LogConfig;
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_log::LogConfig;
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -44,13 +44,13 @@ fn controller_listen() -> &'static str {
 const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
-async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir) {
+async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     let bootstrap = bootstrap_addr();
     let listen = listen_addr();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
         )
         .with_test_writer()
         .try_init();
@@ -64,23 +64,23 @@ async fn start_host_broker() -> (crabka_broker::BrokerHandle, tempfile::TempDir)
         advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
+    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
-/// Pre-create a topic with the classic admin tooling. Crabka's broker does
+/// Pre-create a topic with the classic admin tooling. Krabka's broker does
 /// not auto-create topics on the produce path, so tests must create them
 /// explicitly. This matches the existing `jvm_acceptance.rs` convention.
 fn create_topic(name: &str, partitions: i32) {
@@ -126,7 +126,7 @@ fn spawn_consumer(image: &'static str, script: String) -> tokio::task::JoinHandl
             .output()
             .expect("docker run");
         eprintln!(
-            "CRABKA[test] consumer {image} status={} stderr={}",
+            "KRABKA[test] consumer {image} status={} stderr={}",
             out.status,
             String::from_utf8_lossy(&out.stderr),
         );
@@ -168,7 +168,7 @@ fn docker_run(image: &str, args: &[&str]) -> std::process::Output {
         .output()
         .expect("docker run");
     eprintln!(
-        "CRABKA[test] docker {image} {args:?} status={} stderr={}",
+        "KRABKA[test] docker {image} {args:?} status={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr),
     );
@@ -340,7 +340,7 @@ async fn jvm_kip848_coexists_with_classic() {
 /// Phase 1: a classic (cp-kafka 7.4.0) consumer forms group `g-migrate` and
 /// drains batch 1. That proves the classic protocol serves the group. Phase
 /// 2: a next-gen (apache/kafka 4.0.0, `group.protocol=consumer`) consumer joins
-/// the SAME group and drains a freshly-produced batch 2. Crabka's unified
+/// the SAME group and drains a freshly-produced batch 2. Krabka's unified
 /// coordinator runs the default `Bidirectional` policy with the consumer
 /// rebalance protocol enabled, from `NextGenConfig::default`, because
 /// `start_host_broker` does not override it. The consumer protocol therefore
@@ -395,7 +395,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     )
     .await
     .unwrap();
-    eprintln!("CRABKA[test] classic stdout:\n{classic_out}");
+    eprintln!("KRABKA[test] classic stdout:\n{classic_out}");
     let cp = parse_partitions(&classic_out);
     assert!(
         cp == all,
@@ -416,7 +416,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     )
     .await
     .unwrap();
-    eprintln!("CRABKA[test] nextgen stdout:\n{nextgen_out}");
+    eprintln!("KRABKA[test] nextgen stdout:\n{nextgen_out}");
     let np = parse_partitions(&nextgen_out);
     assert!(
         np == all,

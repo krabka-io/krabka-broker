@@ -1,4 +1,4 @@
-//! End-to-end grading of the `crabka-worm-verify` binary.
+//! End-to-end grading of the `krabka-worm-verify` binary.
 //!
 //! Each test builds a WORM archive on disk the way a backend writes one, runs
 //! the real binary against it with `--local-dir`, and checks both the exit code
@@ -14,9 +14,9 @@ use std::{
 
 use assert2::check;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crabka_audit::signing::FileEd25519Signer;
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use krabka_audit::signing::FileEd25519Signer;
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     ChainHead, ChainStamp, EpochId, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry,
     RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
     Sha256Digest, TopicIdPartition, WormArchiver, WormChainRecord, manifest_head,
@@ -207,7 +207,7 @@ struct Run {
 }
 
 fn run(args: &[String]) -> Run {
-    let output = Command::new(env!("CARGO_BIN_EXE_crabka-worm-verify"))
+    let output = Command::new(env!("CARGO_BIN_EXE_krabka-worm-verify"))
         .args(args)
         .output()
         .expect("the verify binary runs");

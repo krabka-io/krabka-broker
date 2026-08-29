@@ -12,8 +12,8 @@
 //! present" sentinel.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_cluster_request::DescribeClusterRequest,
@@ -76,7 +76,7 @@ pub(crate) async fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Describe,
         },
@@ -163,8 +163,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
-    use crabka_security::ListenerProtocol;
+    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId};
+    use krabka_security::ListenerProtocol;
 
     use super::*;
     use crate::{
@@ -240,7 +240,7 @@ mod tests {
             controller_id: -1,
             brokers: vec![],
             cluster_authorized_operations: i32::MIN,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -290,7 +290,7 @@ mod tests {
             port: 29092,
             rack: Some("rack-a".into()),
             is_fenced: false,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(vec![]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(*broker_row == expected_row);
         broker_handle.shutdown().await;

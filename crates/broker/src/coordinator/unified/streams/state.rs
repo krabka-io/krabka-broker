@@ -33,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_log::Offset;
+use krabka_log::Offset;
 
 use super::super::expired_member_ids;
 

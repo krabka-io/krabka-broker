@@ -1,18 +1,18 @@
-//! End-to-end proof that `crabka-restore`'s discover/verify/bound/materialize
+//! End-to-end proof that `krabka-restore`'s discover/verify/bound/materialize
 //! stages compose correctly against a REAL KIP-405 archive.
 //!
 //! Every module under `src/` already has thorough unit-level tests, built
 //! against a hand-faked `SegmentInventory`/`VerifiedSegment`. This file does
 //! not repeat that: it builds a real archive the same way the broker's own
-//! tiered-storage copy path builds one -- a real `crabka_log::Log`, appended
+//! tiered-storage copy path builds one -- a real `krabka_log::Log`, appended
 //! real batches, sealed into real segments, archived through the real
 //! `LocalTieredStorage::copy_log_segment_data` (the pattern
 //! `crates/remote-storage/tests/jvm_tiered_storage.rs` uses to prove the JVM
-//! reads a Crabka-offloaded segment) -- then drives the whole pipeline
-//! through `crabka_restore::run_from_args`/`restore`, the crate's own
+//! reads a Krabka-offloaded segment) -- then drives the whole pipeline
+//! through `krabka_restore::run_from_args`/`restore`, the crate's own
 //! documented in-process entry points (a subprocess needs a Cargo working
 //! tree, which a Bazel sandbox does not have; `crates/format/src/lib.rs`'s
-//! `run_from_args` doc gives the same rationale for `crabka format`).
+//! `run_from_args` doc gives the same rationale for `krabka format`).
 //!
 //! The fixture spans two topics, one of them ("orders") with two partitions,
 //! and one partition ("orders-0") with two archived segments, so discovery
@@ -24,14 +24,14 @@ use std::{collections::BTreeMap, path::Path};
 use assert2::{assert, check};
 use bytes::Bytes;
 use clap::Parser as _;
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_log::{Log, LogConfig, name};
-use crabka_protocol::records::{Attributes, Record, RecordBatch};
-use crabka_remote_storage::{
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_log::{Log, LogConfig, name};
+use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_remote_storage::{
     LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, TopicIdPartition,
 };
-use crabka_restore::{
+use krabka_restore::{
     Cli, EXIT_OK, PartitionReport, ReportFormat, RestoreArgs, RestoreReport, SegmentOutcome,
     restore, run_from_args,
 };
@@ -42,11 +42,11 @@ use uuid::Uuid;
 /// a second `append` always rolls the batch that was active before it into
 /// its own sealed segment.
 ///
-/// `crabka-restore` depends on `crabka-log` but not on `crabka-units`
-/// directly, so this crate has no path to name `crabka_units::ByteSize` or
-/// call `crabka_units::prelude::bytes`. Scaling the existing 1 GiB default
+/// `krabka-restore` depends on `krabka-log` but not on `krabka-units`
+/// directly, so this crate has no path to name `krabka_units::ByteSize` or
+/// call `krabka_units::prelude::bytes`. Scaling the existing 1 GiB default
 /// down through `Div<f64>` -- implemented on every `uom` quantity
-/// `crabka-units` wraps, and reachable here purely through operator syntax
+/// `krabka-units` wraps, and reachable here purely through operator syntax
 /// without naming the type -- gets the same tiny segment size the sibling
 /// `jvm_tiered_storage.rs` fixture builds with `bytes(1)`.
 fn tiny_segment_config() -> LogConfig {
@@ -136,7 +136,7 @@ struct PartitionSpec<'a> {
     groups: &'a [&'a [&'a str]],
 }
 
-/// Build a real, multi-batch `crabka_log::Log` for one partition, roll it so
+/// Build a real, multi-batch `krabka_log::Log` for one partition, roll it so
 /// every group but the last seals into its own segment, and archive each
 /// sealed segment through the real `LocalTieredStorage::copy_log_segment_data`
 /// -- the same call the broker's remote-log-manager makes.
@@ -383,7 +383,7 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
     // `serde_wincode::SerdeCompat<MetadataRecord>` payloads (see
     // `crates/format/src/format.rs` and
     // `crates/format/tests/seeded_records.rs`), and `wincode`/`serde-wincode`
-    // are dependencies of `crabka-format` alone, not of `crabka-restore` --
+    // are dependencies of `krabka-format` alone, not of `krabka-restore` --
     // this crate (and so this test, which may only touch this one file) has
     // no `use` path to either crate. Record survival is checked two ways
     // instead: the record *count* the restore's seeded topics and
@@ -395,8 +395,8 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
     // included.
     let baseline = tempfile::tempdir().expect("baseline tempdir");
     let baseline_dir = baseline.path().join("formatted");
-    let baseline_code = crabka_format::run_from_args([
-        "crabka-format".to_owned(),
+    let baseline_code = krabka_format::run_from_args([
+        "krabka-format".to_owned(),
         "--log-dir".to_owned(),
         baseline_dir.display().to_string(),
         "--cluster-id".to_owned(),

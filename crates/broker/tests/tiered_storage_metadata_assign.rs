@@ -14,12 +14,12 @@ mod support;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_remote_storage_topic::{
+use futures_util::StreamExt;
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_remote_storage_topic::{
     kafka_log::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     log::{MetadataEventLog, PartitionStart},
 };
-use futures_util::StreamExt;
 use tempfile::TempDir;
 
 /// Boot a bare loopback broker with the pinned-port pattern from
@@ -43,7 +43,7 @@ async fn start_bare_broker() -> (BrokerHandle, TempDir) {
     cfg.advertised_listener = listen.to_string();
     cfg.controller_listen_addr = controller_addrs[0];
     cfg.controller_quorum_voters =
-        vec![(crabka_broker::NodeId(1), controller_addrs[0].to_string())];
+        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
 
     let data_listener = client_listeners.into_iter().next().unwrap();
     let controller_listener = controller_listeners.into_iter().next().unwrap();

@@ -43,9 +43,9 @@ use std::{io, net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::BrokerHandle;
-use crabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord};
-use crabka_protocol::{
+use krabka_broker::BrokerHandle;
+use krabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
@@ -83,7 +83,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-unclean-test";
+    let client_id = "krabka-unclean-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -123,7 +123,7 @@ async fn create_topic_plaintext(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -291,9 +291,9 @@ async fn unclean_recovery_elects_longest_log_replica() {
     assert!(
         pr_before.replicas
             == vec![
-                crabka_broker::NodeId(1),
-                crabka_broker::NodeId(2),
-                crabka_broker::NodeId(3)
+                krabka_broker::NodeId(1),
+                krabka_broker::NodeId(2),
+                krabka_broker::NodeId(3)
             ],
         "expected RF=3 replicas [1,2,3]; got {:?}",
         pr_before.replicas
@@ -323,13 +323,13 @@ async fn unclean_recovery_elects_longest_log_replica() {
     let forged = MetadataRecord::V1Partition(PartitionRecord {
         topic: topic.to_string(),
         partition: 0,
-        leader: crabka_broker::NodeId(99),
+        leader: krabka_broker::NodeId(99),
         replicas: vec![
-            crabka_broker::NodeId(1),
-            crabka_broker::NodeId(2),
-            crabka_broker::NodeId(3),
+            krabka_broker::NodeId(1),
+            krabka_broker::NodeId(2),
+            krabka_broker::NodeId(3),
         ],
-        isr: vec![crabka_broker::NodeId(99)],
+        isr: vec![krabka_broker::NodeId(99)],
         leader_epoch: pr_before.leader_epoch.next(),
         adding_replicas: vec![],
         removing_replicas: vec![],

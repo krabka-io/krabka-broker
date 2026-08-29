@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crabka_units::prelude::{Time, TimeExt as _};
-use crabka_voters::VoterSet;
+use krabka_units::prelude::{Time, TimeExt as _};
+use krabka_voters::VoterSet;
 
 use crate::{
     action::{Action, TimerKind},
@@ -23,7 +23,7 @@ use crate::{
 /// function, so production self-staggers without per-node config.
 #[must_use]
 pub fn election_jitter_ms(me: NodeId, epoch: Epoch, base_ms: u64) -> u64 {
-    crabka_verified::election_jitter_ms(me.0, epoch, base_ms)
+    krabka_verified::election_jitter_ms(me.0, epoch, base_ms)
 }
 
 /// The hand-rolled KIP-595 + KIP-996 quorum state machine.
@@ -223,7 +223,7 @@ impl QuorumStateMachine {
     /// KIP-595: the higher last epoch wins. On a tie, the higher or equal
     /// offset wins.
     fn log_is_up_to_date(log: &dyn LogView, cand: LogEnd) -> bool {
-        crabka_verified::log_is_up_to_date(
+        krabka_verified::log_is_up_to_date(
             log.last_epoch(),
             log.end_offset(),
             cand.last_epoch,
@@ -387,7 +387,7 @@ impl QuorumStateMachine {
             .map(|progress| progress.fetch_offset.min(log_end))
             .collect();
         let new_hwm = if self.is_voter() {
-            crabka_verified::recompute_high_watermark(
+            krabka_verified::recompute_high_watermark(
                 log_end,
                 &follower_offsets,
                 self.state.majority(),
@@ -877,7 +877,7 @@ impl QuorumStateMachine {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::prelude::{millis, secs};
+    use krabka_units::prelude::{millis, secs};
 
     use super::*;
     use crate::{
@@ -928,12 +928,12 @@ mod tests {
             }
         }
     }
-    fn voters(ids: &[NodeId]) -> crabka_voters::VoterSet {
-        crabka_voters::VoterSet::from_voters(ids.iter().map(|&id| crabka_voters::Voter {
+    fn voters(ids: &[NodeId]) -> krabka_voters::VoterSet {
+        krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
             id,
             directory_id: uuid::Uuid::nil(),
             endpoints: vec![],
-            kraft_version: crabka_voters::KRaftVersionRange::default(),
+            kraft_version: krabka_voters::KRaftVersionRange::default(),
         }))
     }
     fn machine(me: NodeId, ids: &[NodeId]) -> QuorumStateMachine {

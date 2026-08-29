@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabka_ids::PartitionIndex;
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
 
 use super::{
     engine::WalShardEngine,
@@ -26,16 +26,16 @@ pub(crate) struct ShardId {
 /// Registry from shard identity to its in-process WAL engine.
 #[derive(Debug)]
 pub(crate) struct WalShardRegistry {
-    local_node_id: crabka_raft::NodeId,
+    local_node_id: krabka_raft::NodeId,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
-    placements: RwLock<HashMap<ShardId, Vec<crabka_raft::NodeId>>>,
+    placements: RwLock<HashMap<ShardId, Vec<krabka_raft::NodeId>>>,
     #[cfg(any(test, feature = "test-helpers"))]
-    follower_fetchers: DashMap<ShardId, std::collections::BTreeSet<crabka_raft::NodeId>>,
+    follower_fetchers: DashMap<ShardId, std::collections::BTreeSet<krabka_raft::NodeId>>,
 }
 
 impl WalShardRegistry {
     #[must_use]
-    pub(crate) fn new(local_node_id: crabka_raft::NodeId) -> Self {
+    pub(crate) fn new(local_node_id: krabka_raft::NodeId) -> Self {
         Self {
             local_node_id,
             engines: DashMap::new(),
@@ -59,7 +59,7 @@ impl WalShardRegistry {
     /// Replacing the map also removes deleted topics and superseded topic IDs.
     pub(crate) fn replace_placements(
         &self,
-        placements: &HashMap<ShardId, Vec<crabka_raft::NodeId>>,
+        placements: &HashMap<ShardId, Vec<krabka_raft::NodeId>>,
     ) {
         let mut current = self
             .placements
@@ -76,7 +76,7 @@ impl WalShardRegistry {
 
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub(crate) fn placement(&self, shard_id: ShardId) -> Option<Vec<crabka_raft::NodeId>> {
+    pub(crate) fn placement(&self, shard_id: ShardId) -> Option<Vec<krabka_raft::NodeId>> {
         self.placements
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -98,7 +98,7 @@ impl WalShardRegistry {
     }
 
     #[must_use]
-    pub(crate) fn local_node_id(&self) -> crabka_raft::NodeId {
+    pub(crate) fn local_node_id(&self) -> krabka_raft::NodeId {
         self.local_node_id
     }
 
@@ -132,8 +132,8 @@ impl WalShardRegistry {
 
     pub(crate) fn route_fetch_request(
         &self,
-        request: &crabka_protocol::owned::fetch_request::FetchRequest,
-    ) -> Option<Result<crabka_protocol::owned::fetch_response::FetchResponse, crate::BrokerError>>
+        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, crate::BrokerError>>
     {
         self.route_decoded_fetch(decode_fetch_request(request)?)
     }
@@ -141,7 +141,7 @@ impl WalShardRegistry {
     fn route_decoded_fetch(
         &self,
         request: WalFetchRequest,
-    ) -> Option<Result<crabka_protocol::owned::fetch_response::FetchResponse, crate::BrokerError>>
+    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, crate::BrokerError>>
     {
         let QuorumGroup::DisklessWal {
             topic_id,
@@ -174,10 +174,10 @@ impl WalShardRegistry {
         let Some(engine) = self.get(shard) else {
             return Some(Ok(unknown_shard_fetch_response(request.group)));
         };
-        engine.record_follower_ack(request.from, crabka_ids::Offset(request.fetch_offset));
+        engine.record_follower_ack(request.from, krabka_ids::Offset(request.fetch_offset));
         Some(
             engine
-                .serve_fetch(crabka_ids::Offset(request.fetch_offset), request.max_size)
+                .serve_fetch(krabka_ids::Offset(request.fetch_offset), request.max_size)
                 .map(|fetch| {
                     let error_code = if fetch.offset_out_of_range {
                         OFFSET_OUT_OF_RANGE
@@ -211,10 +211,10 @@ impl WalShardRouter {
     }
 }
 
-impl crabka_raft::RaftShardRouter for WalShardRouter {
-    fn route(&self, api_key: i16, body: bytes::Bytes) -> crabka_raft::ShardRouteFuture<'_> {
+impl krabka_raft::RaftShardRouter for WalShardRouter {
+    fn route(&self, api_key: i16, body: bytes::Bytes) -> krabka_raft::ShardRouteFuture<'_> {
         Box::pin(async move {
-            if api_key != crabka_raft::kraft::transport::api_key::FETCH {
+            if api_key != krabka_raft::kraft::transport::api_key::FETCH {
                 return Ok(None);
             }
             let Some(request) = decode_fetch(&body) else {
@@ -224,7 +224,7 @@ impl crabka_raft::RaftShardRouter for WalShardRouter {
                 return Ok(None);
             };
             let response =
-                response.map_err(|err| crabka_raft::RaftError::ChangeRejected(err.to_string()))?;
+                response.map_err(|err| krabka_raft::RaftError::ChangeRejected(err.to_string()))?;
             Ok(Some(encode_fetch_response_struct(&response)))
         })
     }
@@ -235,14 +235,14 @@ mod tests {
     use std::{collections::BTreeMap, sync::Mutex};
 
     use bytes::Bytes;
-    use crabka_ids::Offset;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::{
+    use krabka_ids::Offset;
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::{
         Decode,
         owned::fetch_response::FetchResponse,
         records::{Record, RecordBatch},
     };
-    use crabka_raft::RaftShardRouter;
+    use krabka_raft::RaftShardRouter;
     use tempfile::tempdir;
 
     use super::*;
@@ -272,12 +272,12 @@ mod tests {
             .unwrap();
         source.lock().unwrap().sync().unwrap();
         let engine = Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-            crabka_raft::NodeId(1),
+            krabka_raft::NodeId(1),
             source.clone(),
         )])));
         engine.replicate_and_sync(&source, Offset(1)).await.unwrap();
 
-        let registry = Arc::new(WalShardRegistry::new(crabka_raft::NodeId(9)));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
         let topic_id = uuid::Uuid::from_u128(17);
         let partition = PartitionIndex(2);
         registry.insert(
@@ -292,18 +292,18 @@ mod tests {
                 topic_id,
                 partition,
             },
-            vec![crabka_raft::NodeId(9)],
+            vec![krabka_raft::NodeId(9)],
         )]));
         let router = WalShardRouter::new(registry);
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
-            crabka_raft::NodeId(9),
+            krabka_raft::NodeId(9),
             0,
             0,
         );
 
         let response = router
-            .route(crabka_raft::kraft::transport::api_key::FETCH, body)
+            .route(krabka_raft::kraft::transport::api_key::FETCH, body)
             .await
             .unwrap()
             .expect("diskless WAL fetch response");
@@ -346,27 +346,27 @@ mod tests {
             log.trim_to_offset(Offset(5)).unwrap();
         }
         let engine = Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-            crabka_raft::NodeId(1),
+            krabka_raft::NodeId(1),
             source,
         )])));
 
-        let registry = Arc::new(WalShardRegistry::new(crabka_raft::NodeId(9)));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
         let shard = ShardId {
             topic_id: uuid::Uuid::from_u128(18),
             partition: PartitionIndex(3),
         };
         registry.insert(shard, engine);
-        registry.replace_placements(&HashMap::from([(shard, vec![crabka_raft::NodeId(9)])]));
+        registry.replace_placements(&HashMap::from([(shard, vec![krabka_raft::NodeId(9)])]));
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-            crabka_raft::NodeId(9),
+            krabka_raft::NodeId(9),
             0,
             4,
         );
 
         let router = WalShardRouter::new(registry);
         let response = router
-            .route(crabka_raft::kraft::transport::api_key::FETCH, body)
+            .route(krabka_raft::kraft::transport::api_key::FETCH, body)
             .await
             .unwrap()
             .unwrap();
@@ -379,12 +379,12 @@ mod tests {
 
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-            crabka_raft::NodeId(9),
+            krabka_raft::NodeId(9),
             0,
             7,
         );
         let response = router
-            .route(crabka_raft::kraft::transport::api_key::FETCH, body)
+            .route(krabka_raft::kraft::transport::api_key::FETCH, body)
             .await
             .unwrap()
             .unwrap();
@@ -398,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn wal_shard_router_rejects_a_broker_outside_the_placement() {
-        let registry = Arc::new(WalShardRegistry::new(crabka_raft::NodeId(2)));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(2)));
         let topic_id = uuid::Uuid::from_u128(17);
         let partition = PartitionIndex(2);
         let shard = ShardId {
@@ -412,21 +412,21 @@ mod tests {
         registry.insert(
             shard,
             Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-                crabka_raft::NodeId(1),
+                krabka_raft::NodeId(1),
                 log,
             )]))),
         );
-        registry.replace_placements(&HashMap::from([(shard, vec![crabka_raft::NodeId(2)])]));
+        registry.replace_placements(&HashMap::from([(shard, vec![krabka_raft::NodeId(2)])]));
         let router = WalShardRouter::new(registry);
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
-            crabka_raft::NodeId(9),
+            krabka_raft::NodeId(9),
             0,
             0,
         );
 
         let response = router
-            .route(crabka_raft::kraft::transport::api_key::FETCH, body)
+            .route(krabka_raft::kraft::transport::api_key::FETCH, body)
             .await
             .unwrap()
             .expect("diskless WAL fetch response");
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn replacing_placements_removes_stale_shards() {
-        let registry = WalShardRegistry::new(crabka_raft::NodeId(1));
+        let registry = WalShardRegistry::new(krabka_raft::NodeId(1));
         let stale = ShardId {
             topic_id: uuid::Uuid::from_u128(1),
             partition: PartitionIndex(0),
@@ -447,14 +447,14 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(2),
             partition: PartitionIndex(0),
         };
-        registry.replace_placements(&HashMap::from([(stale, vec![crabka_raft::NodeId(1)])]));
+        registry.replace_placements(&HashMap::from([(stale, vec![krabka_raft::NodeId(1)])]));
 
-        registry.replace_placements(&HashMap::from([(current, vec![crabka_raft::NodeId(2)])]));
+        registry.replace_placements(&HashMap::from([(current, vec![krabka_raft::NodeId(2)])]));
 
         assert!(registry.placement(stale).is_none());
         assert_eq!(
             registry.placement(current),
-            Some(vec![crabka_raft::NodeId(2)])
+            Some(vec![krabka_raft::NodeId(2)])
         );
     }
 }

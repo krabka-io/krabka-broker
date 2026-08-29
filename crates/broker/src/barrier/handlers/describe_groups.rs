@@ -13,8 +13,8 @@
 //! carries `CLUSTER_AUTHORIZATION_FAILED` (31).
 
 use bytes::Bytes;
-use crabka_metadata::MetadataImage;
-use crabka_protocol::{
+use krabka_metadata::MetadataImage;
+use krabka_protocol::{
     Decode,
     krabka::barrier::{
         DescribeBarrierGroupsRequest, DescribeBarrierGroupsResponse, DescribedBarrierGroup,
@@ -157,7 +157,7 @@ fn response(groups: Vec<DescribedBarrierGroup>) -> DescribeBarrierGroupsResponse
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::millis;
+    use krabka_units::millis;
 
     use super::*;
     use crate::barrier::persistence::GroupValue;

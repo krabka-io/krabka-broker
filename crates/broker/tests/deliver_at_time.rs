@@ -32,10 +32,10 @@ use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{BrokerHandle, NodeId};
-use crabka_client_core::Client;
-use crabka_log::DeliveryPolicy;
-use crabka_protocol::{
+use krabka_broker::{BrokerHandle, NodeId};
+use krabka_client_core::Client;
+use krabka_log::DeliveryPolicy;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -265,7 +265,7 @@ async fn fetch_values(
     served
         .records
         .as_ref()
-        .and_then(crabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
         .map(|batches| {
             batches
                 .iter()

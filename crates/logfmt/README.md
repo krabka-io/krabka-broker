@@ -1,13 +1,13 @@
-# crabka-logfmt
+# krabka-logfmt
 
-Structured-JSON `tracing` log formatter shared across Crabka services (broker,
+Structured-JSON `tracing` log formatter shared across Krabka services (broker,
 gRPC gateway, operator, schema-registry).
 
 It installs a stdout `fmt` layer. The layer writes each event as one JSON object
 on one line, in the shape that Google Cloud Logging (GKE) reads:
 
 ```json
-{"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"crabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
+{"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
 ```
 
 - The layer maps `severity` from the `tracing` level (`WARN` → `WARNING`,
@@ -24,6 +24,6 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 tracing_subscriber::registry()
-    .with(crabka_logfmt::layer(filter, std::io::stdout))
+    .with(krabka_logfmt::layer(filter, std::io::stdout))
     .init();
 ```

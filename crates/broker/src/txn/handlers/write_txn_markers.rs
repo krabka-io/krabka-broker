@@ -19,8 +19,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::PartitionIndex;
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_ids::PartitionIndex;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         write_txn_markers_request::WriteTxnMarkersRequest,
@@ -30,7 +31,6 @@ use crabka_protocol::{
         },
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{
     broker::Broker,
@@ -71,7 +71,7 @@ pub(crate) fn handle(
             };
             // Wrap the wire `i64` into `ProducerId` for the marker builder;
             // unwrapped again below for the raw-`i64` response field.
-            let pid = crabka_log::ProducerId(marker_entry.producer_id);
+            let pid = krabka_log::ProducerId(marker_entry.producer_id);
             let epoch = marker_entry.producer_epoch;
 
             let mut topic_results: Vec<WritableTxnMarkerTopicResult> = Vec::new();
@@ -220,7 +220,7 @@ pub(crate) async fn append_marker_and_materialize(
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MarkerAppend {
-    pub(crate) producer_id: crabka_log::ProducerId,
+    pub(crate) producer_id: krabka_log::ProducerId,
     pub(crate) producer_epoch: i16,
     pub(crate) marker_type: MarkerType,
     pub(crate) coordinator_epoch: i32,
@@ -229,7 +229,7 @@ pub(crate) struct MarkerAppend {
 
 fn pending_offset_entries(
     partition: &crate::partition::Partition,
-    producer_id: crabka_log::ProducerId,
+    producer_id: krabka_log::ProducerId,
 ) -> Result<CommittedOffsets, BrokerError> {
     let log = partition.log.lock().map_err(|_| {
         BrokerError::Replication("offsets log lock poisoned while applying txn marker".into())
@@ -240,7 +240,7 @@ fn pending_offset_entries(
     let end = log.log_end_offset();
     let mut offsets: CommittedOffsets = HashMap::new();
     while next < end {
-        let read = log.read(next, crabka_units::mebibytes(1))?;
+        let read = log.read(next, krabka_units::mebibytes(1))?;
         if read.batches.is_empty() {
             break;
         }
@@ -274,7 +274,7 @@ fn pending_offset_entries(
                 }
             }
             advanced_to =
-                crabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+                krabka_log::Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
         }
         if advanced_to <= next {
             break;
@@ -318,8 +318,8 @@ mod tests {
     use std::{path::Path, sync::Arc};
 
     use assert2::assert;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::{
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             write_txn_markers_request::{
@@ -421,8 +421,8 @@ mod tests {
 
     #[tokio::test]
     async fn committed_offsets_are_published_by_the_offsets_partition_marker() {
-        use crabka_log::Offset;
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_log::Offset;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
@@ -498,8 +498,8 @@ mod tests {
 
     #[tokio::test]
     async fn aborted_offsets_are_not_published_by_the_offsets_partition_marker() {
-        use crabka_log::Offset;
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_log::Offset;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
@@ -512,7 +512,7 @@ mod tests {
             .partitions
             .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
             .expect("local offsets partition");
-        let producer_id = crabka_log::ProducerId(92);
+        let producer_id = krabka_log::ProducerId(92);
         part.produce_batch(RecordBatch {
             producer_id: producer_id.get(),
             producer_epoch: 5,
@@ -560,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn internal_marker_path_records_supplied_commit_stamp() {
-        use crabka_protocol::records::{Attributes, Record, RecordBatch};
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
         let (broker_handle, dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
@@ -572,10 +572,10 @@ mod tests {
         part.log
             .lock()
             .expect("partition log")
-            .set_stamp_source(Arc::new(crabka_log::MonotonicStampSource::new(1, 1)))
+            .set_stamp_source(Arc::new(krabka_log::MonotonicStampSource::new(1, 1)))
             .expect("install stamp source");
 
-        let producer_id = crabka_log::ProducerId(700);
+        let producer_id = krabka_log::ProducerId(700);
         part.produce_batch(RecordBatch {
             producer_id: producer_id.get(),
             producer_epoch: 2,
@@ -588,7 +588,7 @@ mod tests {
         })
         .await
         .expect("append transactional data");
-        assert!(part.stamp_for_offset(crabka_log::Offset(0)).is_none());
+        assert!(part.stamp_for_offset(krabka_log::Offset(0)).is_none());
 
         append_marker_and_materialize(
             &part,
@@ -605,8 +605,8 @@ mod tests {
         .await
         .expect("commit marker");
 
-        assert!(part.stamp_for_offset(crabka_log::Offset(0)) == Some(900));
-        assert!(part.stamp_for_offset(crabka_log::Offset(1)).is_none());
+        assert!(part.stamp_for_offset(krabka_log::Offset(0)) == Some(900));
+        assert!(part.stamp_for_offset(krabka_log::Offset(1)).is_none());
         broker_handle.shutdown().await;
     }
 }

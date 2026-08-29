@@ -17,8 +17,8 @@
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
@@ -103,7 +103,7 @@ pub(crate) fn handle(
                 };
 
                 let Some(p) =
-                    partitions.get(&topic.topic, crabka_ids::PartitionIndex(part.partition))
+                    partitions.get(&topic.topic, krabka_ids::PartitionIndex(part.partition))
                 else {
                     out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
                     parts_out.push(out);
@@ -127,7 +127,7 @@ pub(crate) fn handle(
                     // Wrap the raw wire `requested_epoch` for the log-crate seam.
                     let end_offset = log
                         .epoch_checkpoint()
-                        .end_offset_for_epoch(crabka_log::LeaderEpoch(part.leader_epoch), leo);
+                        .end_offset_for_epoch(krabka_log::LeaderEpoch(part.leader_epoch), leo);
                     drop(log);
                     out.error_code = codes::NONE;
                     // Unwrap the log-layer `Offset` into the wire `i64` field.
@@ -161,22 +161,22 @@ pub(crate) fn handle(
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_protocol::Encode;
+    use krabka_protocol::Encode;
 
     use super::*;
 
     #[test]
     fn topic_describe_denied_yields_topic_authorization_failed_rows() {
-        use crabka_protocol::owned::offset_for_leader_epoch_response::{
+        use krabka_protocol::owned::offset_for_leader_epoch_response::{
             self, EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         };
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

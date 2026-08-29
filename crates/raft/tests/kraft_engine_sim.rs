@@ -22,7 +22,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use crabka_raft::{
+use krabka_raft::{
     ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftError,
     kraft::{
         KraftConfig, KraftController, KraftLog, NodeId, PeerSender, QuorumState,
@@ -30,7 +30,7 @@ use crabka_raft::{
         transport::{Inbound, api_key},
     },
 };
-use crabka_units::prelude::{Time, millis};
+use krabka_units::prelude::{Time, millis};
 use tokio::sync::oneshot;
 
 /// Per-node election timeouts, staggered so one node reliably wins the first
@@ -102,19 +102,19 @@ impl PeerSender for SimNet {
     }
 }
 
-fn voter_set(ids: &[NodeId]) -> crabka_metadata::voters::VoterSet {
-    crabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-        crabka_metadata::voters::Voter {
+fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
+    krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
+        krabka_metadata::voters::Voter {
             id,
             directory_id: uuid::Uuid::nil(),
             endpoints: Vec::new(),
-            kraft_version: crabka_metadata::voters::KRaftVersionRange::default(),
+            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
         }
     }))
 }
 
-fn topic_record(name: &str, id: u128) -> crabka_metadata::MetadataRecord {
-    crabka_metadata::MetadataRecord::V1Topic(crabka_metadata::TopicRecord {
+fn topic_record(name: &str, id: u128) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: name.to_string(),
         topic_id: uuid::Uuid::from_u128(id),
         partitions: 1,
@@ -274,7 +274,7 @@ async fn three_engines_elect_one_leader() {
 ///     candidates every round, self-vote, and never reach a majority, because
 ///     the third voter is down. They then churn for tens of seconds. The
 ///     `start_n_node`-style topologies with all voters up never exercised this.
-///     The mixed JVM and Crabka quorum did, because the JVM boots slowly.
+///     The mixed JVM and Krabka quorum did, because the JVM boots slowly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
     let net = SimNet::new();

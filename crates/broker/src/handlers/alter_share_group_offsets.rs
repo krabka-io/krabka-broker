@@ -9,8 +9,8 @@
 //! ACL gate, which needs the principal and the peer `SocketAddr`.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
@@ -172,7 +172,7 @@ async fn reset_partition(
             topic_id,
             partition,
             cur_epoch + 1,
-            crabka_log::Offset(start_offset),
+            krabka_log::Offset(start_offset),
         )
         .await
         .map_err(|_| ())
@@ -219,7 +219,7 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             alter_share_group_offsets_request::{
@@ -229,7 +229,7 @@ mod tests {
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         },
     };
-    use crabka_security::Principal;
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{
@@ -456,7 +456,7 @@ mod tests {
             state.state_epoch
         } else {
             persister
-                .initialize("g-reset", topic_id, 0, 4, crabka_log::Offset(10))
+                .initialize("g-reset", topic_id, 0, 4, krabka_log::Offset(10))
                 .await
                 .expect("seed share state");
             4
@@ -472,7 +472,7 @@ mod tests {
             .expect("state present");
 
         assert!(state.state_epoch == initial_epoch + 1);
-        assert!(state.start_offset == crabka_log::Offset(33));
+        assert!(state.start_offset == krabka_log::Offset(33));
         broker_handle.shutdown().await;
     }
 }

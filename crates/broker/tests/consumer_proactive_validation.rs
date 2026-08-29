@@ -73,11 +73,11 @@ use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_consumer::{AutoOffsetReset, Consumer, ConsumerError};
-use crabka_client_core::Client;
-use crabka_metadata::{MetadataRecord, PartitionRecord};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_consumer::{AutoOffsetReset, Consumer, ConsumerError};
+use krabka_client_core::Client;
+use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
@@ -87,7 +87,7 @@ use crabka_protocol::{
 };
 use tempfile::TempDir;
 
-async fn topic_id_for(client: &Client, name: &str) -> crabka_protocol::primitives::uuid::Uuid {
+async fn topic_id_for(client: &Client, name: &str) -> krabka_protocol::primitives::uuid::Uuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
@@ -238,9 +238,9 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
             .bootstrap(&bootstrap)
             .client_id("seed")
             .group_id("proactive-grp")
-            .session_timeout(crabka_units::secs(30))
-            .rebalance_timeout(crabka_units::secs(2))
-            .heartbeat_interval(crabka_units::secs(1))
+            .session_timeout(krabka_units::secs(30))
+            .rebalance_timeout(krabka_units::secs(2))
+            .heartbeat_interval(krabka_units::secs(1))
             .auto_offset_reset(AutoOffsetReset::Earliest)
             .subscribe([topic.to_string()])
             .build()
@@ -250,7 +250,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline && epochs.len() < 4 {
             for r in seed
-                .poll(crabka_units::millis(300))
+                .poll(krabka_units::millis(300))
                 .await
                 .expect("seed consume must not error")
             {
@@ -312,9 +312,9 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         .bootstrap(&bootstrap)
         .client_id("c")
         .group_id("proactive-grp")
-        .session_timeout(crabka_units::secs(30))
-        .rebalance_timeout(crabka_units::secs(2))
-        .heartbeat_interval(crabka_units::secs(1))
+        .session_timeout(krabka_units::secs(30))
+        .rebalance_timeout(krabka_units::secs(2))
+        .heartbeat_interval(krabka_units::secs(1))
         .auto_offset_reset(AutoOffsetReset::None)
         .subscribe([topic.to_string()])
         .build()
@@ -367,7 +367,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut got = None;
     while Instant::now() < deadline {
-        match consumer.poll(crabka_units::millis(300)).await {
+        match consumer.poll(krabka_units::millis(300)).await {
             Ok(recs) => {
                 assert!(
                     recs.is_empty(),

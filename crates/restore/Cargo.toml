@@ -1,5 +1,5 @@
 [package]
-name = "crabka-restore"
+name = "krabka-restore"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -12,13 +12,13 @@ description = "Offline point-in-time restore: rebuilds a bootable krabka log dir
 workspace = true
 
 [lib]
-name = "crabka_restore"
+name = "krabka_restore"
 path = "src/lib.rs"
 
-# `krabka-restore`, not `crabka-restore`. The `krabka` operator CLI resolves an
+# `krabka-restore`, not `krabka-restore`. The `krabka` operator CLI resolves an
 # unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves
 # `git foo` to `git-foo`. This exact spelling is what makes `krabka restore`
-# work, so it deliberately breaks the `crabka-` convention the rest of the
+# work, so it deliberately breaks the `krabka-` convention the rest of the
 # workspace follows.
 [[bin]]
 name = "krabka-restore"
@@ -28,23 +28,23 @@ path = "src/main.rs"
 # The target cluster is formatted through the same code path `krabka format`
 # uses, with the recovered topic and partition records seeded into the
 # bootstrap stream.
-crabka-format = { version = "0.4.0", path = "../format" }
-crabka-ids = { version = "0.4.0" }
-crabka-log = { version = "0.4.0", path = "../log" }
-crabka-metadata = { version = "0.4.0" }
+krabka-format = { version = "0.4.0", path = "../format" }
+krabka-ids = { version = "0.4.0" }
+krabka-log = { version = "0.4.0", path = "../log" }
+krabka-metadata = { version = "0.4.0" }
 # The archive handle is built straight onto the object-store layer. The broker
 # owns the same mapping, but a recovery tool must not carry the broker.
-crabka-object-store = { version = "0.4.0", path = "../object-store" }
-crabka-protocol = { version = "0.4.0", default-features = false }
+krabka-object-store = { version = "0.4.0", path = "../object-store" }
+krabka-protocol = { version = "0.4.0", default-features = false }
 # The KIP-405 archive key codec and segment metadata model.
-crabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
+krabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
 # `Snapshot::load` reads a broker's `remote-log-metadata/snapshot` for
 # `--rlmm-snapshot`, the authoritative-metadata cross-check against the
 # bucket scan.
-crabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
+krabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-# The `.snapshot` sidecar's CRC32C header. `crabka-log` keeps its own decoder
+# The `.snapshot` sidecar's CRC32C header. `krabka-log` keeps its own decoder
 # `pub(crate)`, so the archive-side verifier reimplements the documented
 # format rather than reaching into the log crate's internals.
 crc32c = { workspace = true }

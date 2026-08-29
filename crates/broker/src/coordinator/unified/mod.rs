@@ -29,9 +29,9 @@ use std::{
 use actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, MetadataProvider};
 use bytes::Bytes;
 use config::NextGenConfig;
-use crabka_protocol::records::{Record, RecordBatch};
 use dashmap::DashMap;
 use group::CoordinatorGroup;
+use krabka_protocol::records::{Record, RecordBatch};
 use offsets_log::OffsetsLog;
 use share::{
     actor::{ShareGroupActorHandle, ShareGroupActorMessage},
@@ -1341,7 +1341,7 @@ impl GroupCoordinator {
     }
 }
 
-/// `MetadataProvider` backed by `crabka_raft::ControllerHandle::current_image()`.
+/// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
 pub struct ImageMetadataProvider {
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
 }
@@ -1355,7 +1355,7 @@ impl std::fmt::Debug for ImageMetadataProvider {
 
 impl MetadataProvider for ImageMetadataProvider {
     fn snapshot(&self) -> reconciler::ReconcileInput {
-        use crabka_protocol::primitives::uuid::Uuid as ProtoUuid;
+        use krabka_protocol::primitives::uuid::Uuid as ProtoUuid;
         let image = self.controller.current_image();
         let mut topic_id_by_name = std::collections::HashMap::new();
         let mut partitions_per_topic = std::collections::HashMap::new();
@@ -1542,13 +1542,13 @@ mod tests {
 
     #[derive(Debug)]
     struct FixedMetadataSource {
-        image: Arc<crabka_metadata::MetadataImage>,
-        leader_tx: tokio::sync::watch::Sender<Option<crabka_raft::NodeId>>,
+        image: Arc<krabka_metadata::MetadataImage>,
+        leader_tx: tokio::sync::watch::Sender<Option<krabka_raft::NodeId>>,
     }
 
     impl FixedMetadataSource {
-        fn new(image: crabka_metadata::MetadataImage) -> Self {
-            let (leader_tx, _) = tokio::sync::watch::channel(Some(crabka_raft::NodeId(1)));
+        fn new(image: krabka_metadata::MetadataImage) -> Self {
+            let (leader_tx, _) = tokio::sync::watch::channel(Some(krabka_raft::NodeId(1)));
             Self {
                 image: Arc::new(image),
                 leader_tx,
@@ -1556,27 +1556,27 @@ mod tests {
         }
     }
 
-    fn unsupported() -> crabka_raft::RaftError {
-        crabka_raft::RaftError::Unsupported("fixed metadata source")
+    fn unsupported() -> krabka_raft::RaftError {
+        krabka_raft::RaftError::Unsupported("fixed metadata source")
     }
 
     #[async_trait::async_trait]
     impl crate::metadata_source::MetadataSource for FixedMetadataSource {
-        fn current_image(&self) -> Arc<crabka_metadata::MetadataImage> {
+        fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
             self.image.clone()
         }
 
-        fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<crabka_metadata::MetadataImage>> {
+        fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>> {
             let (_, rx) = tokio::sync::watch::channel(self.image.clone());
             rx
         }
 
-        fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<crabka_raft::NodeId>> {
+        fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
             self.leader_tx.subscribe()
         }
 
-        fn quorum_state(&self) -> crabka_raft::QuorumState {
-            crabka_raft::QuorumState {
+        fn quorum_state(&self) -> krabka_raft::QuorumState {
+            krabka_raft::QuorumState {
                 current_term: 0,
                 last_applied_index: 0,
                 current_leader: *self.leader_tx.borrow(),
@@ -1588,23 +1588,23 @@ mod tests {
 
         async fn submit_change(
             &self,
-            _records: Vec<crabka_metadata::MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, crabka_raft::RaftError> {
-            Ok(crabka_raft::SubmitChangeResult::default())
+            _records: Vec<krabka_metadata::MetadataRecord>,
+        ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
+            Ok(krabka_raft::SubmitChangeResult::default())
         }
 
         async fn change_membership(
             &self,
-            _new_voters: std::collections::BTreeSet<crabka_raft::NodeId>,
-        ) -> Result<(), crabka_raft::RaftError> {
+            _new_voters: std::collections::BTreeSet<krabka_raft::NodeId>,
+        ) -> Result<(), krabka_raft::RaftError> {
             Err(unsupported())
         }
 
         async fn add_learner(
             &self,
-            _node_id: crabka_raft::NodeId,
-            _node: crabka_raft::Node,
-        ) -> Result<(), crabka_raft::RaftError> {
+            _node_id: krabka_raft::NodeId,
+            _node: krabka_raft::Node,
+        ) -> Result<(), krabka_raft::RaftError> {
             Err(unsupported())
         }
 
@@ -1616,32 +1616,32 @@ mod tests {
             &self,
             _position: i64,
             _max_bytes: i32,
-        ) -> crabka_raft::SnapshotRange {
-            crabka_raft::SnapshotRange::NoSnapshot
+        ) -> krabka_raft::SnapshotRange {
+            krabka_raft::SnapshotRange::NoSnapshot
         }
 
-        async fn trigger_snapshot(&self) -> Result<(), crabka_raft::RaftError> {
+        async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
             Err(unsupported())
         }
 
         async fn add_voter(
             &self,
-            _req: crabka_raft::AddVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::AddVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             Err(unsupported())
         }
 
         async fn remove_voter(
             &self,
-            _req: crabka_raft::RemoveVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::RemoveVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             Err(unsupported())
         }
 
         async fn update_voter(
             &self,
-            _req: crabka_raft::UpdateVoter,
-        ) -> Result<crabka_raft::ReconfigOutcome, crabka_raft::RaftError> {
+            _req: krabka_raft::UpdateVoter,
+        ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
             Err(unsupported())
         }
 
@@ -1649,7 +1649,7 @@ mod tests {
     }
 
     fn fixed_source(
-        image: crabka_metadata::MetadataImage,
+        image: krabka_metadata::MetadataImage,
     ) -> Arc<dyn crate::metadata_source::MetadataSource> {
         Arc::new(FixedMetadataSource::new(image))
     }
@@ -1659,25 +1659,25 @@ mod tests {
     ) -> Arc<crate::share_coordinator::persister_client::SharePersister> {
         let share_coordinator = Arc::new(
             crate::share_coordinator::coordinator::ShareCoordinator::new(
-                crabka_metadata::NodeId(1),
+                krabka_metadata::NodeId(1),
                 Arc::new(crate::partition_registry::PartitionRegistry::new()),
                 crate::share_coordinator::config::ShareCoordinatorConfig::default(),
             ),
         );
         Arc::new(
             crate::share_coordinator::persister_client::SharePersister::new(
-                crabka_metadata::NodeId(1),
+                krabka_metadata::NodeId(1),
                 share_coordinator,
                 source,
                 Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
-                crabka_security::ListenerProtocol::Plaintext,
+                krabka_security::ListenerProtocol::Plaintext,
                 "PLAINTEXT".into(),
             ),
         )
     }
 
-    fn proto_uuid(byte: u8) -> crabka_protocol::primitives::uuid::Uuid {
-        crabka_protocol::primitives::uuid::Uuid([byte; 16])
+    fn proto_uuid(byte: u8) -> krabka_protocol::primitives::uuid::Uuid {
+        krabka_protocol::primitives::uuid::Uuid([byte; 16])
     }
 
     fn real_uuid(byte: u8) -> uuid::Uuid {
@@ -1812,7 +1812,7 @@ mod tests {
 
     #[test]
     fn debug_wrappers_write_type_names() {
-        let source = fixed_source(crabka_metadata::MetadataImage::new(real_uuid(1)));
+        let source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(1)));
         assert!(
             format!("{:?}", MetadataSourceHandle(source.clone())).contains("MetadataSourceHandle")
         );
@@ -1828,8 +1828,8 @@ mod tests {
         assert!(coord.metadata_source().is_none());
         assert!(coord.share_persister().is_none());
 
-        let first_source = fixed_source(crabka_metadata::MetadataImage::new(real_uuid(1)));
-        let second_source = fixed_source(crabka_metadata::MetadataImage::new(real_uuid(2)));
+        let first_source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(1)));
+        let second_source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(2)));
         coord.set_metadata_source(first_source.clone());
         coord.set_metadata_source(second_source);
         let got_source = coord.metadata_source().unwrap();
@@ -2147,10 +2147,10 @@ mod tests {
 
     #[test]
     fn image_metadata_provider_snapshot_projects_topics_partitions_and_racks() {
-        let mut image = crabka_metadata::MetadataImage::new(real_uuid(9));
+        let mut image = krabka_metadata::MetadataImage::new(real_uuid(9));
         let topic_id = real_uuid(8);
-        image.apply(&crabka_metadata::MetadataRecord::V1Topic(
-            crabka_metadata::TopicRecord {
+        image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
                 name: "input".into(),
                 topic_id,
                 partitions: 3,
@@ -2162,9 +2162,9 @@ mod tests {
             (2, Some("rack-b".to_string())),
             (3, None),
         ] {
-            image.apply(&crabka_metadata::MetadataRecord::V1BrokerRegistration(
-                crabka_metadata::BrokerRegistrationRecord {
-                    node_id: crabka_metadata::NodeId(node_id),
+            image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_metadata::NodeId(node_id),
                     broker_epoch: i64::try_from(node_id).unwrap(),
                     incarnation_id: real_uuid(u8::try_from(node_id).unwrap()),
                     host: format!("broker-{node_id}"),
@@ -2176,24 +2176,24 @@ mod tests {
                 },
             ));
         }
-        image.apply(&crabka_metadata::MetadataRecord::V1Partition(
-            crabka_metadata::PartitionRecord {
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
                 topic: "input".into(),
                 partition: 0,
-                leader: crabka_metadata::NodeId(1),
-                replicas: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
-                isr: vec![crabka_metadata::NodeId(1), crabka_metadata::NodeId(2)],
+                leader: krabka_metadata::NodeId(1),
+                replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+                isr: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
                 directories: vec![real_uuid(1), real_uuid(2)],
                 ..Default::default()
             },
         ));
-        image.apply(&crabka_metadata::MetadataRecord::V1Partition(
-            crabka_metadata::PartitionRecord {
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
                 topic: "input".into(),
                 partition: 1,
-                leader: crabka_metadata::NodeId(3),
-                replicas: vec![crabka_metadata::NodeId(3)],
-                isr: vec![crabka_metadata::NodeId(3)],
+                leader: krabka_metadata::NodeId(3),
+                replicas: vec![krabka_metadata::NodeId(3)],
+                isr: vec![krabka_metadata::NodeId(3)],
                 directories: vec![real_uuid(3)],
                 ..Default::default()
             },
@@ -2203,7 +2203,7 @@ mod tests {
             controller: fixed_source(image),
         };
         let snapshot = provider.snapshot();
-        let proto_topic_id = crabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes());
+        let proto_topic_id = krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes());
 
         check!(snapshot.topic_id_by_name.get("input") == Some(&proto_topic_id));
         check!(snapshot.partitions_per_topic.get(&proto_topic_id) == Some(&2));

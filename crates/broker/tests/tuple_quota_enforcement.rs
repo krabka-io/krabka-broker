@@ -31,11 +31,11 @@ use std::{
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
-use crabka_metadata::{
+use krabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
+use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -49,7 +49,7 @@ use crabka_protocol::{
     },
     records::{Record, RecordBatch},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -125,7 +125,7 @@ async fn round_trip(
         api_version,
         corr_id,
         flexible,
-        "crabka-tuple-quota-test",
+        "krabka-tuple-quota-test",
         body,
     )
     .await
@@ -210,7 +210,7 @@ fn start_single_broker_sasl_plaintext_with_users(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -242,7 +242,7 @@ async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
     };
@@ -341,7 +341,7 @@ async fn drive_alter_client_quotas_sasl(
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
     const VERSION: i16 = 1; // flexible
 
-    use crabka_protocol::owned::{
+    use krabka_protocol::owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
         alter_client_quotas_response::AlterClientQuotasResponse,
     };
@@ -582,7 +582,7 @@ async fn tuple_quota_throttles_only_matching_client_id() {
     // by entity_type, so the stored key has "client-id" before "user".
     handle
         .wait_for_image(|img| {
-            let key: crabka_metadata::EntityKey = vec![
+            let key: krabka_metadata::EntityKey = vec![
                 ("client-id".into(), Some("app-x".into())),
                 ("user".into(), Some("alice".into())),
             ];

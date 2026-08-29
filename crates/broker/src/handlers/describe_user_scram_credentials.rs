@@ -1,8 +1,8 @@
 //! `DescribeUserScramCredentials` (`api_key` 50, KIP-554 read half).
 
 use bytes::Bytes;
-use crabka_metadata::{MetadataImage, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{MetadataImage, ResourceType};
+use krabka_protocol::{
     Encode,
     owned::{
         describe_user_scram_credentials_request::{DescribeUserScramCredentialsRequest, UserName},
@@ -12,7 +12,7 @@ use crabka_protocol::{
         },
     },
 };
-use crabka_security::SaslMechanism;
+use krabka_security::SaslMechanism;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -45,7 +45,7 @@ pub(crate) fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Describe,
+            operation: krabka_metadata::AclOperation::Describe,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
@@ -205,8 +205,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use crabka_metadata::{AclOperation, MetadataRecord, ScramCredentialRecord};
-    use crabka_protocol::UnknownTaggedFields;
+    use krabka_metadata::{AclOperation, MetadataRecord, ScramCredentialRecord};
+    use krabka_protocol::UnknownTaggedFields;
 
     #[derive(Debug)]
     struct ClusterDescribeOnly;
@@ -214,7 +214,7 @@ mod tests {
     impl crate::authorizer::Authorizer for ClusterDescribeOnly {
         fn authorize(
             &self,
-            _source: &dyn crabka_authz::AclSource,
+            _source: &dyn krabka_authz::AclSource,
             req: &crate::authorizer::AuthorizationRequest<'_>,
         ) -> AuthorizationResult {
             if req.resource_type == ResourceType::Cluster
@@ -248,7 +248,7 @@ mod tests {
     fn process_targets_for_test(
         image: &MetadataImage,
         users_filter: Option<
-            &[crabka_protocol::owned::describe_user_scram_credentials_request::UserName],
+            &[krabka_protocol::owned::describe_user_scram_credentials_request::UserName],
         >,
     ) -> DescribeUserScramCredentialsResponse {
         let known_users: std::collections::HashSet<String> =
@@ -268,7 +268,7 @@ mod tests {
         users_filter: Option<Vec<String>>,
         seeded: &[(&str, SaslMechanism, u32)],
     ) -> DescribeUserScramCredentialsResponse {
-        use crabka_protocol::owned::describe_user_scram_credentials_request::UserName;
+        use krabka_protocol::owned::describe_user_scram_credentials_request::UserName;
         let req = DescribeUserScramCredentialsRequest {
             users: users_filter.map(|v| {
                 v.into_iter()

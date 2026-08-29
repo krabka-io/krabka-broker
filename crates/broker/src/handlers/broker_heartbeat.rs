@@ -6,15 +6,15 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         broker_heartbeat_request::BrokerHeartbeatRequest,
         broker_heartbeat_response::BrokerHeartbeatResponse,
     },
 };
-use crabka_raft::NodeId;
+use krabka_raft::NodeId;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -211,7 +211,7 @@ fn encode_response(version: i16, resp: &BrokerHeartbeatResponse) -> Result<Bytes
 fn cluster_action_denied(
     authorizer: &dyn crate::authorizer::Authorizer,
     image: &MetadataImage,
-    principal: &crabka_security::Principal,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
 ) -> bool {
     authorizer.authorize(
@@ -238,7 +238,7 @@ fn denied_response(version: i16) -> Result<Bytes, BrokerError> {
 /// failure is logged and does not propagate.
 pub(crate) async fn failover_offline_dirs(
     controller: &std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
-    broker: crabka_raft::NodeId,
+    broker: krabka_raft::NodeId,
     offline: &std::collections::HashSet<uuid::Uuid>,
     liveness: &crate::heartbeat::controller_state::ControllerLivenessState,
     metrics: &crate::metrics::BrokerMetrics,
@@ -261,7 +261,7 @@ pub(crate) async fn failover_offline_dirs(
 /// exists, and return `true` once every *transferable* partition has a new
 /// leader, which means the broker is safe to shut down. A partition with no
 /// other live replica, such as a single-replica internal topic like
-/// `__consumer_offsets` or `__crabka_audit`, cannot transfer leadership
+/// `__consumer_offsets` or `__krabka_audit`, cannot transfer leadership
 /// anywhere, so this function does not count it. A count of those partitions
 /// would block controlled shutdown forever. The function returns
 /// `false` while transferable leadership is still moving, and the client
@@ -305,7 +305,7 @@ async fn drain_leaderships_for_shutdown(
         }
         // Else: no live alternative ISR member to transfer to — e.g. the
         // single-replica internal topics (__consumer_offsets,
-        // __transaction_state, __crabka_audit), of which every broker
+        // __transaction_state, __krabka_audit), of which every broker
         // leads its own copy, or an ISR whose only survivors are witnesses.
         // Leadership cannot move anywhere, so counting
         // it would block controlled shutdown forever; and the broker is
@@ -339,9 +339,9 @@ mod tests {
 
     use assert2::assert;
     use bytes::BytesMut;
-    use crabka_metadata::{BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord};
-    use crabka_protocol::{Encode, primitives::uuid::Uuid as ProtocolUuid};
-    use crabka_raft::{
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_protocol::{Encode, primitives::uuid::Uuid as ProtocolUuid};
+    use krabka_raft::{
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         UpdateVoter,
     };
@@ -391,9 +391,9 @@ mod tests {
         async fn submit_change(
             &self,
             records: Vec<MetadataRecord>,
-        ) -> Result<crabka_raft::SubmitChangeResult, RaftError> {
+        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
             self.captured.lock().unwrap().extend(records);
-            Ok(crabka_raft::SubmitChangeResult::default())
+            Ok(krabka_raft::SubmitChangeResult::default())
         }
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
             unimplemented!()
@@ -443,7 +443,7 @@ mod tests {
             leader,
             replicas: replicas.to_vec(),
             isr: isr.to_vec(),
-            leader_epoch: crabka_metadata::LeaderEpoch(5),
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: dirs.to_vec(),
@@ -453,7 +453,7 @@ mod tests {
     }
 
     async fn liveness_with(alive: &[NodeId]) -> Arc<ControllerLivenessState> {
-        let l = ControllerLivenessState::new(crabka_units::secs(10));
+        let l = ControllerLivenessState::new(krabka_units::secs(10));
         for &n in alive {
             l.record_heartbeat(n.0).await;
         }
@@ -479,11 +479,11 @@ mod tests {
             ..Default::default()
         };
         let mut buf = BytesMut::with_capacity(
-            req.encoded_len(crabka_protocol::owned::broker_heartbeat_request::MAX_VERSION),
+            req.encoded_len(krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION),
         );
         req.encode(
             &mut buf,
-            crabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
+            krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
         )
         .expect("encode BrokerHeartbeatRequest");
         buf.freeze()
@@ -538,7 +538,7 @@ mod tests {
             is_caught_up: false,
             is_fenced: true,
             should_shut_down: false,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(not_controller_response() == expected_not_controller);
 
@@ -548,7 +548,7 @@ mod tests {
             is_caught_up: true,
             is_fenced: false,
             should_shut_down: true,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(success_response(true, false, true) == expected_success);
 
@@ -558,7 +558,7 @@ mod tests {
             is_caught_up: false,
             is_fenced: true,
             should_shut_down: false,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(denied_response_body() == expected_denied);
     }
@@ -643,20 +643,20 @@ mod tests {
         let good = Uuid::from_u128(0x600D);
         // leader=1, replicas=[1,2], isr=[1,2]; broker 1's dir is `bad`.
         let img = image_with_dir_partition(
-            crabka_audit::NodeId(1),
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            krabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[bad, good],
         );
         let (source, captured) = MockSource::new(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
-        let liveness = liveness_with(&[crabka_audit::NodeId(1), crabka_audit::NodeId(2)]).await;
+        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = [bad].into_iter().collect();
 
         let recoveries = failover_offline_dirs(
             &controller,
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             &offline,
             &liveness,
             &metrics,
@@ -670,10 +670,10 @@ mod tests {
         let expected_changes = vec![MetadataRecord::V1Partition(PartitionRecord {
             topic: "t".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(2),
-            replicas: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            isr: vec![crabka_audit::NodeId(2)],
-            leader_epoch: crabka_metadata::LeaderEpoch(6),
+            leader: krabka_audit::NodeId(2),
+            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            isr: vec![krabka_audit::NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(6),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![bad, good],
@@ -690,20 +690,20 @@ mod tests {
         let good = Uuid::from_u128(0x600D);
         // Both replicas are on `good` dir; reporting `bad` as offline is a no-op.
         let img = image_with_dir_partition(
-            crabka_audit::NodeId(1),
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            krabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[good, good],
         );
         let (source, captured) = MockSource::new(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
-        let liveness = liveness_with(&[crabka_audit::NodeId(1), crabka_audit::NodeId(2)]).await;
+        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
         let offline: std::collections::HashSet<Uuid> = [bad].into_iter().collect();
 
         let recoveries = failover_offline_dirs(
             &controller,
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             &offline,
             &liveness,
             &metrics,
@@ -720,22 +720,22 @@ mod tests {
     async fn single_replica_partition_does_not_block_controlled_shutdown() {
         // Broker 1 leads an RF=1 partition (replicas=[1], isr=[1]) — exactly
         // the shape of the broker-affinity internal topics __consumer_offsets
-        // / __crabka_audit. There is nowhere to transfer leadership, so the
+        // / __krabka_audit. There is nowhere to transfer leadership, so the
         // drain gate must still report "safe to shut down" (regression: this
         // used to count the partition forever and time out controlled
         // shutdown at 30s).
         let img = image_with_dir_partition(
-            crabka_audit::NodeId(1),
-            &[crabka_audit::NodeId(1)],
-            &[crabka_audit::NodeId(1)],
+            krabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1)],
+            &[krabka_audit::NodeId(1)],
             &[Uuid::nil()],
         );
         let (source, captured) = MockSource::new(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
-        let liveness = liveness_with(&[crabka_audit::NodeId(1)]).await;
+        let liveness = liveness_with(&[krabka_audit::NodeId(1)]).await;
 
         let drained =
-            drain_leaderships_for_shutdown(&controller, &liveness, crabka_audit::NodeId(1))
+            drain_leaderships_for_shutdown(&controller, &liveness, krabka_audit::NodeId(1))
                 .await
                 .unwrap();
 
@@ -748,17 +748,17 @@ mod tests {
         // Broker 1 leads an RF=2 partition with broker 2 alive in ISR: it can
         // and must transfer, so the broker is not yet safe to shut down.
         let img = image_with_dir_partition(
-            crabka_audit::NodeId(1),
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            &[crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            krabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[Uuid::nil(), Uuid::nil()],
         );
         let (source, captured) = MockSource::new(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
-        let liveness = liveness_with(&[crabka_audit::NodeId(1), crabka_audit::NodeId(2)]).await;
+        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
 
         let drained =
-            drain_leaderships_for_shutdown(&controller, &liveness, crabka_audit::NodeId(1))
+            drain_leaderships_for_shutdown(&controller, &liveness, krabka_audit::NodeId(1))
                 .await
                 .unwrap();
 
@@ -768,7 +768,7 @@ mod tests {
         let MetadataRecord::V1Partition(pr) = &changes[0] else {
             panic!("expected V1Partition change")
         };
-        assert!(pr.leader == crabka_audit::NodeId(2)); // leadership handed to the live ISR replica
+        assert!(pr.leader == krabka_audit::NodeId(2)); // leadership handed to the live ISR replica
     }
 
     /// With empty ACLs and no super-users, the authorizer denies
@@ -776,14 +776,14 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED`.
     #[test]
     fn cluster_action_denied_yields_cluster_authorization_failed() {
-        use crabka_protocol::owned::broker_heartbeat_response::{self, BrokerHeartbeatResponse};
+        use krabka_protocol::owned::broker_heartbeat_response::{self, BrokerHeartbeatResponse};
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -807,9 +807,9 @@ mod tests {
     #[test]
     fn cluster_action_allowed_by_allow_all_authorizer() {
         let image = MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -828,14 +828,14 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         wait_for_leader(&broker).await;
-        let principal = crabka_security::Principal {
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = test_context(&principal, &peer);
-        let version = crabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
+        let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
         let image = broker.controller.current_image();
         let broker_epoch = image
             .broker_epoch(NodeId(1))
@@ -853,7 +853,7 @@ mod tests {
             is_caught_up: true,
             is_fenced: false,
             should_shut_down: false,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
 

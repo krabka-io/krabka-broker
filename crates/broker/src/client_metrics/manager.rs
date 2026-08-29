@@ -11,8 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_metadata::MetadataImage;
-use crabka_units::{
+use krabka_metadata::MetadataImage;
+use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
@@ -363,7 +363,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::{assert, check};
-    use crabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
+    use krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
     use uuid::Uuid;
 
     use super::*;
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn push_throttle_ladder() {
-        let m = ClientMetricsManager::new(crabka_units::kibibytes(1), crabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = ClientAttributes {
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn get_subscription_throttles_but_allows_error_recovery() {
-        let m = ClientMetricsManager::new(crabka_units::kibibytes(1), crabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = ClientAttributes {
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn get_subscription_is_throttled_after_a_recent_push() {
-        let m = ClientMetricsManager::new(crabka_units::kibibytes(1), crabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
         let attrs = ClientAttributes {
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn get_subscription_accepts_exact_interval_boundary() {
-        let m = ClientMetricsManager::new(crabka_units::kibibytes(1), crabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
         let attrs = attrs();
         let start = Instant::now();

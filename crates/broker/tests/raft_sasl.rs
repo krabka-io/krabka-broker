@@ -9,11 +9,11 @@ use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crabka_broker::{
+use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle,
     config::{InterBrokerCredentials, ListenerSpec},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 fn oauth_token() -> String {
@@ -51,11 +51,11 @@ fn sasl_broker_config(
     cfg.broker_id = i32::try_from(i + 1).unwrap();
     cfg.listen_addr = data_addr;
     cfg.advertised_listener = data_addr.to_string();
-    cfg.node_id = crabka_broker::NodeId(u64::try_from(i + 1).unwrap());
+    cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
     cfg.controller_listen_addr = ctrl_addr;
     cfg.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     cfg.bootstrap_mode = mode;
     cfg.listeners = vec![ListenerSpec {
@@ -162,7 +162,7 @@ async fn start_two_brokers_with_controller_protocol(
 // b1.add_learner + b1.change_membership replicate via the dialer (SASL OK),
 // b2's Broker::start returns when it sees the leader — and b2 then calls
 // `controller.submit_change(self_reg)` which forwards to the leader via
-// `crabka_raft::controller::forward_submit_to`. T9b routes that helper
+// `krabka_raft::controller::forward_submit_to`. T9b routes that helper
 // through the injected `OutboundDialer` so the SASL handshake runs before
 // `API_KEY_SUBMIT_CHANGE` hits the wire, and b1 accepts the registration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -334,10 +334,10 @@ async fn controller_listener_sasl_denies_unauthorized_principal() {
     );
     // Deny-by-default authorizer: empty super-user set, no ACLs ⇒ every
     // principal (including the authenticated inter-broker one) is denied.
-    c1.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+    c1.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         std::collections::HashSet::new(),
     ));
-    c2.authorizer = std::sync::Arc::new(crabka_broker::authorizer::SimpleAclAuthorizer::new(
+    c2.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         std::collections::HashSet::new(),
     ));
 
@@ -379,26 +379,26 @@ async fn controller_listener_plaintext_legacy_path_unchanged() {
     // want zero auth on either listener (legacy path).
     let mut c1 = BrokerConfig::for_tests(dir1.path().to_path_buf());
     c1.broker_id = 1;
-    c1.node_id = crabka_broker::NodeId(1);
+    c1.node_id = krabka_broker::NodeId(1);
     c1.listen_addr = data_listen_addr();
     c1.advertised_listener = data_listen_addr().to_string();
     c1.controller_listen_addr = ctrl_addrs[0];
     c1.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     c1.bootstrap_mode = BootstrapMode::Bootstrap;
     c1.controller_listener_protocol = ListenerProtocol::Plaintext;
 
     let mut c2 = BrokerConfig::for_tests(dir2.path().to_path_buf());
     c2.broker_id = 2;
-    c2.node_id = crabka_broker::NodeId(2);
+    c2.node_id = krabka_broker::NodeId(2);
     c2.listen_addr = data_listen_addr();
     c2.advertised_listener = data_listen_addr().to_string();
     c2.controller_listen_addr = ctrl_addrs[1];
     c2.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     c2.bootstrap_mode = BootstrapMode::Bootstrap;
     c2.controller_listener_protocol = ListenerProtocol::Plaintext;

@@ -9,7 +9,7 @@
 //! transfer, so the engine restarts cleanly against the current leader.
 
 use bytes::{Bytes, BytesMut};
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _, gibibytes};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _, gibibytes};
 use refined_type::rule::MinMaxU64;
 
 use crate::types::NodeId;
@@ -166,7 +166,7 @@ impl SnapshotFetchState {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::prelude::bytes;
+    use krabka_units::prelude::bytes;
 
     use super::*;
 

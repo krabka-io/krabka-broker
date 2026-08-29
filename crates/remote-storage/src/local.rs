@@ -1,7 +1,7 @@
 //! [`LocalTieredStorage`] is a filesystem-backed reference
 //! [`RemoteStorageManager`]. It mirrors Kafka's test fixture of the same
 //! name. It uses the same partition directories and segment filenames as
-//! Kafka 4.0, so a JVM `LocalTieredStorage` can read files copied by Crabka.
+//! Kafka 4.0, so a JVM `LocalTieredStorage` can read files copied by Krabka.
 //! It is useful for tests and single-node setups. Production deployments use
 //! an object-store-backed implementation behind the same trait.
 
@@ -65,7 +65,7 @@ impl LocalTieredStorage {
         self.segment_path(metadata, index_type.suffix())
     }
 
-    /// Crabka 0.3.8 and earlier stored one directory per segment. Keep reads
+    /// Krabka 0.3.8 and earlier stored one directory per segment. Keep reads
     /// and deletes compatible while all new copies use Kafka's flat layout.
     fn legacy_segment_dir(&self, metadata: &RemoteLogSegmentMetadata) -> PathBuf {
         let id = metadata.remote_log_segment_id();
@@ -268,7 +268,7 @@ mod tests {
 
     use assert2::{assert, check};
     use bytes::Bytes;
-    use crabka_ids::LeaderEpoch;
+    use krabka_ids::LeaderEpoch;
     use uuid::Uuid;
 
     use super::*;

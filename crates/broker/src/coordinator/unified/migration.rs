@@ -11,7 +11,7 @@ use std::{
 };
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_protocol::{
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
@@ -485,7 +485,7 @@ mod tests {
 
     use assert2::{assert, check};
     use bytes::{Buf, BufMut, Bytes, BytesMut};
-    use crabka_protocol::{Encode, primitives::uuid::Uuid};
+    use krabka_protocol::{Encode, primitives::uuid::Uuid};
 
     use super::{
         super::classic_state::{ClassicGroup, Member},

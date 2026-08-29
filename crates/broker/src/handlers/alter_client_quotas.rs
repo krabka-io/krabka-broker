@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ClientQuotaRecord, MetadataRecord, QuotaEntity, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ClientQuotaRecord, MetadataRecord, QuotaEntity, ResourceType};
+use krabka_protocol::{
     Encode, UnknownTaggedFields,
     owned::{
         alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData},
@@ -38,7 +38,7 @@ const CONTROLLER_MUTATION_RATE_KEY: &str = "controller_mutation_rate";
 /// thread.
 const REQUEST_PERCENTAGE_MAX: f64 = 100.0;
 
-/// Quota keys Crabka accepts in `AlterClientQuotas` ops.
+/// Quota keys Krabka accepts in `AlterClientQuotas` ops.
 const KNOWN_QUOTA_KEYS: &[&str] = &[
     PRODUCER_BYTE_RATE_KEY,
     CONSUMER_BYTE_RATE_KEY,
@@ -54,7 +54,7 @@ const ENTITY_TYPE_CLIENT_ID: &str = "client-id";
 /// Quota entity type: client source IP address (KIP-612).
 const ENTITY_TYPE_IP: &str = "ip";
 
-/// Quota entity types Crabka accepts in `AlterClientQuotas` entries.
+/// Quota entity types Krabka accepts in `AlterClientQuotas` entries.
 const SUPPORTED_ENTITY_TYPES: &[&str] = &[ENTITY_TYPE_USER, ENTITY_TYPE_CLIENT_ID, ENTITY_TYPE_IP];
 
 #[tracing::instrument(
@@ -256,8 +256,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::owned::alter_client_quotas_request::{EntityData, EntryData, OpData};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_protocol::owned::alter_client_quotas_request::{EntityData, EntryData, OpData};
+    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
     use crate::{broker::BrokerHandle, test_support::DenyAll};
@@ -298,7 +298,7 @@ mod tests {
     use crate::test_support::start_broker_with_authorizer as start_broker;
 
     fn quota_value(handle: &BrokerHandle, user: &str, quota_key: &str) -> Option<f64> {
-        let key: crabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
+        let key: krabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
         handle
             .controller_image_for_test()
             .client_quotas()

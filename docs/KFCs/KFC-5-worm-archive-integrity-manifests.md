@@ -4,7 +4,7 @@ A tiered-storage mode that never rewrites and never deletes what it wrote, seals
 
 ## Status
 
-**Adopted.** The implementation is the `worm` module of `crabka-remote-storage`, the `PutRequest` and `PutOutcome` surface of `crabka-object-store`, and the `crabka-worm-verify` binary, merged in [#3](https://github.com/krabka-io/krabka-broker/pull/3). This document lands on branch `claude/worm-archive-integrity-manifests-2bb33t`.
+**Adopted.** The implementation is the `worm` module of `krabka-remote-storage`, the `PutRequest` and `PutOutcome` surface of `krabka-object-store`, and the `krabka-worm-verify` binary, merged in [#3](https://github.com/krabka-io/krabka-broker/pull/3). This document lands on branch `claude/worm-archive-integrity-manifests-2bb33t`.
 
 [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) defines the archive that this mode writes into, and the copy path stays the KIP-405 copy path. No KIP defines write-once retention, archive attestation, or a refused remote read, so this document is the specification for those.
 
@@ -16,7 +16,7 @@ KIP-405 tiering already copies every closed segment to object storage, and the a
 
 That is one failure domain wearing two names. The live cluster and its backup share a credential, share a bucket policy, and share whoever administers both. A ransomware event, a stolen role, or an operator who runs the wrong script reaches the archive on the same path it reaches the data directories. The archive has to sit in a domain the cluster cannot reach, and the cluster has to hold no right that would let it reach in.
 
-Deletion is the loud failure. The quiet one is a rewrite. An attacker who replaces one archived `.log` object with different bytes leaves an archive that still lists correctly, still has the right object count, and still restores. The record batch CRC that Kafka carries does not help here, because whoever wrote the replacement bytes computed the CRC over them. `crabka-restore` says so in its own terms: a CRC proves that bytes did not rot, and it proves nothing about who wrote them. See [KFC-3](KFC-3-point-in-time-restore.md#what-verification-does-not-prove).
+Deletion is the loud failure. The quiet one is a rewrite. An attacker who replaces one archived `.log` object with different bytes leaves an archive that still lists correctly, still has the right object count, and still restores. The record batch CRC that Kafka carries does not help here, because whoever wrote the replacement bytes computed the CRC over them. `krabka-restore` says so in its own terms: a CRC proves that bytes did not rot, and it proves nothing about who wrote them. See [KFC-3](KFC-3-point-in-time-restore.md#what-verification-does-not-prove).
 
 Regulated retention asks for the same two properties for a different reason. SEC Rule 17a-4(f) is the example this work was scoped against. It is a rule for a broker-dealer and not for a broker process, and krabka certifies nothing against it. What the rule's shape asks for is durable and worth naming: records that nobody can rewrite or erase for a stated period, and a way to show that the record set is complete and unaltered. The 2022 amendment to the rule added an audit-trail condition beside the older non-rewriteable and non-erasable condition, so a verifiable trail of what was written and when is a first-class answer rather than a substitute for one.
 
@@ -67,7 +67,7 @@ The manifest is JSON. It names every object the copy wrote with that object's si
 
 ### The Command
 
-`crabka-worm-verify verify` audits an archive. The name does not follow the `krabka <subcommand>` dispatch that `krabka restore` uses, and that is deliberate. The verifier is the auditor's tool and not the operator's, and an auditor installs it on a machine that runs no broker and holds no cluster config.
+`krabka-worm-verify verify` audits an archive. The name does not follow the `krabka <subcommand>` dispatch that `krabka restore` uses, and that is deliberate. The verifier is the auditor's tool and not the operator's, and an auditor installs it on a machine that runs no broker and holds no cluster config.
 
 | Flag | Meaning |
 | :--- | :--- |
@@ -292,7 +292,7 @@ Every manifest read goes through a capped reader that issues a `HEAD` first and 
 
 No allocation is ever sized from a count a manifest supplies. Object bodies are hashed chunk by chunk on a stream and never buffered whole, so a deep walk's memory cost does not follow the object size. A damaged or hostile archive produces a report and never a panic.
 
-### The Primitives Come from `crabka-audit`
+### The Primitives Come from `krabka-audit`
 
 The chain hash formula and the Ed25519 signing come from the audit crate, which already carried both for the broker's own audit checkpoints. The WORM module adds only the domain separation and the canonical encoding that a segment manifest needs.
 

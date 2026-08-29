@@ -12,8 +12,8 @@
 //! not exist, keeps the `i32::MIN` "not present" sentinel.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_groups_request::DescribeGroupsRequest,

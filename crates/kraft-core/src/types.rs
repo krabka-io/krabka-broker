@@ -1,8 +1,8 @@
 //! Core data types for the `KRaft` consensus state machine (KIP-595/996).
 //! Pure, sans-IO: no clock, no wire, no log bytes.
 
-pub use crabka_voters::NodeId;
-use crabka_voters::VoterSet;
+pub use krabka_voters::NodeId;
+use krabka_voters::VoterSet;
 use uuid::Uuid;
 
 /// A simulated or logical instant in milliseconds.
@@ -20,7 +20,7 @@ impl SimInstant {
 }
 
 /// Consensus epoch, always non-negative; the wire leader epoch is
-/// `crabka_ids::LeaderEpoch`.
+/// `krabka_ids::LeaderEpoch`.
 pub type Epoch = u32;
 
 /// Identifies a voter by node id and directory id, as Kafka's `ReplicaKey` does.
@@ -39,7 +39,7 @@ pub struct LogOffsetMetadata {
 
 /// Read-only view of the local replicated log that the state machine uses.
 ///
-/// Production uses the real `crabka-log`-backed implementation; tests supply a fake.
+/// Production uses the real `krabka-log`-backed implementation; tests supply a fake.
 pub trait LogView {
     /// The log end offset: one offset after the last appended record.
     fn end_offset(&self) -> i64;
@@ -125,12 +125,12 @@ mod tests {
         assert2::assert!(qs.voters.contains(NodeId(2)));
     }
 
-    pub(crate) fn test_voter_set(ids: &[NodeId]) -> crabka_voters::VoterSet {
-        crabka_voters::VoterSet::from_voters(ids.iter().map(|&id| crabka_voters::Voter {
+    pub(crate) fn test_voter_set(ids: &[NodeId]) -> krabka_voters::VoterSet {
+        krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
             id,
             directory_id: uuid::Uuid::nil(),
             endpoints: Vec::new(),
-            kraft_version: crabka_voters::KRaftVersionRange::default(),
+            kraft_version: krabka_voters::KRaftVersionRange::default(),
         }))
     }
 }

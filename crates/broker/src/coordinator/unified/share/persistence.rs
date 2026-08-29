@@ -11,7 +11,7 @@
 //! Key versions 9-13 are free. The consumer next-gen keys use 3, 5, 6, 7, 8.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crabka_protocol::{ProtocolError, primitives::uuid::Uuid};
+use krabka_protocol::{ProtocolError, primitives::uuid::Uuid};
 
 use crate::{
     coordinator::unified::persistence::{

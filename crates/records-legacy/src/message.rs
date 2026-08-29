@@ -14,7 +14,7 @@
 //! inside the message except the CRC field itself.
 
 use bytes::{Buf, BufMut, Bytes};
-use crabka_compression::CompressionType;
+use krabka_compression::CompressionType;
 
 use crate::error::LegacyRecordsError;
 
@@ -152,7 +152,7 @@ impl Message {
     /// Returns `Truncated` if the `key` or `value` bytes stop early.
     /// Returns `Malformed` if bytes remain after the value.
     /// # Panics
-    /// Panics if a nonnegative `i32` length does not fit in a `usize`. This cannot occur on any target Crabka builds for.
+    /// Panics if a nonnegative `i32` length does not fit in a `usize`. This cannot occur on any target Krabka builds for.
     pub fn decode_from<B: Buf>(buf: &mut B, frame_size: usize) -> Result<Self, LegacyRecordsError> {
         if buf.remaining() < frame_size {
             return Err(LegacyRecordsError::Truncated {

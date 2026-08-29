@@ -9,9 +9,9 @@ use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
 use bytes::Bytes;
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -39,7 +39,7 @@ const ERR_GROUP_ID_NOT_FOUND: i16 = 69;
 
 // ── boot / connect helpers ────────────────────────────────────────────────────
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -402,11 +402,11 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
 
     // Precondition: the group must be Classic-typed.
     broker
-        .wait_until_group_type("g", crabka_broker::coordinator::unified::GroupType::Classic)
+        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Classic)
         .await;
     assert!(
         broker.group_type_for_test("g")
-            == Some(crabka_broker::coordinator::unified::GroupType::Classic),
+            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
         "precondition: group_type must be Classic before upgrade, got {:?}",
         broker.group_type_for_test("g")
     );
@@ -427,11 +427,11 @@ async fn drained_classic_group_converts_and_preserves_offsets() {
 
     // Group must now be Streams-typed.
     broker
-        .wait_until_group_type("g", crabka_broker::coordinator::unified::GroupType::Streams)
+        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Streams)
         .await;
     assert!(
         broker.group_type_for_test("g")
-            == Some(crabka_broker::coordinator::unified::GroupType::Streams),
+            == Some(krabka_broker::coordinator::unified::GroupType::Streams),
         "group_type must be Streams after upgrade, got {:?}",
         broker.group_type_for_test("g")
     );
@@ -489,7 +489,7 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
     // Precondition: group must be Classic-typed.
     assert!(
         broker.group_type_for_test("g2")
-            == Some(crabka_broker::coordinator::unified::GroupType::Classic),
+            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
         "precondition: group_type must be Classic, got {:?}",
         broker.group_type_for_test("g2")
     );
@@ -509,7 +509,7 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
     // Group must STILL be Classic-typed (no flip).
     assert!(
         broker.group_type_for_test("g2")
-            == Some(crabka_broker::coordinator::unified::GroupType::Classic),
+            == Some(krabka_broker::coordinator::unified::GroupType::Classic),
         "group_type must remain Classic after rejected upgrade, got {:?}",
         broker.group_type_for_test("g2")
     );

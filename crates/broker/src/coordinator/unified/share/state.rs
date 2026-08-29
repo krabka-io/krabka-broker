@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_protocol::primitives::uuid::Uuid;
+use krabka_protocol::primitives::uuid::Uuid;
 
 use super::super::expired_member_ids;
 

@@ -1,5 +1,5 @@
 [package]
-name = "crabka-broker"
+name = "krabka-broker"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,9 @@ rust-version.workspace = true
 description = "Cluster-capable Apache Kafka-compatible krabka broker"
 repository = "https://github.com/robot-head/crabka"
 homepage = "https://github.com/robot-head/crabka"
-documentation = "https://docs.rs/crabka-broker"
+documentation = "https://docs.rs/krabka-broker"
 readme = "README.md"
-keywords = ["kafka", "broker", "streaming", "crabka"]
+keywords = ["kafka", "broker", "streaming", "krabka"]
 categories = ["database-implementations", "network-programming"]
 
 [lints]
@@ -21,43 +21,43 @@ workspace = true
 default = []
 # Exposes test-only `BrokerHandle::test_truncate_local_log` /
 # `test_advance_log_start` for the replication integration tests.
-# Pulls in `crabka-log/test-helpers` to reach `Log::test_set_log_start_offset`.
-test-helpers = ["crabka-log/test-helpers"]
+# Pulls in `krabka-log/test-helpers` to reach `Log::test_set_log_start_offset`.
+test-helpers = ["krabka-log/test-helpers"]
 # Expose jemalloc heap profiles on `/debug/pprof/heap`. Passes the flag
-# through to crabka-telemetry (which gates the heap route) and activates the
+# through to krabka-telemetry (which gates the heap route) and activates the
 # jemalloc global allocator in the broker binary. Unix-only at the dep level;
 # the `#[global_allocator]` static is additionally guarded by `cfg(unix)`.
-heap-profiling = ["crabka-telemetry/heap-profiling", "dep:tikv-jemallocator"]
+heap-profiling = ["krabka-telemetry/heap-profiling", "dep:tikv-jemallocator"]
 
 
 [[bin]]
-name = "crabka-broker"
+name = "krabka-broker"
 path = "src/bin/broker.rs"
 
 [dependencies]
-crabka-audit = { workspace = true }
-crabka-protocol = { version = "0.4.0", default-features = false }
-crabka-telemetry = { version = "0.4.0", path = "../telemetry" }
-crabka-records-legacy = { version = "0.4.0", path = "../records-legacy" }
-crabka-log = { version = "0.4.0", path = "../log" }
-crabka-ids = { version = "0.4.0" }
-crabka-compression = { version = "0.4.0", default-features = false }
-crabka-raft = { version = "0.4.0", path = "../raft" }
-crabka-kraft-core = { version = "0.4.0", path = "../kraft-core" }
-crabka-verified = { version = "0.4.0", path = "../verified" }
-crabka-voters = { version = "0.4.0" }
-crabka-metadata = { version = "0.4.0" }
-crabka-authz = { version = "0.4.0", path = "../authz" }
-crabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
-crabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
-crabka-object-store = { version = "0.4.0", path = "../object-store" }
-crabka-client-core = { version = "0.4.0" }
-crabka-throttle = { version = "0.4.0", path = "../throttle" }
-crabka-units = { workspace = true }
-crabka-security.workspace = true
+krabka-audit = { workspace = true }
+krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-telemetry = { version = "0.4.0", path = "../telemetry" }
+krabka-records-legacy = { version = "0.4.0", path = "../records-legacy" }
+krabka-log = { version = "0.4.0", path = "../log" }
+krabka-ids = { version = "0.4.0" }
+krabka-compression = { version = "0.4.0", default-features = false }
+krabka-raft = { version = "0.4.0", path = "../raft" }
+krabka-kraft-core = { version = "0.4.0", path = "../kraft-core" }
+krabka-verified = { version = "0.4.0", path = "../verified" }
+krabka-voters = { version = "0.4.0" }
+krabka-metadata = { version = "0.4.0" }
+krabka-authz = { version = "0.4.0", path = "../authz" }
+krabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
+krabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
+krabka-object-store = { version = "0.4.0", path = "../object-store" }
+krabka-client-core = { version = "0.4.0" }
+krabka-throttle = { version = "0.4.0", path = "../throttle" }
+krabka-units = { workspace = true }
+krabka-security.workspace = true
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
-crabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
+krabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
 qubit-clock = { workspace = true, features = ["tokio"] }
 arc-swap.workspace = true
 async-trait.workspace = true
@@ -151,23 +151,23 @@ stateright = { workspace = true }
 # Large-N randomized fuzz of the idempotent-producer dedup core (`check_pure`),
 # complementing the exhaustive stateright model (`producer_state_model.rs`).
 proptest = { workspace = true }
-crabka-broker = { path = ".", features = ["test-helpers"] }
+krabka-broker = { path = ".", features = ["test-helpers"] }
 # `bootstrap_consumption`, `cli_smoke` and `format_features` format a log
 # directory before booting a broker. They call the library rather than spawn the
 # binary: the formatting is setup, not the thing under test, and a subprocess
 # would need a Cargo working tree, which a Bazel test sandbox does not have.
-crabka-format = { version = "0.4.0", path = "../format" }
+krabka-format = { version = "0.4.0", path = "../format" }
 # Drives the relocated `client_admin_*` suites, which boot an in-process
 # broker to exercise the admin client end to end.
-crabka-client-admin = { version = "0.4" }
-crabka-client-consumer = { version = "0.4" }
-crabka-client-producer = { version = "0.4" }
+krabka-client-admin = { version = "0.4" }
+krabka-client-consumer = { version = "0.4" }
+krabka-client-producer = { version = "0.4" }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
-crabka-client-core = { version = "0.4", features = ["mock"] }
-crabka-ids = { version = "0.4.0" }
-crabka-records-legacy = { version = "0.4.0", path = "../records-legacy" }
-crabka-protocol = { version = "0.4", default-features = false }
+krabka-client-core = { version = "0.4", features = ["mock"] }
+krabka-ids = { version = "0.4.0" }
+krabka-records-legacy = { version = "0.4.0", path = "../records-legacy" }
+krabka-protocol = { version = "0.4", default-features = false }
 # Serialize the captured real-Kafka DescribeGroups fixture as JSON.
 serde_json = { workspace = true }
 bytes = { workspace = true }

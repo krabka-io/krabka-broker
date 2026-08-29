@@ -4,8 +4,8 @@
 //! helper turns one alter row into a `PartitionRecord` that is ready to
 //! submit, or into a wire error code.
 
-use crabka_metadata::{MetadataImage, PartitionRecord};
-use crabka_raft::NodeId;
+use krabka_metadata::{MetadataImage, PartitionRecord};
+use krabka_raft::NodeId;
 
 use crate::codes::{
     ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, NO_REASSIGNMENT_IN_PROGRESS,
@@ -127,7 +127,7 @@ fn cancel_path(pr: &PartitionRecord) -> Result<Option<PartitionRecord>, RowError
         leader,
         replicas: reverted_replicas,
         isr: reverted_isr,
-        leader_epoch: crabka_metadata::LeaderEpoch(pr.leader_epoch.0 + epoch_bump),
+        leader_epoch: krabka_metadata::LeaderEpoch(pr.leader_epoch.0 + epoch_bump),
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: new_directories,
@@ -183,8 +183,8 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Option<PartitionRecord> {
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use crabka_metadata::ResourceType;
-use crabka_protocol::{
+use krabka_metadata::ResourceType;
+use krabka_protocol::{
     Encode,
     owned::{
         alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
@@ -223,7 +223,7 @@ pub(crate) async fn handle(
             host: ctx.peer,
             resource_type: ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: crabka_metadata::AclOperation::Alter,
+            operation: krabka_metadata::AclOperation::Alter,
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
@@ -236,7 +236,7 @@ pub(crate) async fn handle(
     }
 
     let mut by_topic: HashMap<String, Vec<ReassignablePartitionResponse>> = HashMap::new();
-    let mut to_submit: Vec<crabka_metadata::MetadataRecord> = Vec::new();
+    let mut to_submit: Vec<krabka_metadata::MetadataRecord> = Vec::new();
     for topic in &req.topics {
         let mut rows = Vec::with_capacity(topic.partitions.len());
         for p in &topic.partitions {
@@ -249,7 +249,7 @@ pub(crate) async fn handle(
                 req.allow_replication_factor_change,
             ) {
                 Ok(Some(record)) => {
-                    to_submit.push(crabka_metadata::MetadataRecord::V1Partition(record));
+                    to_submit.push(krabka_metadata::MetadataRecord::V1Partition(record));
                     rows.push(ok_row(p.partition_index));
                 }
                 Ok(None) => rows.push(ok_row(p.partition_index)),
@@ -355,16 +355,16 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::{
+    use krabka_metadata::{
         BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
     };
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::alter_partition_reassignments_request::{
             AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
         },
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
     use uuid::Uuid;
 
     use super::*;
@@ -417,7 +417,7 @@ mod tests {
             leader: NodeId(leader),
             replicas: replicas.iter().copied().map(NodeId).collect(),
             isr: isr.iter().copied().map(NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(5),
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
             adding_replicas: adding.iter().copied().map(NodeId).collect(),
             removing_replicas: removing.iter().copied().map(NodeId).collect(),
             directories: vec![],

@@ -16,7 +16,7 @@ mod model;
 
 use std::time::Duration;
 
-use crabka_ids::NodeId;
+use krabka_ids::NodeId;
 use model::ConsensusModel;
 use stateright::{Checker, Model};
 

@@ -122,8 +122,8 @@ jobs:
   # would fail every run for a reason that says nothing about the proofs.
   #
   # `cargo creusot` runs per crate. Run bare it builds the whole workspace, and
-  # `crabka-broker` does not compile under `--cfg creusot`, because
-  # `crabka-throttle` gates out `ThrottleState` and `TokenBucket` there.
+  # `krabka-broker` does not compile under `--cfg creusot`, because
+  # `krabka-throttle` gates out `ThrottleState` and `TokenBucket` there.
   proofs:
     name: creusot proofs
     if: github.event_name != 'schedule'
@@ -184,8 +184,8 @@ jobs:
       - name: prove
         run: |
           export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-          cargo creusot --package crabka-verified
-          cargo creusot --package crabka-throttle
+          cargo creusot --package krabka-verified
+          cargo creusot --package krabka-throttle
 
   # Container suites, one runner each.
   #

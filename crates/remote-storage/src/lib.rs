@@ -1,6 +1,6 @@
-//! KIP-405 tiered-storage SPI and reference implementations for Crabka.
+//! KIP-405 tiered-storage SPI and reference implementations for Krabka.
 //!
-//! This crate is the foundation layer for Crabka's tiered storage. It
+//! This crate is the foundation layer for Krabka's tiered storage. It
 //! defines the two plugin SPIs and the data model that they exchange, and
 //! it supplies the two reference implementations that the rest of the
 //! tiered-storage stack builds and tests against. It mirrors the shapes
@@ -51,7 +51,7 @@
 //! `spawn_blocking`. Because the SPIs stay synchronous, the segment-copy and
 //! segment-fetch paths here need no async runtime of their own. The archive
 //! verifier is the exception: [`verify_archive`] is an `async fn` over the
-//! object store, and the `crabka-worm-verify` binary starts a Tokio runtime to
+//! object store, and the `krabka-worm-verify` binary starts a Tokio runtime to
 //! drive it.
 //!
 //! ## Write-once (WORM) archive mode
@@ -75,7 +75,7 @@
 //! is present with the recorded size. Tail truncation is the one attack the
 //! archive cannot reveal on its own, so a caller that holds an independently
 //! recorded tip passes it as [`VerifyRequest::expect_head`]. The
-//! `crabka-worm-verify` binary is the same check with a command line and graded
+//! `krabka-worm-verify` binary is the same check with a command line and graded
 //! exit codes.
 //!
 //! ## Filesystem-backed remote tier
@@ -84,15 +84,15 @@
 //! use std::{collections::BTreeMap, path::PathBuf};
 //!
 //! use bytes::Bytes;
-//! use crabka_ids::LeaderEpoch;
-//! use crabka_remote_storage::{
+//! use krabka_ids::LeaderEpoch;
+//! use krabka_remote_storage::{
 //!     IndexType, LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
 //!     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
 //! };
 //! use uuid::Uuid;
 //!
 //! # fn run() -> Result<(), Box<dyn std::error::Error>> {
-//! let storage = LocalTieredStorage::new(PathBuf::from("/var/lib/crabka-remote"));
+//! let storage = LocalTieredStorage::new(PathBuf::from("/var/lib/krabka-remote"));
 //! let topic_partition = TopicIdPartition::new(Uuid::new_v4(), "orders", 0);
 //! let segment_id = RemoteLogSegmentId::new(topic_partition, Uuid::new_v4());
 //! let mut leader_epochs = BTreeMap::new();
@@ -113,9 +113,9 @@
 //!
 //! // The broker fills these paths from a closed local log segment.
 //! let segment = LogSegmentData {
-//!     log_segment: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.log"),
-//!     offset_index: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.index"),
-//!     time_index: PathBuf::from("/var/lib/crabka/orders-0/00000000000000000000.timeindex"),
+//!     log_segment: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.log"),
+//!     offset_index: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.index"),
+//!     time_index: PathBuf::from("/var/lib/krabka/orders-0/00000000000000000000.timeindex"),
 //!     transaction_index: None,
 //!     producer_snapshot_index: None,
 //!     leader_epoch_index: Bytes::new(),
@@ -127,7 +127,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/crabka-remote-storage/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage/0.4.0")]
 
 mod cache;
 pub mod dump;
@@ -142,10 +142,6 @@ mod s3;
 mod storage_manager;
 mod worm;
 
-pub use crabka_object_store::{
-    DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, GcsConfig, ObjectStoreConfig,
-    S3Config,
-};
 pub use dump::{PartitionDump, RlmmCacheDump};
 pub use error::RemoteStorageError;
 pub use index::{
@@ -155,6 +151,10 @@ pub use index::{
     position_for_relative_offset, relative_offset_floor_for_timestamp, txn_overlaps,
 };
 pub use inmemory::InmemoryRemoteLogMetadataManager;
+pub use krabka_object_store::{
+    DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, GcsConfig, ObjectStoreConfig,
+    S3Config,
+};
 pub use local::LocalTieredStorage;
 pub use metadata::{
     CustomMetadata, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,

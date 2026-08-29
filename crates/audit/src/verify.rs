@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, path::Path};
 
-use crabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::{Record, RecordBatch};
 
 use crate::{
     chain::{GENESIS_HEAD, chain_hash, from_hex32},
@@ -308,8 +308,8 @@ mod tests {
 
     use assert2::check;
     use bytes::Bytes;
-    use crabka_log::{Log, LogConfig};
-    use crabka_protocol::records::{Record, RecordBatch, RecordHeader};
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
 
     use super::*;
     use crate::{
@@ -630,7 +630,7 @@ mod tests {
         let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
         let mut chain = ChainState::new();
 
-        let mut record = |value: &str, chain: &mut ChainState, tamper: bool| {
+        let record = |value: &str, chain: &mut ChainState, tamper: bool| {
             let mut rec = AuditRecord {
                 class: crate::event::AuditEventClass::ApplicationLifecycle,
                 value: value.as_bytes().to_vec(),

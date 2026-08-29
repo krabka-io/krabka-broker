@@ -5,15 +5,15 @@
 //! to the Prometheus and OTLP sinks.
 
 use bytes::Bytes;
-use crabka_compression::CompressionType;
-use crabka_protocol::{
+use krabka_compression::CompressionType;
+use krabka_protocol::{
     Decode,
     owned::{
         push_telemetry_request::PushTelemetryRequest,
         push_telemetry_response::PushTelemetryResponse,
     },
 };
-use crabka_units::{
+use krabka_units::{
     ByteSize, Ratio,
     convert::{ByteSizeExt as _, RatioExt as _},
 };
@@ -94,7 +94,7 @@ pub(crate) fn handle(
                     broker.config.telemetry_decompressed_output_floor,
                     broker.config.telemetry_decompressed_output_ceiling,
                 );
-                let decoded = match crabka_compression::decompress(ct, &req.metrics, max_output) {
+                let decoded = match krabka_compression::decompress(ct, &req.metrics, max_output) {
                     Ok(raw) => match otlp::decode_metrics(&raw) {
                         Ok(md) => Some(md),
                         Err(e) => {
@@ -292,9 +292,9 @@ fn sanitize_prometheus_label(label: &str) -> String {
 mod tests {
     use assert2::{assert, check};
     use bytes::Bytes;
-    use crabka_compression::CompressionType;
-    use crabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid};
-    use crabka_units::{bytes, fraction, gibibytes};
+    use krabka_compression::CompressionType;
+    use krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid};
+    use krabka_units::{bytes, fraction, gibibytes};
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},
         metrics::v1::{
@@ -413,7 +413,7 @@ mod tests {
             software_version: "1.0.0",
         };
         let SubscriptionDecision::Assign(assignment) = broker.client_metrics.manager.assign(
-            &crabka_metadata::MetadataImage::new(Uuid::nil()),
+            &krabka_metadata::MetadataImage::new(Uuid::nil()),
             &crate::client_metrics::manager::ClientAttributes {
                 client_instance_id: instance,
                 client_id: ctx.client_id.to_string(),
@@ -458,7 +458,7 @@ mod tests {
             ..Default::default()
         }])
         .encode_to_vec();
-        let payload = crabka_compression::compress(CompressionType::Gzip, &raw)
+        let payload = krabka_compression::compress(CompressionType::Gzip, &raw)
             .expect("compress telemetry payload");
 
         assert!(push_payload(payload).await == codes::NONE);
@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_otlp_payload_returns_invalid_record() {
-        let payload = crabka_compression::compress(CompressionType::Gzip, b"not-otlp")
+        let payload = krabka_compression::compress(CompressionType::Gzip, b"not-otlp")
             .expect("compress telemetry payload");
 
         assert!(push_payload(payload).await == codes::INVALID_RECORD);

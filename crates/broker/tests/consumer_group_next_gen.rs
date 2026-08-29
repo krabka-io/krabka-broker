@@ -1,19 +1,19 @@
 //! Raw-RPC integration tests for KIP-848 next-gen consumer groups,
-//! driven against an in-process Crabka broker through `crabka-client-core`.
+//! driven against an in-process Krabka broker through `krabka-client-core`.
 
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use crabka_broker::{Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     consumer_group_describe_request::ConsumerGroupDescribeRequest,
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     list_groups_request::ListGroupsRequest,
 };
 
-async fn boot() -> (crabka_broker::BrokerHandle, String, tempfile::TempDir) {
+async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -154,7 +154,7 @@ async fn two_members_split_partitions() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_group_locked_against_next_gen() {
-    use crabka_protocol::owned::join_group_request::JoinGroupRequest;
+    use krabka_protocol::owned::join_group_request::JoinGroupRequest;
     let (_b, bootstrap, _d) = boot().await;
     let client = Arc::new(
         Client::builder()
@@ -179,7 +179,7 @@ async fn classic_group_locked_against_next_gen() {
     let mut req = heartbeat("g3", "", 0);
     req.subscribed_topic_names = Some(vec!["t3".into()]);
     let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == crabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(resp.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -187,7 +187,7 @@ async fn kill_switch_returns_group_id_not_found() {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.next_gen_consumer_group.rebalance_protocols =
-        vec![crabka_broker::coordinator::unified::config::RebalanceProtocol::Classic];
+        vec![krabka_broker::coordinator::unified::config::RebalanceProtocol::Classic];
     let broker = Broker::start(config).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
     let client = Arc::new(
@@ -202,7 +202,7 @@ async fn kill_switch_returns_group_id_not_found() {
     let mut req = heartbeat("g4", "", 0);
     req.subscribed_topic_names = Some(vec!["t".into()]);
     let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == crabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(resp.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -274,7 +274,7 @@ async fn stale_epoch_rejected() {
     // Now A re-heartbeats at the OLD epoch 1; A's stored epoch is 2 → STALE.
     let stale = heartbeat("g6", &mid, 1);
     let resp = client.send(stale).await.unwrap();
-    assert!(resp.error_code == crabka_broker::codes::STALE_MEMBER_EPOCH);
+    assert!(resp.error_code == krabka_broker::codes::STALE_MEMBER_EPOCH);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

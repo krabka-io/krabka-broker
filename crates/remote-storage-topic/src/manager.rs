@@ -28,14 +28,14 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_ids::LeaderEpoch;
-use crabka_remote_storage::{
+use futures_util::StreamExt;
+use krabka_ids::LeaderEpoch;
+use krabka_remote_storage::{
     InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
     RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RemotePartitionDeleteMetadata,
     RemoteStorageError, TopicIdPartition,
 };
-use crabka_units::prelude::{StdDurationExt as _, TimeExt as _};
-use futures_util::StreamExt;
+use krabka_units::prelude::{StdDurationExt as _, TimeExt as _};
 use tokio::{runtime::Handle, sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
@@ -741,7 +741,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::{assert, check};
-    use crabka_remote_storage::{CustomMetadata, RemoteLogSegmentId, RemotePartitionDeleteState};
+    use krabka_remote_storage::{CustomMetadata, RemoteLogSegmentId, RemotePartitionDeleteState};
     use uuid::Uuid;
 
     use super::*;
@@ -798,7 +798,7 @@ mod tests {
 
     fn snapshot_test_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "crabka-rlmm-{label}-{}-{}",
+            "krabka-rlmm-{label}-{}-{}",
             std::process::id(),
             SNAP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ))
@@ -816,7 +816,7 @@ mod tests {
             end + 1,
             1,
             100,
-            crabka_remote_storage::RemoteLogSegmentDetails::new(
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
                 2048,
                 RemoteLogSegmentState::CopySegmentStarted,
                 BTreeMap::from([(LeaderEpoch(0), start)]),
@@ -1286,7 +1286,7 @@ mod tests {
                 100,
                 1,
                 100,
-                crabka_remote_storage::RemoteLogSegmentDetails::new(
+                krabka_remote_storage::RemoteLogSegmentDetails::new(
                     2048,
                     RemoteLogSegmentState::CopySegmentStarted,
                     BTreeMap::from([(LeaderEpoch(0), 0)]),

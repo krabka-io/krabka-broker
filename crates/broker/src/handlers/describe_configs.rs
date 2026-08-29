@@ -18,8 +18,8 @@
 //! client supplies an explicit key list, the response holds only those keys.
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         describe_configs_request::DescribeConfigsRequest,
@@ -28,7 +28,7 @@ use crabka_protocol::{
         },
     },
 };
-use crabka_units::convert::TimeExt as _;
+use krabka_units::convert::TimeExt as _;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -60,7 +60,7 @@ const RESOURCE_TYPE_BROKER: i8 = 4;
 const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 const RESOURCE_TYPE_GROUP: i8 = 32;
 
-/// `ConfigDef.Type::UNKNOWN` wire byte. Crabka reports no typed config
+/// `ConfigDef.Type::UNKNOWN` wire byte. Krabka reports no typed config
 /// metadata, which matches brokers from before KIP-226's typed responses.
 const CONFIG_TYPE_UNKNOWN: i8 = 0;
 
@@ -81,8 +81,8 @@ fn make_entry(key: &str, value: &str, config_source: i8) -> DescribeConfigsResou
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 fn describe_one(
-    image: &crabka_metadata::MetadataImage,
-    r: crabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    image: &krabka_metadata::MetadataImage,
+    r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
 ) -> DescribeConfigsResult {
@@ -126,7 +126,7 @@ fn describe_one(
                     ..Default::default()
                 };
             };
-            Some(crabka_metadata::NodeId(node_id))
+            Some(krabka_metadata::NodeId(node_id))
         };
         let defaults = image.default_broker_config();
         let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
@@ -244,8 +244,8 @@ fn describe_one(
 /// list with no error.
 fn resource_authz_failure(
     authorizer: &dyn crate::authorizer::Authorizer,
-    image: &crabka_metadata::MetadataImage,
-    principal: &crabka_security::Principal,
+    image: &krabka_metadata::MetadataImage,
+    principal: &krabka_security::Principal,
     host: &std::net::SocketAddr,
     resource_type: i8,
     resource_name: &str,
@@ -362,8 +362,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::assert;
-    use crabka_metadata::{BrokerConfigRecord, MetadataImage, MetadataRecord};
-    use crabka_protocol::{
+    use krabka_metadata::{BrokerConfigRecord, MetadataImage, MetadataRecord};
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     };
@@ -375,7 +375,7 @@ mod tests {
     fn image_with_broker_config(node_id: u64, key: &str, value: &str) -> MetadataImage {
         let mut img = MetadataImage::new(Uuid::nil());
         img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(node_id),
+            node_id: krabka_metadata::NodeId(node_id),
             config_name: key.to_string(),
             config_value: Some(value.to_string()),
         }));
@@ -392,7 +392,7 @@ mod tests {
     fn broker_resource_all_keys_returned_when_no_filter() {
         let img = image_with_broker_config(1, "leader.replication.throttled.rate", "1024");
         let map = img
-            .broker_config(crabka_metadata::NodeId(1))
+            .broker_config(krabka_metadata::NodeId(1))
             .cloned()
             .unwrap_or_default();
         assert!(
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn topic_describe_one_preserves_result_and_filtered_config_fields() {
-        use crabka_metadata::TopicConfigRecord;
+        use krabka_metadata::TopicConfigRecord;
 
         let mut img = MetadataImage::new(Uuid::nil());
         let mut overrides = BTreeMap::new();
@@ -438,7 +438,7 @@ mod tests {
         }));
         let result = super::describe_one(
             &img,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".into(),
                 configuration_keys: Some(vec!["cleanup.policy".into()]),
@@ -474,7 +474,7 @@ mod tests {
         let img = MetadataImage::new(Uuid::nil());
         let result = super::describe_one(
             &img,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_BROKER,
                 resource_name: "not-a-number".into(),
                 configuration_keys: None,
@@ -501,18 +501,18 @@ mod tests {
     fn broker_resource_key_filter_applied() {
         let mut img = MetadataImage::new(Uuid::nil());
         img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(2),
+            node_id: krabka_metadata::NodeId(2),
             config_name: "leader.replication.throttled.rate".to_string(),
             config_value: Some("512".to_string()),
         }));
         img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(2),
+            node_id: krabka_metadata::NodeId(2),
             config_name: "follower.replication.throttled.rate".to_string(),
             config_value: Some("256".to_string()),
         }));
 
         let map = img
-            .broker_config(crabka_metadata::NodeId(2))
+            .broker_config(krabka_metadata::NodeId(2))
             .cloned()
             .unwrap_or_default();
         let key_filter = ["leader.replication.throttled.rate".to_string()];
@@ -535,7 +535,7 @@ mod tests {
         let img = MetadataImage::new(Uuid::nil());
         // Node 99 has no broker configs in the image.
         let map = img
-            .broker_config(crabka_metadata::NodeId(99))
+            .broker_config(krabka_metadata::NodeId(99))
             .cloned()
             .unwrap_or_default();
         assert!(map.is_empty());
@@ -550,24 +550,24 @@ mod tests {
     fn broker_describe_inherits_default_and_prefers_per_broker_override() {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
             config_name: "leader.replication.throttled.rate".into(),
             config_value: Some("1024".into()),
         }));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
             config_name: "follower.replication.throttled.rate".into(),
             config_value: Some("512".into()),
         }));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: "leader.replication.throttled.rate".into(),
             config_value: Some("2048".into()),
         }));
 
         let result = super::describe_one(
             &image,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_BROKER,
                 resource_name: "1".into(),
                 configuration_keys: None,
@@ -605,19 +605,19 @@ mod tests {
     fn broker_describe_reports_controller_managed_configs_as_read_only() {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
             config_name: config_keys::STRETCH_PREFERRED_LEADER_SITE.into(),
             config_value: Some("dc-a".into()),
         }));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::NodeId(1),
+            node_id: krabka_metadata::NodeId(1),
             config_name: config_keys::BROKER_WITNESS.into(),
             config_value: Some(config_keys::WITNESS_TRUE.into()),
         }));
 
         let result = super::describe_one(
             &image,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_BROKER,
                 resource_name: "1".into(),
                 configuration_keys: None,
@@ -659,7 +659,7 @@ mod tests {
     fn broker_describe_without_overrides_includes_static_node_id() {
         let result = super::describe_one(
             &MetadataImage::new(Uuid::nil()),
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_BROKER,
                 resource_name: "7".into(),
                 configuration_keys: None,
@@ -685,14 +685,14 @@ mod tests {
     fn empty_broker_name_describes_cluster_defaults() {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
             config_name: "leader.replication.throttled.rate".into(),
             config_value: Some("1024".into()),
         }));
 
         let result = super::describe_one(
             &image,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_BROKER,
                 resource_name: String::new(),
                 configuration_keys: None,
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn client_metrics_describe_emits_defaults() {
-        use crabka_metadata::{ClientMetricsConfigRecord, MetadataRecord};
+        use krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord};
         let mut img = MetadataImage::new(Uuid::nil());
         let mut cfgs = std::collections::BTreeMap::new();
         cfgs.insert("metrics".to_string(), "a.".to_string());
@@ -724,7 +724,7 @@ mod tests {
                 configs: cfgs,
             },
         ));
-        let r = crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+        let r = krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
             resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
             resource_name: "sub-a".into(),
             configuration_keys: None,
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn group_describe_merges_dynamic_overrides_with_defaults() {
-        use crabka_metadata::GroupConfigRecord;
+        use krabka_metadata::GroupConfigRecord;
 
         use crate::coordinator::unified::streams::config::{
             KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, StreamsGroupConfig,
@@ -767,7 +767,7 @@ mod tests {
         }));
         let result = super::describe_one(
             &image,
-            crabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
                 resource_type: super::RESOURCE_TYPE_GROUP,
                 resource_name: "streams-app".into(),
                 configuration_keys: Some(vec![
@@ -795,10 +795,10 @@ mod tests {
         );
     }
 
-    fn anon() -> crabka_security::Principal {
-        crabka_security::Principal {
+    fn anon() -> krabka_security::Principal {
+        krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         }
     }

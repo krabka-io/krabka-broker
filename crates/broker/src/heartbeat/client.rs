@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crabka_client_core::ConnectionOptions;
-use crabka_protocol::owned::broker_heartbeat_request::BrokerHeartbeatRequest;
-use crabka_security::ListenerProtocol;
-use crabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs};
+use krabka_client_core::ConnectionOptions;
+use krabka_protocol::owned::broker_heartbeat_request::BrokerHeartbeatRequest;
+use krabka_security::ListenerProtocol;
+use krabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -48,12 +48,12 @@ pub(crate) struct Config {
 fn offline_dir_uuids(
     status: &crate::log_dir_status::LogDirRegistry,
     ids: &crate::log_dir_id::LogDirIds,
-) -> Vec<crabka_protocol::primitives::uuid::Uuid> {
+) -> Vec<krabka_protocol::primitives::uuid::Uuid> {
     status
         .offline()
         .into_iter()
         .filter_map(|(path, _reason)| ids.id_for(&path))
-        .map(|u| crabka_protocol::primitives::uuid::Uuid(*u.as_bytes()))
+        .map(|u| krabka_protocol::primitives::uuid::Uuid(*u.as_bytes()))
         .collect()
 }
 
@@ -78,7 +78,7 @@ fn heartbeat_rpc_timeout(interval: Time) -> Time {
 fn heartbeat_connection_options(broker_id: i32, interval: Time) -> ConnectionOptions {
     let timeout = heartbeat_rpc_timeout(interval);
     ConnectionOptions {
-        client_id: format!("crabka-broker-{broker_id}-heartbeat"),
+        client_id: format!("krabka-broker-{broker_id}-heartbeat"),
         connect_timeout: timeout,
         request_timeout: timeout,
         ..ConnectionOptions::default()
@@ -90,7 +90,7 @@ fn heartbeat_request(
     broker_epoch: i64,
     current_metadata_offset: i64,
     want_shut_down: bool,
-    offline_log_dirs: Vec<crabka_protocol::primitives::uuid::Uuid>,
+    offline_log_dirs: Vec<krabka_protocol::primitives::uuid::Uuid>,
 ) -> BrokerHeartbeatRequest {
     BrokerHeartbeatRequest {
         broker_id,
@@ -136,7 +136,7 @@ pub(crate) async fn run(mut cfg: Config) {
             continue;
         };
         let image = cfg.controller.current_image();
-        let Some(broker_epoch) = image.broker_epoch(crabka_raft::NodeId(
+        let Some(broker_epoch) = image.broker_epoch(krabka_raft::NodeId(
             u64::try_from(cfg.broker_id).unwrap_or(u64::MAX),
         )) else {
             debug!(
@@ -300,14 +300,14 @@ mod tests {
         use assert2::check;
         let opts = heartbeat_connection_options(9, millis(500));
 
-        check!(opts.client_id == "crabka-broker-9-heartbeat");
+        check!(opts.client_id == "krabka-broker-9-heartbeat");
         check!(opts.connect_timeout == secs(1));
         check!(opts.request_timeout == secs(1));
     }
 
     #[test]
     fn heartbeat_request_reports_registration_and_applied_metadata() {
-        let offline = crabka_protocol::primitives::uuid::Uuid([7; 16]);
+        let offline = krabka_protocol::primitives::uuid::Uuid([7; 16]);
         let req = heartbeat_request(3, 41, 47, true, vec![offline]);
 
         assert!(req.broker_id == 3);

@@ -3,7 +3,7 @@
 //! One object concatenates many partitions' verbatim v2-batch runs, delimited by
 //! a footer manifest:
 //! `[MAGIC + version:u16] + runs + [manifest] + [footer_len:u32 + MAGIC]`.
-//! Framing is little-endian and Crabka-private. Only the embedded runs need
+//! Framing is little-endian and Krabka-private. Only the embedded runs need
 //! Kafka byte-exactness.
 
 use bytes::{BufMut, Bytes, BytesMut};

@@ -15,13 +15,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_metadata::{DeleteDelegationTokenRecord, MetadataImage, MetadataRecord};
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_metadata::{DeleteDelegationTokenRecord, MetadataImage, MetadataRecord};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 /// Minimal controller surface for the sweep. [`crate::broker`] adapts the
-/// real [`crabka_raft::ControllerHandle`]. Tests inject a mock.
+/// real [`krabka_raft::ControllerHandle`]. Tests inject a mock.
 #[async_trait]
 pub(crate) trait DelegationTokenController: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
@@ -85,9 +85,9 @@ mod tests {
     use std::{sync::Mutex, time::Duration};
 
     use assert2::assert;
-    use crabka_metadata::{DelegationTokenRecord, MetadataImage, MetadataRecord};
-    use crabka_security::KafkaPrincipal;
-    use crabka_units::hours;
+    use krabka_metadata::{DelegationTokenRecord, MetadataImage, MetadataRecord};
+    use krabka_security::KafkaPrincipal;
+    use krabka_units::hours;
     use uuid::Uuid;
 
     use super::*;

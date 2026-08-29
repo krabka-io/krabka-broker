@@ -14,12 +14,12 @@ use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -33,7 +33,7 @@ const INVALID_REQUEST: i16 = 42;
 async fn boot() -> (
     SocketAddr,
     SocketAddr,
-    crabka_broker::BrokerHandle,
+    krabka_broker::BrokerHandle,
     tempfile::TempDir,
 ) {
     let tempdir = tempfile::tempdir().unwrap();
@@ -84,7 +84,7 @@ async fn send_api_versions(
     frame.put_i16(18); // api_key = ApiVersions
     frame.put_i16(version);
     frame.put_i32(99); // correlation_id
-    let client_id = "crabka-kip-511-test";
+    let client_id = "krabka-kip-511-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -131,7 +131,7 @@ async fn scrape(addr: SocketAddr) -> String {
 async fn v3_valid_client_info_accepted() {
     let (kafka_addr, _metrics_addr, handle, _td) = boot().await;
 
-    let resp = send_api_versions(kafka_addr, 3, "crabka-client-core", "0.1.1")
+    let resp = send_api_versions(kafka_addr, 3, "krabka-client-core", "0.1.1")
         .await
         .expect("ApiVersions");
     assert!(resp.error_code == 0, "valid v3 must succeed: {resp:?}");
@@ -166,7 +166,7 @@ async fn v3_empty_software_name_rejected_with_invalid_request() {
 async fn v3_empty_software_version_rejected_with_invalid_request() {
     let (kafka_addr, _metrics_addr, handle, _td) = boot().await;
 
-    let resp = send_api_versions(kafka_addr, 3, "crabka", "")
+    let resp = send_api_versions(kafka_addr, 3, "krabka", "")
         .await
         .expect("ApiVersions");
     assert!(
@@ -196,7 +196,7 @@ async fn v3_invalid_char_in_name_rejected() {
 async fn v3_leading_dash_in_version_rejected() {
     let (kafka_addr, _metrics_addr, handle, _td) = boot().await;
 
-    let resp = send_api_versions(kafka_addr, 3, "crabka", "-1.0.0")
+    let resp = send_api_versions(kafka_addr, 3, "krabka", "-1.0.0")
         .await
         .expect("ApiVersions");
     assert!(
@@ -236,11 +236,11 @@ async fn accepted_v3_handshake_bumps_client_software_versions_counter() {
     // Drive two distinct (name, version) tuples + one repeat so the
     // expected sample emits with three series, one of them at count 2.
     for _ in 0..2 {
-        send_api_versions(kafka_addr, 3, "crabka-it", "1.0.0")
+        send_api_versions(kafka_addr, 3, "krabka-it", "1.0.0")
             .await
             .expect("ApiVersions");
     }
-    send_api_versions(kafka_addr, 3, "crabka-it", "1.0.1")
+    send_api_versions(kafka_addr, 3, "krabka-it", "1.0.1")
         .await
         .expect("ApiVersions");
     send_api_versions(kafka_addr, 3, "another-lib", "9.9.9")
@@ -251,12 +251,12 @@ async fn accepted_v3_handshake_bumps_client_software_versions_counter() {
 
     // Three series, one count, plus the family HELP/TYPE lines.
     assert!(
-        body.contains("# TYPE crabka_broker_client_software_versions counter"),
+        body.contains("# TYPE krabka_broker_client_software_versions counter"),
         "TYPE line missing in:\n{body}",
     );
-    let needle_repeat = "crabka_broker_client_software_versions_total{software_name=\"crabka-it\",software_version=\"1.0.0\"} 2";
-    let needle_new = "crabka_broker_client_software_versions_total{software_name=\"crabka-it\",software_version=\"1.0.1\"} 1";
-    let needle_other = "crabka_broker_client_software_versions_total{software_name=\"another-lib\",software_version=\"9.9.9\"} 1";
+    let needle_repeat = "krabka_broker_client_software_versions_total{software_name=\"krabka-it\",software_version=\"1.0.0\"} 2";
+    let needle_new = "krabka_broker_client_software_versions_total{software_name=\"krabka-it\",software_version=\"1.0.1\"} 1";
+    let needle_other = "krabka_broker_client_software_versions_total{software_name=\"another-lib\",software_version=\"9.9.9\"} 1";
     for needle in [needle_repeat, needle_new, needle_other] {
         assert!(
             body.contains(needle),
@@ -312,7 +312,7 @@ async fn pre_v3_handshake_does_not_bump_counter() {
     // (HELP/TYPE lines emit even with no series), so just check no
     // sample row with software_name="" was emitted.
     assert!(
-        !body.contains("crabka_broker_client_software_versions_total{software_name=\"\""),
+        !body.contains("krabka_broker_client_software_versions_total{software_name=\"\""),
         "v0 handshake must not be recorded:\n{body}",
     );
 

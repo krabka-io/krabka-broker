@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode,
     owned::{
         offset_commit_request::OffsetCommitRequest,
@@ -248,7 +248,7 @@ fn mixed_response_topics(
 
 fn normalize_topic_ids(
     request: &mut OffsetCommitRequest,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
 ) -> Vec<OffsetCommitResponseTopic> {
     let mut unknown = Vec::new();
     let mut resolved = Vec::with_capacity(request.topics.len());
@@ -339,7 +339,7 @@ async fn append_batch(
     for topic in &req.topics {
         for part in &topic.partitions {
             let value = OffsetCommitValue {
-                offset: crabka_log::Offset(part.committed_offset),
+                offset: krabka_log::Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
                 commit_timestamp_ms: now_ms,
@@ -361,7 +361,7 @@ async fn append_batch(
     batch.last_offset_delta = (delta - 1).max(0);
 
     let Some(part_handle) =
-        partitions.get(OFFSETS_TOPIC, crabka_ids::PartitionIndex(offsets_partition))
+        partitions.get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(offsets_partition))
     else {
         return Err(codes::UNKNOWN_SERVER_ERROR);
     };
@@ -397,7 +397,7 @@ async fn update_committed(req: &OffsetCommitRequest, handle: &Arc<GroupActorHand
             entries.push((
                 (topic.name.clone(), part.partition_index),
                 OffsetEntry {
-                    offset: crabka_log::Offset(part.committed_offset),
+                    offset: krabka_log::Offset(part.committed_offset),
                     leader_epoch: part.committed_leader_epoch,
                     metadata: part.committed_metadata.clone().unwrap_or_default(),
                     commit_timestamp_ms: now_ms,

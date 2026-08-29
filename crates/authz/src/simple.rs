@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crabka_metadata::{AclEntry, AclOperation, PermissionType};
+use krabka_metadata::{AclEntry, AclOperation, PermissionType};
 
 use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
 
@@ -140,8 +140,8 @@ fn implies(stored: AclOperation, requested: AclOperation) -> bool {
 mod tests {
     use std::net::SocketAddr;
 
-    use crabka_metadata::{MetadataImage, MetadataRecord, PatternType, ResourceType};
-    use crabka_security::Principal;
+    use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, ResourceType};
+    use krabka_security::Principal;
     use uuid::Uuid;
 
     use super::*;
@@ -159,7 +159,7 @@ mod tests {
     fn alice() -> Principal {
         Principal {
             name: "alice".into(),
-            auth_method: crabka_security::AuthMethod::SaslPlain,
+            auth_method: krabka_security::AuthMethod::SaslPlain,
             groups: vec![],
         }
     }
@@ -699,12 +699,12 @@ mod tests {
         };
         let admin = Principal {
             name: "admin".into(),
-            auth_method: crabka_security::AuthMethod::SaslPlain,
+            auth_method: krabka_security::AuthMethod::SaslPlain,
             groups: vec![],
         };
         let ops = Principal {
             name: "ops-bot".into(),
-            auth_method: crabka_security::AuthMethod::SaslPlain,
+            auth_method: krabka_security::AuthMethod::SaslPlain,
             groups: vec![],
         };
         let alice = alice();

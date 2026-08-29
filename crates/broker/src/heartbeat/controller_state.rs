@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 use tokio::sync::Mutex;
 
 /// Per-broker liveness state as seen by the controller.
@@ -376,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_broker_starts_alive_after_first_heartbeat() {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(10));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         let transition = liveness.record_heartbeat(1).await;
         assert!(transition == None); // first heartbeat: not a revival
         assert!(liveness.state(1).await == Some(BrokerLivenessState::Alive));
@@ -410,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn fencing_removes_alive_broker_from_eligible_snapshot() {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(10));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         liveness.record_heartbeat(3).await;
 
         assert!(liveness.apply_fencing(3, true, true).await);
@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_only_unfences_after_metadata_catch_up() {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(10));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         liveness.record_fenced_heartbeat(3).await;
 
         assert!(liveness.apply_fencing(3, false, false).await);
@@ -566,7 +566,7 @@ mod tests {
 
     #[tokio::test]
     async fn wants_shutdown_set_and_unset() {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(10));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         assert!(!liveness.wants_shutdown(5).await);
         liveness.set_wants_shutdown(5, true).await;
         assert!(liveness.wants_shutdown(5).await);
@@ -576,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn wants_shutdown_is_per_broker() {
-        let liveness = ControllerLivenessState::new(crabka_units::secs(10));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
         liveness.set_wants_shutdown(1, true).await;
         liveness.set_wants_shutdown(2, true).await;
         for (broker, want) in [(1, true), (2, true), (3, false)] {
@@ -592,7 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn tick_does_not_expire_recently_heartbeated_broker() {
-        let liveness = ControllerLivenessState::new(crabka_units::minutes(1));
+        let liveness = ControllerLivenessState::new(krabka_units::minutes(1));
         liveness.record_heartbeat(4).await;
         let transitions = liveness.tick().await;
         assert!(

@@ -15,8 +15,8 @@ use std::{io, time::Duration};
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::PartitionLabel};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::PartitionLabel};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -26,7 +26,7 @@ use crabka_protocol::{
         produce_response::ProduceResponse,
     },
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -49,7 +49,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-metrics-test";
+    let client_id = "krabka-metrics-test";
     frame.put_i16(i16::try_from(client_id.len()).unwrap());
     frame.put_slice(client_id.as_bytes());
     if flexible {
@@ -97,7 +97,7 @@ async fn create_topic(addr: std::net::SocketAddr) {
 }
 
 async fn produce_one(addr: std::net::SocketAddr) -> u64 {
-    use crabka_protocol::records::{Record, RecordBatch};
+    use krabka_protocol::records::{Record, RecordBatch};
     let batch = RecordBatch {
         records: vec![Record {
             offset_delta: 0,
@@ -140,7 +140,7 @@ async fn produce_one(addr: std::net::SocketAddr) -> u64 {
 }
 
 async fn fetch_one(addr: std::net::SocketAddr) {
-    use crabka_protocol::owned::fetch_response::FetchResponse;
+    use krabka_protocol::owned::fetch_response::FetchResponse;
     let req = FetchRequest {
         max_wait_ms: 500,
         min_bytes: 1,
@@ -210,10 +210,10 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
     // verified after we drive traffic below.)
     let body = scrape(metrics_addr).await;
     for needle in [
-        "crabka_broker_partitions_led",
-        "crabka_broker_active_controller",
-        "crabka_broker_isr_shrinks_total",
-        "crabka_broker_isr_expands_total",
+        "krabka_broker_partitions_led",
+        "krabka_broker_active_controller",
+        "krabka_broker_isr_shrinks_total",
+        "krabka_broker_isr_expands_total",
     ] {
         assert!(body.contains(needle), "missing {needle} in:\n{body}");
     }
@@ -237,11 +237,11 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
 
     let body = scrape(metrics_addr).await;
     for needle in [
-        "crabka_broker_topic_bytes_in_total",
-        "crabka_broker_topic_bytes_out_total",
-        "crabka_broker_topic_produce_requests_total",
-        "crabka_broker_topic_fetch_requests_total",
-        "crabka_broker_messages_in_total",
+        "krabka_broker_topic_bytes_in_total",
+        "krabka_broker_topic_bytes_out_total",
+        "krabka_broker_topic_produce_requests_total",
+        "krabka_broker_topic_fetch_requests_total",
+        "krabka_broker_messages_in_total",
     ] {
         assert!(
             body.contains(needle),
@@ -250,27 +250,27 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
     }
     // `produce_one` writes a single v2 record into the
     // topic, so `messages_in_total{topic=TOPIC}` must read exactly 1.
-    let messages_needle = format!("crabka_broker_messages_in_total{{topic=\"{TOPIC}\"}} 1");
+    let messages_needle = format!("krabka_broker_messages_in_total{{topic=\"{TOPIC}\"}} 1");
     check!(
         body.contains(&messages_needle),
         "messages_in_total should be 1 for the lone produced record, body:\n{body}"
     );
     check!(
         body.contains(&format!(
-            "crabka_broker_topic_produce_requests_total{{topic=\"{TOPIC}\"}}"
+            "krabka_broker_topic_produce_requests_total{{topic=\"{TOPIC}\"}}"
         )),
         "produce-requests counter missing topic label:\n{body}"
     );
     check!(
         body.contains(&format!(
-            "crabka_broker_topic_fetch_requests_total{{topic=\"{TOPIC}\"}}"
+            "krabka_broker_topic_fetch_requests_total{{topic=\"{TOPIC}\"}}"
         )),
         "fetch-requests counter missing topic label:\n{body}"
     );
     // partitions_led >= 1 once the partition writer is up.
     let led_line = body
         .lines()
-        .find(|l| l.starts_with("crabka_broker_partitions_led "))
+        .find(|l| l.starts_with("krabka_broker_partitions_led "))
         .expect("partitions_led series present");
     let value: i64 = led_line
         .rsplit(' ')
@@ -283,7 +283,7 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
     );
     // Single-node broker: it's its own controller leader.
     assert!(
-        body.contains("crabka_broker_active_controller 1"),
+        body.contains("krabka_broker_active_controller 1"),
         "active_controller should be 1 on single-node, body:\n{body}"
     );
 
@@ -309,7 +309,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
     // Enable the disk scanner with a 1s tick so the gauge gets a
     // chance to populate within the test's wait window.
-    cfg.partition_disk_scan_interval = crabka_units::secs(1);
+    cfg.partition_disk_scan_interval = krabka_units::secs(1);
 
     let handle = Broker::start(cfg).await.unwrap();
     let kafka_addr = handle.listen_addr();
@@ -342,7 +342,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
     let body = scrape(metrics_addr).await;
 
     // Topic-level still present.
-    let topic_needle = format!("crabka_broker_topic_bytes_in_total{{topic=\"{TOPIC}\"}}");
+    let topic_needle = format!("krabka_broker_topic_bytes_in_total{{topic=\"{TOPIC}\"}}");
     assert!(
         body.contains(&topic_needle),
         "missing topic-level bytes_in in:\n{body}"
@@ -350,7 +350,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
 
     // Partition-level present with non-zero value.
     let partition_needle =
-        format!("crabka_broker_partition_bytes_in_total{{topic=\"{TOPIC}\",partition=\"0\"}}");
+        format!("krabka_broker_partition_bytes_in_total{{topic=\"{TOPIC}\",partition=\"0\"}}");
     assert!(
         body.contains(&partition_needle),
         "missing partition-level bytes_in in:\n{body}"
@@ -360,7 +360,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
     // runs. Value is timing-dependent (could be 0 if the handler was
     // sub-microsecond), so we only assert presence of the series name,
     // not a specific value.
-    let cpu_needle = format!("crabka_broker_partition_cpu_micros_total{{topic=\"{TOPIC}\"");
+    let cpu_needle = format!("krabka_broker_partition_cpu_micros_total{{topic=\"{TOPIC}\"");
     assert!(
         body.contains(&cpu_needle),
         "missing partition_cpu_micros_total in:\n{body}"
@@ -381,7 +381,7 @@ async fn partition_level_metrics_and_disk_gauge_render() {
     );
 
     // Disk gauge: emitted for at least one (topic, partition) of TOPIC.
-    let disk_prefix = format!("crabka_broker_partition_disk_bytes{{topic=\"{TOPIC}\"");
+    let disk_prefix = format!("krabka_broker_partition_disk_bytes{{topic=\"{TOPIC}\"");
     assert!(
         body.contains(&disk_prefix),
         "missing partition_disk_bytes for materialized partition in:\n{body}"

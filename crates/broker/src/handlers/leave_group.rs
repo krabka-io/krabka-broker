@@ -3,7 +3,7 @@
 //! `Stable` and members remain.
 
 use bytes::Bytes;
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{leave_group_request::LeaveGroupRequest, leave_group_response::LeaveGroupResponse},
 };
@@ -119,14 +119,14 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use crabka_protocol::owned::leave_group_response::{self, LeaveGroupResponse};
+        use krabka_protocol::owned::leave_group_response::{self, LeaveGroupResponse};
 
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = crabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crabka_security::Principal {
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let principal = krabka_security::Principal {
             name: "ANONYMOUS".into(),
-            auth_method: crabka_security::AuthMethod::Anonymous,
+            auth_method: krabka_security::AuthMethod::Anonymous,
             groups: vec![],
         };
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));

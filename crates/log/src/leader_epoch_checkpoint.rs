@@ -13,7 +13,7 @@
 
 use std::{fmt::Write as _, fs, io::Write, path::PathBuf};
 
-use crabka_ids::{LeaderEpoch, Offset};
+use krabka_ids::{LeaderEpoch, Offset};
 use tracing::instrument;
 
 use crate::error::LogError;
@@ -301,7 +301,7 @@ mod leader_epoch_model;
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_ids::{LeaderEpoch, Offset};
+    use krabka_ids::{LeaderEpoch, Offset};
     use tempfile::TempDir;
 
     use super::*;
@@ -615,7 +615,7 @@ mod tests {
 
 #[cfg(test)]
 mod fuzz {
-    use crabka_ids::{LeaderEpoch, Offset};
+    use krabka_ids::{LeaderEpoch, Offset};
     use proptest::prelude::*;
 
     use super::{EpochEntry, UNDEFINED_EPOCH, append_to, epoch_and_offset_for_entries};

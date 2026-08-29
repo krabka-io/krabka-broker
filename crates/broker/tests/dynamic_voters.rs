@@ -10,8 +10,8 @@
 //! tests are gated off Windows, like the other multi-node suites.
 
 use assert2::assert;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId};
-use crabka_raft::reconfig::{ReconfigOutcome, RemoveVoter};
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId};
+use krabka_raft::reconfig::{ReconfigOutcome, RemoveVoter};
 use tempfile::TempDir;
 
 async fn start_dynamic_cluster(n: u64) -> Vec<(BrokerHandle, TempDir)> {
@@ -33,9 +33,9 @@ async fn start_dynamic_cluster(n: u64) -> Vec<(BrokerHandle, TempDir)> {
         config.listen_addr = data_addr;
         config.advertised_listener = data_addr.to_string();
         config.controller_listen_addr = controller_addr;
-        config.controller_election_timeout = crabka_units::millis(200);
-        config.auto_join_retry_backoff = crabka_units::millis(20);
-        config.startup_leader_wait_timeout = crabka_units::secs(10);
+        config.controller_election_timeout = krabka_units::millis(200);
+        config.auto_join_retry_backoff = krabka_units::millis(20);
+        config.startup_leader_wait_timeout = krabka_units::secs(10);
 
         if let Some(bootstrap) = bootstrap_controller {
             config.bootstrap_mode = BootstrapMode::Join;
@@ -87,7 +87,7 @@ async fn auto_join_grows_quorum_to_three() {
         .iter()
         .map(|(handle, _)| handle)
         .find(|handle| {
-            handle.controller_leader_id() == Some(crabka_broker::NodeId(handle.node_id()))
+            handle.controller_leader_id() == Some(krabka_broker::NodeId(handle.node_id()))
         })
         .expect("an elected controller leader");
 
@@ -110,7 +110,7 @@ async fn remove_voter_shrinks_quorum() {
         .iter()
         .map(|(handle, _)| handle)
         .find(|handle| {
-            handle.controller_leader_id() == Some(crabka_broker::NodeId(handle.node_id()))
+            handle.controller_leader_id() == Some(krabka_broker::NodeId(handle.node_id()))
         })
         .expect("an elected controller leader");
     let leader_id = leader.node_id();
@@ -123,7 +123,7 @@ async fn remove_voter_shrinks_quorum() {
     let victim = leader
         .voter_ids_for_test()
         .into_iter()
-        .find(|&id| id != crabka_broker::NodeId(leader_id))
+        .find(|&id| id != krabka_broker::NodeId(leader_id))
         .expect("a follower voter to remove");
     let victim_dir = leader
         .voter_directory_id_for_test(victim)

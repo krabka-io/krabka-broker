@@ -6,17 +6,17 @@ use std::{
     time::Duration,
 };
 
-use crabka_client_core::ConnectionOptions;
-use crabka_ids::PartitionIndex;
-use crabka_metadata::NodeId;
-use crabka_protocol::{
+use krabka_client_core::ConnectionOptions;
+use krabka_ids::PartitionIndex;
+use krabka_metadata::NodeId;
+use krabka_protocol::{
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
     },
     primitives::uuid::Uuid as WireUuid,
 };
-use crabka_security::ListenerProtocol;
+use krabka_security::ListenerProtocol;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -30,7 +30,7 @@ use crate::{
 };
 
 pub(crate) fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
-    crabka_verified::effective_share_backlog(hwm, spso, log_start)
+    krabka_verified::effective_share_backlog(hwm, spso, log_start)
 }
 
 pub(crate) struct BacklogPoller {
@@ -86,7 +86,7 @@ impl BacklogPoller {
 
     async fn snapshot(
         &self,
-        image: &crabka_metadata::MetadataImage,
+        image: &krabka_metadata::MetadataImage,
         groups: Vec<String>,
     ) -> Result<HashMap<ShareGroupLabel, i64>, String> {
         let mut snapshot = HashMap::new();
@@ -133,7 +133,7 @@ impl BacklogPoller {
 
     async fn offsets(
         &self,
-        image: &crabka_metadata::MetadataImage,
+        image: &krabka_metadata::MetadataImage,
         topic: &str,
         partition: i32,
     ) -> Result<(i64, i64), String> {
@@ -153,7 +153,7 @@ impl BacklogPoller {
 
     async fn remote_offsets(
         &self,
-        image: &crabka_metadata::MetadataImage,
+        image: &krabka_metadata::MetadataImage,
         leader: NodeId,
         topic: &str,
         partition: i32,
@@ -170,7 +170,7 @@ impl BacklogPoller {
             |e| (e.host.as_str(), e.port),
         );
         let options = ConnectionOptions {
-            client_id: format!("crabka-share-backlog-{}", self.node_id),
+            client_id: format!("krabka-share-backlog-{}", self.node_id),
             ..ConnectionOptions::default()
         };
         let connection = self
@@ -217,7 +217,7 @@ impl BacklogPoller {
     }
 }
 
-fn owns_group(image: &crabka_metadata::MetadataImage, node_id: NodeId, group_id: &str) -> bool {
+fn owns_group(image: &krabka_metadata::MetadataImage, node_id: NodeId, group_id: &str) -> bool {
     let partition = partitioner::partition_for_group(image, group_id);
     image
         .partition(OFFSETS_TOPIC, partition)
@@ -264,7 +264,7 @@ fn fetch_offsets(
 fn prune_stale(
     metrics: &BrokerMetrics,
     last: &mut HashMap<ShareGroupLabel, i64>,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     node_id: NodeId,
     groups: &[String],
 ) {
@@ -305,9 +305,9 @@ fn clear(metrics: &BrokerMetrics, last: &mut HashMap<ShareGroupLabel, i64>) {
 mod tests {
     use std::collections::HashMap;
 
-    use crabka_ids::LeaderEpoch;
-    use crabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-    use crabka_protocol::{
+    use krabka_ids::LeaderEpoch;
+    use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+    use krabka_protocol::{
         owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
         primitives::uuid::Uuid as WireUuid,
     };

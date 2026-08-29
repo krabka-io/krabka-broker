@@ -10,7 +10,7 @@ use assert2::{assert, check};
 mod support;
 
 use bytes::BufMut;
-use crabka_protocol::{
+use krabka_protocol::{
     Encode,
     owned::{
         consumer_protocol_subscription::ConsumerProtocolSubscription,

@@ -15,12 +15,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crabka_ids::Offset;
-use crabka_remote_storage::{
+use krabka_ids::Offset;
+use krabka_remote_storage::{
     IndexType, LOG_FILE_SUFFIX, PartitionDump, RemoteLogSegmentMetadata, RemoteLogSegmentState,
     TopicIdPartition, parse_partition_dir_name, parse_segment_file_name,
 };
-use crabka_remote_storage_topic::Snapshot;
+use krabka_remote_storage_topic::Snapshot;
 use object_store::path::Path;
 use uuid::Uuid;
 
@@ -431,8 +431,8 @@ mod tests {
 
     use assert2::check;
     use clap::Parser as _;
-    use crabka_ids::LeaderEpoch;
-    use crabka_remote_storage::{
+    use krabka_ids::LeaderEpoch;
+    use krabka_remote_storage::{
         RemoteLogSegmentDetails, RemoteLogSegmentId, RlmmCacheDump, kafka_uuid,
     };
 

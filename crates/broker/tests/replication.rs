@@ -11,8 +11,8 @@
 use std::sync::OnceLock;
 
 use assert2::assert;
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},

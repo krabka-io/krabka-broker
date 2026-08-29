@@ -23,14 +23,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crabka_schema_serde::{
+use krabka_schema_serde::{
     error::SchemaSerdeError,
     format::validate::validate_body,
     registry::RegistryClient,
     subject::{Role, SchemaKind, SubjectStrategy as _, TopicNameStrategy},
     wire,
 };
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 use lru::LruCache;
 
 use super::ValidationMode;
@@ -420,7 +420,7 @@ mod tests {
     use std::time::Duration;
 
     use assert2::{assert, check};
-    use crabka_units::{millis, minutes, secs};
+    use krabka_units::{millis, minutes, secs};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},

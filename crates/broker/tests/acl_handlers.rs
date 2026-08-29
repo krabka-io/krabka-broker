@@ -7,7 +7,7 @@
 //!
 //! T22, the first of three integration test batches, drives the
 //! `CreateAcls` / `DescribeAcls` / `DeleteAcls` flow over a real
-//! `SASL_PLAINTEXT` listener with the wire-typed `crabka-protocol`
+//! `SASL_PLAINTEXT` listener with the wire-typed `krabka-protocol`
 //! request/response codecs. This file copies the SASL framing helpers
 //! (`drive_*`, `round_trip`) inline instead of sharing them through
 //! `mod common`, because Rust integration tests do not easily allow
@@ -21,8 +21,8 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use bytes::{Buf, BufMut, BytesMut};
-use crabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use crabka_protocol::{
+use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         api_versions_request::ApiVersionsRequest,
@@ -52,14 +52,14 @@ use crabka_protocol::{
     },
     records::{Record, RecordBatch},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 
 // Wire `i8` discriminants for the Kafka ACL enums. Kept inline (rather
-// than imported from `crabka-broker::handlers::acl_wire`, which is
+// than imported from `krabka-broker::handlers::acl_wire`, which is
 // crate-private) so the tests exercise the same byte values JVM clients
 // would send. Sourced from `crates/broker/src/handlers/acl_wire.rs`.
 const RESOURCE_TYPE_TOPIC: i8 = 2;
@@ -416,15 +416,15 @@ async fn produce_denied_without_topic_acl() {
     // at least one ACL makes the test read closer to a "real" cluster
     // post-bootstrap.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "_nothing".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:admin".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -472,15 +472,15 @@ async fn produce_allowed_with_topic_write_acl() {
     // but `submit_metadata_record_for_test` is one fewer round-trip and
     // exercises the same authorizer state.)
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "foo".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Write,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Write,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -530,15 +530,15 @@ async fn fetch_denied_without_topic_read_acl() {
     // Seed a dummy ACL via direct controller write. Same rationale as in
     // produce_denied_without_topic_acl.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "_nothing".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:admin".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -761,15 +761,15 @@ async fn metadata_silent_filter_on_fetch_all() {
     // authorizer evaluates every request rather than short-circuiting to
     // Allow.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "t1".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Describe,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Describe,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -817,15 +817,15 @@ async fn metadata_explicit_deny_on_named_topic() {
     // shim off and gives alice *something* she's authorized to see, so
     // the Deny on t2 isn't merely "no ACLs anywhere".
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "t1".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Describe,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Describe,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -870,15 +870,15 @@ async fn join_group_denied_without_group_read_acl() {
     // authorizer would short-circuit to Allow on every check and the
     // Deny assertion below would never fire.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "_nothing".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:admin".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -896,15 +896,15 @@ async fn join_group_denied_without_group_read_acl() {
 
     // Provision Allow Read Group LITERAL "cg-1" User:alice.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Group,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Group,
                 resource_name: "cg-1".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -956,15 +956,15 @@ async fn init_producer_id_denied_without_txn_acl() {
 
     // Seed a dummy ACL to disable the compat shim.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "_nothing".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:admin".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -1016,15 +1016,15 @@ async fn implication_metadata_describes_after_read_acl() {
     // Describe ACL — relies on the Read→Describe implication for
     // the Metadata-by-name visibility check.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "foo".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Read,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Read,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -1069,15 +1069,15 @@ async fn implication_metadata_describes_after_write_acl() {
     // Seed Allow WRITE Topic LITERAL "foo" User:alice host=*. No explicit
     // Describe ACL — relies on the Write→Describe implication.
     handle
-        .submit_metadata_record_for_test(crabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crabka_metadata::AclEntry {
-                resource_type: crabka_metadata::ResourceType::Topic,
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
                 resource_name: "foo".into(),
-                pattern_type: crabka_metadata::PatternType::Literal,
+                pattern_type: krabka_metadata::PatternType::Literal,
                 principal: "User:alice".into(),
                 host: "*".into(),
-                operation: crabka_metadata::AclOperation::Write,
-                permission_type: crabka_metadata::PermissionType::Allow,
+                operation: krabka_metadata::AclOperation::Write,
+                permission_type: krabka_metadata::PermissionType::Allow,
             },
         ))
         .await
@@ -1469,7 +1469,7 @@ async fn round_trip(
     frame.put_i16(api_key);
     frame.put_i16(api_version);
     frame.put_i32(corr_id);
-    let client_id = "crabka-acl-test";
+    let client_id = "krabka-acl-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits in i16"));
     frame.put_slice(client_id.as_bytes());
     if flexible {

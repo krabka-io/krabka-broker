@@ -3,19 +3,19 @@
 use std::collections::{BTreeMap, HashSet};
 
 use bytes::Bytes;
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId,
     ResourceType,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     owned::{
         controller_registration_request::ControllerRegistrationRequest,
         controller_registration_response::ControllerRegistrationResponse,
     },
 };
-use crabka_raft::RaftError;
-use crabka_security::ListenerProtocol;
+use krabka_raft::RaftError;
+use krabka_security::ListenerProtocol;
 
 use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
 
@@ -126,7 +126,7 @@ pub(crate) async fn handle(
 }
 
 fn decode_listeners(
-    listeners: &[crabka_protocol::owned::controller_registration_request::Listener],
+    listeners: &[krabka_protocol::owned::controller_registration_request::Listener],
 ) -> Result<Vec<BrokerEndpoint>, String> {
     if listeners.is_empty() {
         return Err("controller registration has no listeners".into());
@@ -176,7 +176,7 @@ fn response(
 
 #[cfg(test)]
 mod tests {
-    use crabka_protocol::owned::controller_registration_request::Listener;
+    use krabka_protocol::owned::controller_registration_request::Listener;
 
     use super::*;
 

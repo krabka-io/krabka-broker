@@ -18,8 +18,8 @@
 //! `BrokerIdNotRegisteredException` as `INVALID_REQUEST`.
 
 use bytes::Bytes;
-use crabka_metadata::{MetadataRecord, UnregisterBrokerRecord};
-use crabka_protocol::{
+use krabka_metadata::{MetadataRecord, UnregisterBrokerRecord};
+use krabka_protocol::{
     Decode,
     owned::{
         unregister_broker_request::UnregisterBrokerRequest,
@@ -70,7 +70,7 @@ pub(crate) async fn handle(
         return encode_resp(version, &resp);
     }
 
-    let node_id = crabka_metadata::NodeId(u64::try_from(req.broker_id).expect("non-negative"));
+    let node_id = krabka_metadata::NodeId(u64::try_from(req.broker_id).expect("non-negative"));
 
     // Existence check. Unknown id → INVALID_REQUEST with a clear message,
     // matching JVM's `BrokerIdNotRegisteredException → INVALID_REQUEST`
@@ -115,8 +115,8 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use crabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
-    use crabka_security::Principal;
+    use krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
+    use krabka_security::Principal;
 
     use super::*;
     use crate::{authorizer::Authorizer, broker::BrokerHandle, test_support::DenyAll};
@@ -156,7 +156,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::UNKNOWN_SERVER_ERROR,
             error_message: Some("submit failed".into()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -183,7 +183,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("unregister-broker denied".into()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -212,7 +212,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::INVALID_REQUEST,
             error_message: Some("broker_id must be non-negative, got -1".into()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -241,7 +241,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::INVALID_REQUEST,
             error_message: Some("broker 0 is not registered".into()),
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
@@ -270,7 +270,7 @@ mod tests {
             throttle_time_ms: 0,
             error_code: codes::NONE,
             error_message: None,
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;

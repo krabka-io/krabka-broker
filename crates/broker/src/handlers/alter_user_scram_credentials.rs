@@ -34,10 +34,10 @@
 
 use std::collections::HashMap;
 
-use crabka_metadata::{
+use krabka_metadata::{
     AclOperation, DeleteScramCredentialRecord, MetadataRecord, ScramCredentialRecord,
 };
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     alter_user_scram_credentials_request::{
         AlterUserScramCredentialsRequest, ScramCredentialDeletion, ScramCredentialUpsertion,
     },
@@ -45,7 +45,7 @@ use crabka_protocol::owned::{
         AlterUserScramCredentialsResponse, AlterUserScramCredentialsResult,
     },
 };
-use crabka_security::{
+use krabka_security::{
     SaslMechanism,
     scram::{MAX_SCRAM_ITERATIONS, MIN_SCRAM_ITERATIONS},
 };
@@ -89,7 +89,7 @@ pub(crate) async fn handle(
         &AuthorizationRequest {
             principal: ctx.principal,
             host: ctx.peer,
-            resource_type: crabka_metadata::ResourceType::Cluster,
+            resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             operation: AclOperation::Alter,
         },
@@ -110,7 +110,7 @@ pub(crate) async fn handle(
     if crate::features::require_feature(
         &image,
         crate::features::METADATA_VERSION,
-        crabka_metadata::metadata_version::SCRAM_MIN_LEVEL,
+        krabka_metadata::metadata_version::SCRAM_MIN_LEVEL,
     )
     .is_err()
     {
@@ -437,7 +437,7 @@ fn upsertion_record(
     // `stored_key` and `server_key` from the supplied bytes for storage in the
     // metadata image.
     let (stored_key, server_key) =
-        crabka_security::derive_keys_from_salted(mechanism, &upsertion.salted_password);
+        krabka_security::derive_keys_from_salted(mechanism, &upsertion.salted_password);
     MetadataRecord::V1ScramCredential(ScramCredentialRecord {
         user: upsertion.name.clone(),
         mechanism,
@@ -492,9 +492,9 @@ mod tests {
 
     use assert2::assert;
     use bytes::Bytes;
-    use crabka_metadata::FeatureLevelRecord;
-    use crabka_protocol::UnknownTaggedFields;
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_metadata::FeatureLevelRecord;
+    use krabka_protocol::UnknownTaggedFields;
+    use krabka_security::{AuthMethod, Principal};
 
     use crate::{authorizer::Authorizer, test_support::DenyAll};
 
@@ -517,7 +517,7 @@ mod tests {
             mechanism: wire_mechanism,
             iterations: MIN_SCRAM_ITERATIONS,
             salt: Bytes::from_static(b"salt"),
-            salted_password: Bytes::from(vec![7; crabka_security::scram_hash_len(mechanism)]),
+            salted_password: Bytes::from(vec![7; krabka_security::scram_hash_len(mechanism)]),
             ..Default::default()
         }
     }
@@ -680,7 +680,7 @@ mod tests {
 
     #[test]
     fn scram_gate_permits_unknown_and_at_or_above_level() {
-        use crabka_metadata::{
+        use krabka_metadata::{
             FeatureLevelRecord, MetadataImage, MetadataRecord, metadata_version::SCRAM_MIN_LEVEL,
         };
 
@@ -737,7 +737,7 @@ mod tests {
 
         let r = process_upsertion(valid_upsertion("alice"), true, &mut records);
         assert!(r == expected_result("alice", 0, None));
-        let (stored_key, server_key) = crabka_security::derive_keys_from_salted(
+        let (stored_key, server_key) = krabka_security::derive_keys_from_salted(
             SaslMechanism::ScramSha256,
             &valid_upsertion("alice").salted_password,
         );
@@ -783,7 +783,7 @@ mod tests {
             panic!("accepted upsertion must persist a SCRAM credential record");
         };
         let (stored_key, server_key) =
-            crabka_security::derive_keys_from_salted(SaslMechanism::ScramSha256, &salted_password);
+            krabka_security::derive_keys_from_salted(SaslMechanism::ScramSha256, &salted_password);
         assert!(record.stored_key == stored_key);
         assert!(record.server_key == server_key);
     }
@@ -1246,7 +1246,7 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
                 name: crate::features::METADATA_VERSION.to_string(),
-                level: crabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
+                level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
             })])
             .await
             .expect("seed low metadata.version");
@@ -1287,7 +1287,7 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
                 name: crate::features::METADATA_VERSION.to_string(),
-                level: crabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
+                level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
             })])
             .await
             .expect("seed low metadata.version");
@@ -1342,7 +1342,7 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
                 name: crate::features::METADATA_VERSION.to_string(),
-                level: crabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
+                level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
             })])
             .await
             .expect("seed low metadata.version");

@@ -26,12 +26,12 @@ use std::{
     sync::Arc,
 };
 
-use crabka_metadata::{
+use krabka_metadata::{
     MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
 };
 // Alias the request wire module for readability.
-use crabka_protocol::owned::streams_group_heartbeat_request as wire;
-use crabka_raft::RaftError;
+use krabka_protocol::owned::streams_group_heartbeat_request as wire;
+use krabka_raft::RaftError;
 use uuid::Uuid;
 
 use super::persistence::{
@@ -86,7 +86,7 @@ fn to_stored_subtopology(s: &wire::Subtopology) -> StoredSubtopology {
 }
 
 fn to_stored_topic_info(
-    t: &crabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
+    t: &krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
 ) -> StoredTopicInfo {
     StoredTopicInfo {
         name: t.name.clone(),
@@ -497,7 +497,7 @@ pub async fn ensure_internal_topics(
                 leader: replicas[0],
                 replicas: replicas.clone(),
                 isr: replicas,
-                leader_epoch: crabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -513,7 +513,7 @@ pub async fn ensure_internal_topics(
         }
 
         match controller.submit_change(records).await {
-            Ok(_) | Err(RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))) => {}
+            Ok(_) | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {}
             Err(e) => {
                 return Err(BrokerError::Txn(format!(
                     "submit_change failed creating internal topic '{}': {e}",
@@ -574,10 +574,10 @@ mod tests {
                 image.apply(&MetadataRecord::V1Partition(PartitionRecord {
                     topic: name.to_string(),
                     partition: p,
-                    leader: crabka_audit::NodeId(1),
-                    replicas: vec![crabka_audit::NodeId(1)],
-                    isr: vec![crabka_audit::NodeId(1)],
-                    leader_epoch: crabka_metadata::LeaderEpoch(0),
+                    leader: krabka_audit::NodeId(1),
+                    replicas: vec![krabka_audit::NodeId(1)],
+                    isr: vec![krabka_audit::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
                     adding_replicas: vec![],
                     removing_replicas: vec![],
                     directories: vec![],
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn to_stored_topology_maps_all_fields() {
-        use crabka_protocol::owned::common::streams_group_heartbeat_request::{
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::{
             key_value::KeyValue, topic_info::TopicInfo,
         };
 

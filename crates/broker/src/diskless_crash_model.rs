@@ -279,7 +279,7 @@ fn quorum_frontier(s: &CrashState) -> i64 {
     live.sort_unstable();
     let leader_end = live.pop().unwrap_or(0);
     let followers = live;
-    crabka_verified::recompute_high_watermark(leader_end, &followers, WAL_MAJORITY, -1, 0)
+    krabka_verified::recompute_high_watermark(leader_end, &followers, WAL_MAJORITY, -1, 0)
 }
 
 fn surviving_wal_frontier(s: &CrashState) -> i64 {

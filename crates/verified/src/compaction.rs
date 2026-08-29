@@ -1,8 +1,8 @@
 //! KIP-534 log-compaction decision core.
 //!
-//! This core comes out of `crabka-log`, so that Creusot can verify it. The host
+//! This core comes out of `krabka-log`, so that Creusot can verify it. The host
 //! crate re-exports these functions, and the stateright model in
-//! `crabka-log/src/compact_model.rs` drives these exact functions.
+//! `krabka-log/src/compact_model.rs` drives these exact functions.
 
 #[cfg(creusot)]
 use std::clone::Clone;

@@ -1,6 +1,6 @@
 //! End-to-end integration tests for KIP-932 Slice C: share-partition consume
 //! (`ShareFetch`, `api_key` 78) and acknowledge (`ShareAcknowledge`, `api_key`
-//! 79), driven against an in-process Crabka broker through `crabka-client-core`.
+//! 79), driven against an in-process Krabka broker through `krabka-client-core`.
 //!
 //! The typed client works because `ApiVersions` advertises `api_keys` 78/79.
 //! Both `ShareFetchRequest` / `ShareAcknowledgeRequest` impl `ProtocolRequest`,
@@ -26,9 +26,9 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         find_coordinator_request::FindCoordinatorRequest,
@@ -79,7 +79,7 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
 /// materialized (and leads) partition 0, so a subsequent produce won't race the
 /// replicator supervisor.
 async fn create_topic(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     client: &Client,
     topic: &str,
     partitions: i32,
@@ -105,7 +105,7 @@ async fn create_topic(
 }
 
 /// Resolve a created topic's id from this broker's metadata image.
-fn topic_id(broker: &crabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
+fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
     let image = broker.controller_image_for_test();
     image
         .topic(topic)
@@ -149,7 +149,7 @@ fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
-async fn bootstrap_share_state(broker: &crabka_broker::BrokerHandle, client: &Client, key: &str) {
+async fn bootstrap_share_state(broker: &krabka_broker::BrokerHandle, client: &Client, key: &str) {
     let resp = client
         .send(FindCoordinatorRequest {
             key_type: 2, // SHARE
@@ -181,7 +181,7 @@ async fn bootstrap_share_state(broker: &crabka_broker::BrokerHandle, client: &Cl
 /// steady-state heartbeats inside the wait loop rather than sleeping. It mirrors
 /// the `lifecycle_initializes_share_state` pattern in `share_groups.rs`.
 async fn wait_for_share_init(
-    broker: &crabka_broker::BrokerHandle,
+    broker: &krabka_broker::BrokerHandle,
     client: &Client,
     member_id: &str,
     member_epoch: i32,
@@ -346,7 +346,7 @@ async fn share_fetch(
     partition: i32,
     epoch: i32,
     max_wait_ms: i32,
-) -> crabka_protocol::owned::share_fetch_response::PartitionData {
+) -> krabka_protocol::owned::share_fetch_response::PartitionData {
     let req = share_fetch_req(group, member, tid, partition, epoch, max_wait_ms, vec![]);
     let resp: ShareFetchResponse = client.send(req).await.expect("ShareFetch");
     assert!(
@@ -367,7 +367,7 @@ async fn share_ack(
     first: i64,
     last: i64,
     ack_type: i8,
-) -> crabka_protocol::owned::share_acknowledge_response::PartitionData {
+) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
     let count = usize::try_from(last - first + 1).unwrap();
     let req = ShareAcknowledgeRequest {
         group_id: Some("g1".into()),
@@ -409,7 +409,7 @@ async fn share_renew(
     epoch: i32,
     first: i64,
     last: i64,
-) -> crabka_protocol::owned::share_acknowledge_response::PartitionData {
+) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
     let req = ShareAcknowledgeRequest {
         group_id: Some("g1".into()),
         member_id: Some(member.into()),
@@ -441,7 +441,7 @@ async fn share_renew(
 }
 
 /// Total number of offsets covered by the acquired ranges on a fetch row.
-fn acquired_count(p: &crabka_protocol::owned::share_fetch_response::PartitionData) -> i64 {
+fn acquired_count(p: &krabka_protocol::owned::share_fetch_response::PartitionData) -> i64 {
     p.acquired_records
         .iter()
         .map(|r| r.last_offset - r.first_offset + 1)
@@ -459,7 +459,7 @@ async fn fetch_until_acquired(
     tid: uuid::Uuid,
     partition: i32,
     epoch: i32,
-) -> crabka_protocol::owned::share_fetch_response::PartitionData {
+) -> krabka_protocol::owned::share_fetch_response::PartitionData {
     for _ in 0..40 {
         let row = share_fetch(client, group, member, tid, partition, epoch, 0).await;
         if row.error_code == NONE && acquired_count(&row) > 0 {
@@ -1089,8 +1089,8 @@ async fn no_renew_redelivers_after_lock_expiry() {
 /// that the broker merely deferred the records and did not lose them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_committed_skips_open_txn_then_sees_committed() {
-    use crabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
-    use crabka_client_producer::{Producer, ProducerRecord};
+    use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
+    use krabka_client_producer::{Producer, ProducerRecord};
 
     let _permit = broker_test_permit().await;
     let dir = tempfile::TempDir::new().unwrap();

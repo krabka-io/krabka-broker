@@ -132,7 +132,7 @@ async fn jvm_legacy_010_round_trip() {
 /// console-consumer (cp-kafka:6.1.1) reads them back with Fetch v11+.
 /// The test validates that the up-conversion writes a well-formed v2
 /// `RecordBatch` to the log that a modern client can decode, and not
-/// only bytes that a Crabka broker accepts on its own.
+/// only bytes that a Krabka broker accepts on its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_legacy_010_produce_modern_consume() {

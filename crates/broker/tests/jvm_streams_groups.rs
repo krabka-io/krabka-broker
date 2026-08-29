@@ -4,26 +4,26 @@
 //! The test drives the REAL Apache Kafka 4.1.0 `kafka-streams-groups.sh` admin
 //! tool, a `KafkaStreamsGroupsCommand` that wraps the JVM `AdminClient`. The
 //! tool runs inside an `mirror.gcr.io/apache/kafka:4.1.0` container against an
-//! in-process Crabka broker on the host. The container has a JRE-only Kafka
+//! in-process Krabka broker on the host. The container has a JRE-only Kafka
 //! image with no `javac` or `jshell`, so we cannot compile a custom
-//! `KafkaStreams` app. Instead we use the native `crabka-client-core` client to
-//! make a streams group EXIST on Crabka. The client finalizes
+//! `KafkaStreams` app. Instead we use the native `krabka-client-core` client to
+//! make a streams group EXIST on Krabka. The client finalizes
 //! `streams.version=1`, creates a source topic, and drives a
 //! `StreamsGroupHeartbeat` so the group has a live member with an assignment.
-//! We then point the bundled JVM admin tool at Crabka and prove it round-trips
+//! We then point the bundled JVM admin tool at Krabka and prove it round-trips
 //! the streams-group admin wire path.
 //!
 //! The real `apache-kafka-java` 4.1.0 `AdminClient` drives this flow, read
 //! empirically from its DEBUG wire log:
 //!
-//! - `ApiVersions` negotiation (key 18): Crabka advertises api keys 88/89 and
+//! - `ApiVersions` negotiation (key 18): Krabka advertises api keys 88/89 and
 //!   the finalized `streams.version` feature,
 //! - `Metadata` (key 13) to discover the broker set,
 //! - `ListGroups` (key 16, v5) with `typesFilter=[Streams]`, which is the
-//!   KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter, and Crabka returns
+//!   KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter, and Krabka returns
 //!   the live streams group,
 //! - `FindCoordinator` (key 10) for the group,
-//! - `StreamsGroupDescribe` (key 89): Crabka returns the full `DescribedGroup`,
+//! - `StreamsGroupDescribe` (key 89): Krabka returns the full `DescribedGroup`,
 //!   which the JVM `DescribeStreamsGroupsHandler` accepts. That group holds the
 //!   group state and epochs, the resolved topology, and the member with its
 //!   active task assignment.
@@ -42,10 +42,10 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use crabka_client_core::Client;
-use crabka_log::LogConfig;
-use crabka_protocol::owned::{
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_client_core::Client;
+use krabka_log::LogConfig;
+use krabka_protocol::owned::{
     common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Subtopology, Topology},
@@ -110,7 +110,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crabka_broker=info,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
         )
         .with_test_writer()
         .try_init();
@@ -124,19 +124,19 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         advertised_listener: bootstrap_addr().into(),
         log_dir: dir.path().to_path_buf(),
         log_config: LogConfig::default(),
-        node_id: crabka_broker::NodeId(1),
+        node_id: krabka_broker::NodeId(1),
         controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(crabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
-        bootstrap_mode: crabka_broker::BootstrapMode::Bootstrap,
+        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
+        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
     let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("CRABKA[test] broker started listen={listen} advertised={bootstrap}");
+    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
     (handle, dir)
 }
 
@@ -145,7 +145,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
 async fn connect() -> Client {
     Client::builder()
         .bootstrap(client_addr().to_string())
-        .client_id("crabka-streams-test")
+        .client_id("krabka-streams-test")
         .build()
         .await
         .expect("client build")
@@ -328,7 +328,7 @@ fn docker_run(args: &[&str]) -> std::process::Output {
         .output()
         .expect("docker run");
     eprintln!(
-        "CRABKA[test] docker {args:?} status={} stderr={}",
+        "KRABKA[test] docker {args:?} status={} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr),
     );
@@ -361,23 +361,23 @@ const TOOL_DEBUG_PREAMBLE: &str = concat!(
     "export KAFKA_LOG4J_OPTS='-Dlog4j2.configurationFile=/tmp/d.yaml'\n",
 );
 
-/// The headline differential test: make a KIP-1071 streams group live on Crabka
-/// with the native `crabka-client-core` client (`StreamsGroupHeartbeat`, api
+/// The headline differential test: make a KIP-1071 streams group live on Krabka
+/// with the native `krabka-client-core` client (`StreamsGroupHeartbeat`, api
 /// 88). Then drive the REAL Apache Kafka 4.1.0 `kafka-streams-groups.sh` admin
-/// tool against Crabka and prove it round-trips the streams-group admin wire
+/// tool against Krabka and prove it round-trips the streams-group admin wire
 /// path. That tool is the JVM `StreamsGroupCommand` that wraps `AdminClient`.
 ///
 /// We assert these checkpoints, read from the JVM tool's own DEBUG wire logs:
 ///
-///  1. The JVM `AdminClient` negotiated `ApiVersions` with Crabka. The response
+///  1. The JVM `AdminClient` negotiated `ApiVersions` with Krabka. The response
 ///     advertised `StreamsGroupDescribe (apiKey=89)` plus the finalized
 ///     `streams.version` feature, so the KIP-1071 admin surface is visible to
 ///     the real client.
 ///  2. The tool issued `LIST_GROUPS apiVersion=5` with `typesFilter=[Streams]`,
-///     the KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter. Crabka
+///     the KIP-1071 `ListGroupsOptions.forStreamsGroups()` filter. Krabka
 ///     answered with the live streams group (`errorCode=0`).
 ///  3. `StreamsGroupCommand.describeGroups()` then resolved the coordinator and
-///     issued `StreamsGroupDescribe` (api 89). Crabka returned the full group,
+///     issued `StreamsGroupDescribe` (api 89). Krabka returned the full group,
 ///     which the JVM `DescribeStreamsGroupsHandler` accepts. That group holds
 ///     the state and epochs, the resolved topology, and the member with its
 ///     active task assignment. The handler rejects a describe whose topology is
@@ -385,7 +385,7 @@ const TOOL_DEBUG_PREAMBLE: &str = concat!(
 ///     regression there.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-async fn jvm_streams_groups_admin_round_trips_crabka() {
+async fn jvm_streams_groups_admin_round_trips_krabka() {
     let bootstrap = bootstrap_addr();
     let (broker, _dir) = start_host_broker().await;
     let topic = "streams-input";
@@ -395,7 +395,7 @@ async fn jvm_streams_groups_admin_round_trips_crabka() {
     finalize_streams_version(&client).await;
     create_topic(&broker, &client, topic, 2).await;
 
-    // Make a streams group EXIST on Crabka: a lone member owns both partitions
+    // Make a streams group EXIST on Krabka: a lone member owns both partitions
     // of the single subtopology over `streams-input` (native StreamsGroupHeartbeat
     // / api 88).
     let (member_id, resp) = join_and_converge(&client, group, topology(topic), 2, 12).await;
@@ -415,7 +415,7 @@ async fn jvm_streams_groups_admin_round_trips_crabka() {
     keepalive(&client, group, &member_id, epoch).await;
 
     // Drive the JVM tool with DEBUG wire logging so we can read the actual
-    // request/response frames it exchanges with Crabka. `--describe` exercises
+    // request/response frames it exchanges with Krabka. `--describe` exercises
     // the full KIP-1071 admin flow: ApiVersions (18) -> Metadata (13) ->
     // ListGroups (16, typesFilter=[Streams]) -> [StreamsGroupDescribe (89)].
     let described = docker_run(&[
@@ -429,21 +429,21 @@ async fn jvm_streams_groups_admin_round_trips_crabka() {
     ]);
     // With `2>&1` the DEBUG wire log lands on the container's stdout.
     let wire = String::from_utf8_lossy(&described.stdout);
-    eprintln!("CRABKA[test] streams-groups --describe (DEBUG wire log):\n{wire}");
+    eprintln!("KRABKA[test] streams-groups --describe (DEBUG wire log):\n{wire}");
 
-    // Checkpoint 1: the ApiVersions handshake with Crabka advertised the
+    // Checkpoint 1: the ApiVersions handshake with Krabka advertised the
     // KIP-1071 StreamsGroupDescribe API (apiKey=89) and the finalized
     // streams.version feature — the streams-group admin surface is visible to a
     // real Apache Kafka 4.1.0 AdminClient.
     //
     // Checkpoint 2: the tool issued the KIP-1071 streams-group LIST_GROUPS
-    // request (typesFilter=[Streams]) and Crabka answered it cleanly. This is
-    // the real JVM streams-group admin client round-tripping against Crabka.
+    // request (typesFilter=[Streams]) and Krabka answered it cleanly. This is
+    // the real JVM streams-group admin client round-tripping against Krabka.
     //
-    // Checkpoint 3: the streams group now surfaces in Crabka's ListGroups reply,
+    // Checkpoint 3: the streams group now surfaces in Krabka's ListGroups reply,
     // so `StreamsGroupCommand.describeGroups()` proceeds past `listStreamsGroups()`,
     // resolves the coordinator, and issues the KIP-1071 `StreamsGroupDescribe`
-    // (api 89). Crabka answers with the full group — topology + member + active
+    // (api 89). Krabka answers with the full group — topology + member + active
     // task assignment — completing the JVM admin round-trip end to end. The
     // describe response must carry the resolved topology ("missing the topology
     // information" must NOT appear) — the real JVM `DescribeStreamsGroupsHandler`

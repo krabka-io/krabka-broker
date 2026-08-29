@@ -16,7 +16,7 @@
 //! broker binary did in the kind-oauth-introspection e2e job.
 
 use assert2::assert;
-use crabka_broker::{config::BrokerConfig, file_config::FileConfig};
+use krabka_broker::{config::BrokerConfig, file_config::FileConfig};
 
 /// A self-contained CA cert. It does not depend on the security crate's
 /// fixtures, which live behind `#[cfg(test)]`-only paths.
@@ -73,6 +73,6 @@ idp_tls_trust                    = '{ca}'
     file.apply_to(&mut cfg).expect("apply_to should not panic");
     assert!(matches!(
         cfg.oauthbearer_validator,
-        crabka_security::OAuthBearerValidator::Introspection(_)
+        krabka_security::OAuthBearerValidator::Introspection(_)
     ));
 }

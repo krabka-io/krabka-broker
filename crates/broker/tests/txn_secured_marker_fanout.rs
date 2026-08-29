@@ -7,7 +7,7 @@
 //! handshakes that the listener demands. It dials through the shared
 //! `InterBrokerClient`, which carries the inter-broker TLS connector and the
 //! SASL credentials. It does not use a bare one-shot
-//! `crabka_client_core::Client`, which carries neither and can only reach a
+//! `krabka_client_core::Client`, which carries neither and can only reach a
 //! PLAINTEXT inter-broker listener.
 //!
 //! The test boots a two-broker cluster whose inter-broker listener is
@@ -35,15 +35,15 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_broker::{
+use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle,
     config::{InterBrokerCredentials, ListenerSpec},
 };
-use crabka_client_core::{
+use krabka_client_core::{
     Client,
     security::{ClientSecurity, SaslCredentials},
 };
-use crabka_protocol::owned::{
+use krabka_protocol::owned::{
     add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
     common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -52,7 +52,7 @@ use crabka_protocol::owned::{
     init_producer_id_request::InitProducerIdRequest,
     metadata_request::{MetadataRequest, MetadataRequestTopic},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 mod support;
@@ -114,7 +114,7 @@ fn client_security() -> ClientSecurity {
 async fn sasl_client(addr: &str) -> Client {
     Client::builder()
         .bootstrap(addr.to_string())
-        .client_id("crabka-txn-fanout-test")
+        .client_id("krabka-txn-fanout-test")
         .security(client_security())
         .build()
         .await
@@ -142,13 +142,13 @@ async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, 
     let dir0 = TempDir::new().unwrap();
     let mut cfg0 = BrokerConfig::for_tests(dir0.path().to_path_buf());
     cfg0.broker_id = 1;
-    cfg0.node_id = crabka_broker::NodeId(1);
+    cfg0.node_id = krabka_broker::NodeId(1);
     cfg0.directory_id = uuid::Uuid::from_u128(1);
     cfg0.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg0.controller_listen_addr = controller_addrs[0];
     cfg0.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     cfg0.auto_join = false;
     cfg0.bootstrap_servers = vec![];
@@ -157,13 +157,13 @@ async fn start_two_sasl() -> Result<Vec<(BrokerHandle, BrokerConfig, TempDir)>, 
     let dir1 = TempDir::new().unwrap();
     let mut cfg1 = BrokerConfig::for_tests(dir1.path().to_path_buf());
     cfg1.broker_id = 2;
-    cfg1.node_id = crabka_broker::NodeId(2);
+    cfg1.node_id = krabka_broker::NodeId(2);
     cfg1.directory_id = uuid::Uuid::from_u128(2);
     cfg1.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg1.controller_listen_addr = controller_addrs[1];
     cfg1.controller_quorum_voters = voters
         .iter()
-        .map(|(id, a)| (crabka_broker::NodeId(*id), a.to_string()))
+        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
         .collect();
     cfg1.auto_join = false;
     cfg1.bootstrap_servers = vec![];
@@ -217,7 +217,7 @@ async fn start_two_sasl_with_retry() -> Vec<(BrokerHandle, BrokerConfig, TempDir
                 last = Some(e);
                 // intentional: backoff before re-booting the whole cluster after
                 // a failed boot attempt (lets stray raft timings settle) — not a
-                // wait on any observable crabka broker/image/metric state.
+                // wait on any observable krabka broker/image/metric state.
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }

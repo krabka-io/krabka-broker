@@ -12,10 +12,10 @@ use std::sync::{
 
 use arc_swap::ArcSwap;
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_log::{DeliveryPolicy, Log, LogConfig};
-use crabka_protocol::records::{Record, RecordBatch};
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_log::{DeliveryPolicy, Log, LogConfig};
+use krabka_protocol::records::{Record, RecordBatch};
+use krabka_units::{Time, convert::TimeExt as _};
 use qubit_clock::Clock;
 use tokio::sync::{Notify, mpsc};
 

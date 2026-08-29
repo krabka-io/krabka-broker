@@ -12,9 +12,9 @@ use assert2::{assert, check};
 mod support;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_compression::CompressionType;
-use crabka_protocol::{
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_compression::CompressionType;
+use krabka_protocol::{
     Decode, Encode,
     kafka_3_6_2::owned::fetch_response::FetchResponse as LegacyFetchResponse,
     owned::{
@@ -26,7 +26,7 @@ use crabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::{Attributes, Record, RecordBatch, RecordsPayload},
 };
-use crabka_records_legacy::decode_message_set;
+use krabka_records_legacy::decode_message_set;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -74,7 +74,7 @@ async fn round_trip_nonflexible(
 // ── Topic helpers ─────────────────────────────────────────────────────────────
 
 #[allow(dead_code)]
-async fn topic_id_for(client: &crabka_client_core::Client, name: &str) -> WireUuid {
+async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
     let resp = client
         .send(MetadataRequest {
             topics: Some(vec![MetadataRequestTopic {
@@ -94,7 +94,7 @@ async fn topic_id_for(client: &crabka_client_core::Client, name: &str) -> WireUu
 
 /// Creates a single-partition topic with the modern client and asserts that it
 /// succeeds.
-async fn create_topic(client: &crabka_client_core::Client, name: &str) {
+async fn create_topic(client: &krabka_client_core::Client, name: &str) {
     let cr = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -194,7 +194,7 @@ async fn fetch_legacy_raw_at(
     version: i16,
     fetch_offset: i64,
 ) -> Vec<u8> {
-    use crabka_protocol::kafka_3_6_2::owned::fetch_request::{
+    use krabka_protocol::kafka_3_6_2::owned::fetch_request::{
         FetchPartition, FetchRequest, FetchTopic,
     };
 
@@ -297,7 +297,7 @@ async fn fetch_v3_downconverts_v2_batch_to_v0_messageset() {
     // 5. The records field should be a Legacy MessageSet.
     let records_payload = part.records.as_ref().expect("records field should be Some");
     let legacy_bytes = match records_payload {
-        crabka_protocol::records::RecordsPayload::Legacy(b) => b.clone(),
+        krabka_protocol::records::RecordsPayload::Legacy(b) => b.clone(),
         _ => {
             panic!("expected Legacy MessageSet in Fetch v3 response, got non-Legacy payload")
         }
@@ -393,7 +393,7 @@ async fn fetch_v3_recompresses_zstd_as_snappy() {
     // 5. Get the raw legacy bytes.
     let records_payload = part.records.as_ref().expect("records field should be Some");
     let legacy_bytes = match records_payload {
-        crabka_protocol::records::RecordsPayload::Legacy(b) => b.clone(),
+        krabka_protocol::records::RecordsPayload::Legacy(b) => b.clone(),
         _ => {
             panic!("expected Legacy MessageSet in Fetch v3 response, got non-Legacy payload")
         }

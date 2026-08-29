@@ -6,8 +6,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crabka_ids::Offset;
-use crabka_units::prelude::{ByteSize, ByteSizeExt as _, TimeExt as _};
+use krabka_ids::Offset;
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _, TimeExt as _};
 use tracing::instrument;
 
 use crate::{config::LogConfig, error::LogError, name, segment::Segment};
@@ -105,7 +105,7 @@ mod tests {
     /// `ts_base`.
     fn sealed_segment(dir: &std::path::Path, base: i64, batches: i64, ts_base: i64) -> Segment {
         use bytes::Bytes;
-        use crabka_protocol::records::{Record, RecordBatch};
+        use krabka_protocol::records::{Record, RecordBatch};
 
         let mut seg = Segment::create(dir, Offset(base)).expect("create segment");
         for i in 0..batches {
@@ -177,7 +177,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let seg = sealed_segment(dir.path(), 0, 1, 5_000);
         let refs = [&seg];
-        let retention = crabka_units::prelude::millis(1_000);
+        let retention = krabka_units::prelude::millis(1_000);
         let config = LogConfig {
             retention: Some(retention),
             ..LogConfig::default()

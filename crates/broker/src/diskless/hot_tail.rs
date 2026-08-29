@@ -3,9 +3,9 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
 use bytes::Bytes;
-use crabka_ids::PartitionIndex;
-use crabka_protocol::records::RecordBatch;
 use dashmap::DashMap;
+use krabka_ids::PartitionIndex;
+use krabka_protocol::records::RecordBatch;
 use uuid::Uuid;
 
 /// Advisory cache of recently quorum-committed diskless WAL batches.
@@ -119,7 +119,7 @@ struct HotTailEntry {
 mod tests {
     use assert2::check;
     use bytes::BytesMut;
-    use crabka_protocol::records::Record;
+    use krabka_protocol::records::Record;
 
     use super::*;
 

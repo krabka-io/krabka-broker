@@ -8,8 +8,8 @@
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 
-use crabka_metadata::{MetadataImage, MetadataRecord};
-use crabka_raft::{
+use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_raft::{
     AddVoter, ControllerHandle, Node, NodeId, OutboundDialer, QuorumState, RaftError,
     ReconfigOutcome, RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
 };
@@ -268,8 +268,8 @@ pub struct QuorumForwarder {
     pub(crate) voters: Vec<(NodeId, String)>,
     pub(crate) dialer: Arc<dyn OutboundDialer>,
     pub(crate) client_id: String,
-    pub(crate) client_dispatch_queue_capacity: crabka_client_core::ConnectionDispatchQueueCapacity,
-    pub(crate) client_frame_max: crabka_client_core::ClientFrameMax,
+    pub(crate) client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    pub(crate) client_frame_max: krabka_client_core::ClientFrameMax,
     pub(crate) leader: watch::Receiver<Option<NodeId>>,
 }
 
@@ -279,12 +279,12 @@ impl QuorumForwarder {
         target: NodeId,
         addr: &str,
         body: &[u8],
-    ) -> Result<crabka_raft::CrabkaSubmitChangeResponse, RaftError> {
-        let opts = crabka_client_core::ConnectionOptions {
+    ) -> Result<krabka_raft::KrabkaSubmitChangeResponse, RaftError> {
+        let opts = krabka_client_core::ConnectionOptions {
             client_id: self.client_id.clone(),
             dispatch_queue_capacity: self.client_dispatch_queue_capacity,
             frame_max: self.client_frame_max,
-            ..crabka_client_core::ConnectionOptions::default()
+            ..krabka_client_core::ConnectionOptions::default()
         };
         let conn = self
             .dialer
@@ -293,7 +293,7 @@ impl QuorumForwarder {
             .map_err(RaftError::Network)?;
         let resp_body = conn
             .raw_request(
-                crabka_raft::API_KEY_SUBMIT_CHANGE,
+                krabka_raft::API_KEY_SUBMIT_CHANGE,
                 0,
                 bytes::Bytes::copy_from_slice(body),
             )
@@ -301,7 +301,7 @@ impl QuorumForwarder {
             .map_err(RaftError::Network)?;
         conn.close();
         let mut cur: &[u8] = &resp_body;
-        crabka_raft::CrabkaSubmitChangeResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
+        krabka_raft::KrabkaSubmitChangeResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
     }
 }
 
@@ -336,7 +336,7 @@ impl MetadataWriter for QuorumForwarder {
                 &records,
             )
             .map_err(RaftError::from)?;
-        let req = crabka_raft::CrabkaSubmitChangeRequest {
+        let req = krabka_raft::KrabkaSubmitChangeRequest {
             records: bytes::Bytes::from(payload),
         };
         // + 4 for the length-prefix encode_v0 writes ahead of the records.
@@ -364,7 +364,7 @@ impl MetadataWriter for QuorumForwarder {
                 // of record is CreateTopics (-> Kafka TOPIC_ALREADY_EXISTS).
                 Ok(resp) if resp.error_code == 2 => {
                     return Err(RaftError::Metadata(
-                        crabka_metadata::MetadataError::TopicExists(String::new()),
+                        krabka_metadata::MetadataError::TopicExists(String::new()),
                     ));
                 }
                 Ok(resp) => {
@@ -392,15 +392,15 @@ mod tests {
     };
 
     use bytes::{Bytes, BytesMut};
-    use crabka_metadata::{MetadataRecord, TopicRecord};
-    use crabka_protocol::{
+    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_protocol::{
         Encode,
         owned::{
             api_versions_request,
             api_versions_response::{ApiVersion, ApiVersionsResponse},
         },
     };
-    use crabka_raft::{
+    use krabka_raft::{
         BootstrapMode, Controller, ControllerConfig, Node, NodeId, OutboundDialer, RaftError,
         SnapshotRange, SubmitChangeResult,
     };
@@ -412,11 +412,11 @@ mod tests {
         MetadataSource, MetadataWriter, ObserverSource, QuorumForwarder, build_forward_order,
     };
 
-    fn voters() -> Vec<(crabka_raft::NodeId, String)> {
+    fn voters() -> Vec<(krabka_raft::NodeId, String)> {
         vec![
-            (crabka_audit::NodeId(1), "h1:9093".to_string()),
-            (crabka_audit::NodeId(2), "h2:9093".to_string()),
-            (crabka_audit::NodeId(3), "h3:9093".to_string()),
+            (krabka_audit::NodeId(1), "h1:9093".to_string()),
+            (krabka_audit::NodeId(2), "h2:9093".to_string()),
+            (krabka_audit::NodeId(3), "h3:9093".to_string()),
         ]
     }
 
@@ -452,7 +452,7 @@ mod tests {
                 &SubmitChangeResult::default(),
             )
             .expect("serialize submit result");
-        crabka_raft::CrabkaSubmitChangeResponse {
+        krabka_raft::KrabkaSubmitChangeResponse {
             error_code,
             leader_hint,
             result: Bytes::from(result),
@@ -473,13 +473,13 @@ mod tests {
             &self,
             target: NodeId,
             addr: &str,
-            options: crabka_client_core::ConnectionOptions,
-        ) -> Result<crabka_client_core::Connection, crabka_client_core::ClientError> {
+            options: krabka_client_core::ConnectionOptions,
+        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
             self.client_ids
                 .lock()
                 .unwrap()
                 .push(options.client_id.clone());
-            crabka_raft::PlaintextDialer
+            krabka_raft::PlaintextDialer
                 .dial(target, addr, options)
                 .await
         }
@@ -493,8 +493,8 @@ mod tests {
         let (_leader_tx, leader_rx) = watch::channel(leader_hint);
         QuorumForwarder {
             client_dispatch_queue_capacity:
-                crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-            client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
             voters: vec![(NodeId(1), addr.to_string())],
             dialer: Arc::new(RecordingDialer { client_ids }),
             client_id: "forwarder-client".into(),
@@ -526,7 +526,7 @@ mod tests {
         ));
     }
 
-    async fn wait_for_controller_leader(ctrl: &crabka_raft::ControllerHandle) {
+    async fn wait_for_controller_leader(ctrl: &krabka_raft::ControllerHandle) {
         let mut leader_rx = ctrl.watch_leader();
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while leader_rx.borrow().is_none() {
@@ -557,13 +557,13 @@ mod tests {
         // A flipped `Some(v.0) != hint` (i.e. `== hint`) would re-push only the
         // hinted voter and drop the fallbacks, leaving no peer to retry when the
         // hint is stale.
-        let order = build_forward_order(&voters(), Some(crabka_audit::NodeId(2)));
+        let order = build_forward_order(&voters(), Some(krabka_audit::NodeId(2)));
         assert_eq!(
             order,
             vec![
-                (crabka_raft::NodeId(2), "h2:9093".to_string()),
-                (crabka_raft::NodeId(1), "h1:9093".to_string()),
-                (crabka_raft::NodeId(3), "h3:9093".to_string()),
+                (krabka_raft::NodeId(2), "h2:9093".to_string()),
+                (krabka_raft::NodeId(1), "h1:9093".to_string()),
+                (krabka_raft::NodeId(3), "h3:9093".to_string()),
             ]
         );
     }
@@ -580,7 +580,7 @@ mod tests {
     fn forward_order_unknown_hint_still_tries_all_voters() {
         // Hint names a voter not in the set → no leader-first entry, but every
         // voter is still tried (hint 9 != each id).
-        let order = build_forward_order(&voters(), Some(crabka_audit::NodeId(9)));
+        let order = build_forward_order(&voters(), Some(krabka_audit::NodeId(9)));
         assert_eq!(order, voters());
     }
 
@@ -633,14 +633,14 @@ mod tests {
         let observer = crate::metadata_observer::MetadataObserver::start(
             crate::metadata_observer::ObserverConfig {
                 client_dispatch_queue_capacity:
-                    crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+                client_frame_max: krabka_client_core::ClientFrameMax::default(),
                 voters: vec![],
-                dialer: Arc::new(crabka_raft::PlaintextDialer),
+                dialer: Arc::new(krabka_raft::PlaintextDialer),
                 client_id: "observer-source-test".into(),
                 cluster_id,
-                max_bytes: crabka_units::mebibytes(1),
-                poll_interval: crabka_units::minutes(1),
+                max_bytes: krabka_units::mebibytes(1),
+                poll_interval: krabka_units::minutes(1),
                 sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
             },
         );
@@ -699,14 +699,14 @@ mod tests {
         let observer = crate::metadata_observer::MetadataObserver::start(
             crate::metadata_observer::ObserverConfig {
                 client_dispatch_queue_capacity:
-                    crabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                client_frame_max: crabka_client_core::ClientFrameMax::default(),
+                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+                client_frame_max: krabka_client_core::ClientFrameMax::default(),
                 voters: vec![(NodeId(1), ctrl.controller_bound_addr().to_string())],
-                dialer: Arc::new(crabka_raft::PlaintextDialer),
+                dialer: Arc::new(krabka_raft::PlaintextDialer),
                 client_id: "observer-source-offset-test".into(),
                 cluster_id: Uuid::nil(),
-                max_bytes: crabka_units::mebibytes(1),
-                poll_interval: crabka_units::millis(10),
+                max_bytes: krabka_units::mebibytes(1),
+                poll_interval: krabka_units::millis(10),
                 sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
             },
         );
@@ -736,11 +736,11 @@ mod tests {
         let submit_requests = Arc::new(AtomicUsize::new(0));
         let submit_requests_for_mock = submit_requests.clone();
         let mock =
-            crabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
                     return Some(api_versions_response_v0());
                 }
-                if api_key == crabka_raft::API_KEY_SUBMIT_CHANGE {
+                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
                     submit_requests_for_mock.fetch_add(1, Ordering::SeqCst);
                     return Some(submit_change_response_body(0, -1));
                 }
@@ -769,11 +769,11 @@ mod tests {
     #[tokio::test]
     async fn quorum_forwarder_error_code_two_maps_to_topic_exists() {
         let mock =
-            crabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
                     return Some(api_versions_response_v0());
                 }
-                if api_key == crabka_raft::API_KEY_SUBMIT_CHANGE {
+                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
                     return Some(submit_change_response_body(2, -1));
                 }
                 None
@@ -788,7 +788,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            RaftError::Metadata(crabka_metadata::MetadataError::TopicExists(_))
+            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
         ));
         mock.stop();
     }
@@ -796,11 +796,11 @@ mod tests {
     #[tokio::test]
     async fn quorum_forwarder_not_leader_response_preserves_positive_hint() {
         let mock =
-            crabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
                     return Some(api_versions_response_v0());
                 }
-                if api_key == crabka_raft::API_KEY_SUBMIT_CHANGE {
+                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
                     return Some(submit_change_response_body(1, 7));
                 }
                 None
@@ -825,11 +825,11 @@ mod tests {
     #[tokio::test]
     async fn quorum_forwarder_negative_leader_hint_is_unknown() {
         let mock =
-            crabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
                     return Some(api_versions_response_v0());
                 }
-                if api_key == crabka_raft::API_KEY_SUBMIT_CHANGE {
+                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
                     return Some(submit_change_response_body(3, -1));
                 }
                 None
@@ -856,7 +856,7 @@ mod tests {
     /// on cancellation rather than on the next publish.
     #[tokio::test]
     async fn watch_image_loop_applies_current_then_each_published_image() {
-        use crabka_metadata::MetadataImage;
+        use krabka_metadata::MetadataImage;
         use tokio_util::sync::CancellationToken;
 
         use super::watch_image_loop;

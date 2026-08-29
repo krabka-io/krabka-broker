@@ -1,20 +1,20 @@
-# crabka-restore
+# krabka-restore
 
 Offline point-in-time restore: rebuilds a complete, bootable krabka log directory from a KIP-405 tiered-storage archive.
 
-Part of [Crabka](https://github.com/robot-head/crabka), a Rust implementation of Apache Kafka.
+Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of Apache Kafka.
 
 ## Overview
 
 `krabka restore` reads a tiered-storage archive from object storage and materializes a krabka data directory, replayed up to a bound and verified as it rehydrates. The bound is an offset, a timestamp, or a set of exclude-record predicates, so an operator can recover an event-sourced system to the state it held just before a bad write. Recovery of that kind is a hand-built runbook everywhere else.
 
-The tool runs when the cluster does not. It reads the archive through [`crabka-object-store`](../object-store), decodes the archive keys with [`crabka-remote-storage`](../remote-storage), and formats the target through [`crabka-format`](../format). It does not depend on the broker.
+The tool runs when the cluster does not. It reads the archive through [`krabka-object-store`](../object-store), decodes the archive keys with [`krabka-remote-storage`](../remote-storage), and formats the target through [`krabka-format`](../format). It does not depend on the broker.
 
 ## The binary is `krabka-restore`
 
-The `krabka` operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. The binary therefore carries the name `krabka-restore`, and not the `crabka-` prefix that the rest of the workspace uses. Put the binary on `PATH` and `krabka restore` works.
+The `krabka` operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. The binary therefore carries the name `krabka-restore`, and not the `krabka-` prefix that the rest of the workspace uses. Put the binary on `PATH` and `krabka restore` works.
 
-The crate is a library as well as a binary. A tool that embeds the restore calls `crabka_restore::restore`, which returns the structured report and the structured error. Only the binary maps an error onto an exit code.
+The crate is a library as well as a binary. A tool that embeds the restore calls `krabka_restore::restore`, which returns the structured report and the structured error. Only the binary maps an error onto an exit code.
 
 ## Usage
 

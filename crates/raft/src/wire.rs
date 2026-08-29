@@ -1,7 +1,7 @@
-//! Crabka-private controller RPCs over Kafka TCP framing.
+//! Krabka-private controller RPCs over Kafka TCP framing.
 //!
-//! These bodies are NOT part of `crabka-protocol`'s codegen. They are
-//! controller-only and Crabka-specific, with hand-written `encode_v0` and
+//! These bodies are NOT part of `krabka-protocol`'s codegen. They are
+//! controller-only and Krabka-specific, with hand-written `encode_v0` and
 //! `decode_v0` methods. The KIP-595 quorum RPCs (Fetch, Vote, Begin, End) ride
 //! the generated codecs instead. See [`crate::kraft::transport::wire`]. The two
 //! types here back the observer metadata-fetch and the follower-to-leader
@@ -10,7 +10,7 @@
 //! Api keys: `1003` `SubmitChange` (forward), `1004` `MetadataFetch` (observer).
 
 use bytes::{Buf, BufMut, Bytes};
-use crabka_protocol::ProtocolError;
+use krabka_protocol::ProtocolError;
 
 const I32_LEN: usize = 4;
 const SUBMIT_CHANGE_RESPONSE_FIXED_LEN: usize = 10;
@@ -68,11 +68,11 @@ fn get_i32_len_prefixed_bytes(
 /// apply. The controller layer owns the serde details, so the wire module stays
 /// metadata-agnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrabkaSubmitChangeRequest {
+pub struct KrabkaSubmitChangeRequest {
     pub records: Bytes,
 }
 
-impl CrabkaSubmitChangeRequest {
+impl KrabkaSubmitChangeRequest {
     /// # Errors
     /// Returns an error if the record payload is too large for the wire format.
     pub fn encode_v0(&self, out: &mut Vec<u8>) -> Result<(), ProtocolError> {
@@ -88,7 +88,7 @@ impl CrabkaSubmitChangeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrabkaSubmitChangeResponse {
+pub struct KrabkaSubmitChangeResponse {
     /// 0 means success. Any other value is an opaque transport-level error
     /// code: 1 is not leader, 2 is metadata validation, and 3 is other.
     pub error_code: i16,
@@ -99,7 +99,7 @@ pub struct CrabkaSubmitChangeResponse {
     pub result: Bytes,
 }
 
-impl CrabkaSubmitChangeResponse {
+impl KrabkaSubmitChangeResponse {
     /// Encodes this response with wire version zero.
     ///
     /// # Errors
@@ -126,14 +126,14 @@ impl CrabkaSubmitChangeResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrabkaMetadataFetchRequest {
+pub struct KrabkaMetadataFetchRequest {
     /// Next `KraftLog` offset the observer wants.
     pub fetch_offset: i64,
     /// Soft cap on the encoded record-batch payload.
     pub max_bytes: i32,
 }
 
-impl CrabkaMetadataFetchRequest {
+impl KrabkaMetadataFetchRequest {
     pub fn encode_v0(&self, out: &mut Vec<u8>) {
         out.put_i64(self.fetch_offset);
         out.put_i32(self.max_bytes);
@@ -151,7 +151,7 @@ impl CrabkaMetadataFetchRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrabkaMetadataFetchResponse {
+pub struct KrabkaMetadataFetchResponse {
     /// 0 means success. 1 means this node cannot serve, so read
     /// `leader_hint`.
     pub error_code: i16,
@@ -165,7 +165,7 @@ pub struct CrabkaMetadataFetchResponse {
     pub records: Bytes,
 }
 
-impl CrabkaMetadataFetchResponse {
+impl KrabkaMetadataFetchResponse {
     /// # Errors
     /// Returns an error if the record payload is too large for the wire format.
     pub fn encode_v0(&self, out: &mut Vec<u8>) -> Result<(), ProtocolError> {
@@ -216,15 +216,15 @@ mod tests {
 
     #[test]
     fn submit_change_round_trips() {
-        let req = CrabkaSubmitChangeRequest {
+        let req = KrabkaSubmitChangeRequest {
             records: Bytes::from_static(b"\x01\x02\x03"),
         };
         let mut out = Vec::new();
         req.encode_v0(&mut out).unwrap();
         let mut cur: &[u8] = &out;
-        assert2::assert!(CrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap() == req);
+        assert2::assert!(KrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap() == req);
 
-        let resp = CrabkaSubmitChangeResponse {
+        let resp = KrabkaSubmitChangeResponse {
             error_code: 1,
             leader_hint: 3,
             result: Bytes::from_static(b"result"),
@@ -232,44 +232,44 @@ mod tests {
         let mut out = Vec::new();
         resp.encode_v0(&mut out).unwrap();
         let mut cur: &[u8] = &out;
-        assert2::assert!(CrabkaSubmitChangeResponse::decode_v0(&mut cur).unwrap() == resp);
+        assert2::assert!(KrabkaSubmitChangeResponse::decode_v0(&mut cur).unwrap() == resp);
     }
 
     #[test]
     fn submit_change_request_decode_checks_prefix_and_payload_lengths() {
         let mut short_prefix: &[u8] = &[0, 0, 0];
-        assert_unexpected_eof(CrabkaSubmitChangeRequest::decode_v0(&mut short_prefix), 1);
+        assert_unexpected_eof(KrabkaSubmitChangeRequest::decode_v0(&mut short_prefix), 1);
 
         let mut negative_len: &[u8] = &(-1_i32).to_be_bytes();
-        assert_invalid_value(CrabkaSubmitChangeRequest::decode_v0(&mut negative_len));
+        assert_invalid_value(KrabkaSubmitChangeRequest::decode_v0(&mut negative_len));
 
         let mut exact_empty: &[u8] = &[0, 0, 0, 0];
-        let decoded = CrabkaSubmitChangeRequest::decode_v0(&mut exact_empty).unwrap();
+        let decoded = KrabkaSubmitChangeRequest::decode_v0(&mut exact_empty).unwrap();
         assert2::assert!(decoded.records.is_empty());
         assert2::assert!(exact_empty.is_empty());
 
         let mut short_payload: &[u8] = &[0, 0, 0, 4, 0xaa];
-        assert_unexpected_eof(CrabkaSubmitChangeRequest::decode_v0(&mut short_payload), 3);
+        assert_unexpected_eof(KrabkaSubmitChangeRequest::decode_v0(&mut short_payload), 3);
     }
 
     #[test]
     fn submit_change_response_decode_checks_fixed_length() {
         let mut short: &[u8] = &[0, 1, 2];
-        assert_unexpected_eof(CrabkaSubmitChangeResponse::decode_v0(&mut short), 7);
+        assert_unexpected_eof(KrabkaSubmitChangeResponse::decode_v0(&mut short), 7);
     }
 
     #[test]
     fn metadata_fetch_round_trips() {
-        let req = CrabkaMetadataFetchRequest {
+        let req = KrabkaMetadataFetchRequest {
             fetch_offset: 42,
             max_bytes: 1_048_576,
         };
         let mut out = Vec::new();
         req.encode_v0(&mut out);
         let mut cur: &[u8] = &out;
-        assert2::assert!(CrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap() == req);
+        assert2::assert!(KrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap() == req);
 
-        let resp = CrabkaMetadataFetchResponse {
+        let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 3,
             log_start_offset: 1,
@@ -279,25 +279,25 @@ mod tests {
         let mut out = Vec::new();
         resp.encode_v0(&mut out).unwrap();
         let mut cur: &[u8] = &out;
-        assert2::assert!(CrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap() == resp);
+        assert2::assert!(KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap() == resp);
     }
 
     #[test]
     fn metadata_fetch_request_decode_checks_fixed_length() {
         let mut short: &[u8] = &[0, 1, 2, 3, 4];
-        assert_unexpected_eof(CrabkaMetadataFetchRequest::decode_v0(&mut short), 7);
+        assert_unexpected_eof(KrabkaMetadataFetchRequest::decode_v0(&mut short), 7);
 
         let mut exact = Vec::new();
-        CrabkaMetadataFetchRequest {
+        KrabkaMetadataFetchRequest {
             fetch_offset: 9,
             max_bytes: 512,
         }
         .encode_v0(&mut exact);
         let mut cur: &[u8] = &exact;
-        let decoded = CrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap();
+        let decoded = KrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap();
         assert2::assert!(
             decoded
-                == CrabkaMetadataFetchRequest {
+                == KrabkaMetadataFetchRequest {
                     fetch_offset: 9,
                     max_bytes: 512,
                 }
@@ -308,9 +308,9 @@ mod tests {
     #[test]
     fn metadata_fetch_response_decode_checks_fixed_and_payload_lengths() {
         let mut short_fixed: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
-        assert_unexpected_eof(CrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 21);
+        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut short_fixed), 21);
 
-        let resp = CrabkaMetadataFetchResponse {
+        let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: -1,
             log_start_offset: 4,
@@ -320,7 +320,7 @@ mod tests {
         let mut exact = Vec::new();
         resp.encode_v0(&mut exact).unwrap();
         let mut cur: &[u8] = &exact;
-        assert2::assert!(CrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap() == resp);
+        assert2::assert!(KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap() == resp);
         assert2::assert!(cur.is_empty());
 
         let mut short_payload = Vec::new();
@@ -331,6 +331,6 @@ mod tests {
         short_payload.extend_from_slice(&4_i32.to_be_bytes());
         short_payload.push(0xaa);
         let mut cur: &[u8] = &short_payload;
-        assert_unexpected_eof(CrabkaMetadataFetchResponse::decode_v0(&mut cur), 3);
+        assert_unexpected_eof(KrabkaMetadataFetchResponse::decode_v0(&mut cur), 3);
     }
 }

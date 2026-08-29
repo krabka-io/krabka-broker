@@ -1,6 +1,6 @@
 //! Errors returned by `Log` and `Segment`.
 
-use crabka_ids::Offset;
+use krabka_ids::Offset;
 use thiserror::Error;
 
 /// Errors returned by [`Log`](crate::Log) and [`Segment`](crate::Segment).
@@ -47,7 +47,7 @@ pub enum LogError {
 
     /// The encode or decode of a `RecordBatch` failed.
     #[error("records: {0}")]
-    Records(#[from] crabka_protocol::records::RecordsError),
+    Records(#[from] krabka_protocol::records::RecordsError),
 
     /// A segment filename would not parse. For example, it has the wrong
     /// length, or it is not all digits.

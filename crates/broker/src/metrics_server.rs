@@ -20,12 +20,12 @@ use crate::metrics::SharedRegistry;
 /// heap route needs a build with `--features heap-profiling`.
 pub fn router(
     registry: SharedRegistry,
-    profiling: crabka_telemetry::profiling::ProfilingConfig,
-) -> Result<Router, crabka_telemetry::profiling::ProfilingError> {
+    profiling: krabka_telemetry::profiling::ProfilingConfig,
+) -> Result<Router, krabka_telemetry::profiling::ProfilingError> {
     Ok(Router::new()
         .route("/metrics", get(metrics))
         .with_state(registry)
-        .merge(crabka_telemetry::profiling::pprof_router_with_config(
+        .merge(krabka_telemetry::profiling::pprof_router_with_config(
             profiling,
         )?))
 }
@@ -37,9 +37,9 @@ pub fn router(
 pub(crate) async fn run(
     addr: SocketAddr,
     registry: SharedRegistry,
-    profiling: crabka_telemetry::profiling::ProfilingConfig,
+    profiling: krabka_telemetry::profiling::ProfilingConfig,
     shutdown: CancellationToken,
-) -> Result<SocketAddr, crabka_telemetry::profiling::ProfilingError> {
+) -> Result<SocketAddr, krabka_telemetry::profiling::ProfilingError> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, "metrics server listening");
@@ -87,7 +87,7 @@ mod tests {
         m.record_produce("t", 42);
         let app = router(
             m.registry,
-            crabka_telemetry::profiling::ProfilingConfig::default(),
+            krabka_telemetry::profiling::ProfilingConfig::default(),
         )
         .unwrap();
         let resp = app
@@ -111,7 +111,7 @@ mod tests {
             .await
             .unwrap();
         let s = std::str::from_utf8(&body).unwrap();
-        for needle in ["crabka_broker_topic_bytes_in_total", "42", "# EOF"] {
+        for needle in ["krabka_broker_topic_bytes_in_total", "42", "# EOF"] {
             assert!(s.contains(needle), "missing {needle:?} in {s}");
         }
     }
@@ -119,9 +119,9 @@ mod tests {
     #[test]
     fn router_rejects_invalid_profiling_policy() {
         let m = BrokerMetrics::new();
-        let profiling = crabka_telemetry::profiling::ProfilingConfig {
-            profiling_cpu_default_duration: crabka_units::secs(61),
-            ..crabka_telemetry::profiling::ProfilingConfig::default()
+        let profiling = krabka_telemetry::profiling::ProfilingConfig {
+            profiling_cpu_default_duration: krabka_units::secs(61),
+            ..krabka_telemetry::profiling::ProfilingConfig::default()
         };
         assert!(router(m.registry, profiling).is_err());
     }

@@ -39,8 +39,8 @@ use std::{
     sync::Arc,
 };
 
-use crabka_object_store::{ObjectStoreError, read_capped};
 use futures_util::TryStreamExt as _;
+use krabka_object_store::{ObjectStoreError, read_capped};
 use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
@@ -129,7 +129,7 @@ pub struct VerifyRequest {
     /// partition left to check is the one case this cannot report, because the
     /// report has no partition to carry the break: check
     /// [`ArchiveVerifyReport::partitions`] for emptiness as well. The
-    /// `crabka-worm-verify` binary leaves this `None` and compares the tips
+    /// `krabka-worm-verify` binary leaves this `None` and compares the tips
     /// itself, because it grades a tip mismatch as its own outcome and not as
     /// tampering, and because it must also catch the emptied archive.
     pub expect_head: Option<ChainHead>,
@@ -845,9 +845,9 @@ mod tests {
 
     use assert2::check;
     use bytes::Bytes;
-    use crabka_audit::signing::FileEd25519Signer;
-    use crabka_ids::LeaderEpoch;
-    use crabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest};
+    use krabka_audit::signing::FileEd25519Signer;
+    use krabka_ids::LeaderEpoch;
+    use krabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest};
     use object_store::{ObjectStoreExt as _, memory::InMemory};
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
     use uuid::Uuid;

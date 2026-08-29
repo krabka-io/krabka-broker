@@ -71,7 +71,7 @@ The key is controller-managed and read-only. `AlterConfigs` and `IncrementalAlte
 
 `BrokerConfig::validate` rejects an incoherent topology at startup. It checks the site count, the site names, the role of the node against its rack, and the durability arithmetic. It never rewrites an operator value to make the profile fit. A silent change to `min.insync.replicas` would defeat the guarantee the operator asked for.
 
-The durability check calls `crabka_verified::stretch::min_insync_is_site_loss_safe`. That function is formally verified. The broker calls it and does not restate the arithmetic.
+The durability check calls `krabka_verified::stretch::min_insync_is_site_loss_safe`. That function is formally verified. The broker calls it and does not restate the arithmetic.
 
 One consequence reaches every operator who adopts the profile. The safe range has a lower bound and an upper bound, and both are stated against the replicas that one site holds. The lower bound is that `min.insync.replicas` must be more than the replicas any single site holds. The upper bound is `site_loss_survivors(rf, sites)`, which is what a site loss leaves. Three replicas over three sites put one replica in each site, so the bounds become `> 1` and `<= 2`. They meet, and 2 is the only safe value. The broker default is 1, and the profile rejects it at startup. An operator who sets `[stretch]` must also set `min.insync.replicas` to 2.
 
@@ -107,7 +107,7 @@ Krabka diverges from Kafka in one place, and the divergence is the feature. Kafk
 
 Three layers cover the feature.
 
-**Formal proof.** `crates/verified/src/stretch.rs` carries Creusot contracts for the arithmetic that the durability claim rests on. `quorum_survives_any_single_site_loss` states the central property: the voters that remain after the loss of any one site still form a strict majority. A two-site cluster fails that check for every split, which is the formal reason the third site needs a vote. Proof sessions live under `verif/crabka_verified_rlib/stretch/`.
+**Formal proof.** `crates/verified/src/stretch.rs` carries Creusot contracts for the arithmetic that the durability claim rests on. `quorum_survives_any_single_site_loss` states the central property: the voters that remain after the loss of any one site still form a strict majority. A two-site cluster fails that check for every split, which is the formal reason the third site needs a vote. Proof sessions live under `verif/krabka_verified_rlib/stretch/`.
 
 **Model check.** `crates/broker/src/stretch_cluster_model.rs` runs an exhaustive stateright search over site failures, site partitions, elections, and writes. It drives the real `failover_one` and the real placement function, and not a copy. A deliberately broken election function proves that the no-witness-leader property fires.
 

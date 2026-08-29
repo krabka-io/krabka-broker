@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use crabka_protocol::{
+use futures_util::future::BoxFuture;
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         delete_share_group_state_request::DeleteShareGroupStateRequest,
@@ -15,7 +16,6 @@ use crabka_protocol::{
         },
     },
 };
-use futures_util::future::BoxFuture;
 
 use crate::{
     broker::Broker, codes, error::BrokerError, share_coordinator::coordinator::ShareCoordinator,
@@ -83,7 +83,7 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_protocol::{
+    use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
             delete_share_group_state_request::{DeleteStateData, PartitionData},

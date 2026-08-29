@@ -6,7 +6,7 @@
 //! of replica catch-up, broker liveness, and completion ticks, and it asserts
 //! the reassignment-safety invariants. The most important one is that the
 //! replica set never switches off the leader. Design:
-//! `docs/superpowers/specs/2026-06-13-crabka-reassignment-model-design.md`.
+//! `docs/superpowers/specs/2026-06-13-krabka-reassignment-model-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! each run is fenced with `within_boundary`, `target_state_count`, and
@@ -18,8 +18,8 @@ use std::{
     time::Duration,
 };
 
-use crabka_metadata::PartitionRecord;
-use crabka_raft::NodeId;
+use krabka_metadata::PartitionRecord;
+use krabka_raft::NodeId;
 use stateright::{Checker, Model, Property};
 
 use super::reassign_one;
@@ -61,14 +61,14 @@ impl ReassignModel {
     fn basic() -> Self {
         Self {
             replicas: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
-            adding: vec![crabka_audit::NodeId(3)],
-            removing: vec![crabka_audit::NodeId(2)],
-            initial_isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader: crabka_audit::NodeId(1), // not removed → no handoff
+            adding: vec![krabka_audit::NodeId(3)],
+            removing: vec![krabka_audit::NodeId(2)],
+            initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader: krabka_audit::NodeId(1), // not removed → no handoff
             max_epoch: 10,
         }
     }
@@ -76,14 +76,14 @@ impl ReassignModel {
     fn leader_handoff() -> Self {
         Self {
             replicas: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
-            adding: vec![crabka_audit::NodeId(3)],
-            removing: vec![crabka_audit::NodeId(2)],
-            initial_isr: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
-            leader: crabka_audit::NodeId(2), // in `removing` → handoff required before completion
+            adding: vec![krabka_audit::NodeId(3)],
+            removing: vec![krabka_audit::NodeId(2)],
+            initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader: krabka_audit::NodeId(2), // in `removing` → handoff required before completion
             max_epoch: 10,
         }
     }
@@ -91,20 +91,20 @@ impl ReassignModel {
     fn wide() -> Self {
         Self {
             replicas: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
-                crabka_audit::NodeId(4),
-                crabka_audit::NodeId(5),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
+                krabka_audit::NodeId(4),
+                krabka_audit::NodeId(5),
             ],
-            adding: vec![crabka_audit::NodeId(4), crabka_audit::NodeId(5)],
-            removing: vec![crabka_audit::NodeId(1), crabka_audit::NodeId(2)],
+            adding: vec![krabka_audit::NodeId(4), krabka_audit::NodeId(5)],
+            removing: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             initial_isr: vec![
-                crabka_audit::NodeId(1),
-                crabka_audit::NodeId(2),
-                crabka_audit::NodeId(3),
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
             ],
-            leader: crabka_audit::NodeId(1), // in `removing` → handoff required
+            leader: krabka_audit::NodeId(1), // in `removing` → handoff required
             max_epoch: 10,
         }
     }
@@ -133,7 +133,7 @@ fn pr_of(s: &ReassignState) -> PartitionRecord {
         leader: s.leader,
         replicas: s.replicas.clone(),
         isr: s.isr.clone(),
-        leader_epoch: crabka_metadata::LeaderEpoch(s.leader_epoch),
+        leader_epoch: krabka_metadata::LeaderEpoch(s.leader_epoch),
         adding_replicas: s.adding.clone(),
         removing_replicas: s.removing.clone(),
         directories: vec![],

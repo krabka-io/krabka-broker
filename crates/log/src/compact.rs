@@ -20,18 +20,18 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use crabka_ids::{Offset, ProducerId};
-use crabka_protocol::records::RecordBatch;
-use crabka_units::prelude::{ByteSize, Time, TimeExt};
+use krabka_ids::{Offset, ProducerId};
+use krabka_protocol::records::RecordBatch;
+use krabka_units::prelude::{ByteSize, Time, TimeExt};
 // ---------------------------------------------------------------------------
 // KIP-534 pure decision cores
 //
-// The retain/horizon core now lives in `crabka-verified`, where its contract
+// The retain/horizon core now lives in `krabka-verified`, where its contract
 // is proven with Creusot. Thin typed wrappers keep log-local `ProducerId`
 // boundaries explicit while `compact_model.rs` and `core_tests` keep driving
 // the exact production path.
 // ---------------------------------------------------------------------------
-pub(crate) use crabka_verified::{RecordMeta, RetainDecision, TxnDataState};
+pub(crate) use krabka_verified::{RecordMeta, RetainDecision, TxnDataState};
 use tracing::instrument;
 
 use crate::{
@@ -57,7 +57,7 @@ pub(crate) struct BatchMeta {
 #[must_use]
 #[cfg(test)]
 pub(crate) const fn compute_horizon(now_ms: i64, delete_retention_ms: i64) -> i64 {
-    crabka_verified::compute_horizon(now_ms, delete_retention_ms)
+    krabka_verified::compute_horizon(now_ms, delete_retention_ms)
 }
 
 /// The single per-record KIP-534 retain decision.
@@ -70,9 +70,9 @@ pub(crate) const fn retain_decision(
     now_ms: i64,
     delete_retention_ms: i64,
 ) -> RetainDecision {
-    crabka_verified::retain_decision(
+    krabka_verified::retain_decision(
         rec,
-        crabka_verified::BatchMeta {
+        krabka_verified::BatchMeta {
             is_control: batch.is_control,
             producer_id: batch.producer_id.0,
             existing_horizon: batch.existing_horizon,
@@ -480,8 +480,8 @@ impl CleanedTransactionMetadata {
 #[cfg(test)]
 mod build_map_tests {
     use bytes::Bytes;
-    use crabka_ids::Offset;
-    use crabka_protocol::records::{Attributes, Record};
+    use krabka_ids::Offset;
+    use krabka_protocol::records::{Attributes, Record};
     use tempfile::tempdir;
 
     use super::*;
@@ -819,7 +819,7 @@ pub fn rewrite_segments(
             existing_horizon: batch.delete_horizon_ms(),
         };
 
-        let mut kept: Vec<crabka_protocol::records::Record> =
+        let mut kept: Vec<krabka_protocol::records::Record> =
             Vec::with_capacity(batch.records.len());
         // Stamp the output batch with a delete horizon if any record's
         // decision asks for it (stamp once per batch).
@@ -952,11 +952,11 @@ pub fn rewrite_segments(
 /// exercise sparse-index density, so they all pass the default value
 /// through.
 #[cfg(test)]
-const INDEX_INTERVAL: ByteSize = crabka_units::kibibytes(4);
+const INDEX_INTERVAL: ByteSize = krabka_units::kibibytes(4);
 
 /// The `delete.retention.ms` the rewrite tests share.
 #[cfg(test)]
-const RETENTION: Time = crabka_units::secs(1);
+const RETENTION: Time = krabka_units::secs(1);
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {
     dir.join(format!(
@@ -970,9 +970,9 @@ fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {
 mod rewrite_tests {
     use std::fs;
 
-    use crabka_ids::Offset;
-    use crabka_protocol::records::{Attributes, Record};
-    use crabka_units::prelude::millis;
+    use krabka_ids::Offset;
+    use krabka_protocol::records::{Attributes, Record};
+    use krabka_units::prelude::millis;
 
     use super::{
         build_map_tests::{control_batch, make_record, write_sealed_batches, write_sealed_segment},
@@ -1123,7 +1123,7 @@ mod rewrite_tests {
             base_offset: 0,
             last_offset_delta: 0,
             producer_id: 1000,
-            attributes: crabka_protocol::records::Attributes::default().with_transactional(true),
+            attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
             records: vec![Record {
                 offset_delta: 0,
                 key: Some(Bytes::copy_from_slice(b"k1")),
@@ -1137,7 +1137,7 @@ mod rewrite_tests {
             base_offset: 2,
             last_offset_delta: 0,
             producer_id: 2000,
-            attributes: crabka_protocol::records::Attributes::default().with_transactional(true),
+            attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
             records: vec![Record {
                 offset_delta: 0,
                 key: Some(Bytes::copy_from_slice(b"k2")),
@@ -1482,8 +1482,8 @@ pub fn atomic_swap(
 #[cfg(test)]
 mod swap_tests {
     use assert2::check;
-    use crabka_ids::Offset;
-    use crabka_units::prelude::secs;
+    use krabka_ids::Offset;
+    use krabka_units::prelude::secs;
 
     use super::{
         build_map_tests::{make_record, write_sealed_segment},
@@ -1818,7 +1818,7 @@ mod retention_fuzz {
             d1 in 0i64..500,
         ) {
             use bytes::{Bytes, BytesMut};
-            use crabka_protocol::records::{Record, RecordBatch};
+            use krabka_protocol::records::{Record, RecordBatch};
 
             let rec = |delta: i64, k: &[u8]| Record {
                 offset_delta: 0,

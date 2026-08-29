@@ -1,15 +1,15 @@
 //! Deliver-at-time visibility: the broker side of KFC-1.
 //!
-//! A topic set to [`DeliveryPolicy::Scheduled`](crabka_log::DeliveryPolicy)
+//! A topic set to [`DeliveryPolicy::Scheduled`](krabka_log::DeliveryPolicy)
 //! treats a record's own timestamp as the time the record becomes visible to a
-//! consumer. [`crabka_log::Log`] owns the rule and derives one offset from it,
+//! consumer. [`krabka_log::Log`] owns the rule and derives one offset from it,
 //! the **delivery watermark**: the first offset that is not visible yet. This
 //! module is what the broker builds on top of that offset.
 //!
 //! # Correctness comes from the pull path, not from the timer
 //!
 //! The fetch handler recomputes the watermark with
-//! [`Log::advance_delivery_watermark`](crabka_log::Log::advance_delivery_watermark)
+//! [`Log::advance_delivery_watermark`](krabka_log::Log::advance_delivery_watermark)
 //! while it already holds the partition's log mutex, and caps the fetch at what
 //! that call returns. A fetch therefore reads a watermark derived from the
 //! clock reading of that same fetch, and it can never serve a batch early or
@@ -79,14 +79,14 @@ pub(crate) mod waker;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use crabka_ids::Offset;
+use krabka_ids::Offset;
 
 pub(crate) use self::{handles::DeliveryHandles, waker::DeliveryWaker};
 
 /// One scheduled partition's delivery state, as a recompute left it.
 ///
 /// [`DeliveryHandles::publish`] builds this from the
-/// [`DeliveryAdvance`](crabka_log::DeliveryAdvance) the log returns, plus the
+/// [`DeliveryAdvance`](krabka_log::DeliveryAdvance) the log returns, plus the
 /// log end offset that the same lock acquisition read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PartitionDelivery {

@@ -7,8 +7,8 @@
 //! byte-rate data throttle, with `max`, into one `throttle_time_ms` and one
 //! channel mute (KIP-219).
 
-use crabka_metadata::MetadataImage;
-use crabka_units::{Time, convert::TimeExt};
+use krabka_metadata::MetadataImage;
+use krabka_units::{Time, convert::TimeExt};
 
 use super::{
     QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota, positive_f64_to_u64,
@@ -61,7 +61,7 @@ pub fn consume_request_quota(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use crabka_units::{millis, secs};
+    use krabka_units::{millis, secs};
 
     use super::*;
     use crate::quota::test_support::image_with_quota as quota_image;

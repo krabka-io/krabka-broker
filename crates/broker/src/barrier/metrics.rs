@@ -4,8 +4,8 @@
 //! it to the process metric registry. A unit test binds [`NoBarrierMetrics`],
 //! so no test needs a live registry.
 
-use crabka_ids::PartitionIndex;
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_ids::PartitionIndex;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::barrier::persistence::CutStatus;
 

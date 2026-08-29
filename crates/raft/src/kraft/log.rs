@@ -1,14 +1,14 @@
 //! `KraftLog`: the replicated metadata log behind the `LogView` seam.
-//! It is a thin facade over `crabka_log::Log` that adds high-watermark
+//! It is a thin facade over `krabka_log::Log` that adds high-watermark
 //! tracking, committed-read filtering for KIP-595 `Fetch`, and divergence
 //! lookup. The controller uses it as the metadata log.
 
 use std::path::{Path, PathBuf};
 
-use crabka_ids::{LeaderEpoch, Offset};
-use crabka_log::{Log, LogConfig, RawRead};
-use crabka_protocol::{Decode as _, records::RecordBatch};
-use crabka_units::prelude::ByteSize;
+use krabka_ids::{LeaderEpoch, Offset};
+use krabka_log::{Log, LogConfig, RawRead};
+use krabka_protocol::{Decode as _, records::RecordBatch};
+use krabka_units::prelude::ByteSize;
 
 use crate::{
     error::RaftError,
@@ -17,7 +17,7 @@ use crate::{
 
 pub struct KraftLog {
     log: Log,
-    /// Highest committed offset. This is consensus state, and crabka-log does
+    /// Highest committed offset. This is consensus state, and krabka-log does
     /// not track it.
     hwm: Offset,
     hwm_path: PathBuf,
@@ -31,11 +31,11 @@ impl KraftLog {
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log directory cannot be created or the
-    /// underlying `crabka_log::Log` fails to open.
+    /// underlying `krabka_log::Log` fails to open.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, RaftError> {
         let hwm_path = dir.as_ref().join(HIGH_WATERMARK_FILE);
         let log_dir = dir.as_ref().join("@metadata-0");
-        std::fs::create_dir_all(&log_dir).map_err(crabka_log::LogError::Io)?;
+        std::fs::create_dir_all(&log_dir).map_err(krabka_log::LogError::Io)?;
         let mut log = Log::open(&log_dir, LogConfig::default())?;
         if let Some(log_start_offset) =
             std::fs::read_to_string(dir.as_ref().join(LOG_START_OFFSET_FILE))
@@ -69,7 +69,7 @@ impl KraftLog {
         self.hwm
     }
 
-    /// Leader path: appends a batch. crabka-log assigns the offset and records
+    /// Leader path: appends a batch. krabka-log assigns the offset and records
     /// the batch's `partition_leader_epoch`. Returns the assigned base offset.
     ///
     /// # Errors
@@ -169,7 +169,7 @@ impl KraftLog {
             self.hwm_path.with_file_name(LOG_START_OFFSET_FILE),
             self.log.log_start_offset().0.to_string(),
         )
-        .map_err(crabka_log::LogError::Io)?;
+        .map_err(krabka_log::LogError::Io)?;
         Ok(())
     }
 
@@ -214,15 +214,15 @@ impl KraftLog {
 }
 
 impl LogView for KraftLog {
-    // `LogView` is defined by the pure `crabka-kraft-core` consensus engine and
-    // speaks raw `i64` offsets; unwrap the `crabka-log` `Offset`s with `.0` at
+    // `LogView` is defined by the pure `krabka-kraft-core` consensus engine and
+    // speaks raw `i64` offsets; unwrap the `krabka-log` `Offset`s with `.0` at
     // this boundary so the core sees the integers it expects.
     fn end_offset(&self) -> i64 {
         self.log.log_end_offset().0
     }
     fn last_epoch(&self) -> Epoch {
-        // The log seam speaks `crabka_ids::LeaderEpoch(i32)`; the core's
-        // consensus `Epoch` is a `u32`. crabka-log epochs are non-negative
+        // The log seam speaks `krabka_ids::LeaderEpoch(i32)`; the core's
+        // consensus `Epoch` is a `u32`. krabka-log epochs are non-negative
         // (0 for an empty log), so unwrap the newtype and convert to `u32`.
         let latest: LeaderEpoch = self
             .log
@@ -250,7 +250,7 @@ impl LogView for KraftLog {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::prelude::mebibytes;
+    use krabka_units::prelude::mebibytes;
 
     use super::*;
 
@@ -266,7 +266,7 @@ mod tests {
 
     // test helper
     fn batch(base: i64, epoch: i32, value: &[u8]) -> RecordBatch {
-        use crabka_protocol::records::{Attributes, Record};
+        use krabka_protocol::records::{Attributes, Record};
         RecordBatch {
             base_offset: base,
             partition_leader_epoch: epoch,

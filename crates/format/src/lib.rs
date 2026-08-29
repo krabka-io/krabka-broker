@@ -10,10 +10,10 @@
 //! tiered-storage archives hands over the topic and partition records it
 //! recovered that way, and the broker then boots with those topics present.
 //!
-//! This is the `crabka format` command from the monorepo's `crabka-cli`. That
+//! This is the `krabka format` command from the monorepo's `krabka-cli`. That
 //! crate also drives the gres layer, which is why it could not follow the broker
-//! into this repository; the command itself needs only [`crabka_metadata`] and
-//! [`crabka_security`]. It is a library as well as a binary so `crabka-cli` can
+//! into this repository; the command itself needs only [`krabka_metadata`] and
+//! [`krabka_security`]. It is a library as well as a binary so `krabka-cli` can
 //! call it rather than carry a second copy.
 
 use clap::Parser;
@@ -21,12 +21,12 @@ use clap::Parser;
 mod format;
 mod ids;
 
-/// The seed record type [`run_with_records`] accepts, re-exported so a caller
-/// building a bootstrap stream does not have to name [`crabka_metadata`]
-/// itself.
-pub use crabka_metadata::MetadataRecord;
 pub use format::{FormatArgs, ScramSpec, run, run_with_records};
 pub use ids::{ClusterId, DirectoryId};
+/// The seed record type [`run_with_records`] accepts, re-exported so a caller
+/// building a bootstrap stream does not have to name [`krabka_metadata`]
+/// itself.
+pub use krabka_metadata::MetadataRecord;
 
 /// The formatter's command line.
 ///
@@ -34,7 +34,7 @@ pub use ids::{ClusterId, DirectoryId};
 /// same flags.
 #[derive(Parser)]
 #[command(
-    name = "crabka-format",
+    name = "krabka-format",
     version,
     about = "Format a fresh log directory, with optional seed SCRAM credentials"
 )]

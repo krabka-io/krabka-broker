@@ -1,5 +1,5 @@
 [package]
-name = "crabka-barrier"
+name = "krabka-barrier"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -11,24 +11,24 @@ description = "Administers krabka barrier groups: define a group, trigger a cut,
 [lints]
 workspace = true
 
-# A library as well as a binary, for the same reason `crabka-format` is one: a
+# A library as well as a binary, for the same reason `krabka-format` is one: a
 # test that spawns the binary needs a Cargo working tree to build it from, and a
 # Bazel test sandbox has none. Tests call `run_from_args` in process instead.
 [lib]
-name = "crabka_barrier"
+name = "krabka_barrier"
 path = "src/lib.rs"
 
 [[bin]]
-name = "crabka-barrier"
+name = "krabka-barrier"
 path = "src/main.rs"
 
 [dependencies]
 # `parse_barrier_marker` reads a marker back out of a fetched batch. The decoder
 # lives with the injector so the two cannot drift.
-crabka-broker = { version = "0.4.0", path = "../broker" }
-crabka-client-core = { version = "0.4.0" }
-crabka-protocol = { version = "0.4.0" }
-crabka-units = { workspace = true }
+krabka-broker = { version = "0.4.0", path = "../broker" }
+krabka-client-core = { version = "0.4.0" }
+krabka-protocol = { version = "0.4.0" }
+krabka-units = { workspace = true }
 
 clap = { workspace = true, features = ["env"] }
 bytes = { workspace = true }
@@ -38,8 +38,8 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
-crabka-client-admin = { version = "0.4.0" }
+krabka-client-admin = { version = "0.4.0" }
 # BrokerConfig::for_tests lives behind the broker's own test-helpers feature
 # now that the facade crate is gone.
-crabka-broker = { version = "0.4.0", path = "../broker", features = ["test-helpers"] }
+krabka-broker = { version = "0.4.0", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }

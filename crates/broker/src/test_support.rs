@@ -12,8 +12,8 @@
 use std::net::SocketAddr;
 
 use bytes::{Bytes, BytesMut};
-use crabka_protocol::{Decode, Encode};
-use crabka_security::{AuthMethod, Principal};
+use krabka_protocol::{Decode, Encode};
+use krabka_security::{AuthMethod, Principal};
 
 use crate::{
     broker::{Broker, BrokerHandle},
@@ -29,7 +29,7 @@ pub(crate) struct DenyAll;
 impl crate::authorizer::Authorizer for DenyAll {
     fn authorize(
         &self,
-        _source: &dyn crabka_authz::AclSource,
+        _source: &dyn krabka_authz::AclSource,
         _req: &crate::authorizer::AuthorizationRequest<'_>,
     ) -> crate::authorizer::AuthorizationResult {
         crate::authorizer::AuthorizationResult::Deny
@@ -159,7 +159,7 @@ macro_rules! wire_helpers {
         }
 
         fn test_context<'a>(
-            principal: &'a crabka_security::Principal,
+            principal: &'a krabka_security::Principal,
             peer: &'a ::std::net::SocketAddr,
         ) -> crate::handlers::RequestContext<'a> {
             crate::test_support::request_context(principal, peer, $client_id)
@@ -175,7 +175,7 @@ macro_rules! wire_helpers {
         }
 
         fn test_context<'a>(
-            principal: &'a crabka_security::Principal,
+            principal: &'a krabka_security::Principal,
             peer: &'a ::std::net::SocketAddr,
         ) -> crate::handlers::RequestContext<'a> {
             crate::test_support::request_context(principal, peer, $client_id)
@@ -194,7 +194,7 @@ macro_rules! response_helpers {
         }
 
         fn test_context<'a>(
-            principal: &'a crabka_security::Principal,
+            principal: &'a krabka_security::Principal,
             peer: &'a ::std::net::SocketAddr,
         ) -> crate::handlers::RequestContext<'a> {
             crate::test_support::request_context(principal, peer, $client_id)
@@ -206,7 +206,7 @@ macro_rules! response_helpers {
         }
 
         fn test_context<'a>(
-            principal: &'a crabka_security::Principal,
+            principal: &'a krabka_security::Principal,
             peer: &'a ::std::net::SocketAddr,
         ) -> crate::handlers::RequestContext<'a> {
             crate::test_support::request_context(principal, peer, $client_id)

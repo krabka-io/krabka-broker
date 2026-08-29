@@ -1,14 +1,14 @@
-//! Shared proptest strategies for `crabka-log` integration tests.
+//! Shared proptest strategies for `krabka-log` integration tests.
 
 use bytes::Bytes;
-use crabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::{Record, RecordBatch};
 use proptest::prelude::*;
 
 /// Arbitrary [`RecordBatch`] with the given record-count range and bounded key
 /// and value sizes.
 ///
 /// Each record gets a sequential `offset_delta`, so the batch is internally
-/// consistent. The batch's `base_offset` stays at `0`, because [`crabka_log::Log::append`]
+/// consistent. The batch's `base_offset` stays at `0`, because [`krabka_log::Log::append`]
 /// overwrites it with the next assigned offset.
 pub fn arb_batch(records_min: usize, records_max: usize) -> impl Strategy<Value = RecordBatch> {
     (

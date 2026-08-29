@@ -36,13 +36,13 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::{
+use krabka_broker::{
     BrokerConfig, BrokerHandle, NodeId, codes,
     config::{NodeRole, StretchProfile},
     replica_selector::ReplicaSelectorKind,
 };
-use crabka_client_core::Client;
-use crabka_protocol::{
+use krabka_client_core::Client;
+use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},

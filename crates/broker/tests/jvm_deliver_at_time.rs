@@ -33,7 +33,7 @@
 //! JVM tools run in a container. [`jvm_acceptance`] documents that networking.
 //!
 //! ```text
-//! cargo test -p crabka-broker --test jvm_deliver_at_time -- --ignored --nocapture
+//! cargo test -p krabka-broker --test jvm_deliver_at_time -- --ignored --nocapture
 //! ```
 
 mod jvm_acceptance;
@@ -45,13 +45,13 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::BrokerHandle;
-use crabka_log::DeliveryPolicy;
-use crabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-};
 use jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image, start_host_broker,
+};
+use krabka_broker::BrokerHandle;
+use krabka_log::DeliveryPolicy;
+use krabka_protocol::owned::create_topics_request::{
+    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
 };
 
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
@@ -172,7 +172,7 @@ public final class DeliverAtTimeProbe {
 // configuring the topic is an operator action, and the KFC records the tool
 // limitation under Compatibility.
 async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
         .await
@@ -256,7 +256,7 @@ fn run_probe(bootstrap: &str) -> String {
     let out = probe.wait_with_output().expect("wait for the Java probe");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     eprintln!(
-        "CRABKA[test] deliver-at-time probe status={} stdout={stdout} stderr={}",
+        "KRABKA[test] deliver-at-time probe status={} stdout={stdout} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr),
     );

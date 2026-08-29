@@ -16,10 +16,10 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use crabka_compression::RecordDecompressionPolicy;
-use crabka_log::{Log, Offset, VerbatimBatch};
-use crabka_metadata::{AclOperation, ResourceType};
-use crabka_protocol::{
+use krabka_compression::RecordDecompressionPolicy;
+use krabka_log::{Log, Offset, VerbatimBatch};
+use krabka_metadata::{AclOperation, ResourceType};
+use krabka_protocol::{
     Decode, Encode,
     owned::{
         produce_request::ProduceRequest,
@@ -34,8 +34,8 @@ use crabka_protocol::{
         ValidatedBatch, count_records_in_v2_batches, produce_framing, validate_one_v2_batch,
     },
 };
-use crabka_schema_serde::subject::Role;
-use crabka_units::{Time, convert::TimeExt};
+use krabka_schema_serde::subject::Role;
+use krabka_units::{Time, convert::TimeExt};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -74,7 +74,7 @@ const NO_LEADER_ID: i32 = -1;
 /// values, so any string here that does not parse means a corrupt metadata
 /// image.
 fn topic_min_insync_replicas(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
     default_min_insync_replicas: i32,
 ) -> i32 {
@@ -329,7 +329,7 @@ fn decode_produce_request(
     }
     let mut cursor = request_bytes;
     let owned: ProduceRequest =
-        crabka_protocol::kafka_3_6_2::owned::produce_request::ProduceRequest::decode(
+        krabka_protocol::kafka_3_6_2::owned::produce_request::ProduceRequest::decode(
             &mut cursor,
             version,
         )?
@@ -354,7 +354,7 @@ struct ProduceAuthorization {
 
 fn authorize_produce(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     request: &ProduceFramed,
 ) -> ProduceAuthorization {
@@ -407,7 +407,7 @@ fn authorize_produce(
 
 async fn finish_produce_response(
     broker: &Broker,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     handler_start: std::time::Instant,
     bytes_by_qos: &std::collections::BTreeMap<String, u64>,
@@ -454,7 +454,7 @@ async fn finish_produce_response(
     }
     let mut encoded = BytesMut::new();
     if (0..3).contains(&version) {
-        let legacy: crabka_protocol::kafka_3_6_2::owned::produce_response::ProduceResponse =
+        let legacy: krabka_protocol::kafka_3_6_2::owned::produce_response::ProduceResponse =
             response.into();
         encoded.reserve(legacy.encoded_len(version));
         legacy.encode(&mut encoded, version)?;
@@ -475,7 +475,7 @@ async fn finish_produce_response(
 /// propagate with `?`.
 struct PartitionInput {
     part_data: FramedPartition,
-    topic_compression: Option<crabka_compression::CompressionType>,
+    topic_compression: Option<krabka_compression::CompressionType>,
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
     /// `delivery.mode=immediate`, and skips the delivery gate entirely.
     delivery: Option<DeliveryGate>,
@@ -496,7 +496,7 @@ struct PartitionServices<'a> {
     txn_coordinator: &'a Arc<crate::txn::coordinator::TxnCoordinator>,
     producer_state: &'a Arc<crate::producer_state::ProducerState>,
     log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
-    image: &'a Arc<crabka_metadata::MetadataImage>,
+    image: &'a Arc<krabka_metadata::MetadataImage>,
     broker_policy: BrokerProducePolicy,
     record_decompression_policy: RecordDecompressionPolicy,
     metrics: &'a crate::metrics::BrokerMetrics,
@@ -742,9 +742,9 @@ async fn process_partition(
 
 fn diskless_role_ready(
     partition: &crate::partition::Partition,
-    record: &crabka_metadata::PartitionRecord,
+    record: &krabka_metadata::PartitionRecord,
 ) -> bool {
-    crabka_metadata::NodeId(
+    krabka_metadata::NodeId(
         partition
             .current_leader
             .load(std::sync::atomic::Ordering::Acquire),
@@ -758,7 +758,7 @@ fn diskless_role_ready(
 fn replication_target_matches_image(
     target: &crate::partition::ReplicationTarget,
     topic_id: Option<uuid::Uuid>,
-    record: &crabka_metadata::PartitionRecord,
+    record: &krabka_metadata::PartitionRecord,
 ) -> bool {
     target.topic_id == topic_id
         && target.leader_node_id == record.leader
@@ -767,14 +767,14 @@ fn replication_target_matches_image(
 
 fn replica_state_matches_image(
     state: &crate::replica_state::ReplicaState,
-    record: &crabka_metadata::PartitionRecord,
+    record: &krabka_metadata::PartitionRecord,
 ) -> bool {
-    state.current_leader_epoch == crabka_ids::LeaderEpoch(record.leader_epoch.0)
+    state.current_leader_epoch == krabka_ids::LeaderEpoch(record.leader_epoch.0)
         && state.isr.len() == record.isr.len()
         && record.isr.iter().all(|node| state.isr.contains(node))
 }
 
-fn current_leader_hint(record: &crabka_metadata::PartitionRecord) -> LeaderIdAndEpoch {
+fn current_leader_hint(record: &krabka_metadata::PartitionRecord) -> LeaderIdAndEpoch {
     LeaderIdAndEpoch {
         leader_id: i32::try_from(record.leader.0).unwrap_or(NO_LEADER_ID),
         leader_epoch: record.leader_epoch.0,
@@ -852,7 +852,7 @@ async fn handle_duplicate(
     let decision = producer_state
         .check(
             topic_name,
-            crabka_ids::PartitionIndex(partition_index),
+            krabka_ids::PartitionIndex(partition_index),
             batch.producer_id,
             batch.producer_epoch,
             batch.base_sequence,
@@ -904,7 +904,7 @@ struct PartitionGateError {
 #[derive(Clone, Copy)]
 struct BrokerProducePolicy {
     /// This node's id, compared against the image's partition leader.
-    node_id: crabka_metadata::NodeId,
+    node_id: krabka_metadata::NodeId,
     /// Broker default for `min.insync.replicas`. A topic override wins over
     /// it.
     default_min_insync_replicas: i32,
@@ -918,7 +918,7 @@ fn validate_partition_gate(
     acks: i16,
     partitions: &PartitionRegistry,
     log_dir_status: &crate::log_dir_status::LogDirRegistry,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     broker_policy: BrokerProducePolicy,
 ) -> Result<(Arc<crate::partition::Partition>, i32), PartitionGateError> {
     let BrokerProducePolicy {
@@ -940,7 +940,7 @@ fn validate_partition_gate(
         leader_epoch: record.leader_epoch.0,
         ..Default::default()
     };
-    let Some(partition) = partitions.get(topic_name, crabka_ids::PartitionIndex(partition_index))
+    let Some(partition) = partitions.get(topic_name, krabka_ids::PartitionIndex(partition_index))
     else {
         return Err(PartitionGateError {
             code: codes::NOT_LEADER_OR_FOLLOWER,
@@ -991,14 +991,14 @@ fn validate_partition_gate(
 async fn validate_transactional_produce(
     batch: &PreparedBatch,
     coordinator: &crate::txn::coordinator::TxnCoordinator,
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic_name: &str,
     partition: i32,
 ) -> Result<Option<i16>, BrokerError> {
     if !batch.attributes.is_transactional() || batch.producer_id < 0 {
         return Ok(None);
     }
-    let transactional_id = coordinator.tid_for_pid(crabka_log::ProducerId(batch.producer_id));
+    let transactional_id = coordinator.tid_for_pid(krabka_log::ProducerId(batch.producer_id));
     let Some(entry_mutex) = transactional_id
         .as_ref()
         .and_then(|transactional_id| coordinator.get(transactional_id))
@@ -1014,7 +1014,7 @@ async fn validate_transactional_produce(
     }
     let topic_partition = crate::txn::state::TopicPartition {
         topic: topic_name.to_string(),
-        partition: crabka_ids::PartitionIndex(partition),
+        partition: krabka_ids::PartitionIndex(partition),
     };
     let completed = matches!(
         entry.state,
@@ -1126,7 +1126,7 @@ async fn finalize_ack(
         producer_state
             .commit(
                 key.topic,
-                crabka_ids::PartitionIndex(key.partition),
+                krabka_ids::PartitionIndex(key.partition),
                 (key.pid, key.epoch),
                 (key.base_seq, key.last_offset_delta),
                 // Unwrap the assigned `Offset` into the dedup tracker's `i64`.
@@ -1145,8 +1145,8 @@ async fn finalize_ack(
 fn build_topic_error_response(
     topic: &FramedTopic,
     code: i16,
-) -> crabka_protocol::owned::produce_response::TopicProduceResponse {
-    use crabka_protocol::owned::produce_response::{
+) -> krabka_protocol::owned::produce_response::TopicProduceResponse {
+    use krabka_protocol::owned::produce_response::{
         PartitionProduceResponse, TopicProduceResponse,
     };
     TopicProduceResponse {
@@ -1240,7 +1240,7 @@ struct FramedPartition {
 impl ProduceFramed {
     /// v≥3: build from the header-only `produce_framing` walk. This function
     /// decodes and decompresses no record body.
-    fn from_framing(f: crabka_protocol::records::ProduceFraming) -> Self {
+    fn from_framing(f: krabka_protocol::records::ProduceFraming) -> Self {
         Self {
             transactional_id: f.transactional_id,
             acks: f.acks,
@@ -1299,7 +1299,7 @@ impl ProduceFramed {
 }
 
 fn produce_bytes_by_qos_tier(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topics: &[FramedTopic],
 ) -> std::collections::BTreeMap<String, u64> {
     let mut out = std::collections::BTreeMap::new();
@@ -1326,9 +1326,9 @@ fn produce_bytes_by_qos_tier(
 /// result matches the resolution that the partition writer applies through its
 /// `LogConfig::compression_type`.
 fn resolve_topic_compression(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
-) -> Option<crabka_compression::CompressionType> {
+) -> Option<krabka_compression::CompressionType> {
     image
         .topic_config(topic)
         .and_then(|m| m.get(COMPRESSION_TYPE))
@@ -1423,7 +1423,7 @@ fn schedule_runs_backwards(log: &Mutex<Log>, delivery_ms: i64) -> bool {
 /// [`resolve_delivery_schedule_monotonic`], which fall back to their defaults
 /// on a corrupt value exactly as the other produce-side config reads do.
 fn resolve_delivery_gate(
-    image: &crabka_metadata::MetadataImage,
+    image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<DeliveryGate> {
     let scheduled = image
@@ -1523,7 +1523,7 @@ impl PreparedBatch {
 /// `INVALID_REQUEST` or `INVALID_RECORD`.
 fn prepare_batch(
     payload: PartitionPayload,
-    topic_compression: Option<crabka_compression::CompressionType>,
+    topic_compression: Option<krabka_compression::CompressionType>,
     topic_name: &str,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
@@ -1878,7 +1878,7 @@ fn decode_owned_batch(
         ))]
         RecordsPayload::FileRegions(_) => Err(codes::INVALID_REQUEST),
         RecordsPayload::Legacy(bytes) => {
-            match crabka_records_legacy::legacy_to_v2_with_policy(&bytes, policy) {
+            match krabka_records_legacy::legacy_to_v2_with_policy(&bytes, policy) {
                 Ok(rb) => {
                     if !topic_name.is_empty() {
                         metrics.record_produce_message_conversion(topic_name);
@@ -1924,9 +1924,9 @@ fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> ProduceData
             last_offset_delta: prepared.last_offset_delta,
             max_timestamp: prepared.max_timestamp,
             // Wrap the atomic-loaded raw epoch into the log seam's `LeaderEpoch`.
-            leader_epoch: crabka_log::LeaderEpoch(leader_epoch),
+            leader_epoch: krabka_log::LeaderEpoch(leader_epoch),
             // Wrap the produce path's decode-side `i64` into the log seam's `ProducerId`.
-            producer_id: crabka_log::ProducerId(prepared.producer_id),
+            producer_id: krabka_log::ProducerId(prepared.producer_id),
             producer_epoch: prepared.producer_epoch,
             base_sequence: prepared.base_sequence,
             is_transactional,
@@ -1947,17 +1947,17 @@ mod tests {
 
     use assert2::{assert, check};
     use bytes::{Bytes, BytesMut};
-    use crabka_compression::{CompressionType, RecordDecompressionPolicy};
-    use crabka_ids::Offset;
-    use crabka_metadata::{
+    use krabka_compression::{CompressionType, RecordDecompressionPolicy};
+    use krabka_ids::Offset;
+    use krabka_metadata::{
         BrokerConfigRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord,
         TopicRecord,
     };
-    use crabka_protocol::{
+    use krabka_protocol::{
         owned::produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
-    use crabka_units::{Time, bytes, convert::TimeExt, fraction, millis, secs};
+    use krabka_units::{Time, bytes, convert::TimeExt, fraction, millis, secs};
     use uuid::Uuid;
 
     use super::{
@@ -1984,10 +1984,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: topic.into(),
             partition: 0,
-            leader: crabka_audit::NodeId(*isr.first().unwrap_or(&1)),
-            replicas: isr.iter().copied().map(crabka_audit::NodeId).collect(),
-            isr: isr.iter().copied().map(crabka_audit::NodeId).collect(),
-            leader_epoch: crabka_metadata::LeaderEpoch(0),
+            leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
+            replicas: isr.iter().copied().map(krabka_audit::NodeId).collect(),
+            isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -2013,7 +2013,7 @@ mod tests {
 
         assert!(!replication_target_matches_image(
             &crate::partition::ReplicationTarget {
-                leader_epoch: crabka_metadata::LeaderEpoch(record.leader_epoch.0 + 1),
+                leader_epoch: krabka_metadata::LeaderEpoch(record.leader_epoch.0 + 1),
                 ..current
             },
             Some(Uuid::nil()),
@@ -2041,7 +2041,7 @@ mod tests {
         );
         assert!(replica_state_matches_image(&state, record));
 
-        state.current_leader_epoch = crabka_ids::LeaderEpoch(record.leader_epoch.0 + 1);
+        state.current_leader_epoch = krabka_ids::LeaderEpoch(record.leader_epoch.0 + 1);
         assert!(!replica_state_matches_image(&state, record));
     }
 
@@ -2050,14 +2050,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let image = image_with_topic("orders", &[1]);
         let record = image.partition("orders", 0).expect("partition");
-        let log = crabka_log::Log::open(
+        let log = krabka_log::Log::open(
             crate::log_dir::partition_dir(dir.path(), "orders", 0),
-            crabka_log::LogConfig::default(),
+            krabka_log::LogConfig::default(),
         )
         .unwrap();
         let partition = crate::broker::spawn_partition(
             "orders".into(),
-            crabka_ids::PartitionIndex(0),
+            krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
             crate::log_dir_status::LogDirRegistry::default(),
@@ -2084,23 +2084,23 @@ mod tests {
     /// need a Tokio runtime.
     fn produce_gate(
         image: &MetadataImage,
-        node_id: crabka_audit::NodeId,
+        node_id: krabka_audit::NodeId,
         is_witness: bool,
         diskless: bool,
     ) -> Option<(i16, Option<LeaderIdAndEpoch>)> {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log = crabka_log::Log::open(
+        let log = krabka_log::Log::open(
             crate::log_dir::partition_dir(dir.path(), "orders", 0),
-            crabka_log::LogConfig::default(),
+            krabka_log::LogConfig::default(),
         )
         .expect("open log");
         let partitions = crate::partition_registry::PartitionRegistry::new();
         partitions.insert(
             "orders".into(),
-            crabka_ids::PartitionIndex(0),
+            krabka_ids::PartitionIndex(0),
             crate::broker::spawn_partition(
                 "orders".into(),
-                crabka_ids::PartitionIndex(0),
+                krabka_ids::PartitionIndex(0),
                 dir.path().to_path_buf(),
                 log,
                 crate::log_dir_status::LogDirRegistry::default(),
@@ -2186,7 +2186,7 @@ mod tests {
                 refused.clone(),
             ),
         ] {
-            let got = produce_gate(&image, crabka_audit::NodeId(node_id), is_witness, diskless);
+            let got = produce_gate(&image, krabka_audit::NodeId(node_id), is_witness, diskless);
             assert!(got == want, "{name}: got {got:?}, want {want:?}");
         }
     }
@@ -2197,11 +2197,11 @@ mod tests {
         // and it leads the partition, so the gate must still admit the write.
         let mut image = image_with_topic("orders", &[1, 2]);
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: crabka_audit::NodeId(2),
+            node_id: krabka_audit::NodeId(2),
             config_name: crate::config_keys::BROKER_WITNESS.into(),
             config_value: Some(crate::config_keys::WITNESS_TRUE.into()),
         }));
-        let got = produce_gate(&image, crabka_audit::NodeId(1), false, false);
+        let got = produce_gate(&image, krabka_audit::NodeId(1), false, false);
         assert!(got.is_none(), "got {got:?}");
     }
 
@@ -2226,7 +2226,7 @@ mod tests {
     fn framed_topic(name: &str, payload_lens: &[usize]) -> FramedTopic {
         FramedTopic {
             name: name.into(),
-            topic_id: crabka_protocol::primitives::uuid::Uuid::ZERO,
+            topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
             partition_data: payload_lens
                 .iter()
                 .enumerate()
@@ -2337,10 +2337,10 @@ mod tests {
 
     #[test]
     fn build_topic_error_response_preserves_topic_and_partition_fields() {
-        use crabka_protocol::owned::produce_response::{
+        use krabka_protocol::owned::produce_response::{
             LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse,
         };
-        let topic_id = crabka_protocol::primitives::uuid::Uuid([7; 16]);
+        let topic_id = krabka_protocol::primitives::uuid::Uuid([7; 16]);
         let topic = FramedTopic {
             name: "orders".into(),
             topic_id,
@@ -2369,15 +2369,15 @@ mod tests {
             current_leader: LeaderIdAndEpoch {
                 leader_id: -1,
                 leader_epoch: -1,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         let expected = TopicProduceResponse {
             name: "orders".to_string(),
             topic_id,
             partition_responses: vec![error_partition(0), error_partition(4)],
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -2451,12 +2451,12 @@ mod tests {
     fn scheduled_log(
         dir: &std::path::Path,
         deliveries: &[i64],
-    ) -> std::sync::Mutex<crabka_log::Log> {
-        let mut log = crabka_log::Log::open(
+    ) -> std::sync::Mutex<krabka_log::Log> {
+        let mut log = krabka_log::Log::open(
             dir,
-            crabka_log::LogConfig {
-                delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
-                ..crabka_log::LogConfig::default()
+            krabka_log::LogConfig {
+                delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
+                ..krabka_log::LogConfig::default()
             },
         )
         .expect("open the log");
@@ -2658,7 +2658,7 @@ mod tests {
     // relative to that reading and sit far from either boundary.
     #[tokio::test]
     async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
-        use crabka_protocol::owned::produce_response::PartitionProduceResponse;
+        use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
         let dir = tempfile::tempdir().unwrap();
         let image = Arc::new(image_with_delivery(
@@ -2672,11 +2672,11 @@ mod tests {
         let delivery = resolve_delivery_gate(&image, "sched");
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         ));
         let producer_state = Arc::new(crate::producer_state::ProducerState::new());
         let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
@@ -2684,17 +2684,17 @@ mod tests {
 
         let part_dir = crate::log_dir::partition_dir(dir.path(), "sched", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
-        let log = crabka_log::Log::open(
+        let log = krabka_log::Log::open(
             &part_dir,
-            crabka_log::LogConfig {
-                delivery_policy: crabka_log::DeliveryPolicy::Scheduled,
-                ..crabka_log::LogConfig::default()
+            krabka_log::LogConfig {
+                delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
+                ..krabka_log::LogConfig::default()
             },
         )
         .unwrap();
         let part = crate::broker::spawn_partition(
             "sched".to_string(),
-            crabka_ids::PartitionIndex(0),
+            krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
             log_dir_status.clone(),
@@ -2715,7 +2715,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .append(&mut batch_delivered_at(now_ms + 600_000))
             .expect("seed the partition schedule");
-        partitions.insert("sched".to_string(), crabka_ids::PartitionIndex(0), part);
+        partitions.insert("sched".to_string(), krabka_ids::PartitionIndex(0), part);
 
         // The accepted case appends, so it comes last.
         let accepted_delivery_ms = now_ms + 900_000;
@@ -2776,7 +2776,7 @@ mod tests {
                     log_dir_status: &log_dir_status,
                     image: &image,
                     broker_policy: BrokerProducePolicy {
-                        node_id: crabka_audit::NodeId(1),
+                        node_id: krabka_audit::NodeId(1),
                         default_min_insync_replicas: 1,
                         is_witness: false,
                     },
@@ -2799,7 +2799,7 @@ mod tests {
         want_bytes[0..8].copy_from_slice(&1_i64.to_be_bytes());
         want_bytes[12..16].copy_from_slice(&0_i32.to_be_bytes());
         let part = partitions
-            .get("sched", crabka_ids::PartitionIndex(0))
+            .get("sched", krabka_ids::PartitionIndex(0))
             .expect("the partition is registered");
         let stored = part
             .log
@@ -2863,13 +2863,13 @@ mod tests {
     #[test]
     fn legacy_produce_offsets_are_reassigned_consecutively() {
         let records = vec![
-            crabka_records_legacy::ParsedRecord {
+            krabka_records_legacy::ParsedRecord {
                 offset: Offset(10),
                 timestamp: Some(100),
                 key: None,
                 value: Some(Bytes::from_static(b"a")),
             },
-            crabka_records_legacy::ParsedRecord {
+            krabka_records_legacy::ParsedRecord {
                 offset: Offset(20),
                 timestamp: Some(200),
                 key: None,
@@ -2877,9 +2877,9 @@ mod tests {
             },
         ];
         let mut legacy = BytesMut::new();
-        crabka_records_legacy::encode_flat_message_set(
+        krabka_records_legacy::encode_flat_message_set(
             records,
-            crabka_records_legacy::Magic::V1,
+            krabka_records_legacy::Magic::V1,
             &mut legacy,
         );
 
@@ -2946,16 +2946,16 @@ mod tests {
             .is_ok()
         );
 
-        let records = vec![crabka_records_legacy::ParsedRecord {
+        let records = vec![krabka_records_legacy::ParsedRecord {
             offset: Offset(0),
             timestamp: Some(1),
             key: None,
             value: Some(Bytes::from(vec![b'x'; 4096])),
         }];
         let mut legacy = BytesMut::new();
-        crabka_records_legacy::encode_compressed_message_set(
+        krabka_records_legacy::encode_compressed_message_set(
             &records,
-            crabka_records_legacy::Magic::V1,
+            krabka_records_legacy::Magic::V1,
             CompressionType::Lz4,
             &mut legacy,
         )
@@ -2976,10 +2976,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "orders".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(2),
-            replicas: vec![crabka_audit::NodeId(2), crabka_audit::NodeId(3)],
-            isr: vec![crabka_audit::NodeId(2), crabka_audit::NodeId(3)],
-            leader_epoch: crabka_metadata::LeaderEpoch(17),
+            leader: krabka_audit::NodeId(2),
+            replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            leader_epoch: krabka_metadata::LeaderEpoch(17),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -2988,11 +2988,11 @@ mod tests {
         let image = Arc::new(img);
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         ));
         let producer_state = Arc::new(crate::producer_state::ProducerState::new());
         let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
@@ -3028,7 +3028,7 @@ mod tests {
                 log_dir_status: &log_dir_status,
                 image: &image,
                 broker_policy: BrokerProducePolicy {
-                    node_id: crabka_audit::NodeId(1),
+                    node_id: krabka_audit::NodeId(1),
                     default_min_insync_replicas: 1,
                     is_witness: false,
                 },
@@ -3050,9 +3050,9 @@ mod tests {
             current_leader: LeaderIdAndEpoch {
                 leader_id: 2,
                 leader_epoch: 17,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -3068,10 +3068,10 @@ mod tests {
         img.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: "orders".into(),
             partition: 0,
-            leader: crabka_audit::NodeId(2),
-            replicas: vec![crabka_audit::NodeId(2), crabka_audit::NodeId(3)],
-            isr: vec![crabka_audit::NodeId(2), crabka_audit::NodeId(3)],
-            leader_epoch: crabka_metadata::LeaderEpoch(17),
+            leader: krabka_audit::NodeId(2),
+            replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+            leader_epoch: krabka_metadata::LeaderEpoch(17),
             adding_replicas: vec![],
             removing_replicas: vec![],
             directories: vec![],
@@ -3081,11 +3081,11 @@ mod tests {
         // Empty registry → `partitions.get(..)` returns None.
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            crabka_audit::NodeId(2),
+            krabka_audit::NodeId(2),
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         ));
         let producer_state = Arc::new(crate::producer_state::ProducerState::new());
         let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
@@ -3122,7 +3122,7 @@ mod tests {
                 image: &image,
                 // We are the leader (node 2), but hold no local replica.
                 broker_policy: BrokerProducePolicy {
-                    node_id: crabka_audit::NodeId(2),
+                    node_id: krabka_audit::NodeId(2),
                     default_min_insync_replicas: 1,
                     is_witness: false,
                 },
@@ -3144,9 +3144,9 @@ mod tests {
             current_leader: LeaderIdAndEpoch {
                 leader_id: 2,
                 leader_epoch: 17,
-                unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             },
-            unknown_tagged_fields: crabka_protocol::UnknownTaggedFields(Vec::new()),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
         };
         assert!(resp == expected);
     }
@@ -3162,17 +3162,17 @@ mod tests {
     /// which HW 2 already satisfies, and would wrongly return `NONE`.
     #[tokio::test]
     async fn duplicate_acks_all_waits_for_last_offset_plus_one() {
-        use crabka_protocol::owned::produce_response::PartitionProduceResponse;
+        use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
         let dir = tempfile::tempdir().unwrap();
         let image = Arc::new(image_with_topic("orders", &[1]));
         let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
         let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            crabka_audit::NodeId(1),
+            krabka_audit::NodeId(1),
             Arc::clone(&partitions),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             50,
-            crabka_units::mebibytes(1),
+            krabka_units::mebibytes(1),
         ));
         let producer_state = Arc::new(crate::producer_state::ProducerState::new());
         let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
@@ -3181,10 +3181,10 @@ mod tests {
         // Materialize the local leader replica for "orders"-0.
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
-        let log = crabka_log::Log::open(&part_dir, crabka_log::LogConfig::default()).unwrap();
+        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         let part = crate::broker::spawn_partition(
             "orders".to_string(),
-            crabka_ids::PartitionIndex(0),
+            krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
             log_dir_status.clone(),
@@ -3215,10 +3215,10 @@ mod tests {
                 .append(&mut batch)
                 .expect("seed source records");
         }
-        assert!(part.log_end_offset() == crabka_log::Offset(3));
-        part.set_follower_hw(crabka_log::Offset(2)).await;
-        assert!(part.high_watermark().await == crabka_log::Offset(2));
-        partitions.insert("orders".to_string(), crabka_ids::PartitionIndex(0), part);
+        assert!(part.log_end_offset() == krabka_log::Offset(3));
+        part.set_follower_hw(krabka_log::Offset(2)).await;
+        assert!(part.high_watermark().await == krabka_log::Offset(2));
+        partitions.insert("orders".to_string(), krabka_ids::PartitionIndex(0), part);
 
         // Pre-seed the dedup tracker so the incoming batch is a Duplicate whose
         // recorded base_offset is 0 and span is 0..=2.
@@ -3226,7 +3226,7 @@ mod tests {
         producer_state
             .commit(
                 "orders",
-                crabka_ids::PartitionIndex(0),
+                krabka_ids::PartitionIndex(0),
                 (pid, 0),
                 (0, 2),
                 (0, 0),
@@ -3272,7 +3272,7 @@ mod tests {
                 log_dir_status: &log_dir_status,
                 image: &image,
                 broker_policy: BrokerProducePolicy {
-                    node_id: crabka_audit::NodeId(1),
+                    node_id: krabka_audit::NodeId(1),
                     default_min_insync_replicas: 1,
                     is_witness: false,
                 },
@@ -3292,7 +3292,7 @@ mod tests {
 
     #[test]
     fn consume_producer_quota_tuple_match_overage_throttles() {
-        use crabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
         let mut img = MetadataImage::new(uuid::Uuid::nil());
         img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
             entity: vec![
@@ -3348,8 +3348,8 @@ mod tests {
     mod verbatim {
         use assert2::{assert, check};
         use bytes::{Bytes, BytesMut};
-        use crabka_compression::{CompressionType, RecordDecompressionPolicy};
-        use crabka_protocol::records::{
+        use krabka_compression::{CompressionType, RecordDecompressionPolicy};
+        use krabka_protocol::records::{
             Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload,
             TimestampType,
         };
@@ -3577,7 +3577,7 @@ mod tests {
             let b = plain_batch();
             let mut wire = encode(&b).to_vec();
             // Corrupt a body byte → CRC validation fails → owned fallback.
-            let hdr_len = crabka_protocol::records::HEADER_LEN;
+            let hdr_len = krabka_protocol::records::HEADER_LEN;
             wire[hdr_len] ^= 0xFF;
             // A corrupt CRC also fails the owned `RecordBatch::decode`, so the
             // fallback surfaces INVALID_RECORD (the prior decode-error code).
@@ -3641,7 +3641,7 @@ mod tests {
             match data {
                 ProduceData::Verbatim(v) => {
                     assert!(v.is_transactional);
-                    assert!(v.producer_id == crabka_log::ProducerId(100));
+                    assert!(v.producer_id == krabka_log::ProducerId(100));
                 }
                 ProduceData::Owned(_) => panic!("transactional data batch should pass through"),
                 ProduceData::OwnedCommitMarker { .. } | ProduceData::OwnedControl(_) => {

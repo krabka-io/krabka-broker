@@ -14,7 +14,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: crabka-kdc
+    container_name: krabka-kdc
     ports:
       - "88:88/tcp"
       - "88:88/udp"

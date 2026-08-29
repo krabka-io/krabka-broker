@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crabka_units::{Time, millis, secs};
+use krabka_units::{Time, millis, secs};
 use qubit_clock::{
     Clock, SystemClock,
     sleep::{AsyncSleeper, SystemSleeper},
@@ -65,7 +65,7 @@ impl Default for DeliveryConfig {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::convert::TimeExt as _;
+    use krabka_units::convert::TimeExt as _;
 
     use super::*;
 

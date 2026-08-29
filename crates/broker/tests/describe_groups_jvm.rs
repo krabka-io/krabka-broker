@@ -5,9 +5,9 @@
 //! with the `RangeAssignor`. `mirror.gcr.io/apache/kafka:4.0.0` forms a
 //! next-generation consumer group with `group.protocol=consumer`. The host
 //! sends `DescribeGroupsRequest` to each broker with
-//! `crabka_client_core::Client` and captures the responses. JVM Kafka is the
+//! `krabka_client_core::Client` and captures the responses. JVM Kafka is the
 //! authority. This proves the spec premise that real Kafka populates the fields
-//! Crabka's handler now surfaces. See `describe_groups_metadata.rs` for the
+//! Krabka's handler now surfaces. See `describe_groups_metadata.rs` for the
 //! in-process byte-exact echo, and the calibration cross-check below:
 //!
 //!   * `protocol_type == "consumer"` for an active classic consumer group;
@@ -28,7 +28,7 @@
 //! regenerates both files.
 //!
 //! ```text
-//! cargo test -p crabka-broker --test describe_groups_jvm -- --ignored --nocapture
+//! cargo test -p krabka-broker --test describe_groups_jvm -- --ignored --nocapture
 //! ```
 //!
 //! Networking: each Kafka container publishes two PLAINTEXT listeners. `PLAINTEXT` on
@@ -47,15 +47,15 @@ use std::{
 };
 
 use assert2::assert;
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
     describe_groups_response::{DescribeGroupsResponse, DescribedGroup},
 };
 
 const CLASSIC_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 const NEXT_GEN_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
-const CONTAINER: &str = "crabka-describe-groups-jvm";
+const CONTAINER: &str = "krabka-describe-groups-jvm";
 /// Fixed host port the `EXTERNAL` listener is published on.
 const HOST_PORT: u16 = 19092;
 const HOST_BOOTSTRAP: &str = "127.0.0.1:19092";
@@ -100,7 +100,7 @@ fn hex(bytes: &[u8]) -> String {
 /// String fields stay verbatim. Member byte fields become hex plus UTF-8-lossy,
 /// so the fixture is both diffable and readable.
 fn group_json(
-    g: &crabka_protocol::owned::describe_groups_response::DescribedGroup,
+    g: &krabka_protocol::owned::describe_groups_response::DescribedGroup,
 ) -> serde_json::Value {
     let members: Vec<serde_json::Value> = g
         .members
@@ -268,7 +268,7 @@ fn wait_for_broker(api_versions_tool: &str) {
             eprintln!("CAPTURE broker READY");
             return;
         }
-        // intentional: polls the external JVM cp-kafka container via its admin CLI; no in-process crabka metric/image to await.
+        // intentional: polls the external JVM cp-kafka container via its admin CLI; no in-process krabka metric/image to await.
         std::thread::sleep(Duration::from_secs(2));
     }
     panic!(
@@ -299,7 +299,7 @@ fn wait_for_group_stable(group: &str, consumer_groups_tool: &str) {
             eprintln!("CAPTURE group {group} STABLE:\n{last}");
             return;
         }
-        // intentional: polls the external JVM broker's group state via kafka-consumer-groups; no in-process crabka metric/image to await.
+        // intentional: polls the external JVM broker's group state via kafka-consumer-groups; no in-process krabka metric/image to await.
         std::thread::sleep(Duration::from_secs(2));
     }
     panic!(
@@ -487,7 +487,7 @@ fn persist_and_assert_next_gen(response: &DescribeGroupsResponse) {
         "real_kafka_next_gen.json",
         &serde_json::to_string_pretty(&fixture).unwrap(),
     );
-    assert!(next_gen.error_code == crabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(next_gen.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
     assert!(next_gen.error_message.as_deref() == Some("Group g-next is not a classic group."));
     assert!(next_gen.protocol_type.is_empty());
     assert!(next_gen.protocol_data.is_empty());

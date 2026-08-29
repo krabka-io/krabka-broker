@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use crabka_client_core::Client;
-use crabka_protocol::owned::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_client_core::Client;
+use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
 };
@@ -178,6 +178,6 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
             ..Default::default()
         };
         let resp = client.send(req).await.unwrap();
-        assert!(resp.error_code == crabka_broker::codes::UNKNOWN_MEMBER_ID);
+        assert!(resp.error_code == krabka_broker::codes::UNKNOWN_MEMBER_ID);
     }
 }

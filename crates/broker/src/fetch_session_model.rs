@@ -33,7 +33,7 @@ use std::{
     time::Duration,
 };
 
-use crabka_protocol::{
+use krabka_protocol::{
     owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic},
     primitives::uuid::Uuid as WireUuid,
 };
