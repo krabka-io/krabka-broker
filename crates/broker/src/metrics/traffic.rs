@@ -1,0 +1,336 @@
+//! Produce and fetch accounting: the per-topic and per-partition byte,
+//! request, failure and message-conversion counters that the data path bumps
+//! once per request slice.
+
+use super::{BrokerMetrics, PartitionLabel, TopicLabel};
+
+impl BrokerMetrics {
+    /// Convenience: record a Produce hit on `topic` with the given
+    /// payload size. No-op on the error path — callers shouldn't call
+    /// this if the request was rejected.
+    pub fn record_produce(&self, topic: &str, bytes: u64) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_produce_requests.get_or_create(&lbl).inc();
+        if bytes > 0 {
+            self.topic_bytes_in.get_or_create(&lbl).inc_by(bytes);
+        }
+    }
+
+    /// Account `messages` records received on the Produce
+    /// path for `topic`. Mirrors Kafka's
+    /// `BrokerTopicMetrics.MessagesInPerSec`. Called once per
+    /// `RecordBatch` with the batch's record count. Zero is a
+    /// legitimate value (legacy batches whose record count we can't
+    /// cheaply derive without a full conversion) and is a no-op.
+    pub fn record_produce_messages(&self, topic: &str, messages: u64) {
+        if messages == 0 {
+            return;
+        }
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_messages_in.get_or_create(&lbl).inc_by(messages);
+    }
+
+    /// Convenience: record a Fetch hit on `topic` with the bytes
+    /// delivered. The `bytes` arg may legitimately be zero (empty
+    /// fetch); the request counter still increments.
+    pub fn record_fetch(&self, topic: &str, bytes: u64) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_fetch_requests.get_or_create(&lbl).inc();
+        if bytes > 0 {
+            self.topic_bytes_out.get_or_create(&lbl).inc_by(bytes);
+        }
+    }
+
+    /// Record a single failed Produce partition response
+    /// for `topic`. Callers bump once per partition whose response
+    /// carries a non-zero error code — mirrors the JVM's per-row
+    /// `failedProduceRequestRate.mark()`.
+    pub fn record_failed_produce(&self, topic: &str) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_failed_produce_requests.get_or_create(&lbl).inc();
+    }
+
+    /// Record a single failed Fetch partition response
+    /// for `topic`. Same per-partition semantics as
+    /// `record_failed_produce`.
+    pub fn record_failed_fetch(&self, topic: &str) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.topic_failed_fetch_requests.get_or_create(&lbl).inc();
+    }
+
+    /// Convenience: account a partition's slice of a Produce request.
+    /// Called once per partition by the request handler (alongside the
+    /// existing topic-level `record_produce`).
+    pub fn record_partition_produce(&self, topic: &str, partition: i32, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.partition_bytes_in.get_or_create(&lbl).inc_by(bytes);
+    }
+
+    /// Convenience: account a partition's slice of a Fetch response.
+    pub fn record_partition_fetch(&self, topic: &str, partition: i32, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.partition_bytes_out.get_or_create(&lbl).inc_by(bytes);
+    }
+
+    /// Account one v0/v1 → v2 up-conversion on the Produce
+    /// path (the partition's `records` field arrived as a legacy
+    /// `MessageSet` and was decoded into a v2 `RecordBatch`).
+    pub fn record_produce_message_conversion(&self, topic: &str) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.produce_message_conversions.get_or_create(&lbl).inc();
+    }
+
+    /// Account one v2 → v0/v1 down-conversion on the Fetch
+    /// path (a legacy client's Fetch v < 4 response is being assembled
+    /// from a v2 record batch).
+    pub fn record_fetch_message_conversion(&self, topic: &str) {
+        let lbl = TopicLabel {
+            topic: topic.to_string(),
+        };
+        self.fetch_message_conversions.get_or_create(&lbl).inc();
+    }
+
+    /// Convenience: account handler-thread microseconds spent on a
+    /// partition. Called from the produce / fetch hot paths around the
+    /// per-partition work. No-ops on zero so we don't allocate a label
+    /// entry for trivial measurements.
+    pub fn record_partition_cpu_micros(&self, topic: &str, partition: i32, micros: u64) {
+        if micros == 0 {
+            return;
+        }
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.partition_cpu_micros.get_or_create(&lbl).inc_by(micros);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn record_fetch_zero_bytes_still_bumps_request_count() {
+        let m = BrokerMetrics::new();
+        let lbl = TopicLabel {
+            topic: "t".to_string(),
+        };
+        // Pre-condition: no entry for the label yet.
+        m.record_fetch("t", 0);
+        assert!(m.topic_fetch_requests.get_or_create(&lbl).get() == 1);
+        assert!(m.topic_bytes_out.get_or_create(&lbl).get() == 0);
+    }
+
+    #[test]
+    fn record_produce_increments_both_counters() {
+        let m = BrokerMetrics::new();
+        let lbl = TopicLabel {
+            topic: "t".to_string(),
+        };
+        m.record_produce("t", 1024);
+        m.record_produce("t", 2048);
+        assert!(m.topic_produce_requests.get_or_create(&lbl).get() == 2);
+        assert!(m.topic_bytes_in.get_or_create(&lbl).get() == 3072);
+    }
+
+    #[test]
+    fn record_produce_messages_sums_across_calls_and_skips_zero() {
+        let m = BrokerMetrics::new();
+        let lbl = TopicLabel {
+            topic: "t".to_string(),
+        };
+        // Zero is a no-op (legacy batches; the v2-conversion-time
+        // counter tracks those arrivals separately).
+        m.record_produce_messages("t", 0);
+        // The label entry is intentionally NOT eagerly created on a
+        // zero-bump; rate(...) over a never-seen topic should yield
+        // 0, not a phantom series.
+        m.record_produce_messages("t", 3);
+        m.record_produce_messages("t", 7);
+        assert!(m.topic_messages_in.get_or_create(&lbl).get() == 10);
+    }
+
+    #[test]
+    fn partition_helpers_increment_the_right_family() {
+        let m = BrokerMetrics::new();
+        m.record_partition_produce("t", 0, 1024);
+        m.record_partition_produce("t", 1, 512);
+        m.record_partition_fetch("t", 0, 2048);
+        m.record_partition_cpu_micros("t", 0, 500);
+        m.partition_disk_bytes
+            .get_or_create(&PartitionLabel {
+                topic: "t".into(),
+                partition: 0,
+            })
+            .set(1_000_000);
+
+        let lbl_p0 = PartitionLabel {
+            topic: "t".into(),
+            partition: 0,
+        };
+        let lbl_p1 = PartitionLabel {
+            topic: "t".into(),
+            partition: 1,
+        };
+        let cases = [
+            ("bytes_in", &m.partition_bytes_in, &lbl_p0, 1024),
+            ("bytes_in", &m.partition_bytes_in, &lbl_p1, 512),
+            ("bytes_out", &m.partition_bytes_out, &lbl_p0, 2048),
+            ("cpu_micros", &m.partition_cpu_micros, &lbl_p0, 500),
+        ];
+        for (family_name, family, label, want) in cases {
+            // Each read is its own statement: `get_or_create` returns a
+            // read guard, and a first-materialization on the same family
+            // takes the write lock — holding several guards in one
+            // expression self-deadlocks.
+            let got = family.get_or_create(label).get();
+            assert!(
+                got == want,
+                "{family_name} for partition {}",
+                label.partition
+            );
+        }
+        // `partition_disk_bytes` is a Gauge family (i64), so it stays
+        // out of the Counter table above.
+        let disk_p0 = m.partition_disk_bytes.get_or_create(&lbl_p0).get();
+        assert!(disk_p0 == 1_000_000);
+    }
+
+    #[test]
+    fn failed_request_counters_track_per_topic_and_per_call() {
+        // `record_failed_produce` / `record_failed_fetch`
+        // are bumped once per failed partition row. Two calls on
+        // `t-good` and one on `t-bad` must land on the right labels
+        // and yield independent series.
+        let m = BrokerMetrics::new();
+        m.record_failed_produce("t-good");
+        m.record_failed_produce("t-good");
+        m.record_failed_produce("t-bad");
+        m.record_failed_fetch("t-good");
+
+        let good = TopicLabel {
+            topic: "t-good".into(),
+        };
+        let bad = TopicLabel {
+            topic: "t-bad".into(),
+        };
+        // t-bad never saw a failed fetch — series is materialized by
+        // `get_or_create` at read time but its value is 0, which is
+        // what `rate(failed_fetch{topic="t-bad"}[1m])` should compute.
+        let cases = [
+            ("failed_produce", &m.topic_failed_produce_requests, &good, 2),
+            ("failed_produce", &m.topic_failed_produce_requests, &bad, 1),
+            ("failed_fetch", &m.topic_failed_fetch_requests, &good, 1),
+            ("failed_fetch", &m.topic_failed_fetch_requests, &bad, 0),
+        ];
+        for (family_name, family, label, want) in cases {
+            // One `get_or_create` guard per statement (first
+            // materialization takes the family write lock).
+            let got = family.get_or_create(label).get();
+            assert!(got == want, "{family_name} for {:?}", label.topic);
+        }
+    }
+
+    #[test]
+    fn zero_bytes_no_op_on_partition_helpers() {
+        let m = BrokerMetrics::new();
+        m.record_partition_produce("t", 0, 0);
+        m.record_partition_fetch("t", 0, 0);
+        let lbl = PartitionLabel {
+            topic: "t".into(),
+            partition: 0,
+        };
+        // Counters still exist (get_or_create creates them) but at 0.
+        assert!(m.partition_bytes_in.get_or_create(&lbl).get() == 0);
+        assert!(m.partition_bytes_out.get_or_create(&lbl).get() == 0);
+    }
+
+    #[test]
+    fn zero_micros_no_op() {
+        let m = BrokerMetrics::new();
+        m.record_partition_cpu_micros("t", 0, 0);
+        let lbl = PartitionLabel {
+            topic: "t".into(),
+            partition: 0,
+        };
+        // Helper short-circuits at 0; the label entry isn't created.
+        assert!(m.partition_cpu_micros.get_or_create(&lbl).get() == 0);
+    }
+
+    #[test]
+    fn message_conversion_helpers_accumulate_per_topic() {
+        let m = BrokerMetrics::new();
+        m.record_produce_message_conversion("orders");
+        m.record_produce_message_conversion("orders");
+        m.record_produce_message_conversion("payments");
+        m.record_fetch_message_conversion("orders");
+        m.record_fetch_message_conversion("payments");
+        m.record_fetch_message_conversion("payments");
+
+        let orders = TopicLabel {
+            topic: "orders".into(),
+        };
+        let payments = TopicLabel {
+            topic: "payments".into(),
+        };
+        let cases = [
+            (
+                "produce_conversions",
+                &m.produce_message_conversions,
+                &orders,
+                2,
+            ),
+            (
+                "produce_conversions",
+                &m.produce_message_conversions,
+                &payments,
+                1,
+            ),
+            (
+                "fetch_conversions",
+                &m.fetch_message_conversions,
+                &orders,
+                1,
+            ),
+            (
+                "fetch_conversions",
+                &m.fetch_message_conversions,
+                &payments,
+                2,
+            ),
+        ];
+        for (family_name, family, label, want) in cases {
+            // One `get_or_create` guard per statement (first
+            // materialization takes the family write lock).
+            let got = family.get_or_create(label).get();
+            assert!(got == want, "{family_name} for {:?}", label.topic);
+        }
+    }
+}

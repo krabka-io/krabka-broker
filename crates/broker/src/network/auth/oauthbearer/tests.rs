@@ -1,0 +1,302 @@
+//! Round-trip tests for the OAUTHBEARER handler, including KIP-368 re-auth.
+
+use assert2::{assert, check};
+use krabka_security::{Principal, SaslMechanism};
+use krabka_units::secs;
+
+use super::*;
+use crate::network::auth::{
+    AuthenticatedSnapshot,
+    test_support::{assert_failed_authenticate_response, assert_success_authenticate_response},
+};
+
+fn unsecured_token(sub: &str, exp_s: i64) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    format!(
+        "{}.{}.",
+        B64.encode(b"{\"alg\":\"none\"}"),
+        B64.encode(format!("{{\"sub\":\"{sub}\",\"exp\":{exp_s}}}").as_bytes())
+    )
+}
+
+fn oauthbearer_client_response(token: &str) -> SaslAuthenticateRequest {
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(
+            format!("n,,\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
+        ),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn oauthbearer_valid_token_authenticates() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    let token = unsecured_token("svc-account", 1_000_000_900); // exp seconds → future of now
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    let resp = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        None,
+    )
+    .await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    let p = auth.principal().expect("authenticated");
+    assert!(p.name == "svc-account");
+    assert!(p.auth_method == krabka_security::AuthMethod::SaslOAuthBearer);
+    match auth {
+        ConnectionAuth::Authenticated {
+            expires_at_ms,
+            authenticated_via_token,
+            ..
+        } => {
+            assert!(expires_at_ms == Some(1_000_000_900_000));
+            assert!(!authenticated_via_token);
+        }
+        _ => panic!("expected authenticated state"),
+    }
+}
+
+#[tokio::test]
+async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
+    let validator =
+        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            allowable_clock_skew: secs(0),
+            ..Default::default()
+        });
+    let now_ms = 5_000_000_000_000;
+    // exp far in the past → expired.
+    let token = unsecured_token("admin", 1_000_000_000);
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    // Round 1: rejected → error JSON, error_code 0, connection stays open.
+    let resp = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        None,
+    )
+    .await;
+    let expected = SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
+        session_lifetime_ms: 0,
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(matches!(
+        auth,
+        ConnectionAuth::Negotiating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        }
+    ));
+    // Round 2: the client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
+    let dummy = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(&[1u8]),
+        ..Default::default()
+    };
+    let resp2 = handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, now_ms, None).await;
+    assert_failed_authenticate_response(&resp2);
+    assert!(!auth.is_authenticated());
+}
+
+#[tokio::test]
+async fn oauthbearer_malformed_response_returns_error_json() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    let req = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(b"not-a-valid-gs2-message"),
+        ..Default::default()
+    };
+    let resp =
+        handle_authenticate_oauthbearer(&req, &mut auth, &validator, 1_000_000_000_000, None).await;
+    let expected = SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
+        session_lifetime_ms: 0,
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+}
+
+#[tokio::test]
+async fn oauthbearer_authzid_mismatch_fails() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    let token = unsecured_token("alice", 1_000_000_900);
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    // authzid "bob" != token principal "alice".
+    let req = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(
+            format!("n,a=bob,\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
+        ),
+        ..Default::default()
+    };
+    let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, now_ms, None).await;
+    let expected = SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
+        session_lifetime_ms: 0,
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(!auth.is_authenticated());
+}
+
+#[tokio::test]
+async fn authenticate_during_reauth_same_principal_transitions_back_to_authenticated() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    // Token's exp is in seconds; the validator computes expires_at_ms = exp * 1000.
+    let new_token_exp_seconds: i64 = 1_000_000_900;
+    let new_token_exp_millis: i64 = new_token_exp_seconds * 1000;
+    let token = unsecured_token("alice", new_token_exp_seconds);
+    let mut auth = ConnectionAuth::Reauthenticating {
+        previous: AuthenticatedSnapshot {
+            principal: Principal {
+                name: "alice".to_string(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(now_ms + 1_000), // about to expire
+        },
+        exchange: SaslExchange::OAuthBearer,
+    };
+    let resp = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        None,
+    )
+    .await;
+    assert_success_authenticate_response(&resp, b"", new_token_exp_millis - now_ms);
+    assert!(matches!(
+        auth,
+        ConnectionAuth::Authenticated {
+            mechanism: SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(_),
+            ..
+        }
+    ));
+    if let ConnectionAuth::Authenticated {
+        principal,
+        expires_at_ms,
+        ..
+    } = &auth
+    {
+        assert!(principal.name == "alice");
+        assert!(*expires_at_ms == Some(new_token_exp_millis));
+    } else {
+        panic!("expected Authenticated");
+    }
+}
+
+#[tokio::test]
+async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_failed() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    // Token belongs to "bob", but the prior session is "alice".
+    let token = unsecured_token("bob", 1_000_000_900);
+    let mut auth = ConnectionAuth::Reauthenticating {
+        previous: AuthenticatedSnapshot {
+            principal: Principal {
+                name: "alice".to_string(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(now_ms + 1_000),
+        },
+        exchange: SaslExchange::OAuthBearer,
+    };
+    let resp = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        None,
+    )
+    .await;
+    // SASL_AUTHENTICATION_FAILED = 58 per Apache Kafka protocol; the
+    // error message must name the principal mismatch.
+    check!(resp.error_code == SASL_AUTHENTICATION_FAILED);
+    check!(
+        resp.error_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("principal")
+    );
+    check!(resp.auth_bytes.as_ref() == b"".as_slice());
+    check!(resp.session_lifetime_ms == 0);
+    // Connection remained in Reauthenticating (dispatch will close).
+    assert!(matches!(auth, ConnectionAuth::Reauthenticating { .. }));
+}
+
+// KIP-368 ceiling: the server-side
+// `max_session_lifetime_seconds` cap clamps both the response field and
+// the `Authenticated.expires_at_ms` stored on the connection.
+
+#[tokio::test]
+async fn handle_authenticate_oauthbearer_applies_max_session_lifetime_cap() {
+    let validator =
+        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            allowable_clock_skew: secs(0),
+            ..Default::default()
+        });
+    let now_ms = 1_000_000_i64;
+    let exp_ms = now_ms + 60_000; // token good for 60s
+    let token = unsecured_token("alice", exp_ms / 1000);
+    let req = oauthbearer_client_response(&token);
+
+    // (server cap in seconds, expected session lifetime in ms). The
+    // stored expires_at_ms must reflect the clamped value too, not the
+    // raw token exp.
+    let cases = [
+        (Some(secs(30)), 30_000_i64), // cap below the token's 60s exp → clamped
+        (None, 60_000),               // unset cap → raw token exp
+        (Some(secs(600)), 60_000),    // cap above exp → no effect
+    ];
+    for (cap, want_lifetime_ms) in cases {
+        let mut auth = ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::OAuthBearer,
+            exchange: SaslExchange::OAuthBearer,
+            pending_token_expiry_ms: None,
+        };
+        let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, now_ms, cap).await;
+        check!(resp.error_code == 0, "cap {cap:?}");
+        check!(resp.session_lifetime_ms == want_lifetime_ms, "cap {cap:?}");
+        match auth {
+            ConnectionAuth::Authenticated { expires_at_ms, .. } => {
+                assert!(
+                    expires_at_ms == Some(now_ms + want_lifetime_ms),
+                    "cap {cap:?}: expires_at_ms must reflect the clamped value"
+                );
+            }
+            _ => panic!("cap {cap:?}: expected Authenticated"),
+        }
+    }
+}
