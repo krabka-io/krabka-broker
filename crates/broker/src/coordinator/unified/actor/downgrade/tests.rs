@@ -1,29 +1,25 @@
 //! Unit tests for the KIP-848 downgrade trigger and the classic state it
 //! restores.
 
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use krabka_log::Offset;
 use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
 use super::*;
 use crate::{
     codes,
-    coordinator::{
-        DeleteGroupError, GroupSnapshot, MemberSnapshot,
-        unified::{
-            actor::{
-                ClassicMemberView, GroupActorMessage, GroupKindTag,
-                test_support::{
-                    decode_assignment, log_has_classic_group_metadata_write,
-                    make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
-                    seed_classic_member, subscription_blob,
-                },
+    coordinator::unified::{
+        actor::{
+            GroupActorMessage, GroupKindTag,
+            test_support::{
+                decode_assignment, log_has_classic_group_metadata_write,
+                make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
+                seed_classic_member, subscription_blob,
             },
-            classic_state::OffsetEntry,
         },
+        classic_state::OffsetEntry,
     },
 };
 

@@ -1,6 +1,6 @@
 //! Unit tests for the KIP-848 heartbeat path.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_protocol::primitives::uuid::Uuid;

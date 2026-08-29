@@ -78,7 +78,7 @@ pub(crate) async fn validate_group_commit(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::assert;
     use krabka_log::Offset;
 
     use super::*;

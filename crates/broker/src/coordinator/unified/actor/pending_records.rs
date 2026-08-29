@@ -183,11 +183,7 @@ mod tests {
     };
 
     use assert2::assert;
-    use bytes::Bytes;
-    use krabka_protocol::{
-        owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        primitives::uuid::Uuid,
-    };
+    use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
 
     use super::*;
     use crate::coordinator::unified::{
