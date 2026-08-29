@@ -31,8 +31,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use crabka_metadata::{MetadataImage, MetadataRecord};
-use crabka_units::{Time, convert::TimeExt as _, hours, minutes};
+use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_units::{Time, convert::TimeExt as _, hours, minutes};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -48,7 +48,7 @@ pub(crate) const PROPOSAL_RETENTION: Time = hours(24);
 pub(crate) const SWEEP_INTERVAL: Time = minutes(5);
 
 /// The controller surface the sweep needs. [`crate::broker`] adapts the real
-/// [`crabka_raft::ControllerHandle`], and tests inject a mock.
+/// [`krabka_raft::ControllerHandle`], and tests inject a mock.
 #[async_trait]
 pub(crate) trait BreakGlassController: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
@@ -120,8 +120,8 @@ mod tests {
     use std::{sync::Mutex, time::Duration};
 
     use assert2::check;
-    use crabka_metadata::{BreakGlassAction, BreakGlassProposalRecord};
-    use crabka_units::{days, millis};
+    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord};
+    use krabka_units::{days, millis};
 
     use super::*;
     use crate::break_glass::gate::tests::proposal;

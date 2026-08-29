@@ -24,7 +24,7 @@
 //!
 //! # The action vocabulary
 //!
-//! [`crabka_metadata::BreakGlassAction`] is the one definition of the gated
+//! [`krabka_metadata::BreakGlassAction`] is the one definition of the gated
 //! set. This module maps it to the two forms the rest of the code needs: the
 //! wire value that the private APIs carry, and the name that `signed_actions`,
 //! the audit event, and the metric label all use. There is no second action
@@ -47,12 +47,12 @@ pub(crate) mod signing;
 mod state_model;
 pub(crate) mod sweep;
 
-use crabka_metadata::BreakGlassAction;
+use krabka_metadata::BreakGlassAction;
 
 /// The wire value of a break-glass action, as the private APIs carry it.
 ///
 /// The values start at one, in the declaration order of
-/// [`crabka_metadata::BreakGlassAction`]. Zero names no action, so the default
+/// [`krabka_metadata::BreakGlassAction`]. Zero names no action, so the default
 /// request that a client builds with no action set does not decode as a real
 /// transition.
 pub(crate) fn action_to_wire(action: BreakGlassAction) -> i8 {

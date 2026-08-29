@@ -19,9 +19,9 @@
 //! an auditor should see, so this handler audits one.
 
 use bytes::Bytes;
-use crabka_audit::{AuditOutcome, PrivilegedPhase};
-use crabka_metadata::{BreakGlassProposalRecord, MetadataImage};
-use crabka_protocol::{
+use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_metadata::{BreakGlassProposalRecord, MetadataImage};
+use krabka_protocol::{
     Decode,
     krabka::break_glass::{
         BreakGlassApproval as WireApproval, DescribeBreakGlassRequest, DescribeBreakGlassResponse,
@@ -116,7 +116,7 @@ pub(crate) async fn handle(
 }
 
 /// The proposal a request names, or `None` when it asks for every proposal.
-fn wanted_id(id: crabka_protocol::primitives::uuid::Uuid) -> Option<Uuid> {
+fn wanted_id(id: krabka_protocol::primitives::uuid::Uuid) -> Option<Uuid> {
     let id = from_wire_uuid(id);
     (!id.is_nil()).then_some(id)
 }
@@ -195,7 +195,7 @@ fn described(proposal: &BreakGlassProposalRecord) -> DescribedBreakGlassProposal
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_metadata::BreakGlassAction;
+    use krabka_metadata::BreakGlassAction;
 
     use super::*;
     use crate::break_glass::{
@@ -292,7 +292,7 @@ mod tests {
         let stored = BreakGlassProposalRecord {
             approvals: vec![
                 signed_approval("User:bob", "bob-yubi"),
-                crabka_metadata::BreakGlassApproval {
+                krabka_metadata::BreakGlassApproval {
                     key_id: String::new(),
                     signature: Vec::new(),
                     ..signed_approval("User:carol", "carol-yubi")
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn a_nil_wire_id_asks_for_every_proposal() {
-        let nil = crabka_protocol::primitives::uuid::Uuid::ZERO;
+        let nil = krabka_protocol::primitives::uuid::Uuid::ZERO;
 
         check!(wanted_id(nil) == None);
         check!(wanted_id(to_wire_uuid(Uuid::from_u128(5))) == Some(Uuid::from_u128(5)));

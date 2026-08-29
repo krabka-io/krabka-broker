@@ -11,7 +11,7 @@
 //! # The layout
 //!
 //! ```text
-//! BREAK_GLASS_DOMAIN                       22 bytes, "crabka-break-glass-v1\0"
+//! BREAK_GLASS_DOMAIN                       22 bytes, "krabka-break-glass-v1\0"
 //! proposal_id                              16 raw bytes, big-endian
 //! action                                   u8, the wire value of the action
 //! target_len   ‖ target                    u32 big-endian ‖ UTF-8 bytes
@@ -22,7 +22,7 @@
 //!
 //! Every length prefix is a `u32` in big-endian order, which is the
 //! length-prefixed form that
-//! [`crabka_audit::signing::checkpoint_signing_bytes`] and the WORM manifest
+//! [`krabka_audit::signing::checkpoint_signing_bytes`] and the WORM manifest
 //! bytes also use. A length prefix in front of each text field is what stops
 //! two different field splits producing one byte string, so a proposer named
 //! `"User:al"` on target `"ice"` cannot collide with a proposer named
@@ -45,7 +45,7 @@
 //! attacker present a captured signature for a purpose the signer never agreed
 //! to.
 
-use crabka_metadata::BreakGlassProposalRecord;
+use krabka_metadata::BreakGlassProposalRecord;
 
 use crate::{break_glass::action_to_wire, signing_domains::BREAK_GLASS_DOMAIN};
 
@@ -86,7 +86,7 @@ fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::{BreakGlassAction, BreakGlassApproval};
+    use krabka_metadata::{BreakGlassAction, BreakGlassApproval};
     use uuid::Uuid;
 
     use super::*;
@@ -114,7 +114,7 @@ mod tests {
     // under test.
     fn expected_bytes(proposal: &BreakGlassProposalRecord, action_wire: u8) -> Vec<u8> {
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"crabka-break-glass-v1\0");
+        expected.extend_from_slice(b"krabka-break-glass-v1\0");
         expected.extend_from_slice(proposal.proposal_id.as_bytes());
         expected.push(action_wire);
         expected.extend_from_slice(&u32::try_from(proposal.target.len()).unwrap().to_be_bytes());

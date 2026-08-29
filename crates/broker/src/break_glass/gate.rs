@@ -4,7 +4,7 @@
 //! the metadata record that spends it. Every gated handler goes through this
 //! one function, so one set of rules decides what an approval authorizes.
 
-use crabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage, MetadataRecord};
+use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage, MetadataRecord};
 use uuid::Uuid;
 
 use crate::{
@@ -365,8 +365,8 @@ fn topic_of_partition_target(target: &str) -> Option<&str> {
 #[cfg(test)]
 pub(crate) mod tests {
     use assert2::{assert, check};
-    use crabka_metadata::BreakGlassApproval;
-    use crabka_units::minutes;
+    use krabka_metadata::BreakGlassApproval;
+    use krabka_units::minutes;
 
     use super::*;
     use crate::break_glass::ALL_ACTIONS;

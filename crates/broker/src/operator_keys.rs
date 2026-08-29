@@ -8,7 +8,7 @@
 //! [`OperatorKeys::load`] reads every configured public key file, so an
 //! unreadable path or a malformed key stops the broker at boot instead of in
 //! the middle of an incident. Verification calls
-//! [`crabka_audit::signing::verify_signature`], the same code path that checks
+//! [`krabka_audit::signing::verify_signature`], the same code path that checks
 //! an audit checkpoint, so operator key material has the shape the audit
 //! checkpoint keys already have.
 //!
@@ -220,7 +220,7 @@ impl OperatorKeys {
     pub fn verify(&self, key_id: &str, principal: &str, message: &[u8], signature: &[u8]) -> bool {
         self.get(key_id).is_some_and(|key| {
             key.principal == principal
-                && crabka_audit::signing::verify_signature(&key.public_key, message, signature)
+                && krabka_audit::signing::verify_signature(&key.public_key, message, signature)
         })
     }
 }
@@ -428,7 +428,7 @@ mod tests {
             ),
         ])
         .expect("load trust set");
-        let message = b"crabka-topic-freeze-v1\0orders";
+        let message = b"krabka-topic-freeze-v1\0orders";
         let signature = alice.sign(message).as_ref().to_vec();
 
         for (name, key_id, principal, msg, expected) in [
@@ -464,7 +464,7 @@ mod tests {
                 "a tampered message",
                 "alice-yubi",
                 "User:alice",
-                b"crabka-topic-freeze-v1\0ordering".as_slice(),
+                b"krabka-topic-freeze-v1\0ordering".as_slice(),
                 false,
             ),
         ] {

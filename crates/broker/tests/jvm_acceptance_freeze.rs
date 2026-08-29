@@ -12,7 +12,7 @@
 //! first-run failure as a bug in this file until they have shown otherwise.
 //!
 //! ```text
-//! cargo test -p crabka-broker --test jvm_acceptance_freeze -- --ignored --nocapture
+//! cargo test -p krabka-broker --test jvm_acceptance_freeze -- --ignored --nocapture
 //! ```
 //!
 //! # The claim
@@ -93,18 +93,18 @@ use std::{
 };
 
 use assert2::{assert, check};
-use crabka_broker::{
+use jvm_acceptance::{ClientPropsFile, KAFKA_IMAGE_TXN, plain_jaas, write_client_props};
+use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::ListenerSpec,
 };
-use crabka_client_admin::{AdminClient, CreateTopicSpec};
-use crabka_client_core::{Client, security::ClientSecurity};
-use crabka_log::LogConfig;
-use crabka_protocol::krabka::{
+use krabka_client_admin::{AdminClient, CreateTopicSpec};
+use krabka_client_core::{Client, security::ClientSecurity};
+use krabka_log::LogConfig;
+use krabka_protocol::krabka::{
     break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
     freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED, SetTopicFreezeRequest},
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
-use jvm_acceptance::{ClientPropsFile, KAFKA_IMAGE_TXN, plain_jaas, write_client_props};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 // ── The wire vocabulary these cases pin ──────────────────────────────────────
@@ -225,7 +225,7 @@ fn no_proposal_refusal(action: &str, target: &str) -> String {
 /// KFC-9 requires the message to name the command that does set the key,
 /// because a refusal with no next step leaves an operator stuck mid-incident.
 const WRITE_FREEZE_ALTER_REFUSAL: &str = "topic config write.freeze is controller-managed and read-only; \
-     use `crabka-guard freeze set` to set it and `crabka-guard freeze clear` to clear it";
+     use `krabka-guard freeze set` to set it and `krabka-guard freeze clear` to clear it";
 
 /// The `write.freeze` value a `DescribeConfigs` reports for a topic frozen by
 /// its own name, in the `frozen:<pattern>:<scope>` form KFC-9 specifies.
@@ -257,7 +257,7 @@ impl ToolRun {
         let mut output = String::from_utf8_lossy(&out.stdout).into_owned();
         output.push_str(&String::from_utf8_lossy(&out.stderr));
         let status = out.status;
-        eprintln!("CRABKA[test] jvm tool {args:?} status={status}\n{output}");
+        eprintln!("KRABKA[test] jvm tool {args:?} status={status}\n{output}");
         Self { status, output }
     }
 
@@ -440,11 +440,11 @@ async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> JvmBroker {
         node_id: NodeId(1),
         controller_listen_addr: controller,
         controller_quorum_voters: vec![(NodeId(1), controller.to_string())],
-        heartbeat_interval: crabka_units::millis(3_000),
-        heartbeat_timeout: crabka_units::millis(9_000),
-        replica_lag_time_max: crabka_units::millis(30_000),
-        controller_election_timeout: crabka_units::secs(5),
-        controller_heartbeat_interval: crabka_units::millis(500),
+        heartbeat_interval: krabka_units::millis(3_000),
+        heartbeat_timeout: krabka_units::millis(9_000),
+        replica_lag_time_max: krabka_units::millis(30_000),
+        controller_election_timeout: krabka_units::secs(5),
+        controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: BootstrapMode::Bootstrap,
         ..BrokerConfig::default()
     };
@@ -536,7 +536,7 @@ async fn create_topics(bootstrap: &str, security: Option<ClientSecurity>, names:
         })
         .collect();
     let outcomes = admin
-        .create_topics(&specs, crabka_units::secs(30))
+        .create_topics(&specs, krabka_units::secs(30))
         .await
         .expect("create topics");
     for outcome in outcomes {
@@ -621,7 +621,7 @@ async fn approved_unclean_election(bootstrap: &str, target: &str) {
 async fn approve(
     bootstrap: &str,
     operator: (&str, &str),
-    proposal_id: crabka_protocol::primitives::uuid::Uuid,
+    proposal_id: krabka_protocol::primitives::uuid::Uuid,
 ) -> Approvals {
     let client = support::sasl_client(bootstrap, operator.0, operator.1).await;
     let response = client

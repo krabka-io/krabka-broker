@@ -16,7 +16,7 @@
 //! layout is:
 //!
 //! ```text
-//! FREEZE_DOMAIN                     b"crabka-topic-freeze-v1\0"
+//! FREEZE_DOMAIN                     b"krabka-topic-freeze-v1\0"
 //! cluster_id      u32 big-endian length, then the UTF-8 bytes
 //! pattern_type    u8                3 literal, 4 prefixed
 //! scope           u32 big-endian length, then the UTF-8 bytes
@@ -28,7 +28,7 @@
 //! ```
 //!
 //! Every length prefix is a `u32` in big-endian order, which is the shape
-//! [`crabka_audit::signing::checkpoint_signing_bytes`] gives the one variable
+//! [`krabka_audit::signing::checkpoint_signing_bytes`] gives the one variable
 //! field it covers. The prefixes are what keep two different records from
 //! building one byte string: without them a scope of `"a"` with a reason of
 //! `"bc"` and a scope of `"ab"` with a reason of `"c"` would sign the same.
@@ -61,9 +61,9 @@
 //! failed and the code does not, because a code that separates them tells an
 //! attacker which check they got past.
 
-use crabka_metadata::{PatternType, TopicFreezeRecord};
-use crabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED};
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_metadata::{PatternType, TopicFreezeRecord};
+use krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED};
+use krabka_units::{Time, convert::TimeExt as _};
 
 use crate::{codes, operator_keys::OperatorKeys, signing_domains::FREEZE_DOMAIN};
 
@@ -270,7 +270,7 @@ mod tests {
     use std::path::PathBuf;
 
     use assert2::{assert, check};
-    use crabka_units::{minutes, secs};
+    use krabka_units::{minutes, secs};
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -386,7 +386,7 @@ mod tests {
         };
 
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"crabka-topic-freeze-v1\0");
+        expected.extend_from_slice(b"krabka-topic-freeze-v1\0");
         expected.extend_from_slice(&[0, 0, 0, 36]);
         expected.extend_from_slice(CLUSTER_ID.as_bytes());
         expected.push(4);

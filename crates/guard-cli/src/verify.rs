@@ -36,8 +36,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crabka_broker::operator_keys::{OperatorKeyEntry, OperatorKeys};
-use crabka_protocol::krabka::freeze::DescribedTopicFreeze;
+use krabka_broker::operator_keys::{OperatorKeyEntry, OperatorKeys};
+use krabka_protocol::krabka::freeze::DescribedTopicFreeze;
 
 use crate::signing::{FreezeSigningInput, freeze_signing_bytes};
 
@@ -238,8 +238,8 @@ struct TrustFileKey {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_audit::FileEd25519Signer;
-    use crabka_protocol::primitives::uuid::Uuid;
+    use krabka_audit::FileEd25519Signer;
+    use krabka_protocol::primitives::uuid::Uuid;
     use ring::signature::Ed25519KeyPair;
     use tempfile::TempDir;
 
@@ -417,7 +417,7 @@ mod tests {
         check!(keys.len() == 1);
         check!(
             keys.get("alice-yubi")
-                .map(crabka_broker::operator_keys::OperatorKey::principal)
+                .map(krabka_broker::operator_keys::OperatorKey::principal)
                 == Some(ALICE)
         );
     }

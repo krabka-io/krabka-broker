@@ -1,9 +1,9 @@
 //! The tool driven end to end against a real broker.
 //!
-//! Every case calls [`crabka_guard::run_from_args`] in process rather than
+//! Every case calls [`krabka_guard::run_from_args`] in process rather than
 //! spawning the binary. A subprocess needs a Cargo working tree to build from
-//! and a Bazel test sandbox has none, which is the same reason `crabka-barrier`
-//! and `crabka-format` are libraries as well as binaries.
+//! and a Bazel test sandbox has none, which is the same reason `krabka-barrier`
+//! and `krabka-format` are libraries as well as binaries.
 //!
 //! What these cover that the unit tests cannot: that each subcommand's request
 //! reaches a broker that answers it, that a signature this machine makes
@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use assert2::{assert, check};
-use crabka_broker::{
+use krabka_broker::{
     Broker, BrokerConfig, BrokerHandle,
     operator_keys::{OperatorKeyEntry, OperatorKeys},
 };
@@ -117,9 +117,9 @@ async fn cluster() -> (BrokerHandle, tempfile::TempDir, String, Key) {
 
 /// Run the tool, returning its exit code.
 async fn cli(bootstrap: &str, args: &[&str]) -> i32 {
-    let mut line = vec!["crabka-guard", "--bootstrap-server", bootstrap];
+    let mut line = vec!["krabka-guard", "--bootstrap-server", bootstrap];
     line.extend_from_slice(args);
-    crabka_guard::run_from_args(line).await
+    krabka_guard::run_from_args(line).await
 }
 
 /// The signing flags a freeze command takes, as a borrowed argument list.
@@ -140,14 +140,14 @@ fn signed_as<'a>(key: &'a Key, principal: &'a str) -> [&'a str; 6] {
 /// this asks the broker directly. It exercises no tool code, only the setup a
 /// later `approve` or `withdraw` case needs.
 async fn only_proposal(bootstrap: &str) -> uuid::Uuid {
-    let client = crabka_client_core::Client::builder()
+    let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .client_id("guard-cli-test")
         .build()
         .await
         .expect("client connects");
     let response = client
-        .send(crabka_protocol::krabka::break_glass::DescribeBreakGlassRequest::default())
+        .send(krabka_protocol::krabka::break_glass::DescribeBreakGlassRequest::default())
         .await
         .expect("describe break-glass");
     let stored = response.proposals.first().expect("the cluster holds one");
@@ -339,7 +339,7 @@ async fn a_registry_the_local_keys_cannot_prove_does_not_pass() {
             ],
         )
         .await
-            == crabka_guard::EXIT_MISMATCH
+            == krabka_guard::EXIT_MISMATCH
     );
 
     // A trust file that is not there stops the verify before it starts.

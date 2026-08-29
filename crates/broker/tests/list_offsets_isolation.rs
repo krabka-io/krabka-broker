@@ -34,10 +34,10 @@ mod support;
 
 use assert2::check;
 use bytes::Bytes;
-use crabka_broker::{BrokerHandle, codes};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::owned::{
+use krabka_broker::{BrokerHandle, codes};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     list_offsets_response::ListOffsetsPartitionResponse,

@@ -7,9 +7,9 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "guard-cli")
 
-# `bazel run //crates/guard-cli:crabka-guard -- --bootstrap-server host:9092 freeze list`
+# `bazel run //crates/guard-cli:krabka-guard -- --bootstrap-server host:9092 freeze list`
 crate_binary(
-    name = "crabka-guard",
+    name = "krabka-guard",
     crate_root = "src/main.rs",
     lib = ":guard-cli",
 )

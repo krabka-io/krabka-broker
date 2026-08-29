@@ -1013,7 +1013,7 @@ pub struct FileOperatorKey {
     /// author is not this principal.
     pub principal: String,
     /// Path to the raw 32-byte Ed25519 public key, the bytes an
-    /// [`crabka_audit::FileEd25519Signer`] reports as its public key. It is
+    /// [`krabka_audit::FileEd25519Signer`] reports as its public key. It is
     /// read at startup, so a bad path stops the broker at boot and not in the
     /// middle of an incident.
     pub public_key_path: String,
@@ -1052,7 +1052,7 @@ pub struct FileFreezeConfig {
     /// How far a signed freeze record's timestamp may sit from the
     /// controller's clock. Default
     /// [`crate::config::DEFAULT_FREEZE_SIGNATURE_MAX_SKEW`].
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub signature_max_skew: Option<Time>,
 }
@@ -1076,7 +1076,7 @@ pub struct FileBreakGlassConfig {
     pub required_approvals: Option<usize>,
     /// How long a proposal stays usable. Default
     /// [`crate::config::DEFAULT_BREAK_GLASS_PROPOSAL_TTL`].
-    #[serde(default, with = "crabka_units::serde_units::human::option_time")]
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub proposal_ttl: Option<Time>,
     /// Actions whose approvals must also carry a detached operator signature.

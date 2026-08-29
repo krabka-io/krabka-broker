@@ -822,8 +822,8 @@ impl OperatorKey {
     }
 
     /// The trust-set entry that names this key.
-    pub fn entry(&self) -> crabka_broker::operator_keys::OperatorKeyEntry {
-        crabka_broker::operator_keys::OperatorKeyEntry {
+    pub fn entry(&self) -> krabka_broker::operator_keys::OperatorKeyEntry {
+        krabka_broker::operator_keys::OperatorKeyEntry {
             key_id: self.key_id.clone(),
             principal: self.principal.clone(),
             public_key_path: self.public_path.clone(),
@@ -874,14 +874,14 @@ pub async fn start_with_operator_keys(
 ) -> (BrokerHandle, Client, BrokerConfig) {
     let entries: Vec<_> = keys.iter().map(|k| k.entry()).collect();
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = crabka_broker::operator_keys::OperatorKeys::load(&entries)
+    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
         .expect("load the operator trust set");
     config.break_glass.approvers = approvers.iter().map(|a| (*a).to_owned()).collect();
 
     let broker = Broker::start(config.clone()).await.expect("broker start");
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
@@ -916,19 +916,19 @@ pub async fn start_with_operator_keys_sasl(
 ) -> (BrokerHandle, String, BrokerConfig) {
     let entries: Vec<_> = keys.iter().map(|k| k.entry()).collect();
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = crabka_broker::operator_keys::OperatorKeys::load(&entries)
+    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
         .expect("load the operator trust set");
     config.break_glass.approvers = approvers.iter().map(|a| (*a).to_owned()).collect();
-    config.listeners = vec![crabka_broker::config::ListenerSpec {
+    config.listeners = vec![krabka_broker::config::ListenerSpec {
         name: "SASL_PLAINTEXT".to_owned(),
         bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
         advertised: "127.0.0.1:0".to_owned(),
-        protocol: crabka_security::ListenerProtocol::SaslPlaintext,
+        protocol: krabka_security::ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: None,
     }];
     "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
-    config.enabled_sasl_mechanisms = vec![crabka_security::SaslMechanism::Plain];
+    config.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::Plain];
     for (name, pass) in users {
         config
             .plain_credentials
@@ -944,11 +944,11 @@ pub async fn start_with_operator_keys_sasl(
 ///
 /// Pair it with [`start_with_operator_keys_sasl`] to get a client that the
 /// broker authenticates as `User:<user>`.
-pub fn sasl_plain_security(user: &str, pass: &str) -> crabka_client_core::security::ClientSecurity {
-    crabka_client_core::security::ClientSecurity {
-        protocol: crabka_security::ListenerProtocol::SaslPlaintext,
+pub fn sasl_plain_security(user: &str, pass: &str) -> krabka_client_core::security::ClientSecurity {
+    krabka_client_core::security::ClientSecurity {
+        protocol: krabka_security::ListenerProtocol::SaslPlaintext,
         tls: None,
-        sasl: Some(crabka_client_core::security::SaslCredentials::Plain {
+        sasl: Some(krabka_client_core::security::SaslCredentials::Plain {
             username: user.to_owned(),
             password: pass.to_owned(),
         }),
@@ -960,7 +960,7 @@ pub fn sasl_plain_security(user: &str, pass: &str) -> crabka_client_core::securi
 pub async fn sasl_client(bootstrap: &str, user: &str, pass: &str) -> Client {
     Client::builder()
         .bootstrap(bootstrap)
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .security(sasl_plain_security(user, pass))
         .build()
         .await

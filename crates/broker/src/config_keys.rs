@@ -122,13 +122,13 @@ pub(crate) fn is_controller_managed_broker_config(key: &str) -> bool {
 /// The broker synthesises this key. It is never stored in `V1TopicConfig`,
 /// and it never reaches the topic-config record in the metadata log. The
 /// freeze itself lives in the metadata log as
-/// [`crabka_metadata::TopicFreezeRecord`], so no snapshot and no restore can
+/// [`krabka_metadata::TopicFreezeRecord`], so no snapshot and no restore can
 /// bring back a stale freeze through a topic config.
 ///
 /// The key is controller-managed and read-only. `DescribeConfigs` reports it
 /// with `read_only` set, and both `AlterConfigs` and
 /// `IncrementalAlterConfigs` refuse it with `INVALID_CONFIG`. The
-/// krabka-private `SetTopicFreeze` API (key 1015) and the `crabka-guard` CLI
+/// krabka-private `SetTopicFreeze` API (key 1015) and the `krabka-guard` CLI
 /// are the one path that sets and clears it.
 ///
 /// An operator who holds only the JVM tools reads the freeze with
@@ -155,7 +155,7 @@ pub(crate) fn is_controller_managed_topic_config(key: &str) -> bool {
 pub(crate) fn controller_managed_topic_config_message(key: &str) -> String {
     format!(
         "topic config {key} is controller-managed and read-only; \
-         use `crabka-guard freeze set` to set it and `crabka-guard freeze clear` to clear it"
+         use `krabka-guard freeze set` to set it and `krabka-guard freeze clear` to clear it"
     )
 }
 
@@ -1174,11 +1174,11 @@ mod tests {
 
         check!(message.contains(WRITE_FREEZE), "got: {message}");
         check!(
-            message.contains("crabka-guard freeze set"),
+            message.contains("krabka-guard freeze set"),
             "got: {message}"
         );
         check!(
-            message.contains("crabka-guard freeze clear"),
+            message.contains("krabka-guard freeze clear"),
             "got: {message}"
         );
     }

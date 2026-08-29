@@ -7,7 +7,7 @@
 //! else.
 //!
 //! The precedence rules live on
-//! [`MetadataImage::topic_freeze`][crabka_metadata::MetadataImage::topic_freeze],
+//! [`MetadataImage::topic_freeze`][krabka_metadata::MetadataImage::topic_freeze],
 //! which holds the two indexes that answer them: a cluster with no freeze
 //! costs two emptiness tests, a literal entry beats every prefix entry, the
 //! longest matching prefix wins, and a name that starts with `__` never
@@ -15,7 +15,7 @@
 //! borrow of the entry, and [`FreezeVerdict`] turns that entry into the
 //! `error_message` the producer reads.
 
-use crabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord};
+use krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord};
 
 use crate::freeze::pattern_type_name;
 
@@ -107,7 +107,7 @@ pub(crate) fn resolve_freeze_verdict(image: &MetadataImage, topic: &str) -> Opti
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::MetadataRecord;
+    use krabka_metadata::MetadataRecord;
     use uuid::Uuid;
 
     use super::*;

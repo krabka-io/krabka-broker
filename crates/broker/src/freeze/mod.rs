@@ -6,8 +6,8 @@
 //! response, migrations, and disaster-recovery promotion each need that state.
 //!
 //! The registry itself lives in the metadata log as
-//! [`crabka_metadata::TopicFreezeRecord`], and
-//! [`MetadataImage::topic_freeze`][crabka_metadata::MetadataImage::topic_freeze]
+//! [`krabka_metadata::TopicFreezeRecord`], and
+//! [`MetadataImage::topic_freeze`][krabka_metadata::MetadataImage::topic_freeze]
 //! holds the index that resolves a topic name to the entry that covers it.
 //! This module is the broker half: the produce-path resolver, the signature
 //! layer, and the two control-plane RPCs.
@@ -31,7 +31,7 @@ pub(crate) mod handlers;
 pub(crate) mod resolve;
 pub(crate) mod signing;
 
-use crabka_metadata::PatternType;
+use krabka_metadata::PatternType;
 
 /// The name a scope's pattern type takes in an operator-facing string.
 ///

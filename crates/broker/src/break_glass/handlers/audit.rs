@@ -6,8 +6,8 @@
 //! helper is what keeps a new phase, a new field, or a corrected guard from
 //! reaching four of the five.
 
-use crabka_audit::{AuditLog, AuditOutcome, PrivilegedPhase};
-use crabka_metadata::BreakGlassAction;
+use krabka_audit::{AuditLog, AuditOutcome, PrivilegedPhase};
+use krabka_metadata::BreakGlassAction;
 use uuid::Uuid;
 
 use crate::{
@@ -87,7 +87,7 @@ pub(crate) fn audit_transition(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_audit::{AuditEndpoint, AuditEvent, AuditPrincipal};
+    use krabka_audit::{AuditEndpoint, AuditEvent, AuditPrincipal};
 
     use super::*;
     use crate::break_glass::handlers::tests::{audit_channel, context, peer, principal};

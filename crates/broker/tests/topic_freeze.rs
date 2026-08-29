@@ -1,6 +1,6 @@
 //! KFC-9 topic write freeze, proved over the wire against a live broker.
 //!
-//! The broker half of the freeze is unit-tested inside `crabka-broker`, and
+//! The broker half of the freeze is unit-tested inside `krabka-broker`, and
 //! nothing in that tier reaches the wire. A resolver that answers correctly and
 //! a produce path that ignores its answer both pass those tests. This suite is
 //! the tier that says a refusal refuses, on a real socket, through the real
@@ -26,10 +26,10 @@
 //!
 //! # The signing bytes are reproduced here
 //!
-//! `crabka_broker::freeze::signing::freeze_signing_bytes` is `pub(crate)`
+//! `krabka_broker::freeze::signing::freeze_signing_bytes` is `pub(crate)`
 //! inside a `pub(crate)` module, so no test crate can call it. [`signing_bytes`]
 //! rebuilds the layout that `crates/broker/src/freeze/signing.rs` documents,
-//! field by field. `crabka-guard` carries a third copy for the same reason, and
+//! field by field. `krabka-guard` carries a third copy for the same reason, and
 //! a drift between any two of them fails here: a signature this file makes has
 //! to verify inside the broker, which is only true while both layouts agree.
 
@@ -42,10 +42,10 @@ use std::{
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes};
-use crabka_client_core::Client;
-use crabka_client_producer::{Producer, ProducerRecord};
-use crabka_protocol::{
+use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes};
+use krabka_client_core::Client;
+use krabka_client_producer::{Producer, ProducerRecord};
+use krabka_protocol::{
     krabka::{
         break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
         freeze::{
@@ -103,7 +103,7 @@ const WRITE_FREEZE: &str = "write.freeze";
 ///
 /// It is the value `crate::signing_domains::FREEZE_DOMAIN` holds inside the
 /// broker. That constant is `pub(crate)`, so this suite carries the literal.
-const FREEZE_DOMAIN: &[u8] = b"crabka-topic-freeze-v1\0";
+const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 
 /// The `ThawTopicFreeze` break-glass action, on the wire.
 const ACTION_THAW: i8 = 1;
@@ -308,7 +308,7 @@ async fn wait_for_registry_len(client: &Client, want: usize) -> Vec<DescribedTop
     }
 }
 
-/// The cluster id, read the way `crabka-guard` reads it before it signs.
+/// The cluster id, read the way `krabka-guard` reads it before it signs.
 ///
 /// It is inside the signed bytes, which is what stops a signature made for one
 /// cluster from being replayed into another.
@@ -378,7 +378,7 @@ struct SignedFreeze<'a> {
 }
 
 /// Sign a freeze or a thaw on the caller's own machine, exactly as
-/// `crabka-guard --sign-with` does: the private key never reaches the broker,
+/// `krabka-guard --sign-with` does: the private key never reaches the broker,
 /// and only the `key_id` and the detached signature go on the wire.
 fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest {
     let proposal_id = *signed.proposal_id.as_bytes();
@@ -568,8 +568,8 @@ async fn neither_alter_path_can_set_or_clear_a_freeze() {
     let refusal = (
         codes::INVALID_CONFIG,
         Some(
-            "topic config write.freeze is controller-managed and read-only; use `crabka-guard \
-             freeze set` to set it and `crabka-guard freeze clear` to clear it"
+            "topic config write.freeze is controller-managed and read-only; use `krabka-guard \
+             freeze set` to set it and `krabka-guard freeze clear` to clear it"
                 .to_owned(),
         ),
     );
@@ -718,7 +718,7 @@ async fn start_with_metrics() -> (BrokerHandle, Client, tempfile::TempDir) {
     let broker = Broker::start(config).await.expect("broker start");
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
@@ -776,7 +776,7 @@ async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) ->
     partition
         .records
         .as_ref()
-        .and_then(crabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
         .map_or(0, |batches| {
             batches.iter().map(|batch| batch.records.len()).sum()
         })
@@ -830,8 +830,8 @@ async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic
         .await;
     let body = scrape(metrics_addr).await;
     for needle in [
-        "crabka_broker_topic_freezes_active 1",
-        "crabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
+        "krabka_broker_topic_freezes_active 1",
+        "krabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
     ] {
         check!(body.contains(needle), "missing {needle} in:\n{body}");
     }
@@ -1000,7 +1000,7 @@ async fn a_freeze_survives_a_controller_restart() {
     for topic in ["orders", CONTROL] {
         broker.wait_until_partition_present(topic, 0).await;
         broker
-            .wait_until_local_partition_leader(topic, 0, crabka_broker::NodeId(broker.node_id()))
+            .wait_until_local_partition_leader(topic, 0, krabka_broker::NodeId(broker.node_id()))
             .await;
     }
 
@@ -1029,14 +1029,14 @@ async fn a_freeze_survives_a_controller_restart() {
 /// single-approver break-glass set, the same plaintext listener.
 async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> (BrokerHandle, Client) {
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = crabka_broker::operator_keys::OperatorKeys::load(&[key.entry()])
+    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&[key.entry()])
         .expect("load the operator trust set");
     config.break_glass.approvers = vec![support::ANONYMOUS.to_owned()];
     config.freeze.require_signature = true;
     let broker = Broker::start(config).await.expect("broker start");
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
@@ -1389,14 +1389,14 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
     let broker = support::start_reusing_addrs(&config, "the signed-freeze restart").await;
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
-        .client_id("crabka-broker-test")
+        .client_id("krabka-broker-test")
         .build()
         .await
         .expect("client build");
     for topic in ["orders", CONTROL] {
         broker.wait_until_partition_present(topic, 0).await;
         broker
-            .wait_until_local_partition_leader(topic, 0, crabka_broker::NodeId(broker.node_id()))
+            .wait_until_local_partition_leader(topic, 0, krabka_broker::NodeId(broker.node_id()))
             .await;
     }
 

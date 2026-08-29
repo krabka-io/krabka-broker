@@ -35,11 +35,11 @@
 //! in the far future where no later record replaces it.
 
 use bytes::Bytes;
-use crabka_audit::{AuditOutcome, AuditResource, PrivilegedPhase};
-use crabka_metadata::{
+use krabka_audit::{AuditOutcome, AuditResource, PrivilegedPhase};
+use krabka_metadata::{
     BreakGlassAction, MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     Decode,
     krabka::freeze::{SetTopicFreezeRequest, SetTopicFreezeResponse},
 };
@@ -493,12 +493,12 @@ mod tests {
     use std::{net::SocketAddr, path::PathBuf};
 
     use assert2::{assert, check};
-    use crabka_metadata::{BreakGlassApproval, BreakGlassProposalRecord};
-    use crabka_protocol::{
+    use krabka_metadata::{BreakGlassApproval, BreakGlassProposalRecord};
+    use krabka_protocol::{
         krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
         primitives::uuid::Uuid as ProtocolUuid,
     };
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
     use tempfile::TempDir;
 
@@ -555,7 +555,7 @@ mod tests {
         RequestContext::new(
             principal,
             peer,
-            "crabka-guard",
+            "krabka-guard",
             "conn-1",
             false,
             "PLAINTEXT",

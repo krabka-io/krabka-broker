@@ -114,7 +114,7 @@ The value names the scope because a `true` does not tell an operator what to do 
 
 The key is reported for an unfrozen topic as well, rather than left out. An absent key cannot be told apart from a broker that does not have the feature, and an operator who checks a freeze during an incident needs that difference. An internal topic is never freezable, so it reads `false`.
 
-`AlterConfigs` and `IncrementalAlterConfigs` refuse the key by name with `INVALID_CONFIG` (40), and the message names `crabka-guard` as the tool that sets it. The key is never stored as a topic config, and it never reaches the topic-config record in the metadata log. This reuses the pattern that the controller-managed broker configs already follow.
+`AlterConfigs` and `IncrementalAlterConfigs` refuse the key by name with `INVALID_CONFIG` (40), and the message names `krabka-guard` as the tool that sets it. The key is never stored as a topic config, and it never reaches the topic-config record in the metadata log. This reuses the pattern that the controller-managed broker configs already follow.
 
 There is no second internal topic. `__barrier_state` exists because a barrier cut has no other read path. Here the audit topic carries the history as OCSF JSON, and `DescribeConfigs` carries the current state. The key is never stored, so no snapshot and no restore can resurrect a stale freeze from a topic config.
 
@@ -151,7 +151,7 @@ background_unclean_recovery = "audit-only"
 | `break_glass.signed_actions` | the three irreversible actions | Actions whose approvals need a signature. |
 | `break_glass.background_unclean_recovery` | `audit-only` | `off`, `audit-only`, or `require`. See [the background path](#the-background-recovery-path-has-no-caller-to-refuse). |
 
-`[[operator_keys]]` is a top-level section rather than a nested one, because two subsystems verify against it. A duration takes any unit that `crabka_units` accepts, and a bare number is refused.
+`[[operator_keys]]` is a top-level section rather than a nested one, because two subsystems verify against it. A duration takes any unit that `krabka_units` accepts, and a bare number is refused.
 
 The broker refuses three key-set conditions when it loads the file. Each one is refused because the silent reading of it is worse than a refusal. A key file that the broker cannot read is refused. A key file that does not hold an Ed25519 public key is refused. A duplicate `key_id` is refused. A `signed_actions` entry with no configured key is a startup error too, because the alternative is an action that quietly stops needing a signature.
 
@@ -169,17 +169,17 @@ Every label set is bounded. `break_glass_bypassed` is the one an operator should
 
 ### The Command
 
-`crabka-guard` is one command for one incident. The crate is a library as well as a binary, for the reason `crabka-barrier` and `crabka-format` are. A test that spawns a binary needs a Cargo working tree, and a Bazel test sandbox has none. So the tests call `run_from_args` in process. `--bootstrap-server` is required and also reads `CRABKA_BOOTSTRAP_SERVER`, which is what `crabka-barrier` does.
+`krabka-guard` is one command for one incident. The crate is a library as well as a binary, for the reason `krabka-barrier` and `krabka-format` are. A test that spawns a binary needs a Cargo working tree, and a Bazel test sandbox has none. So the tests call `run_from_args` in process. `--bootstrap-server` is required and also reads `KRABKA_BOOTSTRAP_SERVER`, which is what `krabka-barrier` does.
 
 ```
-crabka-guard freeze set --topic orders --reason "DR cutover" [--sign-with key.pk8 --key-id alice-yubi]
-crabka-guard freeze set --prefix tenant-a. --reason "tenant offboarding"
-crabka-guard freeze list [--verify-signatures]
-crabka-guard freeze clear --topic orders --proposal <uuid> --sign-with key.pk8 --key-id alice-yubi
-crabka-guard break-glass propose  --action delete-topic --target doomed --reason "..." --ttl 30m
-crabka-guard break-glass approve  --proposal <uuid> [--sign-with key.pk8 --key-id alice-yubi]
-crabka-guard break-glass withdraw --proposal <uuid>
-crabka-guard break-glass list [--pending]
+krabka-guard freeze set --topic orders --reason "DR cutover" [--sign-with key.pk8 --key-id alice-yubi]
+krabka-guard freeze set --prefix tenant-a. --reason "tenant offboarding"
+krabka-guard freeze list [--verify-signatures]
+krabka-guard freeze clear --topic orders --proposal <uuid> --sign-with key.pk8 --key-id alice-yubi
+krabka-guard break-glass propose  --action delete-topic --target doomed --reason "..." --ttl 30m
+krabka-guard break-glass approve  --proposal <uuid> [--sign-with key.pk8 --key-id alice-yubi]
+krabka-guard break-glass withdraw --proposal <uuid>
+krabka-guard break-glass list [--pending]
 ```
 
 `--sign-with` takes a PKCS#8 key file and never sends it. The command builds the canonical bytes on the operator's own machine, signs them there, and puts only the `key_id` and the signature on the wire. The private key never reaches a broker.
@@ -195,9 +195,9 @@ crabka-guard break-glass list [--pending]
 | 4 | The action needs an approval that does not exist. |
 | 5 | A signature did not verify. |
 
-Codes 0 to 3 keep the meanings that `crabka-barrier` gives them, code 3 included.
+Codes 0 to 3 keep the meanings that `krabka-barrier` gives them, code 3 included.
 
-Code 3 is reserved rather than reused. `crabka-barrier` already exits 3 for a cut that does not match the log, and an operator runbook branches on `$?` without knowing which krabka tool answered it. One number has to mean one thing across both tools, so the two codes this feature adds take 4 and 5 rather than displacing it.
+Code 3 is reserved rather than reused. `krabka-barrier` already exits 3 for a cut that does not match the log, and an operator runbook branches on `$?` without knowing which krabka tool answered it. One number has to mean one thing across both tools, so the two codes this feature adds take 4 and 5 rather than displacing it.
 
 Code 4 is the one a runbook branches on: it says the cluster is healthy and the caller is authorized, and the operation still needs a second person. Code 5 keeps "the tool could not check" apart from "the tool checked and the answer is wrong". KFC-5's verifier draws the same distinction.
 
@@ -207,7 +207,7 @@ One new audit event covers both features. It names the outcome, the phase, the a
 
 The event carries the raw signature and not only a verified flag. The audit log is hash-chained, and its checkpoints carry an Ed25519 signature. An auditor who trusts that chain and holds the operator public keys can re-verify who set every freeze from the audit topic alone. That check needs no broker and no metadata log. Every field the freeze preimage covers comes out of the event except the cluster id, which is a property of the cluster whose log the auditor is holding. That is a second copy of the proof, independent of the first.
 
-The event's class is `ApiActivity`, which is the class the ordinary administrative event already uses. The spool frame tag, the spool reader, and `crabka-audit verify` are unchanged, and only the OCSF body mapping is new.
+The event's class is `ApiActivity`, which is the class the ordinary administrative event already uses. The spool frame tag, the spool reader, and `krabka-audit verify` are unchanged, and only the OCSF body mapping is new.
 
 ## Proposed Changes
 
@@ -273,7 +273,7 @@ The name of the person who set a freeze is the broker's word for it. That is not
 So the record carries a detached Ed25519 signature made by the operator's own key. The operator's machine makes it before the request leaves. The broker verifies it before it accepts the record. The metadata log stores it, so it stays verifiable afterwards with no trust in any broker.
 
 ```text
-FREEZE_DOMAIN = "crabka-topic-freeze-v1\0"
+FREEZE_DOMAIN = "krabka-topic-freeze-v1\0"
   cluster_id     length-prefixed
   pattern_type   u8
   scope          length-prefixed
@@ -398,7 +398,7 @@ An operator has to do nothing on a cluster that does not use the feature. The re
 
 An operator who turns the two-person rule on has to install the operator keys and the approver set on every broker before the first proposal. A `signed_actions` entry with no matching key stops the broker at startup, so a half-configured cluster fails loudly rather than accepting an unsigned approval.
 
-One existing consumer of krabka's own output sees a change. The audit topic carries a new event body, and a reader that switches on the OCSF class sees the class it already handles. The spool format, the spool reader, and `crabka-audit verify` are unchanged.
+One existing consumer of krabka's own output sees a change. The audit topic carries a new event body, and a reader that switches on the OCSF class sees the class it already handles. The spool format, the spool reader, and `krabka-audit verify` are unchanged.
 
 krabka is greenfield and undeployed, so there is no migration and no compatibility shim. There is nothing to deprecate.
 
@@ -422,7 +422,7 @@ It also covers a transaction that enlisted the partition before the freeze and s
 
 The break-glass suite covers each gated transition with and without an approval, the three distinct-principal refusals, expiry, and a failover on a three-node cluster. It also proves that the approval and the transition land in one raft append.
 
-**Audit.** Each step produces a chained record, the chain still verifies through `crabka-audit verify`, and the proposal id joins the approve event to the transition event. One case does the thing that nothing else proves. It reads a signed freeze's event back off the audit topic, and re-verifies the signature against the operator public key. It never touches the metadata image. A metrics case asserts that the counters move on a real request, which is the gap KFC-7's suite found late.
+**Audit.** Each step produces a chained record, the chain still verifies through `krabka-audit verify`, and the proposal id joins the approve event to the transition event. One case does the thing that nothing else proves. It reads a signed freeze's event back off the audit topic, and re-verifies the signature against the operator public key. It never touches the metadata image. A metrics case asserts that the counters move on a real request, which is the gap KFC-7's suite found late.
 
 **JVM acceptance, tagged `manual`.** `kafka-console-producer` against a frozen topic gets a `PolicyViolationException` and exits non-zero. `kafka-topics --delete` with no proposal fails and carries the broker's message. `kafka-leader-election --election-type unclean` fails without a proposal and succeeds with one. `kafka-configs --alter` cannot set a freeze key.
 
@@ -450,7 +450,7 @@ A krabka-private code would let a client tell a freeze from any other policy ref
 
 It loses on what an unknown code does at the client, which is where KFC-1 and KFC-7 each lost the same argument. `Errors.forCode` maps an unassigned value to `UNKNOWN_SERVER_ERROR`, and clients then disagree about whether to retry it. `POLICY_VIOLATION` (44) is an existing Kafka code with an existing JVM exception and an existing non-retriable classification. The `error_message` carries the detail that a new code would have carried.
 
-The private codes in this design are not an exception to that rule. They ride krabka-private API keys only, where the caller is `crabka-guard` and no JVM client can reach them.
+The private codes in this design are not an exception to that rule. They ride krabka-private API keys only, where the caller is `krabka-guard` and no JVM client can reach them.
 
 ### Signing With the Broker's Key
 
@@ -498,7 +498,7 @@ KFC-4 put its cuts in `__barrier_state`, and a proposal is a similar kind of con
 
 It loses on atomicity. The consume of an approval must land in the same append as the transition it authorizes. A metadata change and an internal-topic write are two appends, and a crash between them either spends the approval twice or loses it. There is no ordering of the two writes that fixes this.
 
-The reason KFC-4 chose a topic does not apply either. Non-Rust clients read a cut, and nothing outside `crabka-guard` reads a pending proposal.
+The reason KFC-4 chose a topic does not apply either. Non-Rust clients read a cut, and nothing outside `krabka-guard` reads a pending proposal.
 
 ### Break-Glass Approval as a Field on the Gated Request
 
@@ -506,4 +506,4 @@ Every gated request could carry a proposal id, which would make the authorizatio
 
 It loses on the wire format, which is the compatibility constraint that outranks everything else here. `kafka-leader-election.sh`, `kafka-topics`, `kafka-delete-records`, and `kafka-reassign-partitions` send the request shapes their KIPs define. krabka cannot add a field to any of them and stay a Kafka broker. An operator would then need a krabka-specific tool for operations that the JVM tools already do.
 
-A standing authorization keeps every one of those tools working. The operator gets the approval through `crabka-guard`, runs the stock tool, and the broker looks the approval up. The one request that does name its proposal explicitly is the thaw, because that request is krabka's own.
+A standing authorization keeps every one of those tools working. The operator gets the approval through `krabka-guard`, runs the stock tool, and the broker looks the approval up. The one request that does name its proposal explicitly is the thaw, because that request is krabka's own.

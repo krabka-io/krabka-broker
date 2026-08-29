@@ -10,7 +10,7 @@
 //!
 //! The broker defines the same two layouts in `freeze::signing` and
 //! `break_glass::signing`, and both builders are `pub(crate)` inside
-//! `pub(crate)` modules. Nothing outside `crabka-broker` can call either one,
+//! `pub(crate)` modules. Nothing outside `krabka-broker` can call either one,
 //! so this module reproduces both layouts. Two copies of a byte layout drift
 //! silently, so the tests below rebuild every expected vector by hand, field by
 //! field, from the layout the broker's module documents. A change on either
@@ -20,7 +20,7 @@
 //! # The freeze layout
 //!
 //! ```text
-//! FREEZE_DOMAIN                     b"crabka-topic-freeze-v1\0"
+//! FREEZE_DOMAIN                     b"krabka-topic-freeze-v1\0"
 //! cluster_id      u32 big-endian length, then the UTF-8 bytes
 //! pattern_type    u8                3 literal, 4 prefixed
 //! scope           u32 big-endian length, then the UTF-8 bytes
@@ -34,7 +34,7 @@
 //! # The break-glass approval layout
 //!
 //! ```text
-//! BREAK_GLASS_DOMAIN                b"crabka-break-glass-v1\0"
+//! BREAK_GLASS_DOMAIN                b"krabka-break-glass-v1\0"
 //! proposal_id     16 bytes
 //! action          u8                the wire value of the action
 //! target          u32 big-endian length, then the UTF-8 bytes
@@ -44,23 +44,23 @@
 //! ```
 //!
 //! An approval signs the proposal that the broker holds, and not a proposal the
-//! caller supplies. So `crabka-guard break-glass approve --sign-with` reads the
+//! caller supplies. So `krabka-guard break-glass approve --sign-with` reads the
 //! proposal back first and signs what the broker stored. The approvals list is
 //! outside the signed bytes on purpose: every approver signs the same payload,
 //! and a payload that grew with each approval could never verify twice.
 
 use std::path::Path;
 
-use crabka_audit::FileEd25519Signer;
+use krabka_audit::FileEd25519Signer;
 
 /// Domain separator for a freeze record signature (KFC-9).
 ///
 /// It differs from every other separator in the workspace, so a signature made
 /// for one purpose never verifies as another.
-pub const FREEZE_DOMAIN: &[u8] = b"crabka-topic-freeze-v1\0";
+pub const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 
 /// Domain separator for a break-glass approval signature (KFC-9).
-pub const BREAK_GLASS_DOMAIN: &[u8] = b"crabka-break-glass-v1\0";
+pub const BREAK_GLASS_DOMAIN: &[u8] = b"krabka-break-glass-v1\0";
 
 /// The freeze record fields that a signature covers.
 ///
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn the_freeze_bytes_match_the_documented_layout() {
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"crabka-topic-freeze-v1\0");
+        expected.extend_from_slice(b"krabka-topic-freeze-v1\0");
         expected.extend_from_slice(&11u32.to_be_bytes());
         expected.extend_from_slice(b"krabka-test");
         expected.push(3);
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn the_approval_bytes_match_the_documented_layout() {
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"crabka-break-glass-v1\0");
+        expected.extend_from_slice(b"krabka-break-glass-v1\0");
         expected.extend_from_slice(&PROPOSAL_ID);
         expected.push(6);
         expected.extend_from_slice(&6u32.to_be_bytes());

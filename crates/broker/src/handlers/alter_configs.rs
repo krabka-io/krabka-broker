@@ -188,7 +188,7 @@ fn topic_config_record(
     for cfg in &resource.configs {
         // A controller-managed key is never stored, so it cannot take part
         // in the replacement. The check comes before the whitelist, so the
-        // operator reads the refusal that names `crabka-guard` and not
+        // operator reads the refusal that names `krabka-guard` and not
         // `unrecognized config key`.
         if config_keys::is_controller_managed_topic_config(&cfg.name) {
             return Err((

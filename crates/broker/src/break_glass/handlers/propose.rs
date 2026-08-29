@@ -12,13 +12,13 @@
 //! answers `CLUSTER_AUTHORIZATION_FAILED` (31).
 
 use bytes::Bytes;
-use crabka_audit::{AuditOutcome, PrivilegedPhase};
-use crabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
-use crabka_protocol::{
+use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
+use krabka_protocol::{
     Decode,
     krabka::break_glass::{ProposeBreakGlassRequest, ProposeBreakGlassResponse},
 };
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 use uuid::Uuid;
 
 use crate::{
@@ -247,7 +247,7 @@ fn effective_ttl(configured: Time, requested_ms: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_units::{minutes, secs};
+    use krabka_units::{minutes, secs};
 
     use super::*;
     use crate::{

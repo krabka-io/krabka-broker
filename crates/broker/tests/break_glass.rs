@@ -39,19 +39,19 @@ use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use crabka_broker::{
+use krabka_broker::{
     Broker, BrokerConfig, BrokerHandle, NodeId, codes,
     config::{BackgroundUncleanRecovery, ListenerSpec},
     metrics::{BreakGlassAction as ActionLabel, BreakGlassActionLabel},
     operator_keys::OperatorKeys,
 };
-use crabka_client_core::{Client, Connection, ConnectionOptions};
-use crabka_metadata::{
+use krabka_client_core::{Client, Connection, ConnectionOptions};
+use krabka_metadata::{
     BreakGlassAction as GatedAction, BreakGlassApproval as StoredApproval,
     BreakGlassProposalRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord,
     UnregisterBrokerRecord,
 };
-use crabka_protocol::{
+use krabka_protocol::{
     krabka::break_glass::{
         ApproveBreakGlassRequest, ApproveBreakGlassResponse, BreakGlassApproval as WireApproval,
         DescribeBreakGlassRequest, DescribedBreakGlassProposal, ProposeBreakGlassRequest,
@@ -71,7 +71,7 @@ use crabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
     records::RecordBatch,
 };
-use crabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 mod support;
@@ -250,7 +250,7 @@ async fn propose(
     action: i8,
     target: &str,
     ttl_ms: i64,
-) -> crabka_protocol::krabka::break_glass::ProposeBreakGlassResponse {
+) -> krabka_protocol::krabka::break_glass::ProposeBreakGlassResponse {
     client
         .send(ProposeBreakGlassRequest {
             action,
@@ -307,7 +307,7 @@ async fn approve(client: &Client, id: WireUuid) -> ApproveBreakGlassResponse {
 /// Add one approval signed by `key`, over the proposal the broker holds.
 ///
 /// The signature covers the stored record and not one the caller made up, so
-/// this reads the proposal back first, exactly as `crabka-guard` does.
+/// this reads the proposal back first, exactly as `krabka-guard` does.
 async fn approve_signed(
     client: &Client,
     id: WireUuid,
@@ -349,7 +349,7 @@ async fn approve_with(
 /// broker's own encoder would make the check vacuous.
 fn approval_signing_bytes(proposal: &DescribedBreakGlassProposal) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(b"crabka-break-glass-v1\0");
+    out.extend_from_slice(b"krabka-break-glass-v1\0");
     out.extend_from_slice(&proposal.proposal_id.0);
     out.extend_from_slice(&proposal.action.to_be_bytes());
     push_len_prefixed(&mut out, proposal.target.as_bytes());
@@ -429,7 +429,7 @@ async fn delete_topic(client: &Client, name: &str) -> i16 {
 /// Whether `client`'s cluster still knows `name`.
 async fn topic_exists(client: &Client, name: &str) -> bool {
     client
-        .send(crabka_protocol::owned::metadata_request::MetadataRequest::default())
+        .send(krabka_protocol::owned::metadata_request::MetadataRequest::default())
         .await
         .expect("Metadata")
         .topics
@@ -949,19 +949,19 @@ async fn metadata_batches(
     .await
     .expect("dial the controller listener");
     let mut body = Vec::new();
-    crabka_raft::CrabkaMetadataFetchRequest {
+    krabka_raft::KrabkaMetadataFetchRequest {
         fetch_offset: from,
         max_bytes: 4 << 20,
     }
     .encode_v0(&mut body);
     let raw = connection
-        .raw_request(crabka_raft::API_KEY_METADATA_FETCH, 0, Bytes::from(body))
+        .raw_request(krabka_raft::API_KEY_METADATA_FETCH, 0, Bytes::from(body))
         .await
         .expect("metadata fetch");
     connection.close();
 
     let mut cursor: &[u8] = &raw;
-    let response = crabka_raft::CrabkaMetadataFetchResponse::decode_v0(&mut cursor)
+    let response = krabka_raft::KrabkaMetadataFetchResponse::decode_v0(&mut cursor)
         .expect("decode the metadata fetch response");
     assert!(response.error_code == 0, "the controller served the fetch");
 
@@ -977,7 +977,7 @@ async fn metadata_batches(
                 .records
                 .iter()
                 .filter_map(|record| record.value.as_ref())
-                .filter_map(|value| crabka_metadata::from_kraft_value(value, image).ok())
+                .filter_map(|value| krabka_metadata::from_kraft_value(value, image).ok())
                 .collect(),
         );
     }

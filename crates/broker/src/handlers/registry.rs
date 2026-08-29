@@ -817,31 +817,31 @@ krabka_private_context_dispatches!(register_krabka_private_context_dispatches;
     (
         set_topic_freeze_adapter,
         crate::handlers::SET_TOPIC_FREEZE_API_KEY,
-        crabka_protocol::krabka::freeze::set_topic_freeze::FLEXIBLE_MIN,
+        krabka_protocol::krabka::freeze::set_topic_freeze::FLEXIBLE_MIN,
         crate::freeze::handlers::set_freeze::handle
     ),
     (
         describe_topic_freezes_adapter,
         crate::handlers::DESCRIBE_TOPIC_FREEZES_API_KEY,
-        crabka_protocol::krabka::freeze::describe_topic_freezes::FLEXIBLE_MIN,
+        krabka_protocol::krabka::freeze::describe_topic_freezes::FLEXIBLE_MIN,
         crate::freeze::handlers::describe_freezes::handle
     ),
     (
         propose_break_glass_adapter,
         crate::handlers::PROPOSE_BREAK_GLASS_API_KEY,
-        crabka_protocol::krabka::break_glass::propose::FLEXIBLE_MIN,
+        krabka_protocol::krabka::break_glass::propose::FLEXIBLE_MIN,
         crate::break_glass::handlers::propose::handle
     ),
     (
         approve_break_glass_adapter,
         crate::handlers::APPROVE_BREAK_GLASS_API_KEY,
-        crabka_protocol::krabka::break_glass::approve::FLEXIBLE_MIN,
+        krabka_protocol::krabka::break_glass::approve::FLEXIBLE_MIN,
         crate::break_glass::handlers::approve::handle
     ),
     (
         describe_break_glass_adapter,
         crate::handlers::DESCRIBE_BREAK_GLASS_API_KEY,
-        crabka_protocol::krabka::break_glass::describe::FLEXIBLE_MIN,
+        krabka_protocol::krabka::break_glass::describe::FLEXIBLE_MIN,
         crate::break_glass::handlers::describe::handle
     ),
 );

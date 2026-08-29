@@ -458,8 +458,8 @@ mod tests {
         serde_json::json!({
             "version": "1.3.0",
             "product": {
-                "vendor_name": "Crabka",
-                "name": "crabka-broker",
+                "vendor_name": "Krabka",
+                "name": "krabka-broker",
                 "version": "0.3.7",
             }
         })

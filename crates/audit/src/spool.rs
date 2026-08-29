@@ -404,8 +404,8 @@ mod tests {
     #[test]
     fn privileged_action_record_round_trips_through_the_frame_format() {
         let product = ProductInfo {
-            vendor_name: "Crabka".into(),
-            name: "crabka-broker".into(),
+            vendor_name: "Krabka".into(),
+            name: "krabka-broker".into(),
             version: "0".into(),
         };
         let event = AuditEvent::PrivilegedAction {

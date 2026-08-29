@@ -11,7 +11,7 @@
 //! Every label set is bounded. The `action` label takes one of the seven action
 //! names, and the `state` label takes one of the four state names.
 
-use crabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage};
+use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage};
 
 use crate::{
     break_glass::{config::BreakGlassPolicy, gate::distinct_approvers},
@@ -95,7 +95,7 @@ fn state_index(state: BreakGlassState) -> usize {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::BreakGlassProposalRecord;
+    use krabka_metadata::BreakGlassProposalRecord;
 
     use super::*;
     use crate::{

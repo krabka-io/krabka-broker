@@ -20,7 +20,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use crabka_metadata::BreakGlassAction as GatedAction;
+use krabka_metadata::BreakGlassAction as GatedAction;
 use prometheus_client::{
     encoding::{EncodeLabelSet, EncodeLabelValue, LabelValueEncoder},
     metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
@@ -197,7 +197,7 @@ impl EncodeLabelValue for BreakGlassState {
 /// KFC-9 privileged transition that a break-glass proposal authorizes, as a
 /// metric label.
 ///
-/// [`crabka_metadata::BreakGlassAction`] is the one definition of the gated
+/// [`krabka_metadata::BreakGlassAction`] is the one definition of the gated
 /// set. This newtype is only what lets that definition *be* a label value:
 /// both the enum and `EncodeLabelValue` are foreign to this crate, so the
 /// orphan rule forbids implementing the trait on the enum directly.
@@ -247,7 +247,7 @@ pub struct BreakGlassStateLabel {
 /// KFC-9 privileged-transition label set, paired with the
 /// `break_glass_refusals` and `break_glass_bypassed` counter families.
 /// Cardinality is bounded at seven, because the field wraps the closed
-/// [`crabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
+/// [`krabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
 /// action.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct BreakGlassActionLabel {
@@ -2569,20 +2569,20 @@ mod tests {
         let cases = [
             (
                 "freeze rejections",
-                "crabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
+                "krabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
             ),
-            ("freezes active", "crabka_broker_topic_freezes_active 2"),
+            ("freezes active", "krabka_broker_topic_freezes_active 2"),
             (
                 "proposals",
-                "crabka_broker_break_glass_proposals{state=\"pending\"} 3",
+                "krabka_broker_break_glass_proposals{state=\"pending\"} 3",
             ),
             (
                 "refusals",
-                "crabka_broker_break_glass_refusals_total{action=\"delete_topic\"} 1",
+                "krabka_broker_break_glass_refusals_total{action=\"delete_topic\"} 1",
             ),
             (
                 "bypassed",
-                "crabka_broker_break_glass_bypassed_total{action=\"unclean_recovery\"} 1",
+                "krabka_broker_break_glass_bypassed_total{action=\"unclean_recovery\"} 1",
             ),
         ];
         for (what, needle) in cases {
@@ -2613,7 +2613,7 @@ mod tests {
 
         for (label, _, count) in cases {
             let needle =
-                format!("crabka_broker_break_glass_proposals{{state=\"{label}\"}} {count}");
+                format!("krabka_broker_break_glass_proposals{{state=\"{label}\"}} {count}");
             assert!(buf.contains(&needle), "missing {needle} in:\n{buf}");
         }
     }
@@ -2660,11 +2660,11 @@ mod tests {
 
         for (i, (label, _)) in cases.into_iter().enumerate() {
             let refused = format!(
-                "crabka_broker_break_glass_refusals_total{{action=\"{label}\"}} {}",
+                "krabka_broker_break_glass_refusals_total{{action=\"{label}\"}} {}",
                 i + 1
             );
             let bypassed =
-                format!("crabka_broker_break_glass_bypassed_total{{action=\"{label}\"}} 1");
+                format!("krabka_broker_break_glass_bypassed_total{{action=\"{label}\"}} 1");
             assert!(buf.contains(&refused), "missing {refused} in:\n{buf}");
             assert!(buf.contains(&bypassed), "missing {bypassed} in:\n{buf}");
         }

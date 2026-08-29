@@ -21,7 +21,7 @@
 //! # Every phase reaches the audit log
 //!
 //! A proposal, each approval, a withdrawal, and every refusal produce one
-//! [`crabka_audit::AuditEvent::PrivilegedAction`] event. The event names the
+//! [`krabka_audit::AuditEvent::PrivilegedAction`] event. The event names the
 //! acting principal, the other people who approved, the key id, the raw
 //! signature, and a fingerprint of this broker's approver set. A two-person
 //! rule whose record names one person is not a two-person rule.
@@ -36,11 +36,11 @@ pub(crate) mod audit;
 pub(crate) mod describe;
 pub(crate) mod propose;
 
-use crabka_audit::{
+use krabka_audit::{
     AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal, PrivilegedPhase,
 };
-use crabka_protocol::primitives::uuid::Uuid as WireUuid;
-use crabka_raft::RaftError;
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
+use krabka_raft::RaftError;
 use uuid::Uuid;
 
 // The `Describe` gate that `describe` applies. It lives in `crate::handlers`
@@ -189,7 +189,7 @@ pub(crate) fn audit_privileged(
 #[cfg(test)]
 pub(crate) mod tests {
     use assert2::{assert, check};
-    use crabka_security::{AuthMethod, Principal};
+    use krabka_security::{AuthMethod, Principal};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -213,7 +213,7 @@ pub(crate) mod tests {
         RequestContext {
             principal,
             peer,
-            client_id: "crabka-guard",
+            client_id: "krabka-guard",
             connection_id: "test-connection",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",

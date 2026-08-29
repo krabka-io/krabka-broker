@@ -10,7 +10,7 @@
 //! It is one command for one incident. It is a library as well as a binary so
 //! tests call [`run_from_args`] in process: a test that spawns the binary needs
 //! a Cargo working tree to build it from, and a Bazel test sandbox has none.
-//! That is the same reason `crabka-barrier` and `crabka-format` are libraries.
+//! That is the same reason `krabka-barrier` and `krabka-format` are libraries.
 //!
 //! # The two properties that matter
 //!
@@ -27,7 +27,7 @@
 //! # Exit codes
 //!
 //! A runbook branches on `$?`, so every number means one thing across this tool
-//! and `crabka-barrier`. See [`EXIT_REFUSED`], [`EXIT_UNREACHABLE`],
+//! and `krabka-barrier`. See [`EXIT_REFUSED`], [`EXIT_UNREACHABLE`],
 //! [`EXIT_MISMATCH`], [`EXIT_NO_APPROVAL`] and [`EXIT_BAD_SIGNATURE`].
 //!
 //! # The api keys
@@ -40,7 +40,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use crabka_protocol::{
+use krabka_protocol::{
     krabka::{
         break_glass as bg,
         freeze::{self as api, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
@@ -48,7 +48,7 @@ use crabka_protocol::{
     owned::describe_cluster_request::DescribeClusterRequest,
     primitives::uuid::Uuid as WireUuid,
 };
-use crabka_units::{Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 
 pub mod signing;
 pub mod verify;
@@ -62,7 +62,7 @@ pub const EXIT_REFUSED: i32 = 1;
 pub const EXIT_UNREACHABLE: i32 = 2;
 /// The exit code for a registry the local trust set does not match.
 ///
-/// It carries `crabka-barrier`'s meaning: the tool asked the cluster for
+/// It carries `krabka-barrier`'s meaning: the tool asked the cluster for
 /// something and what came back does not agree with what the operator holds. A
 /// registry entry that names an operator key this machine does not have is that
 /// disagreement, and it is not the same answer as a signature that failed. This
@@ -87,13 +87,13 @@ pub const EXIT_BAD_SIGNATURE: i32 = 5;
 /// same flags.
 #[derive(Parser)]
 #[command(
-    name = "crabka-guard",
+    name = "krabka-guard",
     version,
     about = "Freeze topic writes, lift a freeze, and run the break-glass two-person rule"
 )]
 pub struct Cli {
     /// One or more `host:port` pairs to bootstrap against.
-    #[arg(long, short = 'b', env = "CRABKA_BOOTSTRAP_SERVER", required = true)]
+    #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
     pub bootstrap_server: String,
 
     /// What to do.
@@ -347,7 +347,7 @@ pub fn pattern_name(pattern_type: i8) -> &'static str {
 
 /// Parse a time argument.
 ///
-/// Delegates to `crabka_units`, so every unit the broker's own configuration
+/// Delegates to `krabka_units`, so every unit the broker's own configuration
 /// accepts works here too: `ns`, `us`, `ms`, `s`, `m`, `h`, `d` and their long
 /// forms.
 ///
@@ -355,7 +355,7 @@ pub fn pattern_name(pattern_type: i8) -> &'static str {
 /// crate's rule and it is the right one here: `--ttl 30` from someone who meant
 /// minutes would otherwise open a proposal for thirty milliseconds.
 fn parse_time(raw: &str) -> Result<Time, String> {
-    crabka_units::parse::time(raw).map_err(|e| e.to_string())
+    krabka_units::parse::time(raw).map_err(|e| e.to_string())
 }
 
 /// Parse a proposal id.
@@ -385,9 +385,9 @@ where
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client = match crabka_client_core::Client::builder()
+    let client = match krabka_client_core::Client::builder()
         .bootstrap(&cli.bootstrap_server)
-        .client_id("crabka-guard")
+        .client_id("krabka-guard")
         .build()
         .await
     {
@@ -413,7 +413,7 @@ pub async fn run(cli: Cli) -> i32 {
 /// Returns the [`Failure`] of a step that stopped before a broker answered: a
 /// key file that cannot be read, a proposal that cannot be looked up, or a
 /// request that did not complete.
-async fn dispatch(client: &crabka_client_core::Client, command: Command) -> Result<i32, Failure> {
+async fn dispatch(client: &krabka_client_core::Client, command: Command) -> Result<i32, Failure> {
     match command {
         Command::Freeze { command } => match command {
             FreezeCommand::Set {
@@ -459,7 +459,7 @@ async fn dispatch(client: &crabka_client_core::Client, command: Command) -> Resu
 /// proposal are what separate them, and both are inside the signed bytes, so a
 /// signature captured from a freeze cannot be replayed as the thaw.
 async fn set_freeze(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     scope: &ScopeArgs,
     reason: String,
     signing: &FreezeSigningArgs,
@@ -510,7 +510,7 @@ async fn set_freeze(
 
 /// Read the registry, and prove it when the operator asks.
 async fn list_freezes(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     scope: Option<String>,
     verify_signatures: bool,
     operator_keys: Option<&std::path::Path>,
@@ -541,7 +541,7 @@ async fn list_freezes(
 
 /// Open a proposal.
 async fn propose(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     action: Action,
     target: String,
     reason: String,
@@ -576,7 +576,7 @@ async fn propose(
 /// supplies, so a signed approval reads the proposal back first and signs what
 /// is stored.
 async fn approve(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     proposal: uuid::Uuid,
     sign_with: Option<&std::path::Path>,
     key_id: Option<&str>,
@@ -623,7 +623,7 @@ async fn approve(
 ///
 /// This rides api key 1018 with the `withdraw` flag set, and never key 1017.
 async fn withdraw(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     proposal: uuid::Uuid,
 ) -> Result<i32, Failure> {
     let request = bg::ApproveBreakGlassRequest {
@@ -644,7 +644,7 @@ async fn withdraw(
 
 /// Print the proposals and their approvals.
 async fn list_proposals(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     pending: bool,
     proposal: Option<uuid::Uuid>,
 ) -> Result<i32, Failure> {
@@ -668,7 +668,7 @@ async fn list_proposals(
 
 /// Read one stored proposal, so a signature covers what the broker holds.
 async fn read_proposal(
-    client: &crabka_client_core::Client,
+    client: &krabka_client_core::Client,
     proposal_id: WireUuid,
 ) -> Result<bg::DescribedBreakGlassProposal, Failure> {
     let request = bg::DescribeBreakGlassRequest {
@@ -691,7 +691,7 @@ async fn read_proposal(
 }
 
 /// Read the cluster id that a freeze signature covers.
-async fn cluster_id(client: &crabka_client_core::Client) -> Result<String, Failure> {
+async fn cluster_id(client: &krabka_client_core::Client) -> Result<String, Failure> {
     let response = client
         .send(DescribeClusterRequest::default())
         .await
@@ -716,12 +716,12 @@ enum Failure {
     Signature(String),
 }
 
-impl From<crabka_client_core::ClientError> for Failure {
+impl From<krabka_client_core::ClientError> for Failure {
     /// A client error is always a transport failure here.
     ///
     /// Nothing is known about the request's outcome, which is what separates
     /// this from a refusal the broker answered with.
-    fn from(error: crabka_client_core::ClientError) -> Self {
+    fn from(error: krabka_client_core::ClientError) -> Self {
         Failure::Transport(format!(
             "the request did not complete, so its outcome is unknown: {error}"
         ))
@@ -838,7 +838,7 @@ fn now_ms() -> i64 {
 /// other refusal is a refusal.
 #[must_use]
 pub fn exit_for_code(code: i16) -> i32 {
-    use crabka_broker::codes;
+    use krabka_broker::codes;
 
     match code {
         codes::NONE => 0,
@@ -852,11 +852,11 @@ pub fn exit_for_code(code: i16) -> i32 {
 
 /// Describe an error code.
 ///
-/// `crabka-broker` has no code-to-name table, so this prints the number and
+/// `krabka-broker` has no code-to-name table, so this prints the number and
 /// names the krabka-private codes that no Kafka reference lists.
 #[must_use]
 pub fn code_name(code: i16) -> String {
-    use crabka_broker::codes;
+    use krabka_broker::codes;
 
     let note = match code {
         codes::BREAK_GLASS_APPROVAL_REQUIRED => {
@@ -994,7 +994,7 @@ fn report_verify(freezes: &[api::DescribedTopicFreeze], outcome: &VerifyOutcome)
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_broker::codes;
+    use krabka_broker::codes;
 
     use super::*;
 
@@ -1080,7 +1080,7 @@ mod tests {
         }
     }
 
-    /// The three codes `crabka-barrier` also ships keep the numbers it gives
+    /// The three codes `krabka-barrier` also ships keep the numbers it gives
     /// them, so one runbook can branch on both tools.
     #[test]
     fn the_shared_exit_codes_keep_the_barrier_meanings() {
@@ -1120,9 +1120,9 @@ mod tests {
     /// guess about where the cluster is.
     #[test]
     fn a_command_line_without_a_bootstrap_server_is_refused() {
-        assert!(Cli::try_parse_from(["crabka-guard", "freeze", "list"]).is_err());
+        assert!(Cli::try_parse_from(["krabka-guard", "freeze", "list"]).is_err());
         assert!(
-            Cli::try_parse_from(["crabka-guard", "-b", "localhost:9092", "freeze", "list"]).is_ok()
+            Cli::try_parse_from(["krabka-guard", "-b", "localhost:9092", "freeze", "list"]).is_ok()
         );
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
     /// with both would have two.
     #[test]
     fn a_freeze_names_exactly_one_scope() {
-        let base = ["crabka-guard", "-b", "localhost:9092", "freeze", "set"];
+        let base = ["krabka-guard", "-b", "localhost:9092", "freeze", "set"];
         let reason = ["--reason", "DR cutover"];
 
         let literal = Cli::try_parse_from(
@@ -1171,7 +1171,7 @@ mod tests {
     #[test]
     fn the_signing_flags_travel_together() {
         let base = [
-            "crabka-guard",
+            "krabka-guard",
             "-b",
             "localhost:9092",
             "freeze",
@@ -1221,7 +1221,7 @@ mod tests {
     /// an empty trust set, which is a check that silently does nothing.
     #[test]
     fn verifying_signatures_needs_a_local_key_file() {
-        let base = ["crabka-guard", "-b", "localhost:9092", "freeze", "list"];
+        let base = ["krabka-guard", "-b", "localhost:9092", "freeze", "list"];
         assert!(
             Cli::try_parse_from(base.iter().chain(["--verify-signatures"].iter())).is_err(),
             "verifying with no key file is refused"
@@ -1283,7 +1283,7 @@ mod tests {
     #[test]
     fn an_action_is_spelled_with_dashes_on_the_command_line() {
         let cli = Cli::try_parse_from([
-            "crabka-guard",
+            "krabka-guard",
             "-b",
             "localhost:9092",
             "break-glass",

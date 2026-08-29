@@ -27,9 +27,9 @@
 pub(crate) mod describe_freezes;
 pub(crate) mod set_freeze;
 
-use crabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal};
-use crabka_metadata::PatternType;
-use crabka_protocol::krabka::freeze::{
+use krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal};
+use krabka_metadata::PatternType;
+use krabka_protocol::krabka::freeze::{
     PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
 };
 
@@ -48,11 +48,11 @@ use crate::{
 // decodes.
 const _: () = assert!(
     crate::handlers::SET_TOPIC_FREEZE_API_KEY
-        == crabka_protocol::krabka::freeze::set_topic_freeze::API_KEY
+        == krabka_protocol::krabka::freeze::set_topic_freeze::API_KEY
 );
 const _: () = assert!(
     crate::handlers::DESCRIBE_TOPIC_FREEZES_API_KEY
-        == crabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY
+        == krabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY
 );
 
 /// The pattern type that a request's `pattern_type` byte names, or `None` when
@@ -151,7 +151,7 @@ pub(crate) fn audit_freeze(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     outcome: AuditOutcome,
-    phase: crabka_audit::PrivilegedPhase,
+    phase: krabka_audit::PrivilegedPhase,
     audit: &FreezeAudit<'_>,
     approvers: &[String],
 ) {

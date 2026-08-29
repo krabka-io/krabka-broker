@@ -7,9 +7,9 @@
 //! captured signature for a purpose the signer never agreed to.
 //!
 //! `crates/remote-storage/src/worm/manifest.rs` states the same rule. It gives
-//! the segment manifest [`crabka_remote_storage::MANIFEST_DOMAIN`] and the
-//! chain preimage [`crabka_remote_storage::MANIFEST_BODY_DOMAIN`], and it
-//! deliberately does not share [`crabka_audit::signing::CHECKPOINT_DOMAIN`],
+//! the segment manifest [`krabka_remote_storage::MANIFEST_DOMAIN`] and the
+//! chain preimage [`krabka_remote_storage::MANIFEST_BODY_DOMAIN`], and it
+//! deliberately does not share [`krabka_audit::signing::CHECKPOINT_DOMAIN`],
 //! even though both schemes sign with the same Ed25519 keys and the same
 //! verifier.
 //!
@@ -20,16 +20,16 @@
 //! path would have to reach into the other path for its constant.
 
 /// Domain separator for a `TopicFreezeRecord` signature (KFC-9).
-pub(crate) const FREEZE_DOMAIN: &[u8] = b"crabka-topic-freeze-v1\0";
+pub(crate) const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 
 /// Domain separator for a break-glass approval signature (KFC-9).
-pub(crate) const BREAK_GLASS_DOMAIN: &[u8] = b"crabka-break-glass-v1\0";
+pub(crate) const BREAK_GLASS_DOMAIN: &[u8] = b"krabka-break-glass-v1\0";
 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_audit::signing::CHECKPOINT_DOMAIN;
-    use crabka_remote_storage::{MANIFEST_BODY_DOMAIN, MANIFEST_DOMAIN};
+    use krabka_audit::signing::CHECKPOINT_DOMAIN;
+    use krabka_remote_storage::{MANIFEST_BODY_DOMAIN, MANIFEST_DOMAIN};
 
     use super::{BREAK_GLASS_DOMAIN, FREEZE_DOMAIN};
 

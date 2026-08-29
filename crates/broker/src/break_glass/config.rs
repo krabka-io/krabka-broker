@@ -18,8 +18,8 @@
 //! is what makes a disagreement visible after the fact: every break-glass audit
 //! event carries it.
 
-use crabka_metadata::BreakGlassAction;
-use crabka_units::Time;
+use krabka_metadata::BreakGlassAction;
+use krabka_units::Time;
 
 use crate::{break_glass::action_name, config::BreakGlassConfig, operator_keys};
 
@@ -103,7 +103,7 @@ impl<'a> BreakGlassPolicy<'a> {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_units::minutes;
+    use krabka_units::minutes;
 
     use super::*;
     use crate::{break_glass::ALL_ACTIONS, operator_keys::approver_set_fingerprint};
@@ -148,7 +148,7 @@ mod tests {
         let config = config();
         let policy = BreakGlassPolicy::new(&config);
         for action in ALL_ACTIONS {
-            let expected = action == crabka_metadata::BreakGlassAction::DeleteTopic;
+            let expected = action == krabka_metadata::BreakGlassAction::DeleteTopic;
             check!(
                 policy.needs_signature(action) == expected,
                 "{}",

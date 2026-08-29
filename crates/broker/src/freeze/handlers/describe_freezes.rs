@@ -19,8 +19,8 @@
 //! apart.
 
 use bytes::Bytes;
-use crabka_metadata::{MetadataImage, TopicFreezeRecord};
-use crabka_protocol::{
+use krabka_metadata::{MetadataImage, TopicFreezeRecord};
+use krabka_protocol::{
     Decode,
     krabka::freeze::{
         DescribeTopicFreezesRequest, DescribeTopicFreezesResponse, DescribedTopicFreeze,
@@ -120,8 +120,8 @@ fn described(entry: &TopicFreezeRecord) -> DescribedTopicFreeze {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use crabka_metadata::{MetadataRecord, PatternType};
-    use crabka_protocol::krabka::freeze::{
+    use krabka_metadata::{MetadataRecord, PatternType};
+    use krabka_protocol::krabka::freeze::{
         PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
     };
     use uuid::Uuid;

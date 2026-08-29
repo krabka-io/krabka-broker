@@ -24,10 +24,10 @@
 
 use std::time::Duration;
 
-use crabka_metadata::{
+use krabka_metadata::{
     BreakGlassAction, BreakGlassApproval, BreakGlassProposalRecord, MetadataImage, MetadataRecord,
 };
-use crabka_units::millis;
+use krabka_units::millis;
 use stateright::{Checker, Model, Property};
 use uuid::Uuid;
 

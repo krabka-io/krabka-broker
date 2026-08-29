@@ -2951,7 +2951,7 @@ dependencies = [
 [[package]]
 name = "krabka-compression"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "assert2",
  "bytes",
@@ -2989,9 +2989,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-guard"
+version = "0.4.0"
+dependencies = [
+ "assert2",
+ "clap",
+ "hex",
+ "krabka-audit",
+ "krabka-broker",
+ "krabka-client-core",
+ "krabka-protocol",
+ "krabka-units",
+ "ring",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "krabka-ids"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "assert2",
  "derive_more",
@@ -3051,7 +3073,7 @@ dependencies = [
 [[package]]
 name = "krabka-metadata"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "assert2",
  "bytes",
@@ -3087,7 +3109,7 @@ dependencies = [
 [[package]]
 name = "krabka-protocol"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "arbitrary",
  "assert2",
@@ -3262,7 +3284,7 @@ dependencies = [
 [[package]]
 name = "krabka-security"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "arc-swap",
  "assert2",
@@ -3337,7 +3359,7 @@ dependencies = [
 [[package]]
 name = "krabka-trace-context"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "opentelemetry",
  "serde",
@@ -3349,7 +3371,7 @@ dependencies = [
 [[package]]
 name = "krabka-units"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "num-traits",
  "serde",
@@ -3369,7 +3391,7 @@ dependencies = [
 [[package]]
 name = "krabka-voters"
 version = "0.4.0"
-source = "git+https://github.com/krabka-io/krabka-protocol?rev=dea9f7613cf078d1b4be421562e3cbaefb5346c2#dea9f7613cf078d1b4be421562e3cbaefb5346c2"
+source = "git+https://github.com/krabka-io/krabka-protocol?rev=1cb579849b1ba02f7d738d55df775f96766d0838#1cb579849b1ba02f7d738d55df775f96766d0838"
 dependencies = [
  "assert2",
  "krabka-ids",

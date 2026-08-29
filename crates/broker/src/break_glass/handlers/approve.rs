@@ -36,9 +36,9 @@
 //! audit log after the fact.
 
 use bytes::Bytes;
-use crabka_audit::{AuditOutcome, PrivilegedPhase};
-use crabka_metadata::{BreakGlassApproval, BreakGlassProposalRecord, MetadataRecord};
-use crabka_protocol::{
+use krabka_audit::{AuditOutcome, PrivilegedPhase};
+use krabka_metadata::{BreakGlassApproval, BreakGlassProposalRecord, MetadataRecord};
+use krabka_protocol::{
     Decode,
     krabka::break_glass::{ApproveBreakGlassRequest, ApproveBreakGlassResponse},
 };
@@ -209,7 +209,7 @@ pub(crate) struct Attempt<'a> {
 ///
 /// The result is the stored record with one approval appended, or with
 /// `withdrawn` set. The caller writes it to the metadata log, where
-/// [`MetadataImage::validate`](crabka_metadata::MetadataImage::validate)
+/// [`MetadataImage::validate`](krabka_metadata::MetadataImage::validate)
 /// refuses it if another approval landed first and this record does not extend
 /// that list.
 ///
@@ -429,7 +429,7 @@ fn count(value: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use crabka_metadata::BreakGlassAction;
+    use krabka_metadata::BreakGlassAction;
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
     use tempfile::TempDir;
 

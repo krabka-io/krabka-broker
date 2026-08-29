@@ -9,13 +9,13 @@ use std::{
     },
 };
 
+use dashmap::DashMap;
+use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt},
 };
-use dashmap::DashMap;
-use futures_util::future::BoxFuture;
 use tokio::{
     net::TcpListener,
     task::{JoinHandle, JoinSet},
@@ -5615,8 +5615,8 @@ fn tune_accepted_socket(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::{kibibytes, mebibytes, millis, minutes, secs};
     use futures_util::future::BoxFuture;
+    use krabka_units::{kibibytes, mebibytes, millis, minutes, secs};
     use tempfile::tempdir;
 
     use super::*;
