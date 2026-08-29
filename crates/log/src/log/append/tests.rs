@@ -1,0 +1,263 @@
+//! Unit tests for the owned append paths: offset assignment, the
+//! caller-supplied `append_at` offset, the leader-epoch transitions all
+//! four append paths record, and the size-driven segment roll.
+
+use assert2::check;
+use krabka_units::prelude::bytes;
+use tempfile::tempdir;
+
+use super::*;
+use crate::{
+    config::LogConfig,
+    leader_epoch_checkpoint::EpochEntry,
+    log::test_support::{
+        sample_batch, sample_batch_with_epoch, test_batch_at, test_log, verbatim_from,
+    },
+    stamp_index::{StampEntry, StampIndex},
+};
+
+/// A leader-epoch transition is recorded only when the epoch is known and
+/// only when it advances past the one already recorded.
+///
+/// Four append paths carry the same two-part guard, and each half is silent
+/// on its own: joined with `||` an unknown epoch gets recorded, and relaxed
+/// from `>` to `>=` the same epoch is recorded twice. Neither shows up in
+/// the appended data -- only in the epoch checkpoint.
+#[test]
+fn an_epoch_transition_is_recorded_once_and_only_when_it_advances() {
+    // Offered in order. -1 is KIP-320's "unknown"; 5 repeats; 6 advances.
+    const OFFERED: [i32; 5] = [-1, 5, 5, 6, -1];
+    // Only the two advances belong in the checkpoint.
+    const RECORDED: [i32; 2] = [5, 6];
+
+    fn recorded(log: &Log) -> Vec<i32> {
+        log.epoch_checkpoint
+            .entries()
+            .iter()
+            .map(|e| e.epoch.0)
+            .collect()
+    }
+
+    // `append`: the log assigns the base offset.
+    {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for epoch in OFFERED {
+            let mut batch = sample_batch(1);
+            batch.partition_leader_epoch = epoch;
+            log.append(&mut batch).expect("append");
+        }
+        check!(recorded(&log) == RECORDED, "append: {:?}", recorded(&log));
+    }
+
+    // `append_at`: the caller supplies the offset.
+    {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for (i, epoch) in OFFERED.iter().enumerate() {
+            let mut batch = sample_batch(1);
+            batch.partition_leader_epoch = *epoch;
+            log.append_at(&mut batch, Offset(i64::try_from(i).unwrap()))
+                .expect("append_at");
+        }
+        check!(
+            recorded(&log) == RECORDED,
+            "append_at: {:?}",
+            recorded(&log)
+        );
+    }
+
+    // `append_verbatim`: producer-supplied bytes, log-assigned offset.
+    {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for epoch in OFFERED {
+            let producer = test_batch_at(0);
+            let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(epoch));
+            log.append_verbatim(&vb).expect("append_verbatim");
+        }
+        check!(
+            recorded(&log) == RECORDED,
+            "append_verbatim: {:?}",
+            recorded(&log)
+        );
+    }
+
+    // `append_verbatim_at`: producer-supplied bytes and offset.
+    {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for (i, epoch) in OFFERED.iter().enumerate() {
+            let producer = test_batch_at(0);
+            let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(*epoch));
+            log.append_verbatim_at(&vb, Offset(i64::try_from(i).unwrap()))
+                .expect("append_verbatim_at");
+        }
+        check!(
+            recorded(&log) == RECORDED,
+            "append_verbatim_at: {:?}",
+            recorded(&log)
+        );
+    }
+}
+
+#[test]
+fn append_at_uses_reconciled_frontier_floor() {
+    let (dir, mut log) = test_log();
+    let mut prefix = test_batch_at(0);
+    log.append(&mut prefix).unwrap();
+
+    log.reconcile_next_offset(Offset(3));
+    let mut gap_batch = test_batch_at(0);
+    let mut rejected = gap_batch.clone();
+    let err = log.append_at(&mut rejected, Offset(1)).unwrap_err();
+    assert!(matches!(
+        err,
+        LogError::OffsetMismatch {
+            expected: Offset(3),
+            actual: Offset(1)
+        }
+    ));
+
+    log.append_at(&mut gap_batch, Offset(3)).unwrap();
+    assert_eq!(log.log_end_offset(), Offset(4));
+    drop(dir);
+}
+
+#[test]
+fn append_assigns_monotonic_offsets() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut b1 = sample_batch(3);
+    let mut b2 = sample_batch(2);
+    let first_offset = log.append(&mut b1).unwrap();
+    let second_offset = log.append(&mut b2).unwrap();
+    assert2::assert!(first_offset == Offset(0));
+    assert2::assert!(second_offset == Offset(3));
+    assert2::assert!(log.log_end_offset() == Offset(5));
+}
+
+#[test]
+fn append_at_matching_offset_preserves_caller_offset() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut b = sample_batch(3);
+    // Pretend the caller (a replicator) already knows the leader's
+    // assigned offset for this batch is 0.
+    log.append_at(&mut b, Offset(0)).unwrap();
+    assert2::assert!(b.base_offset == 0);
+    assert2::assert!(log.log_end_offset() == Offset(3));
+
+    let mut b2 = sample_batch(2);
+    log.append_at(&mut b2, Offset(3)).unwrap();
+    assert2::assert!(b2.base_offset == 3);
+    assert2::assert!(log.log_end_offset() == Offset(5));
+}
+
+#[test]
+fn append_at_with_mismatched_offset_errors() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut b = sample_batch(2);
+    let err = log.append_at(&mut b, Offset(7)).unwrap_err();
+    assert2::assert!(matches!(
+        err,
+        LogError::OffsetMismatch {
+            expected: Offset(0),
+            actual: Offset(7)
+        }
+    ));
+    // Failure must not advance the log.
+    assert2::assert!(log.log_end_offset() == 0);
+}
+
+#[test]
+fn segment_rolls_when_bytes_exceeded() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        segment_size: bytes(200), // tiny so we roll fast
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config).unwrap();
+    for _ in 0..5 {
+        let mut b = sample_batch(2);
+        log.append(&mut b).unwrap();
+    }
+    // Multiple .log files should exist now.
+    let log_files: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
+        .collect();
+    assert2::assert!(log_files.len() >= 2);
+}
+
+/// A roll to a new segment reopens the active `.stampindex` at the
+/// sidecar of the new segment. The entry for the post-roll batch lands in
+/// the new segment's file and does not leak back into the sealed
+/// segment's file. This test guards the reopen. A reopen that did nothing
+/// would keep the stamps in the sealed segment's index.
+#[test]
+fn roll_reopens_stampindex_for_new_segment() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(
+        dir.path(),
+        LogConfig {
+            segment_size: bytes(1), // roll on every append after the first
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    log.set_stamp_source(std::sync::Arc::new(
+        crate::stamp_source::MonotonicStampSource::new(100, 5),
+    ))
+    .unwrap();
+
+    log.append(&mut sample_batch(1)).unwrap(); // offset 0, segment 0, stamp 100
+    log.append(&mut sample_batch(1)).unwrap(); // rolls: segment @ base 1, stamp 105
+
+    // The new segment's own sidecar holds exactly its post-roll entry.
+    let seg1 = StampIndex::open(dir.path().join("00000000000000000001.stampindex")).unwrap();
+    assert2::assert!(
+        seg1.entries()
+            == [StampEntry {
+                base_offset: Offset(1),
+                last_offset: Offset(1),
+                stamp: 105,
+            }]
+    );
+    // The sealed segment kept only its pre-roll entry — nothing leaked back.
+    let seg0 = StampIndex::open(dir.path().join("00000000000000000000.stampindex")).unwrap();
+    assert2::assert!(
+        seg0.entries()
+            == [StampEntry {
+                base_offset: Offset(0),
+                last_offset: Offset(0),
+                stamp: 100,
+            }]
+    );
+}
+
+#[test]
+fn append_records_epoch_transition() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut b = sample_batch_with_epoch(3, 0);
+    log.append(&mut b).unwrap();
+    let mut b2 = sample_batch_with_epoch(2, 1); // 2 records at epoch 1
+    log.append(&mut b2).unwrap();
+    assert2::assert!(
+        log.epoch_checkpoint().entries()
+            == &[
+                EpochEntry {
+                    epoch: LeaderEpoch(0),
+                    start_offset: Offset(0)
+                },
+                EpochEntry {
+                    epoch: LeaderEpoch(1),
+                    start_offset: Offset(3)
+                }
+            ]
+    );
+}

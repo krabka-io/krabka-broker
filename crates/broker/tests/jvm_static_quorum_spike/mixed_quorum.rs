@@ -1,0 +1,244 @@
+//! The KIP-595 Slice 6 acceptance spike: two Krabka controllers and one JVM
+//! controller form a static three-voter quorum, and the JVM joins the
+//! Krabka-led quorum as a follower and replicates its committed metadata.
+//!
+//! This is the leader-to-follower direction of the cross-implementation goal,
+//! and it needs no KIP-853 dynamic voters.
+
+use std::{net::SocketAddr, process::Command, time::Duration};
+
+use assert2::check;
+use krabka_broker::{Broker, BrokerHandle};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+use crate::{
+    static_quorum_harness::{
+        KAFKA_IMAGE, docker_rm, kafka_cluster_id_string, krabka_controller_config,
+    },
+    support,
+};
+
+const CONTAINER: &str = "krabka-kip595-slice5-spike";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker + a published controller port (throwaway spike)"]
+async fn static_mixed_jvm_krabka_quorum() {
+    support::init_tracing();
+    docker_rm(CONTAINER);
+
+    // ── shared cluster id ──────────────────────────────────────────────────
+    let cluster_id = Uuid::from_u128(0x4d6b_5533_4f45_5642_4e54_6377_4e54_4a45);
+    let cid_str = kafka_cluster_id_string(cluster_id);
+    eprintln!("shared cluster_id uuid={cluster_id} kafka_str={cid_str}");
+
+    // ── pre-bind 3 controller ports on the host ────────────────────────────
+    let (client_addrs, controller_addrs) = support::bind_and_drop_ports(3).await;
+    let p1 = controller_addrs[0].port();
+    let p2 = controller_addrs[1].port();
+    let p3 = controller_addrs[2].port();
+
+    // Krabka voters bind 0.0.0.0 so the JVM container can reach them through
+    // host.docker.internal. The pre-bound addrs are 127.0.0.1:<p>; rewrite to
+    // 0.0.0.0:<p> for the bind, but keep 127.0.0.1 in the voter set Krabka uses
+    // to dial *its own* peers (loopback is reachable in-process).
+    let krabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
+    let krabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
+
+    // Voter set as seen FROM the Krabka side: dial peers on loopback; the JVM
+    // (id 3) is reachable at its published host port.
+    let krabka_voters: Vec<(u64, SocketAddr)> = vec![
+        (1, format!("127.0.0.1:{p1}").parse().unwrap()),
+        (2, format!("127.0.0.1:{p2}").parse().unwrap()),
+        (3, format!("127.0.0.1:{p3}").parse().unwrap()),
+    ];
+
+    // ── start the 2 Krabka controllers ─────────────────────────────────────
+    let dir1 = TempDir::new().unwrap();
+    let dir2 = TempDir::new().unwrap();
+    let cfg1 = krabka_controller_config(
+        0,
+        client_addrs[0],
+        krabka_ctrl_1,
+        &krabka_voters,
+        cluster_id,
+        dir1.path(),
+    );
+    let cfg2 = krabka_controller_config(
+        1,
+        client_addrs[1],
+        krabka_ctrl_2,
+        &krabka_voters,
+        cluster_id,
+        dir2.path(),
+    );
+    let (c1, c2): (BrokerHandle, BrokerHandle) = {
+        let s1 = tokio::spawn(Broker::start(cfg1));
+        let s2 = tokio::spawn(Broker::start(cfg2));
+        (
+            s1.await.unwrap().expect("krabka voter 1 start"),
+            s2.await.unwrap().expect("krabka voter 2 start"),
+        )
+    };
+    eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
+
+    // ── format + start the JVM controller (id 3) ───────────────────────────
+    // The JVM's controller.quorum.voters lists addresses reachable FROM the
+    // container: the Krabka voters at host.docker.internal, itself on localhost.
+    let props = format!(
+        "process.roles=controller\n\
+         node.id=3\n\
+         controller.quorum.voters=1@host.docker.internal:{p1},2@host.docker.internal:{p2},3@localhost:{p3}\n\
+         controller.listener.names=CONTROLLER\n\
+         listeners=CONTROLLER://0.0.0.0:{p3}\n\
+         listener.security.protocol.map=CONTROLLER:PLAINTEXT\n\
+         log.dirs=/tmp/kraft-controller-logs\n"
+    );
+    let propdir = TempDir::new().unwrap();
+    let proppath = propdir.path().join("controller.properties");
+    std::fs::write(&proppath, props).unwrap();
+
+    let entry = format!(
+        "/opt/kafka/bin/kafka-storage.sh format -t {cid_str} --config /tmp/c.properties --ignore-formatted && \
+         exec /opt/kafka/bin/kafka-server-start.sh /tmp/c.properties"
+    );
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            CONTAINER,
+            "--add-host=host.docker.internal:host-gateway",
+            "-p",
+            &format!("{p3}:{p3}"),
+            "-v",
+            &format!("{}:/tmp/c.properties", proppath.display()),
+            "--entrypoint",
+            "bash",
+            KAFKA_IMAGE,
+            "-c",
+            &entry,
+        ])
+        .status()
+        .expect("docker run JVM controller");
+    assert!(status.success(), "docker run failed");
+    eprintln!("JVM controller (id 3) container started");
+
+    // ── observe for ~40s ────────────────────────────────────────────────────
+    // Success criterion 1: a single leader emerges across all three voters and
+    // the two Krabka nodes agree on it. Success criterion 2: a follower's image
+    // reflects the leader's committed records.
+    let deadline = std::time::Instant::now() + Duration::from_secs(50);
+    let mut elected = false;
+    let mut last_l1 = None;
+    let mut last_l2 = None;
+    let mut tick = 0u32;
+    while std::time::Instant::now() < deadline {
+        let l1 = c1.controller_leader_id();
+        let l2 = c2.controller_leader_id();
+        last_l1 = l1;
+        last_l2 = l2;
+        if l1.is_some() && l1 == l2 {
+            elected = true;
+        }
+        // Krabka-side telemetry every ~2s: leader epoch, HWM, and per-voter
+        // matched index (does the JVM voter id=3 show up as fetching?).
+        if tick.is_multiple_of(4) {
+            let qs = c1.controller_quorum_state_for_test();
+            eprintln!(
+                "[t={}s] krabka n1 view: leader={:?} epoch={} hwm={} matched={:?}",
+                tick / 2,
+                qs.current_leader,
+                qs.current_term,
+                qs.last_applied_index,
+                qs.per_voter_matched_index,
+            );
+        }
+        tick += 1;
+        // intentional: paces the fixed ~50s observation window; the loop
+        // deliberately never breaks so the external JVM container has time to
+        // boot, join, and produce the logs/telemetry this test greps below.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Capture JVM logs regardless of outcome — they ARE the finding.
+    let logs = Command::new("docker")
+        .args(["logs", CONTAINER])
+        .output()
+        .expect("docker logs");
+    let log_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&logs.stdout),
+        String::from_utf8_lossy(&logs.stderr)
+    );
+    let _ = std::fs::write("/tmp/jvm_spike.log", &log_text);
+    eprintln!("==== JVM controller logs (tail) ====");
+    for line in log_text
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+    {
+        eprintln!("{line}");
+    }
+
+    // Krabka-side observations.
+    eprintln!(
+        "Krabka leader view: node1={last_l1:?} node2={last_l2:?}  \
+         voter_count(n1)={} voter_count(n2)={}",
+        c1.voter_count_for_test(),
+        c2.voter_count_for_test(),
+    );
+
+    // Did the JVM successfully join the quorum cross-impl? Success looks like
+    // the JVM transitioning to Follower of the Krabka leader (or, less likely,
+    // winning leadership itself). The dominant *failure* signal is the JVM
+    // declaring `UNSUPPORTED_VERSION` ("The node does not support VOTE") because
+    // Krabka's controller-listener ApiVersions handshake advertises no APIs —
+    // so the JVM's NetworkClient refuses to even send Vote/Fetch on the wire.
+    let jvm_joined = log_text.contains("Completed transition to FollowerState")
+        || log_text.contains("Completed transition to LeaderState");
+    let jvm_unsupported_version =
+        log_text.contains("does not support VOTE") || log_text.contains("UNSUPPORTED_VERSION");
+    let jvm_fatal_fault = log_text.contains("Encountered fatal fault");
+    // The done bar: the JVM follower replicated the Krabka leader's committed
+    // log and built its FeaturesImage from it — proving cross-impl metadata
+    // replication, not just election.
+    let jvm_replicated = log_text.contains("finished catching up to the current high water mark")
+        && log_text.contains("metadata.version=25");
+    eprintln!(
+        "JVM cross-impl: joined={jvm_joined} unsupported={jvm_unsupported_version} \
+         fatal_fault={jvm_fatal_fault} replicated={jvm_replicated}"
+    );
+
+    docker_rm(CONTAINER);
+    c1.shutdown().await;
+    c2.shutdown().await;
+
+    // The two Krabka voters MUST elect among themselves regardless of the JVM.
+    check!(
+        elected,
+        "Krabka 2/3 majority failed to elect a stable shared leader \
+         (n1={last_l1:?} n2={last_l2:?})"
+    );
+
+    // The acceptance bar (Slice 6): the JVM controller joins the Krabka-led
+    // static quorum as a follower, never fatal-faults, and replicates the
+    // leader's committed metadata (HWM catch-up + a FeaturesImage carrying
+    // metadata.version=25).
+    check!(
+        jvm_joined && !jvm_unsupported_version,
+        "JVM did not join cross-impl: joined={jvm_joined}, unsupported={jvm_unsupported_version}"
+    );
+    check!(
+        !jvm_fatal_fault,
+        "JVM raft thread fatal-faulted (a wire/record inconsistency); see logs"
+    );
+    check!(
+        jvm_replicated,
+        "JVM did not replicate the Krabka leader's committed metadata (no HWM catch-up / \
+         metadata.version not loaded); see JVM logs"
+    );
+}

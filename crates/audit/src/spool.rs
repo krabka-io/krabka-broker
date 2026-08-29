@@ -24,12 +24,17 @@ use krabka_units::{
     prelude::{ByteSize, ByteSizeExt as _},
 };
 
+use self::codec::{decode_record, encode_frame};
 use crate::{
-    chain::{chain_hash, from_hex32},
-    event::AuditEventClass,
-    ids::{MaxSpoolBytes, RecordCount, Seq, SpoolBytes},
-    sink::{AuditError, AuditRecord, HEADER_PREV_HASH, HEADER_SEQ},
+    ids::{MaxSpoolBytes, RecordCount, SpoolBytes},
+    sink::{AuditError, AuditRecord},
 };
+
+mod codec;
+mod resume;
+
+#[cfg(test)]
+mod test_support;
 
 const SPOOL_FILE: &str = "audit.spool";
 
@@ -252,139 +257,23 @@ impl Spool {
         self.count = RecordCount(0);
         Ok(())
     }
-
-    /// The `(next_seq, head)` from the last chained record in the spool.
-    ///
-    /// A chained record is a record that is not a checkpoint. Returns `None` if
-    /// the spool has no chained record.
-    #[tracing::instrument(level = "debug", skip_all, fields(count = self.count.0), err)]
-    /// # Errors
-    /// Returns an error if the spool file cannot be opened or read.
-    pub fn resume_point(&self) -> Result<Option<(u64, [u8; 32])>, AuditError> {
-        let records = self.read_all()?;
-        Ok(records
-            .iter()
-            .rev()
-            .find_map(resume_from_record)
-            .map(|(seq, head)| (seq.0, head)))
-    }
-}
-
-/// Compute `(next_seq, head_after)` from one chained record.
-///
-/// The computation uses the record's headers and its value. Returns `None` for
-/// a checkpoint, and for a record without the chain headers.
-fn resume_from_record(rec: &AuditRecord) -> Option<(Seq, [u8; 32])> {
-    if rec.class == AuditEventClass::Checkpoint {
-        return None;
-    }
-    let mut seq: Option<u64> = None;
-    let mut prev: Option<[u8; 32]> = None;
-    for (k, v) in &rec.headers {
-        if k == HEADER_SEQ {
-            seq = std::str::from_utf8(v).ok().and_then(|s| s.parse().ok());
-        } else if k == HEADER_PREV_HASH {
-            prev = std::str::from_utf8(v).ok().and_then(from_hex32);
-        }
-    }
-    let (seq, prev) = (seq?, prev?);
-    let head = chain_hash(&prev, seq, &rec.value);
-    Some((Seq(seq + 1), head))
-}
-
-fn encode_frame(record: &AuditRecord) -> Vec<u8> {
-    let body = encode_record(record);
-    let len = u32::try_from(body.len()).expect("audit record fits u32");
-    let mut frame = Vec::with_capacity(4 + body.len());
-    frame.extend_from_slice(&len.to_be_bytes());
-    frame.extend_from_slice(&body);
-    frame
-}
-
-fn encode_record(record: &AuditRecord) -> Vec<u8> {
-    let mut b = Vec::new();
-    b.push(record.class.tag());
-    put_bytes(&mut b, &record.value);
-    let hc = u32::try_from(record.headers.len()).expect("header count fits u32");
-    b.extend_from_slice(&hc.to_be_bytes());
-    for (k, v) in &record.headers {
-        put_bytes(&mut b, k.as_bytes());
-        put_bytes(&mut b, v);
-    }
-    b
-}
-
-fn put_bytes(b: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len()).expect("field fits u32");
-    b.extend_from_slice(&len.to_be_bytes());
-    b.extend_from_slice(bytes);
-}
-
-fn decode_record(mut b: &[u8]) -> Option<AuditRecord> {
-    let class = AuditEventClass::from_tag(*b.first()?)?;
-    b = &b[1..];
-    let value = take_bytes(&mut b)?;
-    let hc = usize::try_from(take_u32(&mut b)?).unwrap_or(0);
-    let mut headers = Vec::with_capacity(hc);
-    for _ in 0..hc {
-        let k = take_bytes(&mut b)?;
-        let v = take_bytes(&mut b)?;
-        headers.push((String::from_utf8(k).ok()?, v));
-    }
-    Some(AuditRecord {
-        class,
-        value,
-        headers,
-    })
-}
-
-fn take_u32(b: &mut &[u8]) -> Option<u32> {
-    if b.len() < 4 {
-        return None;
-    }
-    let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-    *b = &b[4..];
-    Some(n)
-}
-
-fn take_bytes(b: &mut &[u8]) -> Option<Vec<u8>> {
-    let len = usize::try_from(take_u32(b)?).unwrap_or(0);
-    if b.len() < len {
-        return None;
-    }
-    let out = b[..len].to_vec();
-    *b = &b[len..];
-    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes};
+    use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
     use super::*;
     use crate::{
-        chain::{GENESIS_HEAD, chain_hash, to_hex},
+        chain::{GENESIS_HEAD, chain_hash},
         event::{
             AuditEndpoint, AuditEvent, AuditEventClass, AuditOutcome, AuditPrincipal,
             PrivilegedPhase,
         },
         ocsf::ProductInfo,
-        sink::{AuditRecord, HEADER_PREV_HASH, HEADER_SEQ},
+        spool::test_support::{ROOMY_CAP, chained_record},
     };
-
-    /// A cap that is large enough that no test reaches it by accident.
-    const ROOMY_CAP: ByteSize = mebibytes(1);
-
-    fn chained_record(seq: u64, prev: &[u8; 32], value: &[u8]) -> AuditRecord {
-        let mut r = AuditRecord {
-            class: AuditEventClass::ApplicationLifecycle,
-            value: value.to_vec(),
-            headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
-        };
-        r.push_chain_headers(seq, prev);
-        r
-    }
 
     #[test]
     fn append_then_read_round_trips_records_with_headers() {
@@ -516,30 +405,6 @@ mod tests {
     }
 
     #[test]
-    fn resume_point_is_from_last_chained_record_skipping_checkpoints() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let prev0 = GENESIS_HEAD;
-        let r0 = chained_record(0, &prev0, b"v0");
-        let head0 = chain_hash(&prev0, 0, b"v0");
-        let r1 = chained_record(1, &head0, b"v1");
-        let head1 = chain_hash(&head0, 1, b"v1");
-        // a checkpoint record (no seq/prev_hash) must be skipped
-        let cp = AuditRecord {
-            class: AuditEventClass::Checkpoint,
-            value: b"{\"type\":\"checkpoint\"}".to_vec(),
-            headers: vec![("event_class".into(), b"checkpoint".to_vec())],
-        };
-        s.append(&r0).unwrap();
-        s.append(&r1).unwrap();
-        s.append(&cp).unwrap();
-        let (next_seq, head) = s.resume_point().unwrap().unwrap();
-        // after seq 1; the hex projection also checks r1's chain math.
-        check!((next_seq, head, to_hex(&head)) == (2, head1, to_hex(&head1)));
-        let _ = (HEADER_SEQ, HEADER_PREV_HASH); // used by impl
-    }
-
-    #[test]
     fn open_heals_torn_tail_frame() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
@@ -598,28 +463,6 @@ mod tests {
         let healed = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(healed.recovered_torn_tail());
         check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
-    }
-
-    /// Four bytes is the boundary: exactly four is a readable `u32`, and fewer
-    /// must yield `None` rather than index past the end.
-    #[test]
-    fn take_u32_reads_at_the_four_byte_boundary() {
-        // (input, decoded, bytes left unread)
-        let cases: &[(&[u8], Option<u32>, usize)] = &[
-            (&[], None, 0),
-            (&[0x00], None, 1),
-            (&[0x00, 0x00, 0x01], None, 3),
-            (&[0x00, 0x00, 0x01, 0x00], Some(256), 0),
-            (&[0x00, 0x00, 0x01, 0x00, 0xff], Some(256), 1),
-        ];
-        for (input, want, want_left) in cases {
-            let mut b: &[u8] = input;
-            let got = take_u32(&mut b);
-            check!(
-                (got, b.len()) == (*want, *want_left),
-                "take_u32({input:x?})"
-            );
-        }
     }
 
     #[test]

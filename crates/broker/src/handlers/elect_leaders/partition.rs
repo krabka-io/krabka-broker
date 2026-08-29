@@ -1,0 +1,90 @@
+//! The election of one partition, from the break-glass gate through to the
+//! response row the request carries back for it.
+//!
+//! This is where the two unclean paths part: a topic that opted into an
+//! offset-aware recovery strategy goes to the Unclean Recovery Manager, and
+//! every other target elects straight out of the metadata image.
+
+use krabka_metadata::MetadataRecord;
+use krabka_protocol::owned::elect_leaders_response::PartitionResult;
+
+use super::{
+    batch::ElectionBatch,
+    env::ElectionEnv,
+    recovery::run_offset_aware_recovery,
+    response::elect_error_to_wire,
+    unclean_gate::{authorize_unclean, refuse_unclean, unclean_target},
+};
+use crate::{
+    config_keys::{RecoveryStrategy, resolve_recovery_strategy},
+    leader_election::{ElectionType, select_new_leader_for_partition},
+};
+
+/// Elect one partition, and answer the row the response carries for it.
+pub(super) async fn elect_one(
+    env: &ElectionEnv<'_>,
+    batch: &mut ElectionBatch,
+    topic: &str,
+    partition: i32,
+) -> PartitionResult {
+    // KFC-9: the break-glass gate runs before any election work, because it is
+    // an authority gate and not a content gate. It never sees a preferred
+    // election.
+    let consumed = if matches!(env.election, ElectionType::Unclean) {
+        match authorize_unclean(env.image, &env.broker.config.break_glass, topic, partition) {
+            Ok(consumed) => consumed,
+            Err(denial) => return refuse_unclean(env, topic, partition, &denial),
+        }
+    } else {
+        None
+    };
+
+    // KIP-966: an UNCLEAN election on a topic that opted into an offset-aware
+    // recovery strategy is routed through the Unclean Recovery Manager, which
+    // polls surviving replicas for their log state before electing. The URM
+    // owns `submit_change` for these, so we must NOT push a record into the
+    // batch here — we just await the outcome and translate it to a
+    // per-partition row.
+    let strategy = resolve_recovery_strategy(env.image, topic);
+    let use_offset_aware = matches!(env.election, ElectionType::Unclean)
+        && !matches!(strategy, RecoveryStrategy::None);
+    if use_offset_aware {
+        return run_offset_aware_recovery(env, batch, topic, partition, strategy, consumed).await;
+    }
+
+    let result = select_new_leader_for_partition(
+        env.image,
+        env.liveness,
+        env.witnesses,
+        topic,
+        partition,
+        env.election,
+    )
+    .await;
+    match result {
+        Ok(new_pr) => {
+            let proposal_id = batch.spend(consumed);
+            batch.records.push(MetadataRecord::V1Partition(new_pr));
+            if matches!(env.election, ElectionType::Unclean) {
+                batch
+                    .applied
+                    .push((unclean_target(topic, partition), proposal_id));
+            }
+            PartitionResult {
+                partition_id: partition,
+                error_code: 0,
+                error_message: None,
+                ..Default::default()
+            }
+        }
+        Err(err) => {
+            let (code, msg) = elect_error_to_wire(err);
+            PartitionResult {
+                partition_id: partition,
+                error_code: code,
+                error_message: Some(msg.into()),
+                ..Default::default()
+            }
+        }
+    }
+}

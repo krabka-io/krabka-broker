@@ -1,0 +1,87 @@
+//! Inter-broker replication accounting: the follower-side and leader-side
+//! byte counters of a replica fetch, and the unclean-election counter that
+//! records when an out-of-ISR replica took leadership.
+
+use super::{BrokerMetrics, PartitionLabel};
+
+impl BrokerMetrics {
+    /// Account bytes this broker received from the partition
+    /// leader as a follower (inter-broker `Fetch` round-trip, follower
+    /// side). Called from the replicator after a successful append.
+    pub fn record_replication_in(&self, topic: &str, partition: i32, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.replication_bytes_in.get_or_create(&lbl).inc_by(bytes);
+    }
+
+    /// KIP-841: account one unclean leader election (an
+    /// election that picked an out-of-ISR replica because the ISR was
+    /// empty and the topic had `unclean.leader.election.enable=true`).
+    pub fn record_unclean_leader_election(&self) {
+        self.unclean_leader_elections_total.inc();
+    }
+
+    /// Account bytes this broker served to a follower as the
+    /// partition leader (inter-broker `Fetch` round-trip, leader side).
+    /// Called from the `Fetch` handler when `replica_id >= 0`.
+    pub fn record_replication_out(&self, topic: &str, partition: i32, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let lbl = PartitionLabel {
+            topic: topic.to_string(),
+            partition,
+        };
+        self.replication_bytes_out.get_or_create(&lbl).inc_by(bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn replication_helpers_accumulate_per_partition() {
+        let m = BrokerMetrics::new();
+        // Two appends from the same leader partition.
+        m.record_replication_in("orders", 3, 1_500);
+        m.record_replication_in("orders", 3, 2_500);
+        // Different partition stays independent.
+        m.record_replication_in("orders", 4, 100);
+        // Outbound side: bytes this broker served to its followers.
+        m.record_replication_out("orders", 3, 4_000);
+        m.record_replication_out("orders", 4, 0); // no-op
+
+        let lbl3 = PartitionLabel {
+            topic: "orders".into(),
+            partition: 3,
+        };
+        let lbl4 = PartitionLabel {
+            topic: "orders".into(),
+            partition: 4,
+        };
+        let cases = [
+            ("replication_in", &m.replication_bytes_in, &lbl3, 4_000),
+            ("replication_in", &m.replication_bytes_in, &lbl4, 100),
+            ("replication_out", &m.replication_bytes_out, &lbl3, 4_000),
+            ("replication_out", &m.replication_bytes_out, &lbl4, 0),
+        ];
+        for (family_name, family, label, want) in cases {
+            // One `get_or_create` guard per statement (first
+            // materialization takes the family write lock).
+            let got = family.get_or_create(label).get();
+            assert!(
+                got == want,
+                "{family_name} for partition {}",
+                label.partition
+            );
+        }
+    }
+}

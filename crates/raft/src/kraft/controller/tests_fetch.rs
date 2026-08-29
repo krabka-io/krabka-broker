@@ -1,0 +1,386 @@
+//! Tests for the Fetch and `FetchSnapshot` paths: the predicates that classify
+//! a response, the replies a follower and a leaderless node serve, and the
+//! requests the engine emits while replicating or transferring a snapshot.
+
+use std::time::Duration as StdDuration;
+
+use assert2::assert;
+
+use super::*;
+use crate::kraft::controller::{
+    records::decode_batches,
+    replication::{
+        FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
+        should_serve_fetch_records, should_start_snapshot_fetch, snapshot_fetch_response_invalid,
+    },
+    test_support::{
+        build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
+        recv_peer_send, recv_peer_send_with_api,
+    },
+};
+
+#[test]
+fn fetch_records_are_served_only_by_clean_leader_fetches() {
+    for (_case, has_snapshot, has_divergence, is_leader, want) in [
+        ("clean leader", false, false, true, true),
+        ("snapshot response", true, false, true, false),
+        ("divergence response", false, true, true, false),
+        ("clean follower", false, false, false, false),
+    ] {
+        assert2::assert!(
+            should_serve_fetch_records(has_snapshot, has_divergence, is_leader) == want
+        );
+    }
+}
+
+#[test]
+fn fetch_epoch_uses_installed_snapshot_epoch_only_at_empty_boundary() {
+    for (_case, installed, log_start, log_end, last_epoch, want) in [
+        ("empty log with installed snapshot", Some(7), 10, 10, 3, 7),
+        ("non-empty log with snapshot", Some(7), 10, 11, 3, 3),
+        ("empty log without snapshot", None, 10, 10, 3, 3),
+    ] {
+        assert2::assert!(
+            fetch_epoch_for_request(installed, Offset(log_start), Offset(log_end), last_epoch)
+                == want
+        );
+    }
+}
+
+#[test]
+fn fetch_batch_classifier_separates_duplicate_append_and_gap() {
+    for (_case, base_offset, log_end, want) in [
+        (
+            "duplicate batch",
+            4,
+            5,
+            FetchBatchDisposition::AlreadyPresent,
+        ),
+        ("contiguous append", 5, 5, FetchBatchDisposition::Append),
+        ("offset gap", 6, 5, FetchBatchDisposition::Gap),
+    ] {
+        assert2::assert!(classify_fetch_batch(Offset(base_offset), Offset(log_end)) == want);
+    }
+}
+
+#[test]
+fn snapshot_fetch_hint_starts_only_for_future_non_duplicate_snapshots() {
+    for (_case, snapshot_id, log_end, in_flight, want) in [
+        ("future snapshot", (11, 2), 10, None, true),
+        ("snapshot at log end", (10, 2), 10, None, false),
+        (
+            "duplicate in-flight snapshot",
+            (11, 2),
+            10,
+            Some((11, 2)),
+            false,
+        ),
+        ("newer in-flight snapshot", (12, 2), 10, Some((11, 2)), true),
+    ] {
+        assert2::assert!(
+            should_start_snapshot_fetch(snapshot_id, Offset(log_end), in_flight) == want
+        );
+    }
+}
+
+#[test]
+fn snapshot_fetch_response_is_invalid_unless_success_from_active_leader() {
+    for (_case, error_code, response_epoch, current_epoch, want) in [
+        ("successful active leader", 0, 2, 2, false),
+        ("error from active leader", 1, 2, 2, true),
+        ("success from wrong epoch", 0, 3, 2, true),
+        ("error from wrong epoch", 1, 3, 2, true),
+    ] {
+        assert2::assert!(
+            snapshot_fetch_response_invalid(
+                error_code,
+                NodeId(response_epoch),
+                NodeId(current_epoch)
+            ) == want
+        );
+    }
+}
+
+#[tokio::test]
+async fn follower_fetch_redirects_to_current_leader() {
+    let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    follower.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(2),
+        leader_epoch: 1,
+    });
+    let (reply, mut response) = oneshot::channel();
+
+    follower.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(3),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        }
+        .encode(),
+        reply,
+    });
+
+    let body = response
+        .try_recv()
+        .expect("follower returned Fetch redirect");
+    let decoded = wire::PeerResponse::decode_fetch(&body).expect("decode Fetch redirect");
+    assert2::assert!(matches!(
+        decoded,
+        wire::PeerResponse::Fetch {
+            leader_id: NodeId(2),
+            leader_epoch: 1,
+            records,
+            ..
+        } if records.is_empty()
+    ));
+}
+
+#[tokio::test]
+async fn fetch_without_leader_returns_error_instead_of_dropping_reply() {
+    let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let leader_epoch = follower.core.quorum_state().leader_epoch;
+    let (reply, mut response) = oneshot::channel();
+
+    follower.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(2),
+            fetch_epoch: leader_epoch,
+            fetch_offset: 0,
+        }
+        .encode(),
+        reply,
+    });
+
+    let body = response
+        .try_recv()
+        .expect("leaderless Fetch returned an error");
+    assert2::assert!(matches!(
+        wire::PeerResponse::decode_fetch(&body),
+        Some(wire::PeerResponse::FetchError {
+            leader_epoch: response_epoch,
+            error_code: wire::NOT_LEADER_OR_FOLLOWER,
+        }) if response_epoch == leader_epoch
+    ));
+}
+
+#[tokio::test]
+async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+
+    engine.broadcast_end_quorum_epoch(4);
+
+    let mut peers = Vec::new();
+    for _ in 0..2 {
+        let send = recv_peer_send(&mut sends).await;
+        assert2::assert!(send.api_key == api_key::END_QUORUM_EPOCH);
+        match wire::decode_end(&send.body) {
+            Some(wire::PeerRequest::EndQuorumEpoch {
+                leader_id,
+                leader_epoch,
+            }) => {
+                assert2::assert!(leader_id == NodeId(1));
+                assert2::assert!(leader_epoch == 4);
+            }
+            other => panic!("unexpected end quorum request: {other:?}"),
+        }
+        peers.push(send.peer);
+    }
+    peers.sort_unstable();
+    assert2::assert!(peers == vec![NodeId(2), NodeId(3)]);
+}
+
+#[tokio::test]
+async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    engine
+        .log
+        .install_snapshot(Offset(10))
+        .expect("install snapshot");
+    engine.installed_snapshot_epoch = Some(7);
+    let fetch_response = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 7,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 10,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+    let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
+
+    engine.send_fetch(NodeId(2));
+    let send = recv_peer_send(&mut sends).await;
+    match wire::decode_fetch(&send.body) {
+        Some(wire::PeerRequest::Fetch {
+            fetch_epoch,
+            fetch_offset,
+            ..
+        }) => {
+            assert2::assert!(fetch_epoch == 7);
+            assert2::assert!(fetch_offset == 10);
+        }
+        other => panic!("unexpected fetch request: {other:?}"),
+    }
+
+    let mut batch = one_offset_batch(10, 9, b"after-snapshot");
+    engine
+        .log
+        .append_at(&mut batch, Offset(10))
+        .expect("append after snapshot");
+    engine.send_fetch(NodeId(2));
+    let send = recv_peer_send(&mut sends).await;
+    match wire::decode_fetch(&send.body) {
+        Some(wire::PeerRequest::Fetch {
+            fetch_epoch,
+            fetch_offset,
+            ..
+        }) => {
+            assert2::assert!(fetch_epoch == 9);
+            assert2::assert!(fetch_offset == 11);
+        }
+        other => panic!("unexpected fetch request: {other:?}"),
+    }
+}
+
+#[test]
+fn serve_fetch_records_returns_batches_only_for_offsets_inside_log() {
+    let (mut engine, _dir) = build_engine_only_with_policy(
+        NodeId(1),
+        &[NodeId(1)],
+        ControllerFetchMissLimit::default(),
+        MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
+            .expect("one byte still serves the first batch"),
+    );
+    let mut batch = one_offset_batch(0, 1, b"a");
+    engine.log.append(&mut batch).expect("append");
+    let mut batch = one_offset_batch(1, 1, b"b");
+    engine.log.append(&mut batch).expect("append");
+
+    assert2::assert!(engine.serve_fetch_records(Offset(-1)).is_empty());
+    assert2::assert!(engine.serve_fetch_records(Offset(2)).is_empty());
+    let records = engine.serve_fetch_records(Offset(0));
+    let decoded = decode_batches(&records).expect("decode served records");
+    assert2::assert!(
+        decoded
+            .iter()
+            .map(|batch| batch.base_offset)
+            .collect::<Vec<_>>()
+            == vec![0]
+    );
+}
+
+#[tokio::test]
+async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
+    let (mut engine, _dir) = build_engine_only_with_policy(
+        NodeId(1),
+        &[NodeId(1), NodeId(2)],
+        ControllerFetchMissLimit::default(),
+        MetadataRaftFetchMax::try_from(krabka_units::bytes(512)).expect("positive fetch maximum"),
+    );
+    let fetch_snapshot_response = wire::PeerResponse::FetchSnapshot {
+        snapshot_id: (11, 3),
+        size: 0,
+        position: 0,
+        bytes: bytes::Bytes::new(),
+        error_code: 0,
+    }
+    .encode();
+    let mut sends = record_peer_sends(&mut engine, fetch_snapshot_response);
+
+    let body = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: Some((11, 3)),
+        hwm: 11,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+    engine.on_fetch_response(NodeId(2), &body);
+    let send = recv_peer_send_with_api(&mut sends, api_key::FETCH_SNAPSHOT).await;
+    match wire::decode_fetch_snapshot(&send.body) {
+        Some(wire::PeerRequest::FetchSnapshot {
+            snapshot_id,
+            position,
+            max_bytes,
+            ..
+        }) => {
+            assert2::assert!(snapshot_id == (11, 3));
+            assert2::assert!(position == 0);
+            assert2::assert!(max_bytes == 512);
+        }
+        other => panic!("unexpected fetch snapshot request: {other:?}"),
+    }
+    assert2::assert!(
+        engine
+            .snapshot_fetch
+            .as_ref()
+            .is_some_and(|s| s.snapshot_id == (11, 3))
+    );
+
+    engine.on_fetch_response(NodeId(2), &body);
+    assert2::assert!(
+        tokio::time::timeout(StdDuration::from_millis(20), async {
+            loop {
+                let send = recv_peer_send(&mut sends).await;
+                if send.api_key == api_key::FETCH_SNAPSHOT {
+                    return send;
+                }
+            }
+        })
+        .await
+        .is_err()
+    );
+
+    engine
+        .log
+        .install_snapshot(Offset(11))
+        .expect("install snapshot");
+    engine.snapshot_fetch = None;
+    engine.on_fetch_response(NodeId(2), &body);
+    assert2::assert!(engine.snapshot_fetch.is_none());
+}
+
+#[tokio::test]
+async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    let fetch_response = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 0,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+    let mut sends = record_peer_sends(&mut engine, fetch_response);
+
+    engine.snapshot_fetch = Some(SnapshotFetchState::new((12, 3), NodeId(2)));
+    let error_body = wire::PeerResponse::FetchSnapshot {
+        snapshot_id: (12, 3),
+        size: 0,
+        position: 0,
+        bytes: bytes::Bytes::new(),
+        error_code: 99,
+    }
+    .encode();
+    engine.on_fetch_snapshot_response(NodeId(2), &error_body);
+    assert2::assert!(engine.snapshot_fetch.is_none());
+    let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
+    assert2::assert!(send.peer == 2);
+
+    engine.snapshot_fetch = Some(SnapshotFetchState::new((12, 3), NodeId(2)));
+    let ok_body = wire::PeerResponse::FetchSnapshot {
+        snapshot_id: (12, 3),
+        size: 0,
+        position: 0,
+        bytes: bytes::Bytes::new(),
+        error_code: 0,
+    }
+    .encode();
+    engine.on_fetch_snapshot_response(NodeId(3), &ok_body);
+    assert2::assert!(engine.snapshot_fetch.is_none());
+    let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
+    assert2::assert!(send.peer == 3);
+}

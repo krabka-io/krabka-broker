@@ -1,0 +1,92 @@
+//! Total functions over log offsets: the append invariant, the commit window a
+//! high-watermark advance opens, and the half-open ranges a fetch may read
+//! from. They are free functions so each rule can be checked without an engine.
+
+use krabka_ids::Offset;
+
+use crate::error::RaftError;
+
+pub fn assigned_record_offset(assign_base: Offset, delta: i64) -> i64 {
+    assign_base.0.saturating_add(delta)
+}
+
+pub fn append_result_is_consistent(
+    expected_base: Offset,
+    returned_base: Offset,
+    log_end_after: Offset,
+) -> bool {
+    returned_base.cmp(&expected_base).is_eq() && log_end_after.cmp(&expected_base).is_gt()
+}
+
+pub fn validate_append_result(
+    context: &str,
+    expected_base: Offset,
+    returned_base: Offset,
+    log_end_after: Offset,
+) -> Result<(), RaftError> {
+    if append_result_is_consistent(expected_base, returned_base, log_end_after) {
+        Ok(())
+    } else {
+        Err(RaftError::ChangeRejected(format!(
+            "{context} append invariant failed: expected base {expected_base}, got {returned_base}, log end {log_end_after}"
+        )))
+    }
+}
+
+pub fn submit_waiter_need_offset(base: Offset, blob_count: usize) -> Offset {
+    base + i64::try_from(blob_count).unwrap_or(1)
+}
+
+pub fn is_single_voter_majority(majority: usize) -> bool {
+    matches!(majority, 1)
+}
+
+pub fn batch_base_in_apply_window(base_offset: i64, prev_hwm: Offset, applied_hwm: Offset) -> bool {
+    match base_offset.checked_sub(prev_hwm.0) {
+        Some(distance_from_prev) if distance_from_prev >= 0 => {
+            matches!(applied_hwm.0.checked_sub(base_offset), Some(distance_to_hwm) if distance_to_hwm > 0)
+        }
+        _ => false,
+    }
+}
+
+pub fn committed_records_since_snapshot(hwm: Offset, last_snapshot_end_offset: Offset) -> u64 {
+    u64::try_from(hwm.0.saturating_sub(last_snapshot_end_offset.0)).unwrap_or(0)
+}
+
+pub fn snapshot_interval_reached(advanced: u64, snapshot_interval_records: u64) -> bool {
+    matches!(
+        advanced.cmp(&snapshot_interval_records),
+        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
+    )
+}
+
+pub fn expected_hwm_after_advance(prev_hwm: Offset, new_hwm: Offset, log_end: Offset) -> Offset {
+    prev_hwm.max(new_hwm.min(log_end))
+}
+
+pub fn hwm_advanced_as_expected(applied_hwm: Offset, expected_hwm: Offset) -> bool {
+    !applied_hwm.cmp(&expected_hwm).is_lt()
+}
+
+pub fn hwm_reaches_waiter(hwm: Offset, need_offset: Offset) -> bool {
+    matches!(
+        hwm.cmp(&need_offset),
+        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
+    )
+}
+
+pub fn metadata_fetch_offset_in_committed_window(
+    fetch_offset: Offset,
+    high_watermark: Offset,
+) -> bool {
+    (0..high_watermark.0).contains(&fetch_offset.0)
+}
+
+pub fn fetch_batch_committed_before_hwm(base_offset: i64, high_watermark: Offset) -> bool {
+    (i64::MIN..high_watermark.0).contains(&base_offset)
+}
+
+pub fn fetch_offset_has_records(fetch_offset: Offset, log_end: Offset) -> bool {
+    (0..log_end.0).contains(&fetch_offset.0)
+}

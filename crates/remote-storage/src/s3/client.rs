@@ -1,0 +1,134 @@
+//! Construction and configuration of an [`S3RemoteStorage`], and the bridge
+//! that drives the backend's async object-store calls from a synchronous
+//! trait method.
+//!
+//! A backend comes either from an arbitrary `ObjectStore` handle through
+//! [`S3RemoteStorage::with_store`] or from an [`S3Config`] through
+//! [`S3RemoteStorage::from_s3_config`]. The chained builders
+//! [`S3RemoteStorage::with_multipart_tuning`] and
+//! [`S3RemoteStorage::with_worm`] then set the upload tuning and the archive
+//! posture.
+
+use std::sync::Arc;
+
+use krabka_object_store::{
+    DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, ObjectStoreClient,
+    ObjectStoreConfig, ObjectStoreError, S3Config, build_object_store,
+};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
+use object_store::ObjectStore;
+
+use super::{S3RemoteStorage, WormMode, size_from_usize};
+use crate::{
+    error::RemoteStorageError,
+    worm::{WormArchiver, WormConfig},
+};
+
+impl S3RemoteStorage {
+    /// Wraps an arbitrary `ObjectStore`, for example
+    /// `object_store::memory::InMemory` for tests. Use
+    /// [`Self::from_s3_config`] for the production S3 path. Multipart
+    /// tuning falls back to the [`DEFAULT_MULTIPART_THRESHOLD`] and
+    /// [`DEFAULT_MULTIPART_CHUNK_SIZE`] constants. Call
+    /// [`Self::with_multipart_tuning`] to override them in tests.
+    #[must_use]
+    pub fn with_store(store: Arc<dyn ObjectStore>, prefix: Option<String>) -> Self {
+        Self {
+            ops: ObjectStoreClient::new(store),
+            prefix,
+            multipart_threshold: ByteSize::from_bytes(DEFAULT_MULTIPART_THRESHOLD),
+            multipart_chunk_size: size_from_usize(DEFAULT_MULTIPART_CHUNK_SIZE),
+            worm: None,
+        }
+    }
+
+    /// Puts this backend into WORM archive mode.
+    ///
+    /// Every copy then seals a signed, chained `.manifest` beside the segment,
+    /// every delete is refused, and a `write_only` archive refuses remote
+    /// fetches as well.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteStorageError::Worm`] when `cfg`'s signing key cannot be
+    /// loaded.
+    pub fn with_worm(mut self, cfg: &WormConfig) -> Result<Self, RemoteStorageError> {
+        self.worm = Some(WormMode {
+            archiver: WormArchiver::from_config(cfg)?,
+            write_only: cfg.write_only,
+        });
+        Ok(self)
+    }
+
+    /// Overrides the multipart threshold and chunk size. Returns `self` for
+    /// chained calls. Tests use this to force the multipart path on small
+    /// fixtures. Production usually keeps the defaults.
+    #[must_use]
+    pub fn with_multipart_tuning(mut self, threshold: ByteSize, chunk_size: ByteSize) -> Self {
+        self.multipart_threshold = threshold;
+        self.multipart_chunk_size = chunk_size;
+        self
+    }
+
+    /// Builds an `AmazonS3` client from `cfg` and wraps it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteStorageError::InvalidArgument`] if `object_store`'s
+    /// builder rejects the bucket, region, and endpoint combination.
+    pub fn from_s3_config(cfg: &S3Config) -> Result<Self, RemoteStorageError> {
+        let store = build_object_store(&ObjectStoreConfig::S3(cfg.clone()))
+            .map_err(|e| RemoteStorageError::InvalidArgument(e.to_string()))?;
+        Ok(
+            Self::with_store(store, cfg.prefix.clone()).with_multipart_tuning(
+                ByteSize::from_bytes(cfg.multipart_threshold),
+                size_from_usize(cfg.multipart_chunk_size),
+            ),
+        )
+    }
+
+    /// Runs an async [`ObjectOps`](krabka_object_store::ObjectOps) call to
+    /// completion on the current Tokio runtime. Sync trait callers reach this
+    /// through `spawn_blocking`, where `Handle::current()` is always
+    /// available. The `block_on` bridge lives here, never in the substrate.
+    pub(super) fn block_os<T, F>(fut: F) -> Result<T, ObjectStoreError>
+    where
+        F: std::future::Future<Output = Result<T, ObjectStoreError>>,
+    {
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            ObjectStoreError::Backend(
+                "S3RemoteStorage requires an active Tokio runtime; call from spawn_blocking".into(),
+            )
+        })?;
+        tokio::task::block_in_place(|| handle.block_on(fut))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+    use krabka_object_store::{DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD};
+    use krabka_units::prelude::{ByteSizeExt as _, kibibytes, mebibytes};
+    use object_store::memory::InMemory;
+
+    use super::S3RemoteStorage;
+
+    /// The multipart tunables cross two seams: in from
+    /// [`krabka_object_store`]'s primitive config, and back out to the
+    /// primitive-typed `ObjectOps` substrate. Both must be lossless for every
+    /// size the config can express, so a mis-scaled conversion, such as a
+    /// stray `* 1024`, cannot silently change when a segment switches to
+    /// multipart.
+    #[test]
+    fn multipart_tuning_round_trips_through_the_primitive_seams() {
+        let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), None);
+        check!(store.multipart_threshold.bytes_u64() == DEFAULT_MULTIPART_THRESHOLD);
+        check!(store.multipart_chunk_size.bytes_usize() == DEFAULT_MULTIPART_CHUNK_SIZE);
+
+        let tuned = store.with_multipart_tuning(mebibytes(64), kibibytes(512));
+        check!(tuned.multipart_threshold.bytes_u64() == 64 * 1024 * 1024);
+        check!(tuned.multipart_chunk_size.bytes_usize() == 512 * 1024);
+    }
+}

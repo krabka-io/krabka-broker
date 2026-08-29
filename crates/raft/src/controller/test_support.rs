@@ -1,0 +1,123 @@
+//! Fixtures shared by the controller unit tests: the metadata records they
+//! submit, the waits for an elected leader and for a committed change, the
+//! retrying listener bind that proves a port was released, and the recording
+//! dialer that observes the client id an outbound fetch goes out with.
+
+use std::{net::SocketAddr, sync::Arc};
+
+use krabka_units::prelude::{ByteSize, Time, TimeExt as _, gibibytes, millis, secs};
+use uuid::Uuid;
+
+use crate::{
+    controller::ControllerHandle, error::RaftError, network::OutboundDialer, types::NodeId,
+};
+
+pub(super) const TEST_OP_TIMEOUT: Time = secs(2);
+
+/// Election timeout used by tests that want a leader elected promptly.
+pub(super) const FAST_ELECTION_TIMEOUT: Time = millis(200);
+
+/// A fetch budget large enough that no test log is truncated by it.
+pub(super) const UNBOUNDED_FETCH: ByteSize = gibibytes(1);
+
+pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: name.into(),
+        topic_id: Uuid::nil(),
+        partitions: 1,
+        replication_factor: 1,
+    })
+}
+
+pub(super) fn committable_topic_record(name: &str) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: name.into(),
+        topic_id: Uuid::new_v4(),
+        partitions: 1,
+        replication_factor: 1,
+    })
+}
+
+pub(super) async fn wait_for_leader(ctrl: &ControllerHandle) {
+    let mut leader_rx = ctrl.watch_leader();
+    tokio::time::timeout(
+        TEST_OP_TIMEOUT.to_std(),
+        leader_rx.wait_for(Option::is_some),
+    )
+    .await
+    .expect("no leader elected within 2s")
+    .expect("leader watch channel closed");
+}
+
+pub(super) async fn submit_change_with_timeout(
+    ctrl: &ControllerHandle,
+    records: Vec<krabka_metadata::MetadataRecord>,
+    context: &str,
+) -> Result<(), RaftError> {
+    tokio::time::timeout(TEST_OP_TIMEOUT.to_std(), ctrl.submit_change(records))
+        .await
+        .unwrap_or_else(|_| panic!("{context} submit_change timed out"))
+        .map(|_| ())
+}
+
+pub(super) async fn bind_eventually(addr: SocketAddr) -> tokio::net::TcpListener {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => return listener,
+            Err(err) if tokio::time::Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(err) => panic!("listener address {addr} was not released: {err}"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct RecordingDialer {
+    pub(super) client_ids: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl OutboundDialer for RecordingDialer {
+    async fn dial(
+        &self,
+        _target: NodeId,
+        addr: &str,
+        options: krabka_client_core::ConnectionOptions,
+    ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
+        self.client_ids
+            .lock()
+            .unwrap()
+            .push(options.client_id.clone());
+        let sock = tokio::net::lookup_host(addr)
+            .await
+            .map_err(krabka_client_core::ClientError::Io)?
+            .next()
+            .ok_or_else(|| {
+                krabka_client_core::ClientError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "test address resolved to no sockets",
+                ))
+            })?;
+        krabka_client_core::Connection::connect(sock, options).await
+    }
+}
+
+pub(super) fn submit_change_response_bytes(error_code: i16, leader_hint: i64) -> bytes::Bytes {
+    let mut out = Vec::new();
+    let result =
+        <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(
+            &crate::SubmitChangeResult::default(),
+        )
+        .expect("serialize result");
+    crate::wire::KrabkaSubmitChangeResponse {
+        error_code,
+        leader_hint,
+        result: bytes::Bytes::from(result),
+    }
+    .encode_v0(&mut out)
+    .unwrap();
+    bytes::Bytes::from(out)
+}

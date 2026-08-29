@@ -1,0 +1,161 @@
+//! Projection of a `Fetch` request, or of the partitions its session
+//! already caches, into the per-topic shape the read path walks, together
+//! with the session classification and topic authorization that run before
+//! any partition is read.
+
+use std::sync::Arc;
+
+use krabka_metadata::AclOperation;
+use krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid};
+
+use crate::{
+    authorizer::{AuthorizationResult, authorize_topics},
+    broker::Broker,
+    fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
+};
+
+/// Projection of `FetchRequest::topics` or of the cached session partitions.
+///
+/// It holds the minimum that the read loop needs. The handler builds it once
+/// at the top, from either source.
+pub(super) struct EffectiveTopic {
+    pub(super) topic: String,
+    pub(super) topic_id: WireUuid,
+    pub(super) partitions: Vec<EffectivePartition>,
+}
+
+pub(super) struct EffectivePartition {
+    pub(super) partition: i32,
+    pub(super) current_leader_epoch: i32,
+    /// KIP-320: the leader epoch of the last fetched record, as the fetcher
+    /// reports it. `-1` means "not set". This happens with v0–v11 fetchers and
+    /// with session-cached partitions that never set the field.
+    pub(super) last_fetched_epoch: i32,
+    pub(super) fetch_offset: i64,
+    pub(super) partition_max_bytes: i32,
+}
+
+pub(super) struct FetchPreparation {
+    pub(super) decision: SessionDecision,
+    pub(super) effective_topics: Vec<EffectiveTopic>,
+    pub(super) image: Arc<krabka_metadata::MetadataImage>,
+    pub(super) denied_topics: std::collections::HashSet<String>,
+    pub(super) effective_replica_id: i32,
+    pub(super) is_follower_fetch: bool,
+    pub(super) read_committed: bool,
+}
+
+pub(super) fn prepare_fetch(
+    broker: &Broker,
+    request: &FetchRequest,
+    context: &crate::handlers::RequestContext<'_>,
+) -> Result<FetchPreparation, i16> {
+    let effective_replica_id = if request.replica_id >= 0 {
+        request.replica_id
+    } else {
+        request.replica_state.replica_id
+    };
+    let is_follower_fetch = effective_replica_id >= 0;
+    let decision = broker.fetch_session_cache.classify(request);
+    if let SessionDecision::Error { code } = decision {
+        return Err(code);
+    }
+    let effective_topics = match &decision {
+        SessionDecision::Incremental { partitions, .. } => {
+            group_cached_into_effective_topics(partitions)
+        }
+        _ => request
+            .topics
+            .iter()
+            .map(|topic| EffectiveTopic {
+                topic: topic.topic.clone(),
+                topic_id: topic.topic_id,
+                partitions: topic
+                    .partitions
+                    .iter()
+                    .map(|partition| EffectivePartition {
+                        partition: partition.partition,
+                        current_leader_epoch: partition.current_leader_epoch,
+                        last_fetched_epoch: partition.last_fetched_epoch,
+                        fetch_offset: partition.fetch_offset,
+                        partition_max_bytes: partition.partition_max_bytes,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let image = broker.controller.current_image();
+    let names: Vec<String> = effective_topics
+        .iter()
+        .map(|topic| {
+            if !topic.topic.is_empty() {
+                topic.topic.clone()
+            } else if topic.topic_id != WireUuid::ZERO {
+                image
+                    .topic_name_by_id(&uuid::Uuid::from_bytes(topic.topic_id.0))
+                    .map(str::to_owned)
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })
+        .collect();
+    let denied_topics = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        &*image,
+        context.principal,
+        context.peer,
+        AclOperation::Read,
+        names.iter().map(String::as_str),
+    )
+    .into_iter()
+    .filter(|(_, result)| *result == AuthorizationResult::Deny)
+    .map(|(name, _)| name.to_owned())
+    .collect();
+    Ok(FetchPreparation {
+        decision,
+        effective_topics,
+        image,
+        denied_topics,
+        effective_replica_id,
+        is_follower_fetch,
+        read_committed: !is_follower_fetch && request.isolation_level == 1,
+    })
+}
+
+/// Re-group the flat `(key, state)` list that `FetchSessionCache::classify`
+/// returns into per-topic chunks.
+///
+/// The topic order is the order in which the keys first appear. `HashMap`
+/// iteration order is not stable across runs, but it is stable within a single
+/// classify call.
+fn group_cached_into_effective_topics(
+    cached: &[(FetchSessionKey, CachedPartitionState)],
+) -> Vec<EffectiveTopic> {
+    use std::collections::HashMap;
+    let mut order: Vec<String> = Vec::new();
+    let mut by_topic: HashMap<String, EffectiveTopic> = HashMap::new();
+    for (k, s) in cached {
+        let entry = by_topic
+            .entry(k.topic_name.clone())
+            .or_insert_with(|| EffectiveTopic {
+                topic: k.topic_name.clone(),
+                topic_id: k.topic_id,
+                partitions: Vec::new(),
+            });
+        entry.partitions.push(EffectivePartition {
+            partition: k.partition,
+            current_leader_epoch: s.current_leader_epoch,
+            last_fetched_epoch: s.last_fetched_epoch,
+            fetch_offset: s.fetch_offset,
+            partition_max_bytes: s.max_bytes,
+        });
+        if !order.iter().any(|t| t == &k.topic_name) {
+            order.push(k.topic_name.clone());
+        }
+    }
+    order
+        .into_iter()
+        .map(|n| by_topic.remove(&n).expect("populated above"))
+        .collect()
+}

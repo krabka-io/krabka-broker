@@ -20,7 +20,7 @@ use krabka_raft::kraft::{
     types::{Epoch, LogView},
 };
 use krabka_units::prelude::{ByteSize, gibibytes};
-use sim_harness::{Sim, SimNodeLog};
+use sim_harness::{cluster::Sim, node_log::SimNodeLog};
 
 /// A read budget larger than any log this simulation builds, so every read
 /// returns the whole log.

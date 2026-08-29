@@ -1,0 +1,182 @@
+//! One-shot Kafka RPCs against a bootstrap server's controller listener.
+//!
+//! Each function here dials `target` afresh (terminating TLS or SASL as the
+//! listener protocol demands), encodes one request, reads one response and
+//! closes the connection, mirroring `Controller::forward_submit_to`. A fresh
+//! connection per attempt is what keeps the retry loops stateless.
+
+use bytes::{Bytes, BytesMut};
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        add_raft_voter_request::{self, AddRaftVoterRequest},
+        add_raft_voter_response::AddRaftVoterResponse,
+        remove_raft_voter_request::{self, RemoveRaftVoterRequest},
+        remove_raft_voter_response::RemoveRaftVoterResponse,
+        update_raft_voter_request::{self, UpdateRaftVoterRequest},
+        update_raft_voter_response::UpdateRaftVoterResponse,
+    },
+};
+
+pub(super) async fn send_remove_raft_voter(
+    client: &crate::network::client::InterBrokerClient,
+    protocol: krabka_security::ListenerProtocol,
+    server_name: &str,
+    target: &str,
+    req: &RemoveRaftVoterRequest,
+) -> Result<RemoveRaftVoterResponse, String> {
+    let version = remove_raft_voter_request::MAX_VERSION;
+    let mut body = BytesMut::with_capacity(req.encoded_len(version));
+    req.encode(&mut body, version)
+        .map_err(|error| format!("RemoveRaftVoter encode: {error}"))?;
+    let (host, port) = split_bootstrap_server(target)?;
+    let connection = client
+        .connect_as_connection(
+            host,
+            port,
+            protocol,
+            server_name,
+            auto_join_connection_options(),
+        )
+        .await
+        .map_err(|error| format!("dial {target}: {error}"))?;
+    let response = connection
+        .raw_request(
+            remove_raft_voter_request::API_KEY,
+            version,
+            Bytes::from(body),
+        )
+        .await
+        .map_err(|error| format!("RemoveRaftVoter raw_request: {error}"));
+    connection.close();
+    let response = response?;
+    let mut cursor: &[u8] = &response;
+    RemoveRaftVoterResponse::decode(&mut cursor, version)
+        .map_err(|error| format!("RemoveRaftVoter decode: {error}"))
+}
+
+pub(super) async fn send_update_voter(
+    client: &crate::network::client::InterBrokerClient,
+    protocol: krabka_security::ListenerProtocol,
+    server_name: &str,
+    target: &str,
+    request: &UpdateRaftVoterRequest,
+) -> Result<UpdateRaftVoterResponse, String> {
+    let version = update_raft_voter_request::MAX_VERSION;
+    let mut body = BytesMut::with_capacity(request.encoded_len(version));
+    request
+        .encode(&mut body, version)
+        .map_err(|error| format!("UpdateVoter encode: {error}"))?;
+    let (host, port) = split_bootstrap_server(target)?;
+    let connection = client
+        .connect_as_connection(
+            host,
+            port,
+            protocol,
+            server_name,
+            auto_join_connection_options(),
+        )
+        .await
+        .map_err(|error| format!("dial {target}: {error}"))?;
+    let response = connection
+        .raw_request(
+            update_raft_voter_request::API_KEY,
+            version,
+            Bytes::from(body),
+        )
+        .await
+        .map_err(|error| format!("UpdateVoter raw_request: {error}"));
+    connection.close();
+    let response = response?;
+    UpdateRaftVoterResponse::decode(&mut response.as_ref(), version)
+        .map_err(|error| format!("UpdateVoter decode: {error}"))
+}
+
+/// Dial `target`'s controller listener (terminating TLS / SASL as the
+/// protocol demands) and send a single `AddRaftVoter` request, returning the
+/// decoded response. A fresh connection per attempt mirrors
+/// `Controller::forward_submit_to`.
+pub(super) async fn send_add_raft_voter(
+    client: &crate::network::client::InterBrokerClient,
+    protocol: krabka_security::ListenerProtocol,
+    server_name: &str,
+    target: &str,
+    req: &AddRaftVoterRequest,
+) -> Result<AddRaftVoterResponse, String> {
+    let version = add_raft_voter_request::MAX_VERSION;
+
+    let mut body = BytesMut::with_capacity(req.encoded_len(version));
+    req.encode(&mut body, version)
+        .map_err(|e| format!("AddRaftVoter encode: {e}"))?;
+
+    let (host, port) = split_bootstrap_server(target)?;
+    let opts = auto_join_connection_options();
+    let conn = client
+        .connect_as_connection(host, port, protocol, server_name, opts)
+        .await
+        .map_err(|e| format!("dial {target}: {e}"))?;
+
+    let resp_body = conn
+        .raw_request(add_raft_voter_request::API_KEY, version, Bytes::from(body))
+        .await
+        .map_err(|e| format!("AddRaftVoter raw_request: {e}"));
+    conn.close();
+    let resp_body = resp_body?;
+
+    let mut cur: &[u8] = &resp_body;
+    AddRaftVoterResponse::decode(&mut cur, version).map_err(|e| format!("AddRaftVoter decode: {e}"))
+}
+
+fn split_bootstrap_server(target: &str) -> Result<(&str, u16), String> {
+    let (host, port) = target
+        .rsplit_once(':')
+        .ok_or_else(|| format!("bootstrap server {target:?} must use <host>:<port>"))?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|error| format!("invalid bootstrap server port in {target:?}: {error}"))?;
+    Ok((host.trim_matches(['[', ']']), port))
+}
+
+fn auto_join_connection_options() -> krabka_client_core::ConnectionOptions {
+    krabka_client_core::ConnectionOptions {
+        client_id: "krabka-auto-join".to_string(),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn auto_join_connection_options_uses_joiner_client_id() {
+        let opts = auto_join_connection_options();
+
+        assert_eq!(opts.client_id, "krabka-auto-join");
+    }
+
+    #[tokio::test]
+    async fn send_add_raft_voter_errors_when_target_is_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let target = listener.local_addr().expect("local addr");
+        drop(listener);
+        let target = target.to_string();
+
+        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let req = AddRaftVoterRequest::default();
+        let err = send_add_raft_voter(
+            &client,
+            krabka_security::ListenerProtocol::Plaintext,
+            "broker.internal",
+            &target,
+            &req,
+        )
+        .await
+        .expect_err("closed port must not produce a successful default response");
+        assert!(err.contains("dial"), "unexpected error: {err}");
+    }
+}
