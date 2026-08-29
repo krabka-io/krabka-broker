@@ -51,6 +51,11 @@ mod single_broker;
 // that pulls in `support` can reach it as `support::relay`.
 pub mod relay;
 
+// Each suite declares `mod support;` and reaches the helpers it needs through
+// this one re-export, so every binary compiles the whole surface and uses only
+// part of it. That is why this statement carries the `unused_imports` allow:
+// the same reason the module carries `allow(dead_code)`.
+#[allow(unused_imports)]
 pub use self::{
     audit::{audit_record_seqs, consume_audit_records},
     cluster::start_n_node_with,
