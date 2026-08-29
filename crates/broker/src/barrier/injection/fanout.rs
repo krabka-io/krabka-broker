@@ -1,0 +1,380 @@
+//! The retry loop that writes one epoch's markers into every target partition.
+//!
+//! [`MarkerFanout`] reads a fresh metadata image per attempt, groups the
+//! partitions that still carry no marker by their leader, appends locally or
+//! through the transport seam, and repeats until every target is marked or the
+//! deadline passes. The offsets it collects are the cut.
+
+use std::{collections::BTreeMap, sync::Arc};
+
+use krabka_log::Offset;
+use krabka_metadata::{MetadataImage, NodeId};
+use krabka_units::{Time, convert::TimeExt as _};
+use tokio::time::Instant;
+use tracing::warn;
+
+use super::{RemoteMarkerWriter, append_marker, backoff_for, group_by_leader};
+use crate::{
+    barrier::{
+        config::BarrierConfig, marker::BarrierMarker, metrics::BarrierMetrics,
+        state::TargetPartition,
+    },
+    metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry,
+};
+
+/// The leader of `target` in `image`.
+fn leader_in(image: &MetadataImage, target: &TargetPartition) -> Option<NodeId> {
+    image
+        .partition(&target.topic, target.partition.get())
+        .map(|p| p.leader)
+}
+
+/// Everything one marker fan-out needs.
+pub(crate) struct MarkerFanout<'a> {
+    pub(crate) node_id: NodeId,
+    pub(crate) partitions: &'a PartitionRegistry,
+    pub(crate) controller: &'a Arc<dyn MetadataSource>,
+    pub(crate) remote: Option<&'a Arc<dyn RemoteMarkerWriter>>,
+    pub(crate) metrics: &'a dyn BarrierMetrics,
+    pub(crate) config: &'a BarrierConfig,
+}
+
+impl MarkerFanout<'_> {
+    /// Write `marker` into every partition of `targets`, and collect the
+    /// offsets.
+    ///
+    /// The function reads a fresh metadata image per attempt, so a leader that
+    /// moves between two attempts still gets the marker. It returns when every
+    /// target carries a marker, or when `timeout` passes. The caller publishes
+    /// a partial cut for whatever is absent from the result.
+    ///
+    /// The caller supplies `timeout` rather than the fan-out reading it from
+    /// the config, because a `TriggerBarrier` request carries its own bound.
+    pub(crate) async fn run(
+        &self,
+        marker: &BarrierMarker,
+        targets: Vec<TargetPartition>,
+        timeout: Time,
+    ) -> BTreeMap<TargetPartition, Offset> {
+        let deadline = Instant::now() + timeout.to_std();
+        let mut pending = targets;
+        let mut placed: BTreeMap<TargetPartition, Offset> = BTreeMap::new();
+        let mut attempt: u32 = 0;
+
+        while !pending.is_empty() {
+            let image = self.controller.current_image();
+            let plan = group_by_leader(&pending, |target| leader_in(&image, target));
+            for (leader, group) in plan {
+                match leader {
+                    None => {}
+                    Some(leader) if leader == self.node_id => {
+                        self.place_local(marker, &group, &mut placed).await;
+                    }
+                    Some(leader) => {
+                        self.place_remote(leader, marker, &group, &mut placed).await;
+                    }
+                }
+            }
+            pending.retain(|target| !placed.contains_key(target));
+            if pending.is_empty() {
+                break;
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let wait = backoff_for(
+                attempt,
+                self.config.retry_backoff,
+                self.config.retry_backoff_max,
+            )
+            .to_std()
+            .min(deadline - now);
+            tokio::time::sleep(wait).await;
+            attempt = attempt.saturating_add(1);
+        }
+        placed
+    }
+
+    /// Append the marker into every partition this broker leads.
+    async fn place_local(
+        &self,
+        marker: &BarrierMarker,
+        targets: &[TargetPartition],
+        placed: &mut BTreeMap<TargetPartition, Offset>,
+    ) {
+        for target in targets {
+            let Some(partition) = self.partitions.get(&target.topic, target.partition) else {
+                warn!(
+                    topic = target.topic,
+                    partition = target.partition.get(),
+                    "barrier target is led locally but is not open here"
+                );
+                self.metrics
+                    .marker_append_failed(&target.topic, target.partition);
+                continue;
+            };
+            match append_marker(&partition, marker).await {
+                Ok(offset) => {
+                    self.metrics.marker_written(&target.topic);
+                    placed.insert(target.clone(), offset);
+                }
+                Err(error) => {
+                    warn!(
+                        topic = target.topic,
+                        partition = target.partition.get(),
+                        %error,
+                        "barrier marker append failed"
+                    );
+                    self.metrics
+                        .marker_append_failed(&target.topic, target.partition);
+                }
+            }
+        }
+    }
+
+    /// Ask `leader` to append the marker into every partition it leads.
+    async fn place_remote(
+        &self,
+        leader: NodeId,
+        marker: &BarrierMarker,
+        targets: &[TargetPartition],
+        placed: &mut BTreeMap<TargetPartition, Offset>,
+    ) {
+        let Some(remote) = self.remote else {
+            warn!(
+                %leader,
+                count = targets.len(),
+                "no barrier marker transport; the remote partitions stay unmarked"
+            );
+            for target in targets {
+                self.metrics
+                    .marker_append_failed(&target.topic, target.partition);
+            }
+            return;
+        };
+        match remote.write_markers(leader, marker, targets).await {
+            Ok(placements) => {
+                for placement in placements {
+                    self.metrics.marker_written(&placement.target.topic);
+                    placed.insert(placement.target, placement.offset);
+                }
+            }
+            Err(error) => {
+                warn!(%leader, %error, "barrier marker request to the leader failed");
+                for target in targets {
+                    self.metrics
+                        .marker_append_failed(&target.topic, target.partition);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::{assert, check};
+    use krabka_ids::PartitionIndex;
+    use krabka_units::{millis, secs};
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        barrier::{
+            injection::{
+                MarkerPlacement, MockRemoteMarkerWriter,
+                test_support::{at, fast_config, marker, source},
+            },
+            marker::parse_barrier_marker,
+            metrics::NoBarrierMetrics,
+            test_support::{open_partition, topic_records},
+        },
+        error::BrokerError,
+    };
+
+    #[tokio::test]
+    async fn a_local_fan_out_marks_every_partition_and_returns_its_offset() {
+        let dir = tempdir().expect("tempdir");
+        let registry = PartitionRegistry::new();
+        for p in 0..2 {
+            open_partition(&registry, dir.path(), "orders", p);
+        }
+        let controller = source(&topic_records("orders", 2, NodeId(1)));
+        let metrics = NoBarrierMetrics;
+        let config = fast_config();
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: None,
+            metrics: &metrics,
+            config: &config,
+        };
+
+        let placed = fanout
+            .run(
+                &marker(),
+                vec![at("orders", 0), at("orders", 1)],
+                config.injection_timeout,
+            )
+            .await;
+        assert!(placed.len() == 2);
+        assert!(placed[&at("orders", 0)] == Offset(0));
+        assert!(placed[&at("orders", 1)] == Offset(0));
+
+        // The record at the returned offset is this epoch's marker, and the
+        // batch carries the partition's leader epoch rather than a zero.
+        for p in 0..2 {
+            let partition = registry
+                .get("orders", PartitionIndex(p))
+                .expect("the partition is open");
+            let read = partition
+                .read_log(Offset(0), krabka_units::mebibytes(1))
+                .expect("read the log back");
+            let batch = &read.batches[0];
+            check!(batch.attributes.is_control_batch());
+            check!(parse_barrier_marker(&batch.records[0]).ok() == Some(marker()));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_partition_that_is_not_open_locally_stays_unmarked() {
+        let dir = tempdir().expect("tempdir");
+        let registry = PartitionRegistry::new();
+        open_partition(&registry, dir.path(), "orders", 0);
+        let controller = source(&topic_records("orders", 2, NodeId(1)));
+        let metrics = NoBarrierMetrics;
+        let config = fast_config();
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: None,
+            metrics: &metrics,
+            config: &config,
+        };
+
+        let placed = fanout
+            .run(
+                &marker(),
+                vec![at("orders", 0), at("orders", 1)],
+                config.injection_timeout,
+            )
+            .await;
+        assert!(placed.keys().cloned().collect::<Vec<_>>() == vec![at("orders", 0)]);
+    }
+
+    #[tokio::test]
+    async fn a_remote_partition_goes_through_the_transport_seam() {
+        let registry = PartitionRegistry::new();
+        let controller = source(&topic_records("orders", 1, NodeId(2)));
+        let metrics = NoBarrierMetrics;
+        let config = fast_config();
+
+        let mut remote = MockRemoteMarkerWriter::new();
+        remote
+            .expect_write_markers()
+            .times(1)
+            .returning(|leader, _marker, targets| {
+                assert!(leader == NodeId(2));
+                Ok(targets
+                    .iter()
+                    .map(|target| MarkerPlacement {
+                        target: target.clone(),
+                        offset: Offset(77),
+                    })
+                    .collect())
+            });
+        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
+
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: Some(&remote),
+            metrics: &metrics,
+            config: &config,
+        };
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
+        assert!(placed == BTreeMap::from([(at("orders", 0), Offset(77))]));
+    }
+
+    #[tokio::test]
+    async fn the_fan_out_retries_a_leader_that_failed_once() {
+        let registry = PartitionRegistry::new();
+        let controller = source(&topic_records("orders", 1, NodeId(2)));
+        let metrics = NoBarrierMetrics;
+        let config = BarrierConfig {
+            injection_timeout: secs(30),
+            retry_backoff: millis(1),
+            retry_backoff_max: millis(1),
+            ..BarrierConfig::default()
+        };
+
+        let mut remote = MockRemoteMarkerWriter::new();
+        let mut calls = 0;
+        remote
+            .expect_write_markers()
+            .times(2)
+            .returning(move |_leader, _marker, targets| {
+                calls += 1;
+                if calls == 1 {
+                    return Err(BrokerError::Replication("leader is mid-election".into()));
+                }
+                Ok(targets
+                    .iter()
+                    .map(|target| MarkerPlacement {
+                        target: target.clone(),
+                        offset: Offset(12),
+                    })
+                    .collect())
+            });
+        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
+
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: Some(&remote),
+            metrics: &metrics,
+            config: &config,
+        };
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
+        assert!(placed == BTreeMap::from([(at("orders", 0), Offset(12))]));
+    }
+
+    #[tokio::test]
+    async fn a_deadline_that_runs_out_returns_what_it_placed() {
+        let registry = PartitionRegistry::new();
+        let controller = source(&topic_records("orders", 1, NodeId(2)));
+        let metrics = NoBarrierMetrics;
+        let config = fast_config();
+
+        let mut remote = MockRemoteMarkerWriter::new();
+        remote
+            .expect_write_markers()
+            .returning(|_leader, _marker, _targets| {
+                Err(BrokerError::Replication("leader is down".into()))
+            });
+        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
+
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: Some(&remote),
+            metrics: &metrics,
+            config: &config,
+        };
+        let placed = fanout
+            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
+            .await;
+        assert!(placed.is_empty());
+    }
+}
