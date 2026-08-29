@@ -271,7 +271,7 @@ mod tests {
     }
 
     fn epochs() -> BTreeMap<LeaderEpoch, i64> {
-        BTreeMap::from([(LeaderEpoch(0), 0)])
+        maplit::btreemap! {LeaderEpoch(0) => 0}
     }
 
     #[test]
@@ -468,7 +468,7 @@ mod tests {
             crate::metadata::RemoteLogSegmentDetails::new(
                 1024,
                 RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 0)]),
+                maplit::btreemap! {LeaderEpoch(0) => 0},
             ),
         )
         .unwrap();

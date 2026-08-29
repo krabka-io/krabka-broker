@@ -198,13 +198,9 @@ fn compact_and_scheduled_delivery_exclude_each_other() {
 
 #[test]
 fn compact_plus_scheduled_rejection_names_both_keys() {
-    let overrides = BTreeMap::from([
-        (CLEANUP_POLICY.to_string(), "compact".to_string()),
-        (
-            DELIVERY_MODE.to_string(),
-            DELIVERY_MODE_SCHEDULED.to_string(),
-        ),
-    ]);
+    let overrides = maplit::btreemap! {
+    CLEANUP_POLICY.to_string() => "compact".to_string(),
+    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
     let error = validate_config_combination(&overrides).unwrap_err();
     assert!(error.contains(CLEANUP_POLICY), "got: {error}");
     assert!(error.contains(DELIVERY_MODE), "got: {error}");
@@ -212,27 +208,19 @@ fn compact_plus_scheduled_rejection_names_both_keys() {
 
 #[test]
 fn validate_topic_config_map_checks_pairs_and_then_combinations() {
-    let accepted = BTreeMap::from([
-        (RETENTION_MS.to_string(), "60000".to_string()),
-        (
-            DELIVERY_MODE.to_string(),
-            DELIVERY_MODE_SCHEDULED.to_string(),
-        ),
-    ]);
+    let accepted = maplit::btreemap! {
+    RETENTION_MS.to_string() => "60000".to_string(),
+    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
     assert!(validate_topic_config_map(&accepted) == Ok(()));
 
-    let bad_pair = BTreeMap::from([(DELIVERY_MODE.to_string(), "later".to_string())]);
+    let bad_pair = maplit::btreemap! {DELIVERY_MODE.to_string() => "later".to_string()};
     assert!(validate_topic_config_map(&bad_pair).is_err());
 
-    let unknown_key = BTreeMap::from([("flush.ms".to_string(), "1000".to_string())]);
+    let unknown_key = maplit::btreemap! {"flush.ms".to_string() => "1000".to_string()};
     assert!(validate_topic_config_map(&unknown_key).is_err());
 
-    let bad_combination = BTreeMap::from([
-        (CLEANUP_POLICY.to_string(), "compact".to_string()),
-        (
-            DELIVERY_MODE.to_string(),
-            DELIVERY_MODE_SCHEDULED.to_string(),
-        ),
-    ]);
+    let bad_combination = maplit::btreemap! {
+    CLEANUP_POLICY.to_string() => "compact".to_string(),
+    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
     assert!(validate_topic_config_map(&bad_combination).is_err());
 }

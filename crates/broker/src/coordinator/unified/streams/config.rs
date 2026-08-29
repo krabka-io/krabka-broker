@@ -180,34 +180,15 @@ impl StreamsGroupConfig {
     /// Effective values exposed by `DescribeConfigs` for a GROUP resource.
     #[must_use]
     pub fn group_config_values(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            (
-                KEY_SESSION_TIMEOUT_MS.into(),
-                self.session_timeout.as_millis().to_string(),
-            ),
-            (
-                KEY_HEARTBEAT_INTERVAL_MS.into(),
-                self.heartbeat_interval.as_millis().to_string(),
-            ),
-            (
-                KEY_ACCEPTABLE_RECOVERY_LAG.into(),
-                self.acceptable_recovery_lag.to_string(),
-            ),
-            (
-                KEY_NUM_WARMUP_REPLICAS.into(),
-                self.num_warmup_replicas.to_string(),
-            ),
-            (
-                KEY_NUM_STANDBY_REPLICAS.into(),
-                self.num_standby_replicas.to_string(),
-            ),
-            (
-                KEY_TASK_OFFSET_INTERVAL_MS.into(),
-                self.task_offset_interval.as_millis().to_string(),
-            ),
-            (KEY_ASSIGNOR_NAME.into(), self.assignor.config_name().into()),
-            (KEY_SHARE_AUTO_OFFSET_RESET.into(), "earliest".into()),
-        ])
+        maplit::btreemap! {
+        KEY_SESSION_TIMEOUT_MS.into() => self.session_timeout.as_millis().to_string(),
+        KEY_HEARTBEAT_INTERVAL_MS.into() => self.heartbeat_interval.as_millis().to_string(),
+        KEY_ACCEPTABLE_RECOVERY_LAG.into() => self.acceptable_recovery_lag.to_string(),
+        KEY_NUM_WARMUP_REPLICAS.into() => self.num_warmup_replicas.to_string(),
+        KEY_NUM_STANDBY_REPLICAS.into() => self.num_standby_replicas.to_string(),
+        KEY_TASK_OFFSET_INTERVAL_MS.into() => self.task_offset_interval.as_millis().to_string(),
+        KEY_ASSIGNOR_NAME.into() => self.assignor.config_name().into(),
+        KEY_SHARE_AUTO_OFFSET_RESET.into() => "earliest".into()}
     }
 }
 
@@ -266,12 +247,11 @@ mod tests {
 
     #[test]
     fn group_overrides_are_validated_and_applied() {
-        let overrides = BTreeMap::from([
-            (KEY_SESSION_TIMEOUT_MS.into(), "50000".into()),
-            (KEY_HEARTBEAT_INTERVAL_MS.into(), "6000".into()),
-            (KEY_NUM_STANDBY_REPLICAS.into(), "1".into()),
-            (KEY_ASSIGNOR_NAME.into(), "highly_available".into()),
-        ]);
+        let overrides = maplit::btreemap! {
+        KEY_SESSION_TIMEOUT_MS.into() => "50000".into(),
+        KEY_HEARTBEAT_INTERVAL_MS.into() => "6000".into(),
+        KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
+        KEY_ASSIGNOR_NAME.into() => "highly_available".into()};
         let got = StreamsGroupConfig::default()
             .with_group_overrides(&overrides)
             .expect("valid overrides");
@@ -283,13 +263,13 @@ mod tests {
 
     #[test]
     fn group_overrides_reject_unknown_and_out_of_bounds_values() {
-        let unknown = BTreeMap::from([("streams.unknown".into(), "1".into())]);
+        let unknown = maplit::btreemap! {"streams.unknown".into() => "1".into()};
         assert!(
             StreamsGroupConfig::default()
                 .with_group_overrides(&unknown)
                 .is_err()
         );
-        let too_short = BTreeMap::from([(KEY_SESSION_TIMEOUT_MS.into(), "1000".into())]);
+        let too_short = maplit::btreemap! {KEY_SESSION_TIMEOUT_MS.into() => "1000".into()};
         assert!(
             StreamsGroupConfig::default()
                 .with_group_overrides(&too_short)

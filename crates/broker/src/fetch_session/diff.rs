@@ -78,24 +78,17 @@ mod tests {
 
     #[test]
     fn forgotten_topic_name_drops_only_matching_topic_partition() {
-        let mut partitions = HashMap::from([
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: 0,
-                },
-                CachedPartitionState::default(),
-            ),
-            (
-                FetchSessionKey {
-                    topic_name: "u".into(),
-                    topic_id: WireUuid::ZERO,
-                    partition: 0,
-                },
-                CachedPartitionState::default(),
-            ),
-        ]);
+        let mut partitions = maplit::hashmap! {
+        FetchSessionKey {
+                topic_name: "t".into(),
+                topic_id: WireUuid::ZERO,
+                partition: 0,
+            } => CachedPartitionState::default(),
+        FetchSessionKey {
+                topic_name: "u".into(),
+                topic_id: WireUuid::ZERO,
+                partition: 0,
+            } => CachedPartitionState::default()};
         let forgotten = vec![ForgottenTopic {
             topic: "t".into(),
             topic_id: WireUuid::ZERO,
@@ -121,24 +114,17 @@ mod tests {
     fn forgotten_topic_id_drops_only_matching_topic_partition() {
         let tid = WireUuid([1u8; 16]);
         let other_tid = WireUuid([2u8; 16]);
-        let mut partitions = HashMap::from([
-            (
-                FetchSessionKey {
-                    topic_name: "t".into(),
-                    topic_id: tid,
-                    partition: 0,
-                },
-                CachedPartitionState::default(),
-            ),
-            (
-                FetchSessionKey {
-                    topic_name: "u".into(),
-                    topic_id: other_tid,
-                    partition: 0,
-                },
-                CachedPartitionState::default(),
-            ),
-        ]);
+        let mut partitions = maplit::hashmap! {
+        FetchSessionKey {
+                topic_name: "t".into(),
+                topic_id: tid,
+                partition: 0,
+            } => CachedPartitionState::default(),
+        FetchSessionKey {
+                topic_name: "u".into(),
+                topic_id: other_tid,
+                partition: 0,
+            } => CachedPartitionState::default()};
         let forgotten = vec![ForgottenTopic {
             topic: String::new(),
             topic_id: tid,

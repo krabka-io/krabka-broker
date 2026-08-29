@@ -195,7 +195,7 @@ mod tests {
             topic_id,
             partition: PartitionIndex(0),
         };
-        let complete = HashMap::from([(shard, vec![NodeId(1), NodeId(2), NodeId(3)])]);
+        let complete = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]};
 
         let desired = supervisor.desired_wal_followers(&image, &complete);
 
@@ -207,7 +207,7 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(7),
                 })
         );
-        let short = HashMap::from([(shard, vec![NodeId(1), NodeId(2)])]);
+        let short = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2)]};
         assert!(supervisor.desired_wal_followers(&image, &short).is_empty());
     }
 
@@ -239,7 +239,7 @@ mod tests {
             topic_id,
             partition: PartitionIndex(0),
         };
-        let placements = HashMap::from([(shard, vec![NodeId(1), NodeId(2), NodeId(3)])]);
+        let placements = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]};
         let target = WalFollowerSpec {
             topic: "diskless".into(),
             leader: NodeId(1),

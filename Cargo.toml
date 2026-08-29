@@ -63,6 +63,7 @@ ktls = "6"
 # an O(1) LRU with a non-zero capacity invariant; pair it with our own
 # TTL field on the value (no built-in expiry).
 lru = "0.18"
+maplit = "1"
 # mockall: generate test mocks for trait seams so engine-IO decision logic is
 # unit-testable (and mutation-killable) without a live broker/quorum/database.
 # Dev-dependency only — `#[cfg_attr(test, mockall::automock)]` keeps it out of

@@ -271,10 +271,9 @@ mod tests {
             .append_at(&mut batch, Offset(0))
             .unwrap();
         source.lock().unwrap().sync().unwrap();
-        let engine = Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-            krabka_raft::NodeId(1),
-            source.clone(),
-        )])));
+        let engine = Arc::new(WalShardEngine::for_logs(
+            maplit::btreemap! {krabka_raft::NodeId(1) => source.clone()},
+        ));
         engine.replicate_and_sync(&source, Offset(1)).await.unwrap();
 
         let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
@@ -287,13 +286,10 @@ mod tests {
             },
             engine,
         );
-        registry.replace_placements(&HashMap::from([(
-            ShardId {
-                topic_id,
-                partition,
-            },
-            vec![krabka_raft::NodeId(9)],
-        )]));
+        registry.replace_placements(&maplit::hashmap! {ShardId {
+            topic_id,
+            partition,
+        } => vec![krabka_raft::NodeId(9)]});
         let router = WalShardRouter::new(registry);
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
@@ -345,10 +341,9 @@ mod tests {
             log.sync().unwrap();
             log.trim_to_offset(Offset(5)).unwrap();
         }
-        let engine = Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-            krabka_raft::NodeId(1),
-            source,
-        )])));
+        let engine = Arc::new(WalShardEngine::for_logs(
+            maplit::btreemap! {krabka_raft::NodeId(1) => source},
+        ));
 
         let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
         let shard = ShardId {
@@ -356,7 +351,7 @@ mod tests {
             partition: PartitionIndex(3),
         };
         registry.insert(shard, engine);
-        registry.replace_placements(&HashMap::from([(shard, vec![krabka_raft::NodeId(9)])]));
+        registry.replace_placements(&maplit::hashmap! {shard => vec![krabka_raft::NodeId(9)]});
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             krabka_raft::NodeId(9),
@@ -411,12 +406,11 @@ mod tests {
         ));
         registry.insert(
             shard,
-            Arc::new(WalShardEngine::for_logs(BTreeMap::from([(
-                krabka_raft::NodeId(1),
-                log,
-            )]))),
+            Arc::new(WalShardEngine::for_logs(
+                maplit::btreemap! {krabka_raft::NodeId(1) => log},
+            )),
         );
-        registry.replace_placements(&HashMap::from([(shard, vec![krabka_raft::NodeId(2)])]));
+        registry.replace_placements(&maplit::hashmap! {shard => vec![krabka_raft::NodeId(2)]});
         let router = WalShardRouter::new(registry);
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
@@ -447,9 +441,9 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(2),
             partition: PartitionIndex(0),
         };
-        registry.replace_placements(&HashMap::from([(stale, vec![krabka_raft::NodeId(1)])]));
+        registry.replace_placements(&maplit::hashmap! {stale => vec![krabka_raft::NodeId(1)]});
 
-        registry.replace_placements(&HashMap::from([(current, vec![krabka_raft::NodeId(2)])]));
+        registry.replace_placements(&maplit::hashmap! {current => vec![krabka_raft::NodeId(2)]});
 
         assert!(registry.placement(stale).is_none());
         assert_eq!(

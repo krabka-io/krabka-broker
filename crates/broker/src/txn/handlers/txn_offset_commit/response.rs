@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn build_response_overrides_denied_topics_with_topic_authorization_error() {
         let req = request();
-        let denied = HashSet::from(["orders".to_string()]);
+        let denied = maplit::hashset! {"orders".to_string()};
 
         let resp = build_response(&req, codes::NONE, &denied);
 

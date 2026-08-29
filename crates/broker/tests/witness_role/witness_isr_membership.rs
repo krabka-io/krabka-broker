@@ -58,11 +58,10 @@ async fn witness_is_a_visible_isr_member_that_serves_no_reads() {
         .collect();
     check!(
         racks
-            == BTreeMap::from([
-                (1, Some(SITE_A.to_string())),
-                (2, Some(SITE_B.to_string())),
-                (WITNESS_ID, Some(SITE_C.to_string())),
-            ]),
+            == maplit::btreemap! {
+            1 => Some(SITE_A.to_string()),
+            2 => Some(SITE_B.to_string()),
+            WITNESS_ID => Some(SITE_C.to_string())},
         "every broker, the witness included, is in Metadata.brokers[] with its rack"
     );
 
@@ -73,7 +72,7 @@ async fn witness_is_a_visible_isr_member_that_serves_no_reads() {
                 partition_index: 0,
                 leader_id: LEADER_ID,
                 replica_nodes: vec![1, 2, WITNESS_ID],
-                isr_nodes: BTreeSet::from([1, 2, WITNESS_ID]),
+                isr_nodes: maplit::btreeset! {1, 2, WITNESS_ID},
                 offline_replicas: vec![],
             },
         "the witness is a replica and an ISR member; the leader is in the preferred site"

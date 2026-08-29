@@ -373,7 +373,7 @@ mod tests {
             RemoteLogSegmentDetails::new(
                 1,
                 RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 0)]),
+                maplit::btreemap! {LeaderEpoch(0) => 0},
             ),
         )
         .expect("finished metadata");
@@ -398,7 +398,7 @@ mod tests {
                 RemoteLogSegmentDetails::new(
                     1,
                     RemoteLogSegmentState::CopySegmentStarted,
-                    BTreeMap::from([(LeaderEpoch(0), 5)]),
+                    maplit::btreemap! {LeaderEpoch(0) => 5},
                 ),
             )
             .expect("started metadata"),

@@ -341,14 +341,10 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
 
     let image = broker_handle.controller_image_for_test();
     let configs = image.topic_config("retries").expect("topic configs");
-    let expected_configs = std::collections::BTreeMap::from([
-        ("delivery.mode".to_string(), "scheduled".to_string()),
-        ("delivery.max.delay.ms".to_string(), "-1".to_string()),
-        (
-            "delivery.schedule.monotonic".to_string(),
-            "true".to_string(),
-        ),
-    ]);
+    let expected_configs = maplit::btreemap! {
+    "delivery.mode".to_string() => "scheduled".to_string(),
+    "delivery.max.delay.ms".to_string() => "-1".to_string(),
+    "delivery.schedule.monotonic".to_string() => "true".to_string()};
     assert!(*configs == expected_configs);
     broker_handle.shutdown().await;
 }

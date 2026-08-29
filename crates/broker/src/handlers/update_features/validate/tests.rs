@@ -146,13 +146,10 @@ fn safe_metadata_downgrade_preserves_representable_directory_fields() {
 
 #[test]
 fn metadata_downgrade_rejects_registered_nodes_without_capability() {
-    let supported = std::collections::BTreeMap::from([(
-        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-        (
-            crate::features::METADATA_VERSION_MIN,
-            crate::features::METADATA_VERSION_MAX,
-        ),
-    )]);
+    let supported = maplit::btreemap! {krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into() => (
+        crate::features::METADATA_VERSION_MIN,
+        crate::features::METADATA_VERSION_MAX,
+    )};
     let registrations = [
         (
             MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {

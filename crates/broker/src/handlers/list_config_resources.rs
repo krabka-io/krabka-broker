@@ -280,19 +280,13 @@ mod tests {
         image.apply(&MetadataRecord::V1GroupConfig(
             krabka_metadata::GroupConfigRecord {
                 group_id: "streams-b".into(),
-                configs: std::collections::BTreeMap::from([(
-                    "streams.num.standby.replicas".into(),
-                    "1".into(),
-                )]),
+                configs: maplit::btreemap! {"streams.num.standby.replicas".into() => "1".into()},
             },
         ));
         image.apply(&MetadataRecord::V1GroupConfig(
             krabka_metadata::GroupConfigRecord {
                 group_id: "streams-a".into(),
-                configs: std::collections::BTreeMap::from([(
-                    "streams.num.standby.replicas".into(),
-                    "1".into(),
-                )]),
+                configs: maplit::btreemap! {"streams.num.standby.replicas".into() => "1".into()},
             },
         ));
         let out = collect_resources(&image, 1, &[RESOURCE_TYPE_GROUP]);

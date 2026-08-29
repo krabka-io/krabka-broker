@@ -258,11 +258,11 @@ mod tests {
         state
             .target
             .per_member
-            .insert("m1".into(), HashMap::from([(topic_id, vec![0])]));
+            .insert("m1".into(), maplit::hashmap! {topic_id => vec![0]});
         state
             .target
             .per_member
-            .insert("m2".into(), HashMap::from([(topic_id, vec![1])]));
+            .insert("m2".into(), maplit::hashmap! {topic_id => vec![1]});
 
         let pending = snapshot_pending_after_change(&state, &["m2".into()], true);
         let member_ids: Vec<&str> = pending

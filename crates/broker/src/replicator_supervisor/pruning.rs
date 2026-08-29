@@ -181,7 +181,7 @@ mod tests {
         supervisor.wal_shards.insert(
             deleted_shard,
             Arc::new(crate::wal::quorum::engine::WalShardEngine::for_logs(
-                std::collections::BTreeMap::from([(NodeId(2), original["deleted"].log.clone())]),
+                maplit::btreemap! {NodeId(2) => original["deleted"].log.clone()},
             )),
         );
         let deleted_wal_dir = crate::wal::quorum::shard_dir(
@@ -262,7 +262,7 @@ mod tests {
         supervisor.wal_shards.insert(
             shard,
             Arc::new(crate::wal::quorum::engine::WalShardEngine::for_logs(
-                std::collections::BTreeMap::from([(NodeId(2), original.log.clone())]),
+                maplit::btreemap! {NodeId(2) => original.log.clone()},
             )),
         );
         let wal_dir =

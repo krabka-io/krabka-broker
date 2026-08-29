@@ -168,7 +168,12 @@ mod tests {
         fs::create_dir_all(root.path()).unwrap();
         fs::write(
             root.path().join(QUORUM_STATE_FILE),
-            br#"{"voters":[0,1,2],"leader_epoch":4,"leader_id":1}"#,
+            serde_json::to_vec(&serde_json::json!({
+                "voters": [0, 1, 2],
+                "leader_epoch": 4,
+                "leader_id": 1,
+            }))
+            .unwrap(),
         )
         .unwrap();
 
@@ -220,10 +225,15 @@ mod tests {
         let cluster_id = Uuid::from_u128(17);
         fs::write(
             root.path().join(QUORUM_STATE_FILE),
-            format!(
-                r#"{{"cluster_id":"{cluster_id}","voters":[0,1,2],"kraft_version":1,"leader_epoch":7,"leader_id":9,"voted_key":{{"id":9,"directory_id":"{}"}}}}"#,
-                Uuid::from_u128(99)
-            ),
+            serde_json::json!({
+                "cluster_id": cluster_id,
+                "voters": [0, 1, 2],
+                "kraft_version": 1,
+                "leader_epoch": 7,
+                "leader_id": 9,
+                "voted_key": {"id": 9, "directory_id": Uuid::from_u128(99)},
+            })
+            .to_string(),
         )
         .unwrap();
         let voter_ids = vec![NodeId(0), NodeId(1), NodeId(2)];

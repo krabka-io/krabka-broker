@@ -317,7 +317,7 @@ mod tests {
             group_type: "classic".into(),
             ..Default::default()
         }];
-        let mut emitted = HashSet::from(["already".to_string()]);
+        let mut emitted = maplit::hashset! {"already".to_string()};
 
         append_next_gen(
             &mut groups,
@@ -346,7 +346,7 @@ mod tests {
         ];
         assert!(groups == expected_groups, "{groups:?}");
         // "denied" was rejected by the authorizer; only "share-a" was added.
-        assert!(emitted == HashSet::from(["already".to_string(), "share-a".to_string()]));
+        assert!(emitted == maplit::hashset! {"already".to_string(), "share-a".to_string()});
     }
 
     #[test]

@@ -112,7 +112,7 @@ pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBa
                 )
                 .expect("test segment fits i32"),
                 RemoteLogSegmentState::CopySegmentFinished,
-                BTreeMap::from([(LeaderEpoch(0), export.base_offset.0)]),
+                maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
             ),
         )
         .expect("valid remote metadata");

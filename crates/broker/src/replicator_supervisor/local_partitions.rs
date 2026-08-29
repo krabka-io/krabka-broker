@@ -321,10 +321,7 @@ mod tests {
             partition_record("diskless", 0, NodeId(2), vec![NodeId(2)], 7),
             MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),
-                overrides: std::collections::BTreeMap::from([(
-                    "krabka.diskless".into(),
-                    "true".into(),
-                )]),
+                overrides: maplit::btreemap! {"krabka.diskless".into() => "true".into()},
             }),
         ]);
         let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img.clone());

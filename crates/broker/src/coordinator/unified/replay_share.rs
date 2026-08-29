@@ -200,15 +200,9 @@ mod tests {
         let expected = ShareGroupSeed {
             group_epoch: 21,
             target_epoch: 22,
-            members: std::collections::HashMap::from([("share-member".to_string(), member)]),
-            target_per_member: std::collections::HashMap::from([(
-                "share-member".to_string(),
-                target,
-            )]),
-            current_per_member: std::collections::HashMap::from([(
-                "share-member".to_string(),
-                current,
-            )]),
+            members: maplit::hashmap! {"share-member".to_string() => member},
+            target_per_member: maplit::hashmap! {"share-member".to_string() => target},
+            current_per_member: maplit::hashmap! {"share-member".to_string() => current},
             state_partition_metadata: share::persistence::ShareGroupStatePartitionMetadataValue {
                 initialized: vec![],
                 deleting: vec![],

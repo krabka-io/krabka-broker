@@ -171,7 +171,7 @@ mod tests {
         let registry = Arc::new(PartitionRegistry::new());
         open_offsets_partition(&registry, dir.path());
         let req = request();
-        let denied = HashSet::from(["orders".to_string()]);
+        let denied = maplit::hashset! {"orders".to_string()};
 
         append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &denied)
             .await

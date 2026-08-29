@@ -123,10 +123,9 @@ mod tests {
 
         let grouped = produce_bytes_by_qos_tier(&img, &topics);
 
-        let expected: BTreeMap<String, u64> = BTreeMap::from([
-            ("gold".to_string(), 30),
-            (crate::config_keys::DEFAULT_QOS_TIER.to_string(), 7),
-        ]);
+        let expected: BTreeMap<String, u64> = maplit::btreemap! {
+        "gold".to_string() => 30,
+        crate::config_keys::DEFAULT_QOS_TIER.to_string() => 7};
         assert!(grouped == expected);
     }
 

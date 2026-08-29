@@ -18,6 +18,7 @@ categories = ["database-implementations", "filesystem"]
 workspace = true
 
 [dependencies]
+maplit = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 # `krabka-worm-verify`, the standalone archive auditor, is a `[[bin]]` of this

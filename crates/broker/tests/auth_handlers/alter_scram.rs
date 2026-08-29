@@ -64,7 +64,7 @@ async fn alter_scram_creds_super_user_can_provision() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha512];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -135,7 +135,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -204,7 +204,7 @@ async fn alter_scram_creds_non_super_user_rejected() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("bob".to_string(), wrong_scram_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; the default `AllowAllAuthorizer`
     // would let alice through.

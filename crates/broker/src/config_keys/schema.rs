@@ -138,14 +138,10 @@ mod tests {
     fn apply_leaves_log_config_alone_for_the_schema_validation_keys() {
         // All three keys are enforced on the produce path, so none of them may
         // reach the log's own config.
-        let overrides = BTreeMap::from([
-            (SCHEMA_VALIDATION_KEY.to_string(), "true".to_string()),
-            (SCHEMA_VALIDATION_VALUE.to_string(), "true".to_string()),
-            (
-                SCHEMA_VALIDATION_MODE.to_string(),
-                SCHEMA_VALIDATION_MODE_FULL.to_string(),
-            ),
-        ]);
+        let overrides = maplit::btreemap! {
+        SCHEMA_VALIDATION_KEY.to_string() => "true".to_string(),
+        SCHEMA_VALIDATION_VALUE.to_string() => "true".to_string(),
+        SCHEMA_VALIDATION_MODE.to_string() => SCHEMA_VALIDATION_MODE_FULL.to_string()};
         assert!(apply_to_log_config(&overrides, &LogConfig::default()) == LogConfig::default());
     }
 

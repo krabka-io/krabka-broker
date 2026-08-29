@@ -2815,6 +2815,7 @@ dependencies = [
  "krabka-voters",
  "ktls",
  "lru",
+ "maplit",
  "mockall",
  "mutants",
  "nix 0.31.3",
@@ -2857,8 +2858,7 @@ dependencies = [
  "uuid",
  "wincode",
  "wiremock",
- "zerocopy",
-]
+ "zerocopy",]
 
 [[package]]
 name = "krabka-client-admin"
@@ -3048,6 +3048,7 @@ dependencies = [
  "krabka-protocol",
  "krabka-units",
  "krabka-verified",
+ "maplit",
  "mutants",
  "proptest",
  "stateright",
@@ -3057,8 +3058,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
- "zerocopy",
-]
+ "zerocopy",]
 
 [[package]]
 name = "krabka-logfmt"
@@ -3142,6 +3142,7 @@ dependencies = [
  "krabka-security",
  "krabka-units",
  "krabka-verified",
+ "maplit",
  "mockall",
  "mutants",
  "refined_type",
@@ -3155,8 +3156,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "wincode",
-]
+ "wincode",]
 
 [[package]]
 name = "krabka-records-legacy"
@@ -3191,6 +3191,7 @@ dependencies = [
  "krabka-object-store",
  "krabka-protocol",
  "krabka-units",
+ "maplit",
  "object_store",
  "proptest",
  "ring",
@@ -3203,8 +3204,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "zerocopy",
-]
+ "zerocopy",]
 
 [[package]]
 name = "krabka-remote-storage-topic"
@@ -3222,6 +3222,7 @@ dependencies = [
  "krabka-remote-storage",
  "krabka-security",
  "krabka-units",
+ "maplit",
  "mutants",
  "refined_type",
  "serde_json",
@@ -3229,8 +3230,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uuid",
-]
+ "uuid",]
 
 [[package]]
 name = "krabka-restore"
@@ -3248,6 +3248,7 @@ dependencies = [
  "krabka-protocol",
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
+ "maplit",
  "object_store",
  "regex",
  "serde",
@@ -3257,8 +3258,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
-]
+ "uuid",]
 
 [[package]]
 name = "krabka-schema-serde"
@@ -3585,6 +3585,12 @@ checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
 dependencies = [
  "digest 0.10.7",
 ]
+
+[[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "memchr"

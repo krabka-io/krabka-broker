@@ -210,7 +210,7 @@ mod tests {
         let snap = s
             .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
             .await;
-        let expected: HashMap<i64, i64> = [(2, 20)].into_iter().collect();
+        let expected: HashMap<i64, i64> = maplit::hashmap! {2 => 20};
         assert!(snap == expected);
         // Unknown partition / topic → empty without panicking.
         for (topic, partition) in [("t", PartitionIndex(99)), ("nope", PartitionIndex(0))] {

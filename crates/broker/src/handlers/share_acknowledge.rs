@@ -329,10 +329,10 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let topic_id = ProtoUuid([8; 16]);
-        let session_partitions = std::collections::HashSet::from([
+        let session_partitions = maplit::hashset! {
             (uuid::Uuid::from_bytes(topic_id.0), 3),
             (uuid::Uuid::from_bytes(topic_id.0), 5),
-        ]);
+        };
         broker
             .share_partition_leaders
             .update_fetch_session(

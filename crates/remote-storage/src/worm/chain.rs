@@ -200,7 +200,7 @@ mod tests {
             RemoteLogSegmentDetails::new(
                 8,
                 state,
-                BTreeMap::from([(LeaderEpoch(0), start_offset)]),
+                maplit::btreemap! {LeaderEpoch(0) => start_offset},
             ),
         )
         .unwrap();

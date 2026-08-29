@@ -124,7 +124,7 @@ mod tests {
                     krabka_remote_storage::RemoteLogSegmentDetails::new(
                         1,
                         RemoteLogSegmentState::CopySegmentStarted,
-                        BTreeMap::from([(LeaderEpoch(7), expected + 1)]),
+                        maplit::btreemap! {LeaderEpoch(7) => expected + 1},
                     ),
                 )
                 .unwrap(),
@@ -236,7 +236,7 @@ mod tests {
                 krabka_remote_storage::RemoteLogSegmentDetails::new(
                     2048,
                     RemoteLogSegmentState::CopySegmentStarted,
-                    BTreeMap::from([(LeaderEpoch(0), 0)]),
+                    maplit::btreemap! {LeaderEpoch(0) => 0},
                 ),
             )
             .unwrap();

@@ -235,7 +235,7 @@ mod tests {
         }
         check!(
             led_partitions(&image, NodeId(1))
-                == HashSet::from([PartitionIndex(0), PartitionIndex(2)])
+                == maplit::hashset! {PartitionIndex(0), PartitionIndex(2)}
         );
     }
 }

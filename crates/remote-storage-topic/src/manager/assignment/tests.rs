@@ -129,7 +129,7 @@ async fn two_brokers_split_metadata_partitions() {
             krabka_remote_storage::RemoteLogSegmentDetails::new(
                 2048,
                 RemoteLogSegmentState::CopySegmentStarted,
-                BTreeMap::from([(LeaderEpoch(0), 0)]),
+                maplit::btreemap! {LeaderEpoch(0) => 0},
             ),
         )
         .unwrap();

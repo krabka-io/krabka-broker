@@ -170,7 +170,7 @@ mod tests {
         assert!(
             derived
                 == DerivedTasks {
-                    num_tasks: BTreeMap::from([("0".to_string(), 6)]),
+                    num_tasks: maplit::btreemap! {"0".to_string() => 6},
                     partition_metadata: StreamsGroupPartitionMetadataValue {
                         topics: vec![StreamsTopicMeta {
                             topic_name: "in-a".to_string(),
@@ -211,7 +211,7 @@ mod tests {
         assert!(
             derived
                 == DerivedTasks {
-                    num_tasks: BTreeMap::from([("0".to_string(), 3), ("1".to_string(), 3)]),
+                    num_tasks: maplit::btreemap! {"0".to_string() => 3, "1".to_string() => 3},
                     partition_metadata: StreamsGroupPartitionMetadataValue {
                         topics: vec![StreamsTopicMeta {
                             topic_name: "in-a".to_string(),

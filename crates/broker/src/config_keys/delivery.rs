@@ -172,17 +172,16 @@ mod tests {
 
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: BTreeMap::from([
-                (DELIVERY_MAX_DELAY_MS.into(), "90000".into()),
-                (DELIVERY_SCHEDULE_MONOTONIC.into(), "true".into()),
-            ]),
+            overrides: maplit::btreemap! {
+            DELIVERY_MAX_DELAY_MS.into() => "90000".into(),
+            DELIVERY_SCHEDULE_MONOTONIC.into() => "true".into()},
         }));
         assert!(resolve_delivery_max_delay(&image, "t") == Some(millis(90_000)));
         assert!(resolve_delivery_schedule_monotonic(&image, "t"));
 
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: BTreeMap::from([(DELIVERY_MAX_DELAY_MS.into(), "-1".into())]),
+            overrides: maplit::btreemap! {DELIVERY_MAX_DELAY_MS.into() => "-1".into()},
         }));
         assert!(resolve_delivery_max_delay(&image, "t") == None);
         assert!(!resolve_delivery_schedule_monotonic(&image, "t"));
@@ -198,10 +197,9 @@ mod tests {
             let mut image = MetadataImage::new(Uuid::nil());
             image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),
-                overrides: BTreeMap::from([
-                    (DELIVERY_MAX_DELAY_MS.into(), value.into()),
-                    (DELIVERY_SCHEDULE_MONOTONIC.into(), value.into()),
-                ]),
+                overrides: maplit::btreemap! {
+                DELIVERY_MAX_DELAY_MS.into() => value.into(),
+                DELIVERY_SCHEDULE_MONOTONIC.into() => value.into()},
             }));
             assert!(
                 resolve_delivery_max_delay(&image, "t") == Some(millis(604_800_000)),

@@ -168,7 +168,7 @@ async fn streams_group_records_replay_into_seed() {
                 member_epoch: 7,
                 previous_member_epoch: 6,
                 state: 0,
-                active: BTreeMap::from([("0".to_string(), vec![0, 1])]),
+                active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),

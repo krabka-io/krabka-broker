@@ -147,13 +147,9 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: std::collections::BTreeMap::from([
-                (config_keys::RETENTION_MS.to_string(), "60000".to_string()),
-                (
-                    config_keys::SEGMENT_BYTES.to_string(),
-                    "1048576".to_string(),
-                ),
-            ]),
+            overrides: maplit::btreemap! {
+            config_keys::RETENTION_MS.to_string() => "60000".to_string(),
+            config_keys::SEGMENT_BYTES.to_string() => "1048576".to_string()},
         });
         assert!(record == expected);
     }
@@ -218,10 +214,7 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: std::collections::BTreeMap::from([(
-                config_keys::CLEANUP_POLICY.to_string(),
-                "compact".to_string(),
-            )]),
+            overrides: maplit::btreemap! {config_keys::CLEANUP_POLICY.to_string() => "compact".to_string()},
         });
         assert!(record == expected);
     }
@@ -245,21 +238,11 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "retries".into(),
-            overrides: std::collections::BTreeMap::from([
-                (config_keys::RETENTION_MS.to_string(), "60000".to_string()),
-                (
-                    config_keys::DELIVERY_MODE.to_string(),
-                    "scheduled".to_string(),
-                ),
-                (
-                    config_keys::DELIVERY_MAX_DELAY_MS.to_string(),
-                    "3600000".to_string(),
-                ),
-                (
-                    config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_string(),
-                    "true".to_string(),
-                ),
-            ]),
+            overrides: maplit::btreemap! {
+            config_keys::RETENTION_MS.to_string() => "60000".to_string(),
+            config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string(),
+            config_keys::DELIVERY_MAX_DELAY_MS.to_string() => "3600000".to_string(),
+            config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_string() => "true".to_string()},
         });
         assert!(record == expected);
     }

@@ -180,7 +180,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // super-users + no ACLs the compat shim would allow everything
     // regardless of principal, which would mask the principal-derivation
     // path under test.
-    cfg.super_users = std::collections::HashSet::from([CLIENT_PRINCIPAL.to_string()]);
+    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();

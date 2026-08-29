@@ -295,7 +295,7 @@ fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
             i32::try_from(std::fs::metadata(&export.log_path).unwrap().len())
                 .expect("test segment fits i32"),
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([(LeaderEpoch(0), export.base_offset.0)]),
+            maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
         ),
     )
     .expect("valid remote metadata");

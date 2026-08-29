@@ -154,7 +154,7 @@ pub(super) fn snapshot_segment(
         RemoteLogSegmentDetails::new(
             i32::try_from(STUB_BYTES.len()).expect("stub length fits in i32"),
             state,
-            BTreeMap::from([(LeaderEpoch(0), base_offset)]),
+            maplit::btreemap! {LeaderEpoch(0) => base_offset},
         ),
     )
     .expect("valid segment metadata")

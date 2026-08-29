@@ -144,7 +144,7 @@ async fn empty_filter_returns_all_tokens_visible_to_caller() {
     assert!(resp.error_code == 0);
     let ids: std::collections::HashSet<&str> =
         resp.tokens.iter().map(|t| t.token_id.as_str()).collect();
-    let expected: std::collections::HashSet<&str> = ["t-a", "t-b"].into_iter().collect();
+    let expected: std::collections::HashSet<&str> = maplit::hashset! {"t-a", "t-b"};
     assert!(ids == expected);
     controller.cancel().await;
 }

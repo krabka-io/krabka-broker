@@ -377,7 +377,7 @@ fn group_describe_merges_dynamic_overrides_with_defaults() {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: "streams-app".into(),
-        configs: BTreeMap::from([(KEY_NUM_STANDBY_REPLICAS.into(), "1".into())]),
+        configs: maplit::btreemap! {KEY_NUM_STANDBY_REPLICAS.into() => "1".into()},
     }));
     let result = super::describe_one(
         &image,

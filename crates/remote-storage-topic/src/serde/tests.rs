@@ -35,11 +35,10 @@ fn add(id: u128, start: i64, end: i64, custom: Option<Vec<u8>>) -> RemoteLogSegm
         krabka_remote_storage::RemoteLogSegmentDetails::new(
             4096,
             RemoteLogSegmentState::CopySegmentStarted,
-            BTreeMap::from([
-                (LeaderEpoch(0), start),
-                (LeaderEpoch(1), start + 10),
-                (LeaderEpoch(2), start + 20),
-            ]),
+            maplit::btreemap! {
+            LeaderEpoch(0) => start,
+            LeaderEpoch(1) => start + 10,
+            LeaderEpoch(2) => start + 20},
         ),
     )
     .unwrap();

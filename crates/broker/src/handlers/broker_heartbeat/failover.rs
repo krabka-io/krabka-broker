@@ -57,7 +57,7 @@ mod tests {
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = [bad].into_iter().collect();
+        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
 
         let recoveries = failover_offline_dirs(
             &controller,
@@ -104,7 +104,7 @@ mod tests {
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = [bad].into_iter().collect();
+        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
 
         let recoveries = failover_offline_dirs(
             &controller,

@@ -21,8 +21,8 @@ use crate::{error::RaftError, kraft::types::NodeId};
 impl KraftControlState {
     pub fn new(voters: VoterSet, version: u16) -> Self {
         Self {
-            voter_history: BTreeMap::from([(-1, voters.clone())]),
-            version_history: BTreeMap::from([(-1, version)]),
+            voter_history: maplit::btreemap! {-1 => voters.clone()},
+            version_history: maplit::btreemap! {-1 => version},
             committed_voters: voters,
             committed_version: version,
         }

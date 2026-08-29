@@ -287,7 +287,7 @@ mod tests {
         state
             .target
             .per_member
-            .insert("m1".to_string(), HashMap::from([(topic, vec![0, 1, 2])]));
+            .insert("m1".to_string(), maplit::hashmap! {topic => vec![0, 1, 2]});
         state.add_or_update_member(m);
 
         let pending = snapshot_pending_after_change(&state, &["m1".to_string()], true);
@@ -298,49 +298,40 @@ mod tests {
         let expected = crate::coordinator::unified::GroupSeed {
             group_epoch: 7,
             target_epoch: 6,
-            members: HashMap::from([(
-                "m1".to_string(),
-                p::MemberMetadataValue {
-                    instance_id: None,
-                    rack_id: None,
-                    client_id: "client-a".to_string(),
-                    client_host: "h".to_string(),
-                    subscribed_topic_names: vec!["t".to_string()],
-                    subscribed_topic_regex: None,
-                    server_assignor: None,
-                    rebalance_timeout_ms: 60_000,
-                    classic: Some(p::ClassicMemberMetadata {
-                        session_timeout_ms: 45_000,
-                        supported_protocols: vec![(
-                            "range".to_string(),
-                            bytes::Bytes::from_static(b"meta"),
-                        )],
-                        last_synced_assignment: bytes::Bytes::from_static(b"assigned"),
-                    }),
-                },
-            )]),
-            target_per_member: HashMap::from([(
-                "m1".to_string(),
-                p::TargetAssignmentMemberValue {
-                    topic_partitions: vec![p::AssignedTopicPartitions {
-                        topic_id: topic,
-                        partitions: vec![0, 1, 2],
-                    }],
-                },
-            )]),
-            current_per_member: HashMap::from([(
-                "m1".to_string(),
-                p::CurrentMemberAssignmentValue {
-                    member_epoch: 7,
-                    previous_member_epoch: 6,
-                    state: MemberAssignmentState::Stable,
-                    assigned_partitions: vec![p::AssignedTopicPartitions {
-                        topic_id: topic,
-                        partitions: vec![0, 1],
-                    }],
-                    partitions_pending_revocation: vec![],
-                },
-            )]),
+            members: maplit::hashmap! {"m1".to_string() => p::MemberMetadataValue {
+                instance_id: None,
+                rack_id: None,
+                client_id: "client-a".to_string(),
+                client_host: "h".to_string(),
+                subscribed_topic_names: vec!["t".to_string()],
+                subscribed_topic_regex: None,
+                server_assignor: None,
+                rebalance_timeout_ms: 60_000,
+                classic: Some(p::ClassicMemberMetadata {
+                    session_timeout_ms: 45_000,
+                    supported_protocols: vec![(
+                        "range".to_string(),
+                        bytes::Bytes::from_static(b"meta"),
+                    )],
+                    last_synced_assignment: bytes::Bytes::from_static(b"assigned"),
+                }),
+            }},
+            target_per_member: maplit::hashmap! {"m1".to_string() => p::TargetAssignmentMemberValue {
+                topic_partitions: vec![p::AssignedTopicPartitions {
+                    topic_id: topic,
+                    partitions: vec![0, 1, 2],
+                }],
+            }},
+            current_per_member: maplit::hashmap! {"m1".to_string() => p::CurrentMemberAssignmentValue {
+                member_epoch: 7,
+                previous_member_epoch: 6,
+                state: MemberAssignmentState::Stable,
+                assigned_partitions: vec![p::AssignedTopicPartitions {
+                    topic_id: topic,
+                    partitions: vec![0, 1],
+                }],
+                partitions_pending_revocation: vec![],
+            }},
         };
         assert!(seed == expected);
     }

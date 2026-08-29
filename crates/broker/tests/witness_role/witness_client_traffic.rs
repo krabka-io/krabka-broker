@@ -80,7 +80,7 @@ async fn witness_refuses_client_traffic_while_replication_advances() {
         .into_iter()
         .collect();
     check!(
-        isr == BTreeSet::from([1, 2, 3]),
+        isr == maplit::btreeset! {1, 2, 3},
         "the witness stays in the ISR after refusing client traffic"
     );
 

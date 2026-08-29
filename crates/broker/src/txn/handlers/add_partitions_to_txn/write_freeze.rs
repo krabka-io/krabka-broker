@@ -175,8 +175,8 @@ mod tests {
 
     #[test]
     fn topic_refusal_ranks_the_acl_deny_above_the_freeze() {
-        let denied = HashSet::from(["denied".to_string(), "both".to_string()]);
-        let frozen = HashSet::from(["frozen".to_string(), "both".to_string()]);
+        let denied = maplit::hashset! {"denied".to_string(), "both".to_string()};
+        let frozen = maplit::hashset! {"frozen".to_string(), "both".to_string()};
 
         for (label, name, want) in [
             ("a topic under neither refusal proceeds", "clean", None),
@@ -387,7 +387,7 @@ mod tests {
                 .map(|tp| tp.topic.clone())
                 .collect();
             check!(
-                enrolled == HashSet::from([UNFROZEN_TOPIC.to_string()]),
+                enrolled == maplit::hashset! {UNFROZEN_TOPIC.to_string()},
                 "{label}"
             );
 

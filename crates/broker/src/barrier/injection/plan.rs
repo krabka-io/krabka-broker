@@ -110,11 +110,10 @@ mod tests {
             0 => Some(NodeId(2)),
             _ => None,
         });
-        let expected = BTreeMap::from([
-            (None, vec![at("orders", 1)]),
-            (Some(NodeId(1)), vec![at("orders", 0)]),
-            (Some(NodeId(2)), vec![at("payments", 0)]),
-        ]);
+        let expected = maplit::btreemap! {
+        None => vec![at("orders", 1)],
+        Some(NodeId(1)) => vec![at("orders", 0)],
+        Some(NodeId(2)) => vec![at("payments", 0)]};
         assert!(plan == expected);
     }
 

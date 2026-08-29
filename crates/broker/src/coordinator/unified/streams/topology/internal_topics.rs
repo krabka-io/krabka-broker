@@ -254,10 +254,9 @@ mod tests {
                 name: "rp".to_string(),
                 partitions: 5,
                 replication_factor: 2,
-                configs: BTreeMap::from([
-                    ("cleanup.policy".to_string(), "delete".to_string()),
-                    ("segment.ms".to_string(), "100".to_string()),
-                ]),
+                configs: maplit::btreemap! {
+                "cleanup.policy".to_string() => "delete".to_string(),
+                "segment.ms".to_string() => "100".to_string()},
             }
         );
 
@@ -267,7 +266,7 @@ mod tests {
                 name: "cl".to_string(),
                 partitions: 5,
                 replication_factor: 3,
-                configs: BTreeMap::from([("cleanup.policy".to_string(), "compact".to_string())]),
+                configs: maplit::btreemap! {"cleanup.policy".to_string() => "compact".to_string()},
             }
         );
     }

@@ -216,7 +216,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
         .flat_map(|r| r.first_offset..=r.last_offset)
         .collect();
     assert!(
-        acquired_offsets == std::collections::BTreeSet::from([0, 2]),
+        acquired_offsets == maplit::btreeset! {0, 2},
         "must re-acquire the disjoint set {{0, 2}}, got {acquired_offsets:?}"
     );
 

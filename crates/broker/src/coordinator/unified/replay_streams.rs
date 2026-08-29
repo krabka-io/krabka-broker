@@ -205,15 +205,9 @@ mod tests {
             assignment_epoch: 32,
             topology: Some(topology),
             partition_metadata: Some(partition_metadata),
-            members: std::collections::HashMap::from([("streams-member".to_string(), member)]),
-            target_per_member: std::collections::HashMap::from([(
-                "streams-member".to_string(),
-                target,
-            )]),
-            current_per_member: std::collections::HashMap::from([(
-                "streams-member".to_string(),
-                current,
-            )]),
+            members: maplit::hashmap! {"streams-member".to_string() => member},
+            target_per_member: maplit::hashmap! {"streams-member".to_string() => target},
+            current_per_member: maplit::hashmap! {"streams-member".to_string() => current},
         };
         assert!(*coord.streams_seeds.get("st").unwrap() == expected);
         assert!(coord.cached_streams_seed("st") == Some(expected));

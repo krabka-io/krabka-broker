@@ -41,7 +41,7 @@ async fn alter_scram_creds_low_iterations_rejected() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -91,7 +91,7 @@ async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -172,7 +172,7 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -221,7 +221,7 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -276,7 +276,7 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
     let admin_password = uuid::Uuid::new_v4().to_string();
     cfg.plain_credentials
         .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -349,7 +349,7 @@ async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
     let admin_password = uuid::Uuid::new_v4().to_string();
     cfg.plain_credentials
         .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = std::collections::HashSet::from(["admin".to_string()]);
+    cfg.super_users = maplit::hashset! {"admin".to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();

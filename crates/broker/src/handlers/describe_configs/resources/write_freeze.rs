@@ -190,13 +190,9 @@ mod tests {
         let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: BTreeMap::from([
-                (
-                    config_keys::CLEANUP_POLICY.to_string(),
-                    "compact".to_string(),
-                ),
-                (config_keys::RETENTION_MS.to_string(), "60000".to_string()),
-            ]),
+            overrides: maplit::btreemap! {
+            config_keys::CLEANUP_POLICY.to_string() => "compact".to_string(),
+            config_keys::RETENTION_MS.to_string() => "60000".to_string()},
         }));
 
         assert!(
@@ -225,10 +221,7 @@ mod tests {
         let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: BTreeMap::from([(
-                config_keys::RETENTION_MS.to_string(),
-                "60000".to_string(),
-            )]),
+            overrides: maplit::btreemap! {config_keys::RETENTION_MS.to_string() => "60000".to_string()},
         }));
         let retention = make_entry(
             config_keys::RETENTION_MS,

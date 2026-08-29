@@ -59,10 +59,7 @@ pub(super) async fn copy_one(
     // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
     // `RemoteLogSegmentMetadata` carries verbatim.
     let epochs: BTreeMap<krabka_ids::LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
-        BTreeMap::from([(
-            krabka_ids::LeaderEpoch(leader_epoch.0.max(0)),
-            ex.base_offset.0,
-        )])
+        maplit::btreemap! {krabka_ids::LeaderEpoch(leader_epoch.0.max(0)) => ex.base_offset.0}
     } else {
         ex.leader_epochs
             .iter()

@@ -30,14 +30,13 @@ mod tests {
 
     #[test]
     fn denied_topic_names_keeps_only_denied_decisions() {
-        let acl_results = std::collections::HashMap::from([
-            ("denied", AuthorizationResult::Deny),
-            ("allowed", AuthorizationResult::Allow),
-        ]);
+        let acl_results = maplit::hashmap! {
+        "denied" => AuthorizationResult::Deny,
+        "allowed" => AuthorizationResult::Allow};
 
         let denied = denied_topic_names(&acl_results);
 
-        let expected = std::collections::HashSet::from(["denied".to_string()]);
+        let expected = maplit::hashset! {"denied".to_string()};
         assert!(denied == expected);
     }
 }

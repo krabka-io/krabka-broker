@@ -257,7 +257,7 @@ mod tests {
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
         // Both `orders-*` topics match; `shipments` must not.
-        assert!(assigned == HashSet::from([orders_eu, orders_us]));
+        assert!(assigned == maplit::hashset! {orders_eu, orders_us});
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
         let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
         // Union of the regex match (`orders-eu`) and the explicit name
         // (`audit`); `shipments` must not appear.
-        assert!(assigned == HashSet::from([orders_eu, audit]));
+        assert!(assigned == maplit::hashset! {orders_eu, audit});
     }
 
     #[test]
