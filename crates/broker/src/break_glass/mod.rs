@@ -39,6 +39,8 @@
 //! is what stops one approval authorizing two transitions across a crash.
 
 pub(crate) mod config;
+#[cfg(test)]
+mod cross_spend_model;
 pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod metrics;
