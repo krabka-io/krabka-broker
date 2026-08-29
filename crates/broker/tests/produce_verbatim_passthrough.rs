@@ -6,7 +6,7 @@
 //! producer all behave correctly across the path.
 //!
 //! These tests complement the unit tests in
-//! `handlers::produce::tests::verbatim`, which pin the dispatch
+//! `handlers::produce::prepare::tests::verbatim`, which pin the dispatch
 //! (`prepare_batch` and `build_produce_data`) at the function level. These
 //! tests drive the whole broker over the wire. Produce and
 //! Fetch auto-negotiate to v13 (KIP-516 topic-id), so every batch travels the

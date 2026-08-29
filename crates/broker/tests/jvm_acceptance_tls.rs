@@ -285,7 +285,7 @@ async fn jvm_sasl_ssl_full_stack() {
 /// `InterBrokerClient` dialing the peer's advertised address from
 /// `MetadataImage`. This is not a SASL or replication bug. It is a
 /// Docker-on-WSL networking limit. The Rust-driven equivalent is
-/// `tests/auth_handlers.rs::two_broker_sasl::two_broker_sasl_plaintext_replication`.
+/// `tests/auth_handlers/two_broker_sasl.rs::two_broker_sasl_plaintext_replication`.
 /// It uses 127.0.0.1 advertised addresses for both brokers and *does*
 /// exercise end-to-end inter-broker SASL replication. Use that as the
 /// load-bearing inter-broker SASL test.

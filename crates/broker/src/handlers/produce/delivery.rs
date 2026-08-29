@@ -20,10 +20,10 @@ use crate::config_keys::{
 ///
 /// On a scheduled topic a batch's `max_timestamp` is its delivery time. Both
 /// rejections read that one v2 header field, which
-/// [`validate_one_v2_batch`] already extracted into
-/// [`ValidatedHeader::max_timestamp`]. Neither decodes a record, decompresses a
-/// body, or changes the verbatim-passthrough decision, so a scheduled topic
-/// keeps the same zero-copy append an immediate topic gets.
+/// [`krabka_protocol::records::validate_one_v2_batch`] already extracted into
+/// `prepare::ValidatedHeader::max_timestamp`. Neither decodes a record,
+/// decompresses a body, or changes the verbatim-passthrough decision, so a
+/// scheduled topic keeps the same zero-copy append an immediate topic gets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct DeliveryGate {
     /// `delivery.max.delay.ms`: the largest delay accepted, measured forward
