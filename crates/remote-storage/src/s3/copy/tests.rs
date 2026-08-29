@@ -7,7 +7,6 @@ use krabka_units::prelude::{ByteSizeExt as _, kibibytes, mebibytes};
 use object_store::{memory::InMemory, path::Path as ObjectPath};
 use tempfile::TempDir;
 
-use super::*;
 use crate::{
     error::RemoteStorageError,
     metadata::RemoteLogSegmentMetadata,

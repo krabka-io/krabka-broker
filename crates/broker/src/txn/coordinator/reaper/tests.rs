@@ -1,3 +1,7 @@
+//! Unit tests for the idle-transaction reaper: the pure transition and
+//! guard helpers, the live `PrepareAbort` retry path, and the three-phase
+//! orchestration loop driven against a mock `ReaperBackend`.
+
 use std::sync::Arc;
 
 use assert2::{assert, check};
