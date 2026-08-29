@@ -211,6 +211,19 @@ pub enum AuditEvent {
         key_id: String,
         signature: Vec<u8>,
         signature_verified: bool,
+        /// The timestamp that the operator's detached signature covers.
+        ///
+        /// For a topic freeze this is the record's `set_at_ms`, which sits
+        /// inside the signed preimage. It is carried here because `time_ms` is
+        /// taken when the event is emitted, which is a different instant: an
+        /// auditor rebuilding the preimage from this record needs the stamp the
+        /// operator signed, not the one the broker logged.
+        ///
+        /// `0` where the event carries no signature over a timestamp, which is
+        /// every unsigned action and every break-glass act -- a break-glass
+        /// approval signs the proposal's `created_at_ms` and `expires_at_ms`
+        /// instead, and neither is a single stamp this field could hold.
+        signed_at_ms: i64,
         source: AuditEndpoint,
         reason: String,
         time_ms: i64,
@@ -321,6 +334,7 @@ mod tests {
             key_id: "op-1".into(),
             signature: vec![0xde, 0xad],
             signature_verified: true,
+            signed_at_ms: 3,
             source: AuditEndpoint {
                 ip: "10.0.0.4".into(),
                 port: 9092,

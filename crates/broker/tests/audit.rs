@@ -867,14 +867,17 @@ async fn the_proposal_id_joins_each_approval_to_the_transition_it_authorized() {
 ///
 /// # What the event does not carry
 ///
-/// Two of the eight signed fields do not come out of the event. The cluster id
-/// is a property of the cluster the log came from, which an auditor knows.
-/// `set_at_ms` is neither: the event's `time` is the moment the broker emitted
-/// it, not the moment the operator signed, so the timestamp comes from the
-/// operator's own record of what they signed. An auditor holding only the
-/// topic cannot rebuild these bytes today. That is a gap in the event, not in
-/// the signature, and this case is written to make the gap visible rather than
-/// to hide it.
+/// One of the eight signed fields does not come out of the event: the cluster
+/// id, which is a property of the cluster whose log the auditor is holding and
+/// so is theirs to know. Every other field, `set_at_ms` included, is read here
+/// out of the record itself.
+///
+/// `set_at_ms` needs its own field because the event's `time` is the moment the
+/// broker emitted the record, not the moment the operator signed, and it is the
+/// signed instant that is inside the preimage. An earlier version of this case
+/// took it from the operator's own note of what they had signed and said so,
+/// because the event did not carry it -- which meant the audit topic alone was
+/// not enough, contradicting what KFC-9 claims for it.
 ///
 /// The tampering check is what keeps the verification from being vacuous: the
 /// same signature over the same record with `frozen` flipped must fail, which
@@ -909,6 +912,9 @@ async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image(
     )
     .expect("a uuid");
     let key_id = action["key_id"].as_str().expect("the event names the key");
+    let set_at_ms = action["signed_at_ms"]
+        .as_i64()
+        .expect("the event carries the stamp the signature covers");
     let signature = hex::decode(
         action["signature"]
             .as_str()
@@ -925,12 +931,18 @@ async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image(
         frozen: true,
         reason,
         set_by,
-        set_at_ms: w.freeze_set_at_ms,
+        set_at_ms,
         proposal_id,
     };
 
     check!(key_id == ALICE_KEY_ID);
     check!(action["signature_verified"] == true);
+    // The stamp the event carries is the one the operator signed, and it is a
+    // different instant from the one the broker logged. Asserting both halves
+    // is what stops a future change from quietly setting `signed_at_ms` to the
+    // emit time, which would verify here and be wrong.
+    check!(set_at_ms == w.freeze_set_at_ms);
+    check!(freeze["time"].as_i64() != Some(set_at_ms));
     let public = std::fs::read(&w.cluster.alice_key.public_path).expect("the operator public key");
     let key = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &public);
     check!(

@@ -424,6 +424,15 @@ fn respond(
         key_id: &req.key_id,
         signature: &req.signature,
         signature_verified,
+        // On a success this is the stamp the accepted record carries, which is
+        // the operator's own on a signed request. A refusal has no record, so
+        // the event carries the stamp the caller presented: that is the value
+        // their signature covers, and an auditor re-checking a refused
+        // signature needs the same bytes the broker checked.
+        set_at_ms: match outcome {
+            Ok(accepted) => accepted.record.set_at_ms,
+            Err(_) => req.set_at_ms,
+        },
         reason,
     };
     audit_freeze(

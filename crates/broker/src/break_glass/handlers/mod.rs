@@ -174,6 +174,9 @@ pub(crate) fn audit_privileged(
         key_id: event.key_id.to_owned(),
         signature: event.signature.to_vec(),
         signature_verified: event.signature_verified,
+        // A break-glass approval signs the proposal's `created_at_ms` and
+        // `expires_at_ms`, not one stamp, so there is nothing to put here.
+        signed_at_ms: 0,
         source: AuditEndpoint {
             ip: ctx.peer.ip().to_string(),
             port: ctx.peer.port(),

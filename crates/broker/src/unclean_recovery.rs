@@ -236,6 +236,8 @@ impl BackgroundRecovery {
             key_id: String::new(),
             signature: Vec::new(),
             signature_verified: false,
+            // The controller runs this with no caller and no signature.
+            signed_at_ms: 0,
             source: AuditEndpoint {
                 ip: String::new(),
                 port: 0,

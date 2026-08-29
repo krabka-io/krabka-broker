@@ -163,6 +163,7 @@ mod tests {
             key_id: String::new(),
             signature: Vec::new(),
             signature_verified: false,
+            signed_at_ms: 0,
             source: AuditEndpoint {
                 ip: "10.0.0.7".to_owned(),
                 port: 51120,

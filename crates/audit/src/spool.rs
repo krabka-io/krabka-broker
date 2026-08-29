@@ -426,6 +426,7 @@ mod tests {
             key_id: "op-1".into(),
             signature: vec![0xde, 0xad, 0xbe, 0xef],
             signature_verified: true,
+            signed_at_ms: 0,
             source: AuditEndpoint {
                 ip: "10.0.0.4".into(),
                 port: 9092,

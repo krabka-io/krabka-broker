@@ -129,6 +129,13 @@ pub(crate) struct FreezeAudit<'a> {
     pub signature: &'a [u8],
     /// Whether the broker verified that signature.
     pub signature_verified: bool,
+    /// The `set_at_ms` the operator signed.
+    ///
+    /// This is inside the signed preimage, and it is not the instant the event
+    /// is emitted. Carrying it is what lets an auditor holding the audit topic
+    /// and the operator public keys rebuild the bytes and check the signature,
+    /// which is the claim KFC-9 makes for this event.
+    pub set_at_ms: i64,
     /// The operator's reason on a success, or the refusal text on a failure.
     pub reason: String,
 }
@@ -166,6 +173,7 @@ pub(crate) fn audit_freeze(
         key_id: audit.key_id.to_owned(),
         signature: audit.signature.to_vec(),
         signature_verified: audit.signature_verified,
+        signed_at_ms: audit.set_at_ms,
         source: AuditEndpoint {
             ip: ctx.peer.ip().to_string(),
             port: ctx.peer.port(),
