@@ -43,6 +43,9 @@ mod validation;
 #[cfg(test)]
 mod test_support;
 
+// Only the #[cfg(test)] stateright models in txn/ reach this variant.
+#[cfg(test)]
+pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
 use self::{
     markers::dispatch_transaction_markers,
     prepare::prepare_transaction,
@@ -54,7 +57,6 @@ pub(crate) use self::{
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_completion_identities,
-        prepare_completion_identities_with_fresh,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
 };

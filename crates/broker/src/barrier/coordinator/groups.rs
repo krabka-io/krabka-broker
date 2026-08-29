@@ -18,7 +18,6 @@ use crate::{
         persistence::{CutValue, GroupValue, RecordKey, encode_group},
         state::{GroupEntry, GroupSpec, schedule_next},
     },
-    metadata_source::MetadataSource,
     time_util::now_ms,
 };
 

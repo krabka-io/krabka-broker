@@ -51,20 +51,27 @@ mod schema;
 mod validation;
 
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
+// Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
+// the alter_configs tests -- so an ungated re-export is dead in a normal build.
+#[cfg(test)]
+pub(crate) use self::{
+    broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
+    delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
+    qos::{DEFAULT_QOS_TIER, QOS_TIER},
+};
 pub(crate) use self::{
     broker_scope::{
-        BROKER_WITNESS, CONTROLLER_MANAGED_BROKER_CONFIGS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE, is_controller_managed_broker_config,
-        parse_remote_list_offsets_timeout, resolve_broker_witness, resolve_preferred_leader_site,
-        resolve_remote_list_offsets_timeout, witness_node_ids,
+        BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        WITNESS_TRUE, is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
+        resolve_broker_witness, resolve_preferred_leader_site, resolve_remote_list_offsets_timeout,
+        witness_node_ids,
     },
     delivery::{
-        DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED,
-        DELIVERY_SCHEDULE_MONOTONIC, resolve_delivery_max_delay,
+        DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
         resolve_delivery_schedule_monotonic,
     },
     log_config::apply_to_log_config,
-    qos::{DEFAULT_QOS_TIER, QOS_TIER, resolve_qos_tier},
+    qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
         resolve_recovery_strategy, resolve_unclean_leader_election_enabled,

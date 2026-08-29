@@ -17,7 +17,7 @@ use crate::{
         error::BarrierError,
         injection::{MarkerFanout, freeze_targets},
         marker::BarrierMarker,
-        metrics::{BarrierMetrics, InjectionReport},
+        metrics::InjectionReport,
         persistence::{
             CutStatus, CutValue, GroupValue, InjectionStartValue, RecordKey, encode_cut,
             encode_group, encode_injection_start,
@@ -27,7 +27,6 @@ use crate::{
             expired_cut_epochs, is_due, next_epoch, schedule_next,
         },
     },
-    metadata_source::MetadataSource,
     time_util::now_ms,
 };
 
