@@ -927,7 +927,7 @@ pub async fn start_with_operator_keys_sasl(
         tls_config: None,
         sasl_mechanisms: None,
     }];
-    config.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
+    "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![crabka_security::SaslMechanism::Plain];
     for (name, pass) in users {
         config
