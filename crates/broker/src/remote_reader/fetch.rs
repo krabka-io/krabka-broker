@@ -9,9 +9,8 @@
 use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::RecordBatch;
 use krabka_remote_storage::{
-    IndexType, LogOffset, RemoteLogMetadataManager, RemoteLogSegmentState, RemoteStorageError,
-    TopicIdPartition, end_position_for, first_batch_at_or_after, parse_offset_index,
-    position_for_relative_offset,
+    IndexType, LogOffset, RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
+    end_position_for, first_batch_at_or_after, parse_offset_index, position_for_relative_offset,
 };
 
 use super::RemoteReader;
@@ -116,8 +115,8 @@ mod tests {
 
     use assert2::assert;
     use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogSegmentMetadata,
-        RemoteStorageManager,
+        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
+        RemoteLogSegmentMetadata, RemoteStorageManager,
     };
     use uuid::Uuid;
 

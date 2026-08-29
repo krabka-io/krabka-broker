@@ -8,8 +8,8 @@
 
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    IndexType, LogOffset, RemoteLogMetadataManager, RemoteLogSegmentState, RemoteStorageError,
-    TopicIdPartition, parse_txn_index, txn_overlaps,
+    IndexType, LogOffset, RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
+    parse_txn_index, txn_overlaps,
 };
 
 use super::{AbortedTxnEntry, RemoteReader};
@@ -67,7 +67,8 @@ mod tests {
 
     use assert2::assert;
     use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteStorageManager,
+        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
+        RemoteStorageManager,
     };
 
     use super::*;

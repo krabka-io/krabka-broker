@@ -8,8 +8,7 @@
 //! read error rather than as a lost future.
 
 use krabka_remote_storage::{
-    BytePosition, IndexType, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
-    RemoteStorageError, RemoteStorageManager, TopicIdPartition,
+    BytePosition, IndexType, RemoteLogSegmentMetadata, RemoteStorageError, TopicIdPartition,
 };
 use tracing::warn;
 
@@ -79,7 +78,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::LocalTieredStorage;
+    use krabka_remote_storage::{LocalTieredStorage, RemoteLogMetadataManager};
 
     use super::*;
     use crate::remote_reader::test_support::tp;
