@@ -6,6 +6,7 @@
 
 use krabka_units::Time;
 
+use super::BackgroundRecovery;
 use crate::config_keys::RecoveryStrategy;
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,8 @@ pub(crate) struct RecoveryPolicy {
     pub queue_capacity: usize,
     pub listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
+    /// KFC-9: what the URM does for a job that no operator approved.
+    pub background: BackgroundRecovery,
 }
 
 impl RecoveryPolicy {
@@ -29,9 +32,11 @@ impl RecoveryPolicy {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_audit::AuditLog;
     use krabka_units::millis;
 
     use super::*;
+    use crate::config::BreakGlassConfig;
 
     #[test]
     fn recovery_policy_selects_configured_deadlines() {
@@ -41,6 +46,7 @@ mod tests {
             queue_capacity: 3,
             listener_protocol: krabka_security::ListenerProtocol::Ssl,
             inter_broker_server_name: "broker.internal".to_string(),
+            background: BackgroundRecovery::new(&BreakGlassConfig::default(), AuditLog::disabled()),
         };
 
         assert!(policy.deadline(RecoveryStrategy::Aggressive) == millis(7));

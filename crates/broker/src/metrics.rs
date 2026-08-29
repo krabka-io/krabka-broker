@@ -23,6 +23,7 @@ use prometheus_client::{
 use tokio::sync::Mutex;
 
 mod auth;
+mod break_glass;
 mod delivery;
 mod labels;
 mod log_cleaner;
@@ -34,8 +35,9 @@ mod traffic;
 
 pub(crate) use self::labels::UNKNOWN_LABEL;
 pub use self::labels::{
-    ApiKeyLabel, BarrierGroupLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel,
-    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
+    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
+    SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -398,4 +400,48 @@ pub struct BrokerMetrics {
     /// this series a rule has to carry a copy of the threshold, and the copy
     /// goes stale the moment an operator retunes the broker.
     pub delivery_clock_uncertainty_seconds: Gauge<f64, AtomicU64>,
+    /// KFC-9 cumulative count of Produce partition rows the broker refused
+    /// because a freeze covers the topic.
+    ///
+    /// The gate sits before the batch is parsed, so a refused row costs no CRC
+    /// check and moves no log end offset. The broker bumps this counter once
+    /// per refused row, so one request that names three partitions of a frozen
+    /// topic adds 3.
+    ///
+    /// Cardinality is bounded by the number of topics a freeze covers, and
+    /// that is at most the number of topics the cluster holds. This is the
+    /// bound the other per-topic families here already accept. A client
+    /// cannot invent a series, because the label comes from a topic name that
+    /// resolved in the metadata image.
+    pub topic_freeze_rejections: Family<TopicLabel, Counter>,
+    /// KFC-9 live entries in the freeze registry (gauge).
+    ///
+    /// It counts registry entries and not frozen topics: one prefix entry
+    /// covers a whole namespace. The value falls when a thaw removes an entry,
+    /// and `freeze.max_entries` caps it. It carries no labels, so it is one
+    /// series per broker.
+    pub topic_freezes_active: Gauge,
+    /// KFC-9 break-glass proposals by state (gauge).
+    ///
+    /// A proposal moves through the states of [`BreakGlassState`], so a rise
+    /// in `pending` beside a flat `approved` is an incident where the second
+    /// person has not answered yet.
+    pub break_glass_proposals: Family<BreakGlassStateLabel, Gauge>,
+    /// KFC-9 cumulative count of privileged transitions the broker refused
+    /// because no approved break-glass proposal covers them, per action.
+    ///
+    /// A refusal is the expected answer when an operator runs the tool before
+    /// the approval lands, so a steady rate here is normal.
+    pub break_glass_refusals: Family<BreakGlassActionLabel, Counter>,
+    /// KFC-9 cumulative count of privileged transitions that ran **without**
+    /// an approved break-glass proposal, per action.
+    ///
+    /// This is the series to alert on. It counts data-losing transitions that
+    /// no second person approved: the background unclean-recovery path has no
+    /// caller to refuse, so `break_glass.background_unclean_recovery =
+    /// "audit-only"` lets recovery run and bumps this counter instead. Any
+    /// non-zero rate is an unclean recovery that took the cluster past the
+    /// two-person rule, and an operator should read the audit log for the
+    /// partition it names.
+    pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
 }

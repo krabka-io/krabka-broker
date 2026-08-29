@@ -11,6 +11,11 @@
 //! rejects a request that names one, and the tombstone sweep leaves them in
 //! place. See [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
+//! A topic resource has the same rule. KFC-9's
+//! [`crate::config_keys::WRITE_FREEZE`] is synthesised for `DescribeConfigs`
+//! and is never stored, so the handler rejects a request that names it. See
+//! [`crate::config_keys::topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
+//!
 //! This file holds the wire entry point and the resource-type constants. The
 //! per-resource work lives in `resource`, and the record builders it
 //! dispatches to live in `topic_configs` and `broker_configs`.

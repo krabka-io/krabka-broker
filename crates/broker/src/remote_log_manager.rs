@@ -12,6 +12,11 @@
 //! of copied segments and the remote read path on `Fetch`. The
 //! remote-storage SPIs are blocking, so each copy and each delete
 //! runs on the `tokio` blocking pool.
+//!
+//! A KFC-9 write freeze splits the sweep in two. The copy runs on a frozen
+//! topic, because it adds a replica and takes nothing away, and tiering a
+//! frozen topic is what a migration wants. Both retention passes stop, because
+//! each one removes data from the topic's log.
 
 use std::{
     sync::{Arc, atomic::Ordering},
@@ -24,7 +29,10 @@ use krabka_units::{ByteSize, Time, bytes, convert::TimeExt as _, secs};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::{partition::Partition, partition_registry::PartitionRegistry};
+use crate::{
+    freeze::resolve::resolve_topic_freeze, partition::Partition,
+    partition_registry::PartitionRegistry,
+};
 
 mod archive;
 mod copy;
@@ -149,6 +157,23 @@ async fn tick_all(
             rlmm,
         )
         .await;
+        // KFC-9: the copy above stays allowed on a frozen topic, and both
+        // retention passes below stop. A freeze refuses every operation that
+        // removes data from the topic's log, and a copy removes none: it adds
+        // a replica, which is exactly what a migration out of a frozen topic
+        // needs.
+        //
+        // This is a different question from `archive`, and it does not
+        // contradict the reason that gate gives below. `archive` says the
+        // remote tier cannot accept a delete, which leaves the local eviction
+        // free precisely because it deletes nothing remote. A freeze says this
+        // topic's log must not lose bytes anywhere, so it stops the local
+        // eviction too.
+        if resolve_topic_freeze(&image, &partition.topic).is_some() {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: a write freeze holds both retention passes");
+            continue;
+        }
         // Local retention is deliberately not gated on `archive`: evicting a
         // local segment that the archive already holds is the whole point of
         // tiering, and it deletes nothing from the remote tier.
@@ -181,6 +206,8 @@ mod tests {
         test_support::{FixedMetadataSource, rolled_tiered_partition_with_config, tp},
         *,
     };
+
+    mod freeze;
 
     fn image_with_orders_topic() -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::from_u128(9));

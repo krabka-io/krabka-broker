@@ -163,6 +163,7 @@ pub(crate) mod barrier;
 // beside this one would be a second thing to drift.
 pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
 pub mod bootstrap;
+pub(crate) mod break_glass;
 mod broker;
 pub(crate) mod cleaner;
 mod client_metrics;
@@ -192,6 +193,7 @@ mod error;
 mod features;
 pub mod fetch_session;
 pub mod file_config;
+pub(crate) mod freeze;
 pub(crate) mod future_log;
 mod handlers;
 pub(crate) mod heartbeat;
@@ -211,6 +213,7 @@ pub(crate) mod metrics_server;
 pub mod network;
 pub(crate) mod oauth_introspection;
 pub(crate) mod oauth_jwks;
+pub mod operator_keys;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;
@@ -228,6 +231,7 @@ mod replicator_supervisor;
 pub mod schema_validation;
 pub mod share_coordinator;
 pub mod share_partition;
+pub(crate) mod signing_domains;
 pub(crate) mod site_placement;
 /// Three-site stretch-cluster model: site failure and network partition
 /// composed with the real site placement, controller failover, preferred

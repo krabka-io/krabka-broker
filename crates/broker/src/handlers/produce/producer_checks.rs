@@ -244,6 +244,7 @@ mod tests {
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
+                freeze: None,
                 txn_id_denied: false,
                 acks: -1,
                 timeout: Duration::from_millis(50),

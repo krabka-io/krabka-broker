@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     broker::{
         DisklessRuntime,
-        adapters::DelegationTokenCleanupControllerAdapter,
+        adapters::{BreakGlassSweepControllerAdapter, DelegationTokenCleanupControllerAdapter},
         audit::start_audit_pipeline,
         gauges::spawn_broker_gauge_updater,
         liveness::{LivenessStartup, start_liveness_services},
@@ -33,12 +33,47 @@ struct RuntimeCaches {
     quota_buckets: Arc<crate::quota::QuotaBuckets>,
 }
 
+/// Publish the KFC-9 gauges that only the metadata image knows.
+///
+/// One image watch feeds both families, because both read the same image and
+/// both must fall as well as rise: the freeze gauge drops when a thaw removes
+/// an entry, and a proposal that moves from `Pending` to `Consumed` lowers one
+/// series and raises another. A tick loop would hold a stale value between
+/// ticks, and two loops would read two different images.
+fn spawn_break_glass_gauges(
+    config: &BrokerConfig,
+    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+    metrics: &crate::metrics::BrokerMetrics,
+    shutdown: CancellationToken,
+) {
+    let images = controller.watch_image();
+    let metrics = metrics.clone();
+    let break_glass = config.break_glass.clone();
+    tokio::spawn(crate::metadata_source::watch_image_loop(
+        images,
+        "break-glass and freeze gauges",
+        shutdown,
+        move |image| {
+            metrics.record_topic_freezes_active(
+                i64::try_from(image.topic_freezes().count()).unwrap_or(i64::MAX),
+            );
+            crate::break_glass::metrics::record_proposal_states(
+                &metrics,
+                image,
+                &break_glass,
+                crate::time_util::now_ms(),
+            );
+        },
+    ));
+}
+
 fn start_runtime_watchers(
     config: &BrokerConfig,
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
     txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
+    metrics: &crate::metrics::BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> RuntimeCaches {
     if let (Some(dynamic), Some(tls_config)) = (tls_dynamic.cloned(), config.tls_config.clone()) {
@@ -77,6 +112,19 @@ fn start_runtime_watchers(
             shutdown.child_token(),
         ));
     }
+    // KFC-9. Every broker sweeps, the tombstone is idempotent, and a broker
+    // that never sweeps is still safe, so the sweep needs no config gate.
+    let break_glass_controller: Arc<dyn crate::break_glass::sweep::BreakGlassController> =
+        Arc::new(BreakGlassSweepControllerAdapter {
+            handle: Arc::clone(controller),
+        });
+    tokio::spawn(crate::break_glass::sweep::run(
+        break_glass_controller,
+        crate::break_glass::sweep::SWEEP_INTERVAL,
+        crate::break_glass::sweep::PROPOSAL_RETENTION,
+        shutdown.child_token(),
+    ));
+    spawn_break_glass_gauges(config, controller, metrics, shutdown.child_token());
     if config.txn_abort_cleanup_interval > <Time as TimeExt>::ZERO {
         tokio::spawn(crate::txn::expiration::run(
             Arc::clone(txn_coordinator),
@@ -175,7 +223,7 @@ pub(super) async fn start_broker_runtime(
         controller,
         inter_broker_client,
         inter_listener_protocol,
-        &metrics,
+        (&metrics, &audit_log),
         &supervisor_shutdown,
         (storage.2, storage.3),
     );
@@ -216,6 +264,7 @@ pub(super) async fn start_broker_runtime(
         tls_dynamic,
         &throttle_state,
         coordinators.0,
+        &metrics,
         &supervisor_shutdown,
     );
     Ok(BrokerRuntimeStartup {

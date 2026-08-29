@@ -14,8 +14,26 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
+//! A topic resource carries one synthesised key beside its stored overrides:
+//! KFC-9's [`crate::config_keys::WRITE_FREEZE`]. It is read-only for the same
+//! reason. The handler reads it from the freeze registry and not from the
+//! topic's override map, because a freeze is never stored as a topic config.
+//! The value names the state:
+//!
+//! - A frozen topic reads `frozen:` and then the registry scope that matched,
+//!   for example `frozen:prefixed:tenant-a.` or `frozen:literal:orders`. The
+//!   part after `frozen:` is [`crate::freeze::freeze_target`]. The operator
+//!   reads one vocabulary here, in the produce-path refusal, in the audit
+//!   events, and in a break-glass target. The scope also says whether the
+//!   freeze names this topic or covers it through a namespace prefix.
+//! - Any other topic reads `false`, at `DEFAULT_CONFIG`. The handler emits the
+//!   key when no freeze covers the topic, and for an internal topic, which is
+//!   never freezable. An absent key reads the same as a broker that has no
+//!   write-freeze feature. The operator cannot separate those two states.
+//!
 //! The handler honors the `configuration_keys` filter on the request. When the
 //! client supplies an explicit key list, the response holds only those keys.
+//! The synthesised key obeys that filter like every stored key.
 
 use bytes::Bytes;
 use krabka_protocol::{

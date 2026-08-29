@@ -267,6 +267,11 @@ mod tests {
     use super::*;
     use crate::{
         chain::{GENESIS_HEAD, chain_hash},
+        event::{
+            AuditEndpoint, AuditEvent, AuditEventClass, AuditOutcome, AuditPrincipal,
+            PrivilegedPhase,
+        },
+        ocsf::ProductInfo,
         spool::test_support::{ROOMY_CAP, chained_record},
     };
 
@@ -280,6 +285,55 @@ mod tests {
         check!((s.append(&r0).unwrap(), s.append(&r1).unwrap()) == (true, true));
         let read = s.read_all().unwrap();
         check!((s.count().0, s.is_empty(), read) == (2, false, vec![r0.clone(), r1.clone()]));
+    }
+
+    /// The privileged-action event shares the `ApiActivity` class tag, so the
+    /// frame format carries it with no change. This proves the round trip on a
+    /// record the broker actually builds, headers and OCSF value included.
+    #[test]
+    fn privileged_action_record_round_trips_through_the_frame_format() {
+        let product = ProductInfo {
+            vendor_name: "Krabka".into(),
+            name: "krabka-broker".into(),
+            version: "0".into(),
+        };
+        let event = AuditEvent::PrivilegedAction {
+            outcome: AuditOutcome::Success,
+            phase: PrivilegedPhase::Approved,
+            action: "unclean_elect_leaders".into(),
+            target: "orders-3".into(),
+            proposal_id: "bg-7".into(),
+            principal: AuditPrincipal {
+                name: "User:bob".into(),
+                auth_method: "MTls".into(),
+            },
+            counterparties: vec![AuditPrincipal {
+                name: "User:alice".into(),
+                auth_method: "MTls".into(),
+            }],
+            approver_set_fingerprint: "f00dcafe".into(),
+            key_id: "op-1".into(),
+            signature: vec![0xde, 0xad, 0xbe, 0xef],
+            signature_verified: true,
+            signed_at_ms: 0,
+            source: AuditEndpoint {
+                ip: "10.0.0.4".into(),
+                port: 9092,
+            },
+            reason: "incident 42".into(),
+            time_ms: 10,
+        };
+        let mut rec = AuditRecord::from_event(&event, &product);
+        rec.push_chain_headers(0, &GENESIS_HEAD);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(s.append(&rec).unwrap());
+        // Reopen, so the read goes through the on-disk frames and not through
+        // any state `append` kept in memory.
+        let s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(s.read_all().unwrap() == vec![rec.clone()]);
+        check!(rec.class == AuditEventClass::ApiActivity);
     }
 
     #[test]

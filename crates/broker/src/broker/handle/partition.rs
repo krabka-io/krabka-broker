@@ -115,6 +115,35 @@ impl BrokerHandle {
         Some(part.log_start_offset().0)
     }
 
+    /// Test-only: hold `(topic, partition)`'s high watermark at `offset`,
+    /// leaving its log end offset where it is. Returns `false` if the partition
+    /// is not hosted on this broker.
+    ///
+    /// This is the state a leader is in whenever a follower in the ISR has not
+    /// acknowledged the tail of the log: records are durable locally and
+    /// invisible to every client until the watermark catches up. Producing it
+    /// for real needs a second broker that is stopped mid-flight, and the
+    /// window before Kafka shrinks the ISR and advances the watermark anyway is
+    /// a timeout rather than a state. A test that wants to assert what a client
+    /// may see of an unreplicated tail installs the watermark instead, and gets
+    /// the same partition without the second broker or the race.
+    ///
+    /// Nothing here reopens the log or moves the log end offset, so a caller
+    /// that has already settled its writes can take a reading immediately.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn hold_high_watermark_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+    ) -> bool {
+        let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) else {
+            return false;
+        };
+        part.replica_state.lock().await.hw = krabka_log::Offset(offset);
+        true
+    }
+
     /// Test-only: return the `retention.ms` override currently active in
     /// `(topic, partition)`'s log config. Returns `None` if the partition is
     /// not hosted on this broker. The inner `Option<Duration>` is `None` when

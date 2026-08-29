@@ -77,6 +77,14 @@ pub(crate) fn scheduled_partition(
             .expect("append a scheduled batch");
     }
 
+    // A single-replica leader has acknowledged every record it holds the moment
+    // its append returns, so seed the high watermark at the log end offset. A
+    // `ListOffsets` answer for a client is bounded by that watermark, and a
+    // partition left at the zero `ReplicaState::new` gives would report an
+    // empty log to every sentinel that reads record data.
+    let mut replica_state = crate::replica_state::ReplicaState::new();
+    replica_state.hw = log.log_end_offset();
+
     let (tx, rx) = mpsc::channel::<WriterMessage>(1);
     // The scheduler sends the partition nothing, so no writer actor is needed.
     // Keeping the receiver alive stops the sender from reporting a dead writer.
@@ -94,9 +102,7 @@ pub(crate) fn scheduled_partition(
         log,
         writer_tx: tx,
         append_notify: Arc::new(Notify::new()),
-        replica_state: Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
+        replica_state: Arc::new(tokio::sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),
         delivery,
         current_leader: Arc::new(AtomicU64::new(leader)),

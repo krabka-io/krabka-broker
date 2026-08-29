@@ -3,10 +3,12 @@
 //! recorder method of their own start at their documented default.
 
 use assert2::assert;
+use krabka_metadata::BreakGlassAction as GatedAction;
 use krabka_units::{convert::TimeExt as _, millis, secs};
 
 use crate::metrics::{
-    BarrierGroupLabel, BrokerMetrics, DirectoryLabel, PartitionLabel, ShareGroupLabel, TopicLabel,
+    BarrierGroupLabel, BreakGlassAction, BreakGlassState, BrokerMetrics, DirectoryLabel,
+    PartitionLabel, ShareGroupLabel, TopicLabel,
 };
 
 /// The gauge exists so an alert can read the bound the broker relies on
@@ -84,6 +86,11 @@ async fn registry_has_broker_prefix_and_all_metrics() {
     m.record_schema_validation_rejection("topic-a", "unknown_id");
     m.record_schema_cache_hit();
     m.record_schema_cache_miss();
+    m.record_topic_freeze_rejection("topic-a");
+    m.record_topic_freezes_active(1);
+    m.record_break_glass_proposals(BreakGlassState::Pending, 1);
+    m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+    m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
     m.record_authentication("PLAIN", true);
     m.record_authentication("SCRAM-SHA-512", false);
     m.record_authentication("Unknown", false);
@@ -190,6 +197,11 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         "krabka_broker_schema_validation_rejections_total",
         "krabka_broker_schema_validation_cache_hits_total",
         "krabka_broker_schema_validation_cache_misses_total",
+        "krabka_broker_topic_freeze_rejections_total",
+        "krabka_broker_topic_freezes_active",
+        "krabka_broker_break_glass_proposals",
+        "krabka_broker_break_glass_refusals_total",
+        "krabka_broker_break_glass_bypassed_total",
     ] {
         assert!(buf.contains(needle), "missing {needle} in:\n{buf}");
     }
@@ -245,4 +257,123 @@ fn audit_spool_metrics_present() {
     assert2::check!(m.audit_records_spooled_total.get() == 1);
     assert2::check!(m.audit_spool_depth.get() == 7);
     assert2::check!(m.audit_spool_bytes.get() == 123);
+}
+
+#[tokio::test]
+async fn kfc9_families_scrape_under_their_names_with_their_labels() {
+    // The registered name plus the counter suffix is what an alert rule
+    // spells, and the label name is what it groups by, so both belong in
+    // the assertion. Every value here is the movement one call makes.
+    let m = BrokerMetrics::new();
+    m.record_topic_freeze_rejection("orders");
+    m.record_topic_freezes_active(2);
+    m.record_break_glass_proposals(BreakGlassState::Pending, 3);
+    m.record_break_glass_refusal(BreakGlassAction(GatedAction::DeleteTopic));
+    m.record_break_glass_bypass(BreakGlassAction(GatedAction::UncleanRecovery));
+
+    let mut buf = String::new();
+    let r = m.registry.lock().await;
+    prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+    drop(r);
+
+    let cases = [
+        (
+            "freeze rejections",
+            "krabka_broker_topic_freeze_rejections_total{topic=\"orders\"} 1",
+        ),
+        ("freezes active", "krabka_broker_topic_freezes_active 2"),
+        (
+            "proposals",
+            "krabka_broker_break_glass_proposals{state=\"pending\"} 3",
+        ),
+        (
+            "refusals",
+            "krabka_broker_break_glass_refusals_total{action=\"delete_topic\"} 1",
+        ),
+        (
+            "bypassed",
+            "krabka_broker_break_glass_bypassed_total{action=\"unclean_recovery\"} 1",
+        ),
+    ];
+    for (what, needle) in cases {
+        assert!(buf.contains(needle), "{what}: missing {needle} in:\n{buf}");
+    }
+}
+
+#[tokio::test]
+async fn break_glass_state_label_covers_every_state() {
+    let cases = [
+        ("pending", BreakGlassState::Pending, 1),
+        ("approved", BreakGlassState::Approved, 2),
+        ("expired", BreakGlassState::Expired, 3),
+        ("consumed", BreakGlassState::Consumed, 4),
+    ];
+    // A new state needs a row here, so the closed label set stays covered.
+    assert!(cases.len() == BreakGlassState::ALL.len());
+
+    let m = BrokerMetrics::new();
+    for (_, state, count) in cases {
+        m.record_break_glass_proposals(state, count);
+    }
+
+    let mut buf = String::new();
+    let r = m.registry.lock().await;
+    prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+    drop(r);
+
+    for (label, _, count) in cases {
+        let needle = format!("krabka_broker_break_glass_proposals{{state=\"{label}\"}} {count}");
+        assert!(buf.contains(&needle), "missing {needle} in:\n{buf}");
+    }
+}
+
+#[tokio::test]
+async fn break_glass_action_label_covers_every_gated_transition() {
+    // The expected label text is spelled out here rather than read back
+    // from `action_name`, so renaming an action fails this test instead of
+    // silently renaming the series an alert rule groups by.
+    let cases = [
+        ("thaw_topic_freeze", GatedAction::ThawTopicFreeze),
+        ("unclean_elect_leaders", GatedAction::UncleanElectLeaders),
+        ("unclean_recovery", GatedAction::UncleanRecovery),
+        ("unregister_broker", GatedAction::UnregisterBroker),
+        ("cancel_reassignment", GatedAction::CancelReassignment),
+        ("delete_topic", GatedAction::DeleteTopic),
+        ("delete_records", GatedAction::DeleteRecords),
+    ];
+    // An action added to the metadata enum needs a row here, so the closed
+    // label set stays covered.
+    assert!(cases.len() == crate::break_glass::ALL_ACTIONS.len());
+    for action in crate::break_glass::ALL_ACTIONS {
+        assert!(
+            cases.iter().any(|(_, cased)| *cased == action),
+            "no expected label for {action:?}"
+        );
+    }
+
+    // Each action gets a distinct refusal count, so a label that resolves
+    // to the wrong series shows up as the wrong number rather than as a
+    // still-passing test.
+    let m = BrokerMetrics::new();
+    for (i, (_, action)) in cases.into_iter().enumerate() {
+        for _ in 0..=i {
+            m.record_break_glass_refusal(BreakGlassAction(action));
+        }
+        m.record_break_glass_bypass(BreakGlassAction(action));
+    }
+
+    let mut buf = String::new();
+    let r = m.registry.lock().await;
+    prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+    drop(r);
+
+    for (i, (label, _)) in cases.into_iter().enumerate() {
+        let refused = format!(
+            "krabka_broker_break_glass_refusals_total{{action=\"{label}\"}} {}",
+            i + 1
+        );
+        let bypassed = format!("krabka_broker_break_glass_bypassed_total{{action=\"{label}\"}} 1");
+        assert!(buf.contains(&refused), "missing {refused} in:\n{buf}");
+        assert!(buf.contains(&bypassed), "missing {bypassed} in:\n{buf}");
+    }
 }

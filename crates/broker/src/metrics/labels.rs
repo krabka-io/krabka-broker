@@ -1,9 +1,16 @@
-//! The label sets the broker attaches to its metric families, and the
-//! sentinel value that keeps an unbounded input from becoming an unbounded
-//! label. They live together because cardinality is a property of the whole
-//! set, not of any one family that uses it.
+//! The label sets the broker attaches to its metric families, the label
+//! values that are closed enums rather than free strings, and the sentinel
+//! value that keeps an unbounded input from becoming an unbounded label. They
+//! live together because cardinality is a property of the whole set, not of
+//! any one family that uses it.
 
-use prometheus_client::encoding::EncodeLabelSet;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
+
+use krabka_metadata::BreakGlassAction as GatedAction;
+use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue, LabelValueEncoder};
 
 /// Sentinel label value that folds unbounded inputs (unrecognised
 /// `api_key`s, `SaslAuthenticate` without a prior handshake) into one
@@ -98,4 +105,102 @@ pub struct SaslMechanismLabel {
 pub struct SchemaRejectionLabel {
     pub topic: String,
     pub reason: String,
+}
+
+/// KFC-9 state of a break-glass proposal.
+///
+/// The four states are the whole lifecycle of a proposal, so a closed enum
+/// bounds the `break_glass_proposals` label set at four series.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum BreakGlassState {
+    /// The proposal has fewer approvals than the broker needs.
+    Pending,
+    /// The proposal has every approval it needs and no transition used it yet.
+    Approved,
+    /// The proposal passed its expiry time and no transition used it.
+    Expired,
+    /// A privileged transition used the proposal.
+    Consumed,
+}
+
+impl BreakGlassState {
+    /// Every state, in lifecycle order.
+    pub const ALL: [Self; 4] = [Self::Pending, Self::Approved, Self::Expired, Self::Consumed];
+
+    /// The `state` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Expired => "expired",
+            Self::Consumed => "consumed",
+        }
+    }
+}
+
+impl EncodeLabelValue for BreakGlassState {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// KFC-9 privileged transition that a break-glass proposal authorizes, as a
+/// metric label.
+///
+/// [`krabka_metadata::BreakGlassAction`] is the one definition of the gated
+/// set. This newtype is only what lets that definition *be* a label value:
+/// both the enum and `EncodeLabelValue` are foreign to this crate, so the
+/// orphan rule forbids implementing the trait on the enum directly.
+///
+/// The label set stays as closed as a broker-local enum made it. The wrapped
+/// enum is itself closed, so the `break_glass_refusals` and
+/// `break_glass_bypassed` families still carry one series per gated operation
+/// and no caller can name an eighth action. What the newtype adds is that
+/// there is now one enum rather than two: an action added to the metadata
+/// definition cannot be forgotten here, and `break_glass::action_name` is the
+/// one spelling that the configuration, the audit event and the metric label
+/// all share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BreakGlassAction(pub GatedAction);
+
+impl BreakGlassAction {
+    /// The `action` label value this transition renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        crate::break_glass::action_name(self.0)
+    }
+}
+
+/// Hashing the label text rather than the wrapped enum, which carries no
+/// `Hash` of its own. Two actions are equal exactly when their names are, so
+/// the hash agrees with `Eq`.
+impl Hash for BreakGlassAction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl EncodeLabelValue for BreakGlassAction {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// KFC-9 proposal-state label set, paired with the `break_glass_proposals`
+/// gauge family. Cardinality is bounded at four, because the field is the
+/// closed [`BreakGlassState`] enum and no caller can name a fifth state.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct BreakGlassStateLabel {
+    pub state: BreakGlassState,
+}
+
+/// KFC-9 privileged-transition label set, paired with the
+/// `break_glass_refusals` and `break_glass_bypassed` counter families.
+/// Cardinality is bounded at seven, because the field wraps the closed
+/// [`krabka_metadata::BreakGlassAction`] enum and no caller can name an eighth
+/// action.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct BreakGlassActionLabel {
+    pub action: BreakGlassAction,
 }

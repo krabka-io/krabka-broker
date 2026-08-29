@@ -18,7 +18,7 @@ pub use chain::{ChainState, GENESIS_HEAD, chain_hash};
 pub use checkpoint::{Checkpoint, EVENT_CLASS_CHECKPOINT};
 pub use event::{
     AuditEndpoint, AuditEvent, AuditEventClass, AuditOutcome, AuditPrincipal, AuditResource,
-    LifecycleKind,
+    LifecycleKind, PrivilegedPhase,
 };
 pub use ids::{CheckpointCount, EpochMs, MaxSpoolBytes, RecordCount, Seq, SpoolBytes};
 pub use krabka_ids::NodeId;

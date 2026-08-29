@@ -376,6 +376,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 delivery,
                 topic_name: "sched".into(),
                 topic_denied: false,
+                freeze: None,
                 txn_id_denied: false,
                 acks: 1,
                 timeout: Duration::from_secs(5),

@@ -19,6 +19,21 @@
 //!   on every partition.
 //! * For each topic, `Write` on `Topic(name)`. On a deny, that topic's
 //!   partition rows emit `TOPIC_AUTHORIZATION_FAILED (29)`.
+//!
+//! ## Write-freeze gate
+//!
+//! A topic that a KFC-9 write freeze covers never joins the transaction's
+//! partition set, and every one of its partition rows emits
+//! `POLICY_VIOLATION (44)`. This is the cheapest place to stop a transaction
+//! from ever reaching a frozen topic.
+//!
+//! A producer that enlisted the partition before the freeze landed keeps its
+//! ability to commit or abort. The gate refuses the *next* enlistment, and a
+//! freeze never stops an open transaction from completing.
+//!
+//! The gate runs after both ACL checks and after the coordinator check. A
+//! caller learns that it is unauthorized, or that it reached the wrong broker,
+//! before it learns anything about the topic's freeze state.
 
 use bytes::Bytes;
 use krabka_protocol::{Decode, owned::add_partitions_to_txn_request::AddPartitionsToTxnRequest};
@@ -28,6 +43,7 @@ mod registration;
 mod results;
 mod versions;
 mod wire;
+mod write_freeze;
 
 #[cfg(test)]
 mod test_support;

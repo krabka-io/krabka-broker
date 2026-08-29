@@ -19,6 +19,7 @@ use super::*;
 use crate::{
     broker::Broker,
     codes,
+    handlers::delete_records::test_support::gated_config,
     test_support::{DenyAll, peer, principal},
 };
 
@@ -265,5 +266,44 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         check!(resp == expected, "{topic}");
     }
 
+    broker_handle.shutdown().await;
+}
+
+// ── KFC-9: the break-glass gate over a trim ─────────────────────────
+
+#[tokio::test]
+async fn a_refused_trim_deletes_nothing() {
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.break_glass = gated_config();
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let principal = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&principal, &peer);
+    topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
+    let part = broker
+        .partitions
+        .get("orders", krabka_ids::PartitionIndex(0))
+        .expect("the partition is local");
+    let before = part.log_start_offset();
+
+    let resp = drive(&broker, &request("orders", &[(0, -1)]), &principal, &peer).await;
+
+    let expected = vec![DeleteRecordsTopicResult {
+        name: "orders".to_owned(),
+        partitions: vec![DeleteRecordsPartitionResult {
+            partition_index: 0,
+            low_watermark: -1,
+            error_code: codes::POLICY_VIOLATION,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    }];
+    assert!(resp.topics == expected, "{resp:?}");
+    // The refusal refused: the log start offset did not move.
+    check!(part.log_start_offset() == before);
     broker_handle.shutdown().await;
 }

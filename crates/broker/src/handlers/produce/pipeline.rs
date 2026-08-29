@@ -4,6 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_compression::RecordDecompressionPolicy;
+use krabka_metadata::TopicFreezeRecord;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
 use super::{
@@ -21,6 +22,7 @@ use super::{
 use crate::{
     codes,
     error::BrokerError,
+    freeze::resolve::FreezeVerdict,
     partition_registry::PartitionRegistry,
     schema_validation::{SchemaGate, SchemaValidator},
 };
@@ -33,7 +35,7 @@ use crate::{
 /// the txn coordinator does not count toward CPU usage. The work returns the
 /// per-partition response on every path. Only `txn_coordinator.put` errors
 /// propagate with `?`.
-pub(super) struct PartitionInput {
+pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
     pub(super) topic_compression: Option<krabka_compression::CompressionType>,
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
@@ -45,6 +47,11 @@ pub(super) struct PartitionInput {
     pub(super) schema: Option<SchemaGate>,
     pub(super) topic_name: String,
     pub(super) topic_denied: bool,
+    /// The topic's KFC-9 write-freeze entry, resolved once per topic. `None`
+    /// is a topic that accepts writes, and skips the freeze gate entirely.
+    /// It sits beside `topic_denied` because it refuses for the same kind of
+    /// reason: nothing about this batch can earn the write.
+    pub(super) freeze: Option<&'a TopicFreezeRecord>,
     pub(super) txn_id_denied: bool,
     pub(super) acks: i16,
     pub(super) timeout: Duration,
@@ -67,7 +74,7 @@ pub(super) struct PartitionServices<'a> {
 }
 
 pub(super) async fn process_partition(
-    input: PartitionInput,
+    input: PartitionInput<'_>,
     services: PartitionServices<'_>,
 ) -> Result<PartitionProduceResponse, BrokerError> {
     let PartitionInput {
@@ -77,6 +84,7 @@ pub(super) async fn process_partition(
         schema,
         topic_name,
         topic_denied,
+        freeze,
         txn_id_denied,
         acks,
         timeout,
@@ -106,6 +114,25 @@ pub(super) async fn process_partition(
 
     if topic_denied {
         out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+        return Ok(out);
+    }
+
+    // ── KFC-9 write freeze ───────────────────────────────────────────
+    // Beside the topic ACL denial, and ahead of `prepare_batch`, because a
+    // freeze is an authority gate and not a content gate. It ranks with the
+    // denial above rather than with the KFC-1 and KFC-7 gates below, so a
+    // frozen topic never pays CRC verification or decompression for a batch
+    // the broker will never accept.
+    //
+    // The position has a second consequence, which the tests assert: the gate
+    // returns ahead of the idempotent-sequence gate, so a refused batch leaves
+    // the producer state untouched and the log end offset unmoved. A refusal
+    // that still appended would be the worst failure this feature can have,
+    // and the error code alone does not rule it out.
+    if let Some(entry) = freeze {
+        metrics.record_topic_freeze_rejection(topic_name);
+        out.error_code = codes::POLICY_VIOLATION;
+        out.error_message = Some(FreezeVerdict::from(entry).error_message());
         return Ok(out);
     }
 

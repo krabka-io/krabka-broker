@@ -39,6 +39,11 @@
 //! [`validate_topic_config`] sees one pair at a time and cannot see that, so
 //! [`validate_config_combination`] checks the rule over a whole override map.
 //!
+//! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
+//! synthesised for `DescribeConfigs` and is never stored, so
+//! [`validate_topic_config`] does not accept it and both alter paths refuse
+//! it by name. See [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
+//!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
 
 mod broker_scope;
@@ -48,6 +53,7 @@ mod log_config;
 mod qos;
 mod recovery;
 mod schema;
+mod topic_scope;
 mod validation;
 
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
@@ -58,6 +64,7 @@ pub(crate) use self::{
     broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
+    topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
 };
 pub(crate) use self::{
     broker_scope::{
@@ -77,6 +84,9 @@ pub(crate) use self::{
         resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
     },
     schema::resolve_schema_validation,
+    topic_scope::{
+        WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
+    },
     validation::{
         is_recognized, parse_compression_type, validate_config_combination, validate_topic_config,
         validate_topic_config_map,

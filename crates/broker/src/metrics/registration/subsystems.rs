@@ -1,6 +1,7 @@
 //! Registration of the families each optional broker subsystem owns: the
 //! audit spool, the KIP-714 client-metrics export, the log cleaner, the
-//! barrier coordinator, KFC-1 scheduled delivery and KFC-7 schema validation.
+//! barrier coordinator, KFC-1 scheduled delivery, KFC-7 schema validation,
+//! and the KFC-9 topic freeze and break-glass workflow.
 
 use prometheus_client::registry::Registry;
 
@@ -197,6 +198,55 @@ impl BrokerMetrics {
              measured clock uncertainty against this series, so an alert \
              tracks the bound the broker relies on instead of a copy of it.",
             self.delivery_clock_uncertainty_seconds.clone(),
+        );
+    }
+
+    pub(super) fn register_group_7(&self, registry: &mut Registry) {
+        registry.register(
+            "topic_freeze_rejections",
+            "KFC-9 cumulative count of Produce partition rows the broker \
+             refused because a freeze covers the topic, per topic. The gate \
+             runs before the batch is parsed, so a refused row moves no log \
+             end offset.",
+            self.topic_freeze_rejections.clone(),
+        );
+
+        registry.register(
+            "topic_freezes_active",
+            "KFC-9 live entries in the freeze registry (gauge). One prefix \
+             entry covers a whole namespace, so this counts entries and not \
+             frozen topics. The freeze max_entries setting caps it.",
+            self.topic_freezes_active.clone(),
+        );
+
+        registry.register(
+            "break_glass_proposals",
+            "KFC-9 break-glass proposals by state (gauge), where state is one \
+             of pending, approved, expired, and consumed. A rise in pending \
+             beside a flat approved is an incident where the second person \
+             has not answered yet.",
+            self.break_glass_proposals.clone(),
+        );
+
+        registry.register(
+            "break_glass_refusals",
+            "KFC-9 cumulative count of privileged transitions the broker \
+             refused because no approved break-glass proposal covers them, \
+             per action. A refusal is the expected answer when an operator \
+             runs the tool before the approval lands.",
+            self.break_glass_refusals.clone(),
+        );
+
+        registry.register(
+            "break_glass_bypassed",
+            "KFC-9 cumulative count of privileged transitions that ran \
+             WITHOUT an approved break-glass proposal, per action. This is \
+             the series to alert on: it counts data-losing unclean \
+             recoveries that no second person approved, which the background \
+             policy audit-only permits because that path has no caller to \
+             refuse. Any non-zero rate needs an operator to read the audit \
+             log for the partition it names.",
+            self.break_glass_bypassed.clone(),
         );
     }
 }

@@ -1,7 +1,7 @@
 //! Thin adapters that let the broker's [`crate::metadata_source::MetadataSource`]
-//! satisfy the narrower controller traits the auto-rebalance, reassignment, and
-//! delegation-token sweeps depend on. They are grouped here because each is a
-//! mechanical forward of the same handle.
+//! satisfy the narrower controller traits the auto-rebalance, reassignment,
+//! delegation-token, and break-glass sweeps depend on. They are grouped here
+//! because each is a mechanical forward of the same handle.
 
 use std::sync::Arc;
 
@@ -81,6 +81,33 @@ pub(super) struct DelegationTokenCleanupControllerAdapter {
 impl crate::delegation_token_cleanup::DelegationTokenController
     for DelegationTokenCleanupControllerAdapter
 {
+    fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
+        self.handle.current_image()
+    }
+
+    async fn submit_change(
+        &self,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<(), String> {
+        self.handle
+            .submit_change(records)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// KFC-9: wraps a real [`krabka_raft::ControllerHandle`] so it can satisfy the
+/// [`crate::break_glass::sweep::BreakGlassController`] trait that the
+/// break-glass expiry sweep needs. Every broker runs the sweep, the way every
+/// broker runs the delegation-token sweep. Raft serializes duplicate
+/// tombstones, so each one after the first is a no-op on the apply path.
+pub(super) struct BreakGlassSweepControllerAdapter {
+    pub(super) handle: Arc<dyn crate::metadata_source::MetadataSource>,
+}
+
+#[async_trait::async_trait]
+impl crate::break_glass::sweep::BreakGlassController for BreakGlassSweepControllerAdapter {
     fn current_image(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.handle.current_image()
     }

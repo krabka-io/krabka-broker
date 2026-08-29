@@ -12,6 +12,7 @@ use super::{
     delegation_token::apply_delegation_tokens,
     listener_settings::{ListenerSettings, apply_listener_settings},
     oauthbearer_apply::apply_oauthbearer,
+    privileged_actions::apply_privileged_action_policy,
     remote_storage::apply_remote_storage,
     tail::{FileConfigTail, apply_config_tail},
     validate::positive_time,
@@ -41,6 +42,9 @@ impl FileConfig {
     // * [`FileConfigError::SchemaRegistryConfig`] when
     //   [`crate::schema_validation::SchemaValidator::new`] rejects the resolved
     //   `[schema_registry]` knobs (zero cache size).
+    // * [`FileConfigError::OperatorKeys`] when an `[[operator_keys]]` entry is
+    //   unloadable, or when `[freeze]` / `[break_glass]` demands a signature
+    //   that no configured key can verify.
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn apply_to(self, cfg: &mut crate::config::BrokerConfig) -> Result<(), FileConfigError> {
@@ -186,6 +190,11 @@ impl FileConfig {
             cfg,
         )?;
 
+        // `[[operator_keys]]`, `[freeze]` and `[break_glass]`: one trust set
+        // shared by the freeze signature path and the break-glass approval
+        // path, plus the two rules that cross those sections.
+        apply_privileged_action_policy(&self.operator_keys, self.freeze, self.break_glass, cfg)?;
+
         if has_runtime && validate_runtime {
             cfg.validate()
                 .map_err(|error| FileConfigError::InvalidConfig(error.to_string()))?;
@@ -233,6 +242,9 @@ protocol = "Plaintext"
         let cfg: FileConfig = toml::from_str(src).unwrap();
         let expected = FileConfig {
             schema_registry: None,
+            operator_keys: vec![],
+            freeze: None,
+            break_glass: None,
             runtime: None,
             broker_id: Some(0),
             log_dir: Some("/var/lib/krabka/data".to_string()),

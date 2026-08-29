@@ -3,13 +3,38 @@
 //! deletion before the broker tears down the partition dirs and the in-memory
 //! state.
 //!
+//! # KFC-9: deleting a topic needs two people
+//!
+//! A topic deletion destroys every record the topic holds, so it is one of the
+//! transitions the break-glass two-person rule gates. The request gains no
+//! field for it: an operator gets an approval out of band through
+//! `krabka-guard`, targeted at the topic name, and then runs
+//! `kafka-topics --delete`.
+//!
+//! # KFC-9: a frozen topic is never deleted
+//!
+//! A write freeze refuses every operation that removes data from the topic it
+//! covers, so a frozen topic answers `POLICY_VIOLATION (44)` here whatever the
+//! caller holds. The check runs ahead of the two-person rule, because an
+//! approval to delete does not defeat a freeze and a refusal must not spend
+//! one.
+//!
+//! A refused topic answers `POLICY_VIOLATION (44)` on its own row, which is the
+//! code Apache Kafka already returns from `CreateTopicPolicy` and
+//! `AlterConfigPolicy`, so `AdminClient` surfaces a `PolicyViolationException`
+//! per topic. The consumed proposal rides the same `submit_change` call as the
+//! delete record, so the approval and the deletion commit together. The gate is
+//! active only when `[break_glass]` names an approver set.
+//!
 //! This file holds the request flow. Request resolution lives in `request`,
-//! the `Delete` ACL check in `authz`, the response shapes in `wire`, the
-//! post-commit local tear-down in `teardown`, the remote-tier snapshot and
-//! cascade in `tiering`, and the audit record in `audit`.
+//! the `Delete` ACL check in `authz`, the break-glass gate in `gate`, the
+//! response shapes in `wire`, the post-commit local tear-down in `teardown`,
+//! the remote-tier snapshot and cascade in `tiering`, and the audit record in
+//! `audit`.
 
 use bytes::Bytes;
-use krabka_metadata::{DeleteTopicRecord, MetadataRecord};
+use krabka_audit::PrivilegedPhase;
+use krabka_metadata::BreakGlassAction;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -20,10 +45,21 @@ use krabka_protocol::{
 use krabka_raft::RaftError;
 use krabka_units::{Time, convert::TimeExt};
 
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{
+    break_glass::{
+        handlers::audit::{GatedTransition, audit_transition},
+        metrics as break_glass_metrics,
+    },
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::RequestContext,
+    time_util::now_ms,
+};
 
 mod audit;
 mod authz;
+mod gate;
 mod request;
 mod teardown;
 mod tiering;
@@ -37,10 +73,11 @@ mod tests;
 use self::{
     audit::{audit_deleted_topics, deleted_topic_resources},
     authz::denied_topic_names,
+    gate::{consumed_proposal_id, delete_topic_records},
     request::resolve_topic_names,
     teardown::remove_local_partitions,
     tiering::{spawn_remote_cascades, tiered_partitions},
-    wire::{delete_topic_result, delete_topics_response},
+    wire::{delete_topic_result, delete_topics_response, refused_topic_result},
 };
 
 /// KIP-599: a zero delay means the request was never throttled, so the
@@ -61,7 +98,7 @@ pub(crate) async fn handle(
     version: i16,
     _correlation_id: i32,
     req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let controller = &broker.controller;
     let partitions = broker.partitions.clone();
@@ -143,6 +180,51 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // KFC-9: a write freeze refuses every operation that removes data
+        // from the topic it covers, and it answers ahead of the two-person
+        // rule. That order is the rule: a break-glass approval to delete does
+        // not defeat a freeze, and a deletion the freeze refuses must not
+        // spend an approval on its way to being refused.
+        //
+        // Like the produce gate, this refusal emits no privileged-action audit
+        // event. A freeze is not a break-glass act, and the registry entry that
+        // caused the refusal is already in the metadata log and in the audit
+        // record of the freeze that set it.
+        if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(&image, &name) {
+            let message = verdict.removal_message();
+            tracing::warn!(topic = %name, refusal = %message, "DeleteTopics refused by a freeze");
+            results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+            continue;
+        }
+
+        // KFC-9: the two-person rule, and the records this append carries. It
+        // runs before the broker snapshots any partition state, because a
+        // deletion the broker will refuse has no reason to walk the topic's
+        // logs.
+        let records =
+            match delete_topic_records(&image, &broker.config.break_glass, &name, now_ms()) {
+                Ok(records) => records,
+                Err(denial) => {
+                    let message = denial.to_string();
+                    break_glass_metrics::record_refusal(&broker.metrics, denial.action);
+                    audit_transition(
+                        &broker.audit_log,
+                        &broker.config.break_glass,
+                        ctx,
+                        &GatedTransition {
+                            action: BreakGlassAction::DeleteTopic,
+                            target: &name,
+                            phase: PrivilegedPhase::Refused,
+                            proposal_id: denial.proposal_id(),
+                            reason: &message,
+                        },
+                    );
+                    results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+                    continue;
+                }
+            };
+        let proposal_id = records.first().and_then(consumed_proposal_id);
+
         // Snapshot every local partition before committing the metadata
         // deletion. The metadata image watcher can remove registry entries as
         // soon as the commit becomes visible; enumerating afterward races that
@@ -155,11 +237,7 @@ pub(crate) async fn handle(
         let tiered_to_cascade =
             tiered_partitions(broker, &partitions, &image, &name, &local_partitions);
 
-        let res = controller
-            .submit_change(vec![MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
-                name: name.clone(),
-            })])
-            .await;
+        let res = controller.submit_change(records).await;
 
         let error_code = match res {
             Ok(_) => {
@@ -174,6 +252,18 @@ pub(crate) async fn handle(
                 );
                 // Now that the local tear-down is done, cascade the remote tier.
                 spawn_remote_cascades(broker, tiered_to_cascade);
+                audit_transition(
+                    &broker.audit_log,
+                    &broker.config.break_glass,
+                    ctx,
+                    &GatedTransition {
+                        action: BreakGlassAction::DeleteTopic,
+                        target: &name,
+                        phase: PrivilegedPhase::Applied,
+                        proposal_id,
+                        reason: "topic deleted",
+                    },
+                );
                 codes::NONE
             }
             Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(_))) => {

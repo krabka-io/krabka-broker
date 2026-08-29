@@ -29,6 +29,7 @@ mod listener_settings;
 mod oauthbearer;
 mod oauthbearer_apply;
 mod object_store;
+mod privileged_actions;
 mod process;
 mod quorum_voters;
 mod remote_storage;
@@ -52,6 +53,7 @@ pub use self::{
     listener::{FileClientAuthMode, FileListener, FileListenerSaslConfig, FileTlsConfig},
     oauthbearer::FileOAuthBearerConfig,
     object_store::{FileRemoteStorageGcsConfig, FileRemoteStorageS3Config, FileWormConfig},
+    privileged_actions::{FileBreakGlassConfig, FileFreezeConfig, FileOperatorKey},
     process::{FileProcessConfig, FileStretchConfig},
     remote_storage::{FileKafkaRlmmConfig, FileRemoteStorageConfig},
     runtime_config::RuntimeFileConfig,
@@ -82,6 +84,18 @@ pub enum FileConfigError {
     /// binary entry point can log a single string.
     #[error("schema registry configuration error: {0}")]
     SchemaRegistryConfig(String),
+    /// The `[[operator_keys]]` trust set could not be loaded, or a section
+    /// demands a signature it has no key to verify. The payload is the
+    /// underlying [`OperatorKeyError`][crate::operator_keys::OperatorKeyError]
+    /// message, or a description of the cross-section rule that failed —
+    /// formatted here rather than at the call site so the binary entry point
+    /// can log a single string.
+    ///
+    /// Every case is a startup error, never a downgrade to unsigned
+    /// operation: a broker that quietly stopped checking signatures is the
+    /// failure this variant exists to prevent.
+    #[error("operator key configuration error: {0}")]
+    OperatorKeys(String),
     /// A TOML section's contents conflict in a way only the apply step
     /// can diagnose — e.g. `[remote_storage]` carrying both `storage_dir`
     /// (local backend) and `[remote_storage.s3]` (object-store backend).
@@ -253,4 +267,22 @@ pub struct FileConfig {
     /// supplies the schemas for KFC-7 broker-side validation. `None` means no
     /// topic can turn schema validation on.
     pub schema_registry: Option<FileSchemaRegistryConfig>,
+
+    /// `[[operator_keys]]` — the shared operator key trust set.
+    ///
+    /// Top-level rather than nested under `[break_glass]`, because two
+    /// subsystems verify against it: a freeze record's detached signature and
+    /// a break-glass approval's. One provisioning step covers both. Empty is
+    /// the default and means no operator key is configured.
+    #[serde(default)]
+    pub operator_keys: Vec<FileOperatorKey>,
+
+    /// `[freeze]` section — the topic write-freeze registry's bounds and its
+    /// signature requirement. Absent leaves the `BrokerConfig` defaults.
+    pub freeze: Option<FileFreezeConfig>,
+
+    /// `[break_glass]` section — the two-person rule over the privileged
+    /// transitions. Absent leaves the `BrokerConfig` defaults, which run no
+    /// break-glass workflow.
+    pub break_glass: Option<FileBreakGlassConfig>,
 }

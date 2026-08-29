@@ -8,7 +8,8 @@
 
 use krabka_log::DeliveryPolicy;
 
-/// The offset the `LATEST` sentinel reports for one partition.
+/// The offset the `LATEST` sentinel reports for one partition, before the
+/// fetchable bound is applied to it.
 ///
 /// A topic that delivers immediately answers the local log end offset. A topic
 /// that schedules delivery (KFC-1) answers its delivery watermark instead,
@@ -31,18 +32,25 @@ use krabka_log::DeliveryPolicy;
 /// no extra lock and no walk here. `None` means the topic stopped scheduling
 /// delivery between the config snapshot and the recompute, where the log end
 /// offset is again the right answer.
+///
+/// Kafka has no counterpart to this function: it answers LATEST with
+/// `lastFetchableOffset` outright. The delivery watermark is the one cap KFC-1
+/// adds, and [`resolve_partition`](super::resolve::resolve_partition) takes the
+/// lower of the two, so on every topic that does not schedule delivery the
+/// answer is Kafka's.
 pub(super) fn latest_offset(
     partition: &crate::partition::Partition,
     policy: DeliveryPolicy,
     local_end: i64,
 ) -> i64 {
-    if policy != DeliveryPolicy::Scheduled {
-        return local_end;
+    if policy == DeliveryPolicy::Scheduled {
+        partition
+            .delivery
+            .publish_now(&partition.log)
+            .map_or(local_end, |delivery| delivery.watermark.0)
+    } else {
+        local_end
     }
-    partition
-        .delivery
-        .publish_now(&partition.log)
-        .map_or(local_end, |delivery| delivery.watermark.0)
 }
 
 pub(super) fn leader_epoch_for_offset(partition: &crate::partition::Partition, offset: i64) -> i32 {

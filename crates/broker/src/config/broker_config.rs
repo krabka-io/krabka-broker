@@ -12,9 +12,12 @@ use krabka_raft::{
 use krabka_security::{SaslMechanism, TlsConfig};
 use krabka_units::{ByteSize, Ratio, Time};
 
-use crate::config::{
-    BrokerFeatureFlags, InterBrokerCredentials, ListenerSpec, NodeRole, RemoteStorageBackend,
-    ReplicationRuntimeConfig, RlmmKind, StretchProfile,
+use crate::{
+    config::{
+        BreakGlassConfig, BrokerFeatureFlags, FreezeConfig, InterBrokerCredentials, ListenerSpec,
+        NodeRole, RemoteStorageBackend, ReplicationRuntimeConfig, RlmmKind, StretchProfile,
+    },
+    operator_keys::OperatorKeys,
 };
 
 #[derive(Debug, Clone)]
@@ -408,6 +411,20 @@ pub struct BrokerConfig {
     /// section was configured, so a topic that turns `schema.validation.*` on
     /// has nothing to validate against.
     pub schema_validator: Option<std::sync::Arc<crate::schema_validation::SchemaValidator>>,
+
+    /// The operator key trust set, configured through the top-level
+    /// `[[operator_keys]]` array in `broker.toml`.
+    ///
+    /// One set serves both signature paths: a freeze record's detached
+    /// signature and a break-glass approval's. Empty is the default and means
+    /// no operator key is provisioned, so nothing may demand a signature.
+    pub operator_keys: OperatorKeys,
+
+    /// Topic write-freeze policy, configured through `[freeze]`.
+    pub freeze: FreezeConfig,
+
+    /// Break-glass two-person rule policy, configured through `[break_glass]`.
+    pub break_glass: BreakGlassConfig,
 
     /// TLS configuration. `None` means no TLS, and is the default.
     pub tls_config: Option<TlsConfig>,

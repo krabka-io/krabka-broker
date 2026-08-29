@@ -128,6 +128,20 @@ impl UncleanRecoveryManager {
         if self.liveness.is_alive(pr.leader.0).await {
             return RecoveryOutcome::NotNeeded;
         }
+        // KFC-9: the recovery is needed from here on, so this is where the
+        // fail-closed rule bites. It runs before the replica poll, because a
+        // recovery the broker will not commit has no reason to spend a round
+        // trip to every surviving replica.
+        if self.policy.background.refuses(job) {
+            self.policy.background.audit_refusal(job, self.node_id);
+            warn!(
+                topic = %job.topic,
+                partition = job.partition,
+                "unclean recovery refused: break_glass.background_unclean_recovery is require \
+                 and no proposal approved it; the partition stays offline"
+            );
+            return RecoveryOutcome::BreakGlassRequired;
+        }
         let known_epoch = pr.leader_epoch;
         let topic_id = image
             .topic(&job.topic)
@@ -234,6 +248,13 @@ impl UncleanRecoveryManager {
             return RecoveryOutcome::NoEligibleReplica;
         }
         self.metrics.record_unclean_leader_election();
+        // KFC-9: the data-losing election is durable now, so a bypass is a
+        // fact rather than an intention. A job that carries a proposal took
+        // the operator path, and its handler already audited the approval it
+        // spent.
+        self.policy
+            .background
+            .audit_bypass(job, self.node_id, winner, &self.metrics);
         RecoveryOutcome::Elected(winner)
     }
 }

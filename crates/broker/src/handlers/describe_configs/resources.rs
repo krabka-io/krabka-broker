@@ -20,8 +20,12 @@ use super::wire::{
 };
 use crate::{codes, config_keys};
 
+mod write_freeze;
+
 #[cfg(test)]
 mod tests;
+
+use self::write_freeze::write_freeze_entry;
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
@@ -40,16 +44,21 @@ pub(super) fn describe_one(
     };
 
     if r.resource_type == RESOURCE_TYPE_TOPIC {
-        let configs = match image.topic_config(&r.resource_name) {
-            None => Vec::new(),
-            Some(map) => {
-                let key_filter: Option<&[String]> = r.configuration_keys.as_deref();
-                map.iter()
-                    .filter(|(k, _)| key_filter.is_none_or(|ks| ks.iter().any(|f| f == *k)))
-                    .map(|(k, v)| make_entry(k, v, CONFIG_SOURCE_DYNAMIC_TOPIC))
-                    .collect()
-            }
-        };
+        let key_filter: Option<&[String]> = r.configuration_keys.as_deref();
+        let wanted = |key: &str| key_filter.is_none_or(|keys| keys.iter().any(|f| f == key));
+        let mut configs: Vec<DescribeConfigsResourceResult> = image
+            .topic_config(&r.resource_name)
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| wanted(key.as_str()))
+            .map(|(key, value)| make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC))
+            .collect();
+        if wanted(config_keys::WRITE_FREEZE) {
+            configs.push(write_freeze_entry(image, &r.resource_name));
+            // The stored overrides arrive in `BTreeMap` order, so one sort
+            // puts the synthesised key back into that order.
+            configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+        }
         return ok(configs);
     }
 

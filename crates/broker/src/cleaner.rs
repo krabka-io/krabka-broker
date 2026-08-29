@@ -1,10 +1,11 @@
 //! Per-broker log-compaction ticker.
 //!
 //! Every `interval`, it walks the partitions registry and dispatches
-//! [`Partition::compact_log`] for every partition where both of these hold:
+//! [`Partition::compact_log`] for every partition where all of these hold:
 //!
-//!   - the topic's `cleanup.policy` is `compact`, and
-//!   - this broker is currently the leader.
+//!   - the topic's `cleanup.policy` is `compact`,
+//!   - this broker is currently the leader, and
+//!   - no KFC-9 write freeze covers the topic.
 //!
 //! The compaction itself runs on the partition's writer actor, so appends and
 //! compaction run in sequence.
@@ -14,13 +15,16 @@ use std::{
     time::Duration,
 };
 
-use krabka_metadata::NodeId;
+use krabka_metadata::{MetadataImage, NodeId};
 use krabka_units::{Time, convert::TimeExt as _};
 use qubit_clock::sleep::{AsyncSleeper, SystemSleeper};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::{metrics::BrokerMetrics, partition::Partition, partition_registry::PartitionRegistry};
+use crate::{
+    freeze::resolve::resolve_topic_freeze, metrics::BrokerMetrics, partition::Partition,
+    partition_registry::PartitionRegistry,
+};
 
 /// Tunables for [`run`].
 #[derive(Clone)]
@@ -31,6 +35,14 @@ pub(crate) struct CleanerConfig {
     /// inject a [`qubit_clock::sleep::MockSleeper`], so the sweep interval
     /// fires on a controlled mock timeline instead of wall-clock time.
     pub sleeper: Arc<dyn AsyncSleeper>,
+    /// The metadata authority the sweep reads the KFC-9 write-freeze registry
+    /// from, re-read once per sweep so a freeze and a thaw both take effect on
+    /// the next tick.
+    ///
+    /// `None` is a sweep with no metadata authority to ask. It resolves no
+    /// freeze and leaves every partition eligible, which is the answer an
+    /// empty registry gives anyway.
+    pub metadata: Option<Arc<dyn crate::metadata_source::MetadataSource>>,
 }
 
 impl CleanerConfig {
@@ -38,6 +50,7 @@ impl CleanerConfig {
         Self {
             interval,
             sleeper: Arc::new(SystemSleeper::new()),
+            metadata: None,
         }
     }
 }
@@ -62,7 +75,11 @@ pub(crate) async fn run(
     loop {
         tokio::select! {
             () = &mut tick => {
-                tick_all(&partitions, node_id, &metrics).await;
+                // One image read per sweep. The registry the sweep gates on is
+                // whatever the metadata authority holds when the tick starts,
+                // so a freeze applied mid-sweep takes effect on the next one.
+                let image = cfg.metadata.as_ref().map(|source| source.current_image());
+                tick_all(&partitions, image.as_deref(), node_id, &metrics).await;
                 tick = sleeper.sleep_for_async(cfg.interval.to_std());
             }
             () = shutdown.cancelled() => {
@@ -73,8 +90,22 @@ pub(crate) async fn run(
     }
 }
 
+/// Whether a KFC-9 write freeze stops this sweep from compacting `topic`.
+///
+/// Compaction removes records, and the KFC's rule refuses every operation that
+/// removes data from a frozen topic's log. A disaster-recovery promotion needs
+/// the frozen prefix byte-identical between the two sites, and one cleaner run
+/// on one side leaves the same offsets holding different bytes.
+///
+/// `image` is `None` for a sweep with no metadata authority to ask, which
+/// resolves no freeze.
+fn freeze_stops_compaction(image: Option<&MetadataImage>, topic: &str) -> bool {
+    image.is_some_and(|image| resolve_topic_freeze(image, topic).is_some())
+}
+
 pub(crate) async fn tick_all(
     partitions: &PartitionRegistry,
+    image: Option<&MetadataImage>,
     node_id: NodeId,
     metrics: &BrokerMetrics,
 ) {
@@ -96,6 +127,14 @@ pub(crate) async fn tick_all(
             log.config_snapshot().cleanup_policy
         };
         if policy != krabka_log::CleanupPolicy::Compact {
+            continue;
+        }
+        // KFC-9, beside the policy test and skipping in exactly the same way.
+        // A skip is the right shape here rather than an error: the cleaner is
+        // a background loop with no caller to refuse, so a frozen topic simply
+        // has no work for it, and the partition becomes eligible again on the
+        // first sweep after the thaw leaves the image, with no operator step.
+        if freeze_stops_compaction(image, &partition.topic) {
             continue;
         }
         match partition.compact_log().await {
@@ -122,13 +161,15 @@ pub(crate) async fn tick_all(
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use bytes::Bytes;
     use krabka_ids::PartitionIndex;
+    use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
     use krabka_protocol::records::{Record, RecordBatch};
     use krabka_units::secs;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -217,7 +258,7 @@ mod tests {
             .collect();
 
         let metrics = BrokerMetrics::new();
-        tick_all(&registry, NodeId(7), &metrics).await;
+        tick_all(&registry, None, NodeId(7), &metrics).await;
 
         // A single `tick_all` is exactly one cleaner sweep, so the run counter
         // must advance by one. This pins `record_cleaner_run` against a no-op
@@ -269,6 +310,7 @@ mod tests {
             CleanerConfig {
                 interval,
                 sleeper: Arc::new(sleeper),
+                metadata: None,
             },
             shutdown.clone(),
             BrokerMetrics::new(),
@@ -315,5 +357,164 @@ mod tests {
 
         shutdown.cancel();
         task.await.expect("cleaner task exits");
+    }
+
+    // ── KFC-9 topic write freeze ─────────────────────────────────────
+
+    /// An image holding one live freeze entry per `(scope, pattern_type)`.
+    fn image_with_freezes(scopes: &[(&str, PatternType)]) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
+        for &(scope, pattern_type) in scopes {
+            image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+                scope: scope.to_owned(),
+                pattern_type,
+                frozen: true,
+                reason: "DR cutover".to_owned(),
+                set_by: "User:alice".to_owned(),
+                set_at_ms: 1_770_000_000_000,
+                proposal_id: Uuid::nil(),
+                key_id: String::new(),
+                signature: Vec::new(),
+            }));
+        }
+        image
+    }
+
+    /// The thaw record for `scope`: the same entry with `frozen` cleared,
+    /// which is what removes it from the registry.
+    fn thaw(image: &mut MetadataImage, scope: &str, pattern_type: PatternType) {
+        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: scope.to_owned(),
+            pattern_type,
+            frozen: false,
+            reason: String::new(),
+            set_by: "User:bob".to_owned(),
+            set_at_ms: 1_770_000_100_000,
+            proposal_id: Uuid::from_u128(7),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }));
+    }
+
+    /// Register one compactable, locally-led partition per topic and report
+    /// each one's pre-sweep record count beside it.
+    fn compactable_topics(
+        dir: &TempDir,
+        registry: &PartitionRegistry,
+        topics: &[&'static str],
+    ) -> Vec<(&'static str, Arc<Partition>, usize)> {
+        topics
+            .iter()
+            .map(|&topic| {
+                let partition = compactable_partition(
+                    dir,
+                    topic,
+                    0,
+                    NodeId(7),
+                    krabka_log::CleanupPolicy::Compact,
+                );
+                let before = record_count(&partition);
+                registry.insert(topic.to_string(), PartitionIndex(0), Arc::clone(&partition));
+                (topic, partition, before)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn tick_all_skips_a_frozen_partition_and_compacts_an_unfrozen_control() {
+        let dir = tempfile::tempdir().expect("log root");
+        let registry = PartitionRegistry::new();
+        let cases = compactable_topics(
+            &dir,
+            &registry,
+            &["frozen-literal", "tenant-a.orders", "unfrozen"],
+        );
+        // One image, one sweep. The control partition is compactable in
+        // exactly the same way as the two frozen ones, so a sweep that
+        // compacted nothing at all could not pass this test.
+        let image = image_with_freezes(&[
+            ("frozen-literal", PatternType::Literal),
+            ("tenant-a.", PatternType::Prefixed),
+        ]);
+
+        tick_all(&registry, Some(&image), NodeId(7), &BrokerMetrics::new()).await;
+
+        // (topic, whether the sweep should have compacted it)
+        let expected = [
+            ("frozen-literal", false),
+            ("tenant-a.orders", false),
+            ("unfrozen", true),
+        ];
+        for ((topic, partition, before), (label, expect_compacted)) in cases.iter().zip(expected) {
+            check!(*topic == label);
+            check!(
+                (record_count(partition) < *before) == expect_compacted,
+                "{label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tick_all_compacts_again_once_the_thaw_leaves_the_image() {
+        let dir = tempfile::tempdir().expect("log root");
+        let registry = PartitionRegistry::new();
+        let cases = compactable_topics(&dir, &registry, &["orders"]);
+        let (_, partition, before) = &cases[0];
+        let mut image = image_with_freezes(&[("orders", PatternType::Literal)]);
+        let metrics = BrokerMetrics::new();
+
+        tick_all(&registry, Some(&image), NodeId(7), &metrics).await;
+        check!(
+            record_count(partition) == *before,
+            "the frozen sweep removes no record"
+        );
+
+        thaw(&mut image, "orders", PatternType::Literal);
+        tick_all(&registry, Some(&image), NodeId(7), &metrics).await;
+
+        check!(
+            record_count(partition) < *before,
+            "the sweep after the thaw compacts with no operator action"
+        );
+    }
+
+    #[test]
+    fn freeze_stops_compaction_reads_the_registry_the_produce_path_reads() {
+        let image = image_with_freezes(&[
+            ("orders", PatternType::Literal),
+            ("tenant-a.", PatternType::Prefixed),
+        ]);
+
+        for (label, topic, want) in [
+            (
+                "a literal freeze covers the one topic it names",
+                "orders",
+                true,
+            ),
+            (
+                "a prefix freeze covers every topic under it",
+                "tenant-a.billing",
+                true,
+            ),
+            (
+                "an unfrozen topic keeps its cleaner eligibility",
+                "events",
+                false,
+            ),
+            (
+                "an internal topic is never frozen, so it stays compactable",
+                "__consumer_offsets",
+                false,
+            ),
+        ] {
+            check!(
+                freeze_stops_compaction(Some(&image), topic) == want,
+                "{label}"
+            );
+            check!(
+                !freeze_stops_compaction(None, topic),
+                "{label}: a sweep with no metadata authority resolves no freeze"
+            );
+        }
     }
 }

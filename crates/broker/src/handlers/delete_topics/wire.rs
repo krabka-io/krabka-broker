@@ -23,6 +23,25 @@ pub(super) fn delete_topic_result(
     }
 }
 
+/// A refused row that also carries the text of the refusal.
+///
+/// `DeleteTopics` v5 and later carry `error_message`, and a break-glass refusal
+/// is exactly the case an operator needs it for: the code says the policy
+/// refused, and the message says which proposal nearly authorized the deletion.
+pub(super) fn refused_topic_result(
+    name: String,
+    error_code: i16,
+    message: String,
+) -> DeletableTopicResult {
+    DeletableTopicResult {
+        name: Some(name),
+        topic_id: WireUuid::ZERO,
+        error_code,
+        error_message: Some(message),
+        ..Default::default()
+    }
+}
+
 /// Builds the response envelope over the per-topic rows.
 pub(super) fn delete_topics_response(
     responses: Vec<DeletableTopicResult>,

@@ -15,10 +15,24 @@
 //!
 //! KFC-1 changes one sentinel and no other: on a topic that schedules
 //! delivery, LATEST reports the partition's delivery watermark instead of its
-//! log end offset. See [`latest_offset`](self::local::latest_offset). Note
-//! that krabka's LATEST answers the log end offset and not the high watermark,
-//! which is a divergence from Apache Kafka that predates KFC-1 and that KFC-1
-//! leaves alone.
+//! log end offset. See [`latest_offset`](self::local::latest_offset).
+//!
+//! Every other answer is decided by one bound, Kafka's `lastFetchableOffset`:
+//! the log end offset for a request that is not a client's, the high watermark
+//! for a `read_uncommitted` client, and the last stable offset (KIP-98) for a
+//! `read_committed` one. `Partition.fetchOffsetForTimestamp` chooses it once
+//! and then uses it twice over. LATEST *is* the bound, so a `read_committed`
+//! consumer that seeks to end stops in front of the records of a transaction
+//! that is still open instead of stepping over them. Every sentinel that
+//! resolves against record data -- `MAX_TIMESTAMP`, the two tiered sentinels,
+//! and a positive timestamp -- is refused with `UNKNOWN_OFFSET` when it lands
+//! at or above the bound, so no client can read an offset past its own end of
+//! partition by asking for it a different way. EARLIEST and
+//! `EARLIEST_LOCAL_TIMESTAMP` are the exceptions Kafka leaves unmeasured:
+//! both resolve from the start of the log, which is never above the bound. See
+//! [`FetchBound`](self::bound::FetchBound),
+//! [`fetch_bound`](self::bound::fetch_bound) and
+//! [`last_fetchable_offset`](self::bound::last_fetchable_offset).
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -30,6 +44,7 @@ use krabka_protocol::{
     },
 };
 
+mod bound;
 mod diskless;
 mod local;
 mod remote;
@@ -44,6 +59,7 @@ mod test_support;
 mod tests;
 
 use self::{
+    bound::fetch_bound,
     remote::{concurrently, remote_timeout},
     resolve::resolve_partition,
     response::error_response,
@@ -68,6 +84,9 @@ pub(crate) async fn handle(
     {
         let mut cur: &[u8] = req_bytes;
         let req = ListOffsetsRequest::decode(&mut cur, version)?;
+        // `isolation_level` decodes only from v2 up; v1 leaves it at 0, which
+        // is `read_uncommitted`, exactly as Kafka treats a v1 request.
+        let bound = fetch_bound(req.replica_id, req.isolation_level);
 
         // ── ACL preamble ────────────────────────────────────────────
         // Per-topic `Describe` on `Topic(name)`. A denied topic gets
@@ -103,12 +122,9 @@ pub(crate) async fn handle(
                         })
                         .collect()
                 } else {
-                    concurrently(
-                        topic
-                            .partitions
-                            .into_iter()
-                            .map(|part| resolve_partition(broker, &name, part, version, timeout)),
-                    )
+                    concurrently(topic.partitions.into_iter().map(|part| {
+                        resolve_partition(broker, &name, part, version, timeout, bound)
+                    }))
                     .await
                 };
                 ListOffsetsTopicResponse {

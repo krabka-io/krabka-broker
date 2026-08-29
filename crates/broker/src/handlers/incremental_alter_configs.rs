@@ -11,6 +11,12 @@
 //!   key is list-valued, so the handler rejects these two with
 //!   `INVALID_CONFIG`.
 //!
+//! A controller-managed key is refused whatever the operation is. KFC-9's
+//! [`crate::config_keys::WRITE_FREEZE`] is synthesised for `DescribeConfigs`
+//! and is never stored, so a DELETE of it is an attempt to lift the freeze and
+//! gets the same refusal a SET gets. See
+//! [`crate::config_keys::topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
+//!
 //! This file holds the request entry point and the per-resource dispatch. Each
 //! resource type has its own submodule that owns the key whitelist, the value
 //! validation, and the metadata record that it stages.

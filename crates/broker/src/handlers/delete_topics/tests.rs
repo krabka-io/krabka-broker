@@ -3,7 +3,7 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_protocol::{
     owned::{
         delete_topics_request::DeleteTopicsRequest,
@@ -15,12 +15,13 @@ use krabka_security::Principal;
 use krabka_units::{Time, convert::TimeExt, millis};
 
 use super::{
-    test_support::{id_state, named_state, request},
+    test_support::{DOOMED, gated_config, id_state, named_state, request},
     *,
 };
 use crate::{
     broker::Broker,
     codes,
+    config::BreakGlassConfig,
     test_support::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
     },
@@ -113,4 +114,62 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
     };
     assert!(resp == expected);
     broker_handle.shutdown().await;
+}
+
+// ── KFC-9: the break-glass gate over a topic deletion ───────────────
+
+/// Run one `DeleteTopics` request for [`DOOMED`] against a broker with this
+/// break-glass configuration, and answer the topic row.
+async fn delete_doomed(break_glass: BreakGlassConfig) -> DeletableTopicResult {
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.break_glass = break_glass;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let principal = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&principal, &peer);
+    let req = DeleteTopicsRequest {
+        topics: vec![named_state(DOOMED)],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+
+    let bytes = handle(&broker, VERSION, 1, &encode_request(&req), &ctx)
+        .await
+        .expect("handle");
+    let resp = decode_response(&bytes);
+    broker_handle.shutdown().await;
+    resp.responses.into_iter().next().expect("one topic row")
+}
+
+#[tokio::test]
+async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
+    let refused = delete_doomed(gated_config()).await;
+
+    let expected = DeletableTopicResult {
+        name: Some(DOOMED.to_owned()),
+        topic_id: WireUuid::ZERO,
+        error_code: codes::POLICY_VIOLATION,
+        error_message: Some(
+            "break-glass refused delete_topic on doomed: no approved proposal covers the request"
+                .to_owned(),
+        ),
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    };
+    assert!(refused == expected, "{refused:?}");
+}
+
+#[tokio::test]
+async fn a_refused_deletion_never_reaches_the_metadata_quorum() {
+    // The topic does not exist, so a broker that submits the delete record
+    // hears `UNKNOWN_TOPIC_OR_PARTITION` back from the quorum. A broker
+    // that answers `POLICY_VIOLATION` instead never submitted anything.
+    let ungated = delete_doomed(BreakGlassConfig::default()).await;
+    let gated = delete_doomed(gated_config()).await;
+
+    check!(ungated.error_code == codes::UNKNOWN_TOPIC_OR_PARTITION);
+    check!(gated.error_code == codes::POLICY_VIOLATION);
 }

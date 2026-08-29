@@ -4,8 +4,9 @@
 //! Every path through the handler answers with the same nested row shape, so
 //! the three builders here are the single place that decides which error code
 //! lands on which partition row: one shared code for the whole transaction,
-//! one shared code with `TOPIC_AUTHORIZATION_FAILED` overriding it on denied
-//! topics, and the KIP-890 verify-only shape whose code is per partition.
+//! one shared code with the per-topic refusal in
+//! [`topic_refusal`](super::write_freeze::topic_refusal) overriding it, and
+//! the KIP-890 verify-only shape whose code is per partition.
 
 use krabka_ids::PartitionIndex;
 use krabka_protocol::owned::common::{
@@ -16,6 +17,7 @@ use krabka_protocol::owned::common::{
     },
 };
 
+use super::write_freeze::topic_refusal;
 use crate::{codes, txn::state::TopicPartition};
 
 /// KIP-890 `TV_2` verify-only per-partition decision. It gives `NONE (0)` when
@@ -32,27 +34,26 @@ fn verify_partition_code(entry: &crate::txn::state::TxnEntry, tp: &TopicPartitio
 }
 
 /// Builds the verify-only response. It has the same shape as
-/// `per_topic_with_denied` on the add path, but each partition carries its own
-/// verify result instead of one shared code. A denied topic still
-/// short-circuits to `TOPIC_AUTHORIZATION_FAILED` on every partition row.
+/// `per_topic_with_refusals` on the add path, but each partition carries its
+/// own verify result instead of one shared code. A denied or frozen topic
+/// still short-circuits to its refusal on every partition row.
 pub(super) fn verify_partitions(
     entry: &crate::txn::state::TxnEntry,
     topics: &[AddPartitionsToTxnTopic],
     denied: &std::collections::HashSet<String>,
+    frozen: &std::collections::HashSet<String>,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
-            let topic_denied = denied.contains(&t.name);
+            let refusal = topic_refusal(&t.name, denied, frozen);
             AddPartitionsToTxnTopicResult {
                 name: t.name.clone(),
                 results_by_partition: t
                     .partitions
                     .iter()
                     .map(|&p| {
-                        let row_code = if topic_denied {
-                            codes::TOPIC_AUTHORIZATION_FAILED
-                        } else {
+                        let row_code = refusal.unwrap_or_else(|| {
                             verify_partition_code(
                                 entry,
                                 &TopicPartition {
@@ -60,7 +61,7 @@ pub(super) fn verify_partitions(
                                     partition: PartitionIndex(p),
                                 },
                             )
-                        };
+                        });
                         AddPartitionsToTxnPartitionResult {
                             partition_index: p,
                             partition_error_code: row_code,
@@ -75,21 +76,19 @@ pub(super) fn verify_partitions(
 }
 
 /// Builds a per-topic and per-partition result list. A topic named in `denied`
-/// gets `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row. Every other
-/// topic gets `code`.
-pub(super) fn per_topic_with_denied(
+/// gets `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row, and one
+/// named in `frozen` gets `POLICY_VIOLATION (44)`. Every other topic gets
+/// `code`.
+pub(super) fn per_topic_with_refusals(
     topics: &[AddPartitionsToTxnTopic],
     denied: &std::collections::HashSet<String>,
+    frozen: &std::collections::HashSet<String>,
     code: i16,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
-            let row_code = if denied.contains(&t.name) {
-                codes::TOPIC_AUTHORIZATION_FAILED
-            } else {
-                code
-            };
+            let row_code = topic_refusal(&t.name, denied, frozen).unwrap_or(code);
             AddPartitionsToTxnTopicResult {
                 name: t.name.clone(),
                 results_by_partition: t
@@ -170,7 +169,10 @@ mod tests {
         let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
         let denied = HashSet::from(["denied".to_string()]);
 
-        let rows = verify_partitions(&e, &topics, &denied);
+        let frozen = HashSet::from(["frozen".to_string()]);
+        let topics = [topics, vec![topic("frozen", &[4])]].concat();
+
+        let rows = verify_partitions(&e, &topics, &denied, &frozen);
 
         let expected = vec![
             topic_result(
@@ -178,16 +180,22 @@ mod tests {
                 &[(1, codes::NONE), (2, codes::TRANSACTION_ABORTABLE)],
             ),
             topic_result("denied", &[(3, codes::TOPIC_AUTHORIZATION_FAILED)]),
+            topic_result("frozen", &[(4, codes::POLICY_VIOLATION)]),
         ];
         assert!(rows == expected);
     }
 
     #[test]
-    fn per_topic_with_denied_preserves_rows_and_overrides_denied_topics() {
-        let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
+    fn per_topic_with_refusals_preserves_rows_and_overrides_refused_topics() {
+        let topics = vec![
+            topic("alpha", &[1, 2]),
+            topic("denied", &[3]),
+            topic("frozen", &[4]),
+        ];
         let denied = HashSet::from(["denied".to_string()]);
+        let frozen = HashSet::from(["frozen".to_string()]);
 
-        let rows = per_topic_with_denied(&topics, &denied, codes::NOT_COORDINATOR);
+        let rows = per_topic_with_refusals(&topics, &denied, &frozen, codes::NOT_COORDINATOR);
 
         let expected = vec![
             topic_result(
@@ -195,6 +203,7 @@ mod tests {
                 &[(1, codes::NOT_COORDINATOR), (2, codes::NOT_COORDINATOR)],
             ),
             topic_result("denied", &[(3, codes::TOPIC_AUTHORIZATION_FAILED)]),
+            topic_result("frozen", &[(4, codes::POLICY_VIOLATION)]),
         ];
         assert!(rows == expected);
     }

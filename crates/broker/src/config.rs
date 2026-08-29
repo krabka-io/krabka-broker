@@ -8,9 +8,11 @@ use krabka_units::{
     ByteSize, Ratio, Time, days, gibibytes, hours, mebibytes, millis, minutes, percent, secs,
 };
 
+mod break_glass;
 mod broker_config;
 mod defaults;
 mod feature_flags;
+mod freeze;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
@@ -26,8 +28,10 @@ mod tiered_storage;
 mod validate;
 
 pub use self::{
+    break_glass::{BackgroundUncleanRecovery, BreakGlassConfig},
     broker_config::BrokerConfig,
     feature_flags::BrokerFeatureFlags,
+    freeze::FreezeConfig,
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
@@ -152,6 +156,49 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
 
+/// Default ceiling on live entries in the topic write-freeze registry.
+///
+/// A prefix-scoped lookup walks the registry in reverse from the topic name,
+/// which is unbounded in the worst case, and that lookup is one hop from the
+/// produce path. The ceiling bounds the walk.
+pub const DEFAULT_FREEZE_MAX_ENTRIES: usize = 1_000;
+
+/// Default tolerance between a signed freeze record's timestamp and the
+/// controller's clock.
+pub const DEFAULT_FREEZE_SIGNATURE_MAX_SKEW: Time = minutes(5);
+
+/// Lowest `required_approvals` a break-glass proposal accepts.
+///
+/// A two-person rule with one approval is one person.
+pub const MIN_BREAK_GLASS_REQUIRED_APPROVALS: usize = 2;
+
+/// Default number of distinct approving principals a break-glass proposal
+/// needs before it authorizes anything.
+pub const DEFAULT_BREAK_GLASS_REQUIRED_APPROVALS: usize = MIN_BREAK_GLASS_REQUIRED_APPROVALS;
+
+/// Default lifetime of a break-glass proposal.
+///
+/// The TTL is also the safety bound on removing an approver: wait it out and
+/// every pending approval by that principal is dead.
+pub const DEFAULT_BREAK_GLASS_PROPOSAL_TTL: Time = minutes(30);
+
+/// Actions that demand a detached operator signature when `[break_glass]` is
+/// configured and `signed_actions` is omitted: the irreversible set.
+///
+/// [`BrokerConfig::default`] leaves [`BreakGlassConfig::signed_actions`] empty
+/// instead, because a broker with no `[break_glass]` section runs no
+/// break-glass workflow at all and has no operator key to verify against.
+pub const DEFAULT_BREAK_GLASS_SIGNED_ACTIONS: &[&str] =
+    &["unclean_elect_leaders", "unclean_recovery", "delete_topic"];
+
 /// Default cadence of the topic-backed RLMM snapshot flush. 60s,
 /// matching Kafka's `remote.log.metadata.snapshot.interval` default.
 pub const DEFAULT_RLMM_SNAPSHOT_INTERVAL: Time = minutes(1);
+
+/// A shared, zero-valued epoch-millisecond counter.
+///
+/// The OAUTHBEARER JWKS refresher stamps two of these, and the validator reads
+/// them through the same `Arc`.
+fn shared_epoch_ms() -> std::sync::Arc<std::sync::atomic::AtomicI64> {
+    std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0))
+}

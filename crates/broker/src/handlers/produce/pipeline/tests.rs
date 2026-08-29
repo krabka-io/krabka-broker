@@ -1,4 +1,5 @@
-//! Tests for the per-partition pipeline's leadership-gate response rows.
+//! Tests for the per-partition pipeline's leadership-gate and write-freeze
+//! response rows.
 
 use std::sync::Arc;
 
@@ -62,6 +63,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
             delivery: None,
             topic_name: "orders".into(),
             topic_denied: false,
+            freeze: None,
             txn_id_denied: false,
             acks: 1,
             timeout: Duration::from_millis(1),
@@ -155,6 +157,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
             delivery: None,
             topic_name: "orders".into(),
             topic_denied: false,
+            freeze: None,
             txn_id_denied: false,
             acks: 1,
             timeout: Duration::from_millis(1),
@@ -196,3 +199,9 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     };
     assert!(resp == expected);
 }
+
+// ── KFC-9 topic write freeze ─────────────────────────────────────
+//
+// The gate that refuses every partition row of a frozen topic, and the
+// per-topic resolve the handler feeds it.
+mod freeze;

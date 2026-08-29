@@ -53,6 +53,21 @@ pub(crate) const LIST_BARRIER_CUTS_API_KEY: ApiKeyCode = 1013;
 /// partitions that the receiving broker leads.
 pub(crate) const WRITE_BARRIER_MARKERS_API_KEY: ApiKeyCode = 1014;
 
+/// `SetTopicFreeze` (1015): sets or clears one topic write-freeze entry.
+pub(crate) const SET_TOPIC_FREEZE_API_KEY: ApiKeyCode = 1015;
+
+/// `DescribeTopicFreezes` (1016): reads back the topic write-freeze registry.
+pub(crate) const DESCRIBE_TOPIC_FREEZES_API_KEY: ApiKeyCode = 1016;
+
+/// `ProposeBreakGlass` (1017): opens one break-glass proposal.
+pub(crate) const PROPOSE_BREAK_GLASS_API_KEY: ApiKeyCode = 1017;
+
+/// `ApproveBreakGlass` (1018): adds one approval to a break-glass proposal.
+pub(crate) const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
+
+/// `DescribeBreakGlass` (1019): lists break-glass proposals and their approvals.
+pub(crate) const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
+
 /// Kafka topics owned by the broker rather than an application.
 pub(crate) fn is_internal_topic(name: &str) -> bool {
     matches!(
@@ -159,6 +174,28 @@ pub(crate) fn cluster_alter_denied(
         krabka_metadata::ResourceType::Cluster,
         acl_wire::CLUSTER_RESOURCE_NAME,
         krabka_metadata::AclOperation::Alter,
+    )
+}
+
+/// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of
+/// [`cluster_alter_denied`].
+///
+/// It returns `true` when the authorizer denies the principal. The barrier,
+/// write-freeze, and break-glass control planes each read the cluster through
+/// this one gate, so a denial answers `CLUSTER_AUTHORIZATION_FAILED` (31)
+/// whichever private api key the caller reached.
+pub(crate) fn cluster_describe_denied(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+) -> bool {
+    acl_denied(
+        authorizer,
+        image,
+        ctx,
+        krabka_metadata::ResourceType::Cluster,
+        acl_wire::CLUSTER_RESOURCE_NAME,
+        krabka_metadata::AclOperation::Describe,
     )
 }
 
@@ -318,7 +355,7 @@ pub(crate) fn audit_admin(
 mod tests {
     use std::{collections::HashSet, net::SocketAddr};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
     use krabka_protocol::{
         Decode,
@@ -450,5 +487,85 @@ mod tests {
             "orders",
             AclOperation::Describe,
         ));
+    }
+
+    /// The barrier, write-freeze, and break-glass read APIs all gate on
+    /// [`cluster_describe_denied`], and every one of them answers
+    /// `CLUSTER_AUTHORIZATION_FAILED` (31) when it returns `true`.
+    #[test]
+    fn cluster_describe_denied_refuses_a_principal_with_no_cluster_describe() {
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let principal = principal();
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = RequestContext {
+            principal: &principal,
+            peer: &peer,
+            client_id: "krabka-guard",
+            connection_id: "connection-a",
+            sendfile_capable: false,
+            connection_listener_name: "PLAINTEXT",
+        };
+
+        for (label, super_users, denied) in [
+            ("an empty acl store denies by default", Vec::new(), true),
+            (
+                "a super user reads the cluster",
+                vec![principal.name.clone()],
+                false,
+            ),
+            (
+                "another super user does not lend its grant",
+                vec!["bob".to_string()],
+                true,
+            ),
+        ] {
+            let authorizer = crate::authorizer::SimpleAclAuthorizer::new(
+                super_users.into_iter().collect::<HashSet<String>>(),
+            );
+
+            check!(
+                cluster_describe_denied(&authorizer, &image, &ctx) == denied,
+                "case {label}"
+            );
+        }
+
+        // The code every caller answers on a denial, and the number Kafka
+        // assigns it.
+        check!(crate::codes::CLUSTER_AUTHORIZATION_FAILED == 31);
+    }
+
+    /// Every krabka-private api key, with the name a failure reports.
+    const KRABKA_PRIVATE_API_KEYS: [(&str, ApiKeyCode, ApiKeyCode); 10] = [
+        ("AlterBarrierGroups", ALTER_BARRIER_GROUPS_API_KEY, 1010),
+        (
+            "DescribeBarrierGroups",
+            DESCRIBE_BARRIER_GROUPS_API_KEY,
+            1011,
+        ),
+        ("TriggerBarrier", TRIGGER_BARRIER_API_KEY, 1012),
+        ("ListBarrierCuts", LIST_BARRIER_CUTS_API_KEY, 1013),
+        ("WriteBarrierMarkers", WRITE_BARRIER_MARKERS_API_KEY, 1014),
+        ("SetTopicFreeze", SET_TOPIC_FREEZE_API_KEY, 1015),
+        ("DescribeTopicFreezes", DESCRIBE_TOPIC_FREEZES_API_KEY, 1016),
+        ("ProposeBreakGlass", PROPOSE_BREAK_GLASS_API_KEY, 1017),
+        ("ApproveBreakGlass", APPROVE_BREAK_GLASS_API_KEY, 1018),
+        ("DescribeBreakGlass", DESCRIBE_BREAK_GLASS_API_KEY, 1019),
+    ];
+
+    #[test]
+    fn krabka_private_api_keys_sit_in_the_private_range() {
+        for (name, api_key, want) in KRABKA_PRIVATE_API_KEYS {
+            assert!(api_key == want, "{name}");
+            assert!(api_key >= KRABKA_PRIVATE_API_KEY_FLOOR, "{name}");
+        }
+    }
+
+    #[test]
+    fn krabka_private_api_keys_are_pairwise_distinct() {
+        for (index, (left_name, left, _)) in KRABKA_PRIVATE_API_KEYS.iter().enumerate() {
+            for (right_name, right, _) in &KRABKA_PRIVATE_API_KEYS[index + 1..] {
+                assert!(left != right, "{left_name} and {right_name}");
+            }
+        }
     }
 }

@@ -116,13 +116,17 @@ pub(super) fn start_liveness_services(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
     listener_protocol: krabka_security::ListenerProtocol,
-    metrics: &crate::metrics::BrokerMetrics,
+    // The two places this subsystem reports to, paired the way `log_dirs`
+    // pairs the two log-dir registries: the metric families, and the audit log
+    // that a bypassed background unclean recovery writes its evidence to.
+    observability: (&crate::metrics::BrokerMetrics, &Arc<krabka_audit::AuditLog>),
     shutdown: &CancellationToken,
     log_dirs: (
         &crate::log_dir_status::LogDirRegistry,
         &crate::log_dir_id::LogDirIds,
     ),
 ) -> LivenessStartup {
+    let (metrics, audit_log) = observability;
     let liveness = Arc::new(
         crate::heartbeat::controller_state::ControllerLivenessState::new(config.heartbeat_timeout),
     );
@@ -159,6 +163,10 @@ pub(super) fn start_liveness_services(
             queue_capacity: config.unclean_recovery_queue_capacity,
             listener_protocol,
             inter_broker_server_name: config.inter_broker_server_name.clone(),
+            background: crate::unclean_recovery::BackgroundRecovery::new(
+                &config.break_glass,
+                Arc::clone(audit_log),
+            ),
         },
         shutdown.child_token(),
     );

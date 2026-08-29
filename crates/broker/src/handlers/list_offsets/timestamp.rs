@@ -220,6 +220,20 @@ mod tests {
             })
             .expect("finish segment");
 
+        // The tier now describes offsets 0..6, so the partition committed them
+        // before they were uploaded: a segment is only ever copied out of a log
+        // that already acknowledged it. `ListOffsets` bounds a client's answer
+        // at the high watermark, and writing the segment straight into remote
+        // storage above skipped the produce path that would have advanced it.
+        broker_arc
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition")
+            .replica_state
+            .lock()
+            .await
+            .hw = krabka_log::Offset(6);
+
         assert!(
             list_one(&client, TOPIC, 1_500).await
                 == ListOffsetsPartitionResponse {

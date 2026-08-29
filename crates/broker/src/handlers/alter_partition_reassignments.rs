@@ -3,8 +3,24 @@
 //! This file holds the wire handler: it authorizes the whole request, walks
 //! every requested row, and submits the accepted records in one batch. The
 //! pure planning that turns one alter row into a `PartitionRecord`, or into a
-//! wire error code, lives in `plan`, and the result rows and the encode step
-//! live in `response`.
+//! wire error code, lives in `plan`, the KFC-9 break-glass gate over a cancel
+//! and the batch one request accumulates live in `cancel_approval`, and the
+//! result rows and the encode step live in `response`.
+//!
+//! # KFC-9: a cancel needs two people, and a start does not
+//!
+//! A cancel reverts a reassignment that is already under way, drops every
+//! adding replica, and can move leadership off one. It is one of the
+//! transitions the break-glass two-person rule gates. A start is not: it adds
+//! replicas and removes none until the new ones catch up. **The completion path
+//! in [`crate::reassignment`] is not a cancel either, and it is not gated.**
+//!
+//! KIP-455 defines the request that `kafka-reassign-partitions` sends and it
+//! gains no field for this. An operator gets the approval out of band through
+//! `krabka-guard`, targeted at `"<topic>-<partition>"` or at the bare topic
+//! name, and the broker looks it up in its own metadata image. A refused row
+//! answers `POLICY_VIOLATION (44)` with the refusal text, and the gate is
+//! active only when `[break_glass]` names an approver set.
 
 use std::collections::HashMap;
 
@@ -18,6 +34,7 @@ use krabka_protocol::owned::{
     },
 };
 
+mod cancel_approval;
 mod plan;
 mod response;
 
@@ -27,13 +44,15 @@ mod test_support;
 mod tests;
 
 pub(crate) use self::plan::process_one_partition;
-use self::response::{
-    encode_response, encode_whole_request_error, err_row, mark_submit_failed, ok_row,
+use self::{
+    cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
+    response::{encode_response, encode_whole_request_error, mark_submit_failed},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes::CLUSTER_AUTHORIZATION_FAILED,
+    handlers::RequestContext,
 };
 
 #[tracing::instrument(
@@ -46,7 +65,7 @@ use crate::{
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterPartitionReassignmentsRequest,
-    ctx: &crate::handlers::RequestContext<'_>,
+    ctx: &RequestContext<'_>,
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
     let image = broker.controller.current_image();
@@ -70,36 +89,36 @@ pub(crate) async fn handle(
         );
     }
 
+    let env = ReassignEnv {
+        broker,
+        image: &image,
+        ctx,
+        allow_rf_change: req.allow_replication_factor_change,
+    };
     let mut by_topic: HashMap<String, Vec<ReassignablePartitionResponse>> = HashMap::new();
-    let mut to_submit: Vec<krabka_metadata::MetadataRecord> = Vec::new();
+    let mut batch = ReassignBatch::default();
     for topic in &req.topics {
         let mut rows = Vec::with_capacity(topic.partitions.len());
         for p in &topic.partitions {
-            let target_slice: Option<&[i32]> = p.replicas.as_deref();
-            match process_one_partition(
-                &image,
-                &topic.name,
-                p.partition_index,
-                target_slice,
-                req.allow_replication_factor_change,
-            ) {
-                Ok(Some(record)) => {
-                    to_submit.push(krabka_metadata::MetadataRecord::V1Partition(record));
-                    rows.push(ok_row(p.partition_index));
-                }
-                Ok(None) => rows.push(ok_row(p.partition_index)),
-                Err((code, msg)) => rows.push(err_row(p.partition_index, code, msg)),
-            }
+            rows.push(alter_one(&env, &mut batch, &topic.name, p));
         }
         by_topic.insert(topic.name.clone(), rows);
     }
 
-    if !to_submit.is_empty()
-        && let Err(e) = broker.controller.submit_change(to_submit).await
+    let mut submit_failure = None;
+    if !batch.records.is_empty()
+        && let Err(e) = broker
+            .controller
+            .submit_change(std::mem::take(&mut batch.records))
+            .await
     {
         tracing::warn!(error = %e, "alter-reassignment submit failed");
+        submit_failure = Some(format!("submit failed: {e}"));
         mark_submit_failed(&mut by_topic, &format!("submit failed: {e}"));
     }
+    // KFC-9: audit the approvals this append spent, now that its outcome is
+    // known.
+    batch.audit_applied(broker, ctx, submit_failure.as_deref());
 
     let responses: Vec<ReassignableTopicResponse> = by_topic
         .into_iter()

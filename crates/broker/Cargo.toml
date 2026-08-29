@@ -113,6 +113,10 @@ crc32c = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
+# SHA-256 fingerprint of the configured break-glass approver set
+# (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
+# audit event so a per-broker divergence in the set is visible afterwards.
+sha2 = { workspace = true }
 tonic = { workspace = true }
 exponential-backoff = "2.1.0"
 
@@ -179,7 +183,6 @@ tokio-rustls.workspace = true
 # Client-side PBKDF2 of the SCRAM password to build
 # `AlterUserScramCredentials` upsertions in tests.
 pbkdf2 = { workspace = true }
-sha2 = { workspace = true }
 # Metrics tests: exercise the axum Router::oneshot helper.
 tower.workspace = true
 # Mint ES256 tokens + build the matching JWK for the signed

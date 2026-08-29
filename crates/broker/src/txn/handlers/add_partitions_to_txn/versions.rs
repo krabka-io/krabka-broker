@@ -22,6 +22,7 @@ use super::{
     registration::{TransactionRequest, process_one_txn},
     results::topic_error,
     wire::encode_response,
+    write_freeze::frozen_topics,
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
@@ -72,8 +73,9 @@ pub(super) async fn handle_v4(
         let topic_results = if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
             topic_error(&txn.topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
         } else {
-            // Per-topic Write check.
+            // Per-topic Write check, then the per-topic freeze read.
             let denied = denied_topics(authorizer, image, principal, peer, &txn.topics);
+            let frozen = frozen_topics(image, &txn.topics);
             process_one_txn(
                 coord,
                 TransactionRequest {
@@ -82,6 +84,7 @@ pub(super) async fn handle_v4(
                     producer_epoch: txn.producer_epoch,
                     topics: &txn.topics,
                     denied: &denied,
+                    frozen: &frozen,
                     txnv,
                     verify_only: txn.verify_only,
                 },
@@ -132,6 +135,7 @@ pub(super) async fn handle_v3(
         )
     } else {
         let denied = denied_topics(authorizer, image, principal, peer, &req.v3_and_below_topics);
+        let frozen = frozen_topics(image, &req.v3_and_below_topics);
         process_one_txn(
             coord,
             TransactionRequest {
@@ -140,6 +144,7 @@ pub(super) async fn handle_v3(
                 producer_epoch: req.v3_and_below_producer_epoch,
                 topics: &req.v3_and_below_topics,
                 denied: &denied,
+                frozen: &frozen,
                 txnv,
                 // v0-3 has no `verify_only` field (predates KIP-890); always add.
                 verify_only: false,

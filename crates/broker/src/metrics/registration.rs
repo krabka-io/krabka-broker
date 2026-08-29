@@ -128,6 +128,11 @@ impl BrokerMetrics {
             schema_validation_cache_hits: Counter::default(),
             schema_validation_cache_misses: Counter::default(),
             delivery_clock_uncertainty_seconds: Gauge::default(),
+            topic_freeze_rejections: Family::default(),
+            topic_freezes_active: Gauge::default(),
+            break_glass_proposals: Family::default(),
+            break_glass_refusals: Family::default(),
+            break_glass_bypassed: Family::default(),
         }
     }
 
@@ -149,6 +154,7 @@ impl BrokerMetrics {
             metrics.register_group_4(&mut registry);
             metrics.register_group_5(&mut registry);
             metrics.register_group_6(&mut registry);
+            metrics.register_group_7(&mut registry);
         }
         metrics
     }

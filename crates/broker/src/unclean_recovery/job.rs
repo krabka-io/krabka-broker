@@ -8,6 +8,7 @@
 use krabka_raft::NodeId;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::config_keys::RecoveryStrategy;
 
@@ -22,6 +23,15 @@ pub(crate) struct RecoveryJob {
     /// the outcome. The background failover path sends the job and does not
     /// wait for a reply.
     pub reply: Option<oneshot::Sender<RecoveryOutcome>>,
+    /// KFC-9: the break-glass proposal that authorized this recovery, and
+    /// `None` when the controller started it on its own.
+    ///
+    /// The `ElectLeaders` handler spends the approval before it enqueues the
+    /// job, so this id is evidence and not an authorization: it says that a
+    /// person asked for this recovery, which is what takes the job out of
+    /// [`BackgroundRecovery`](super::BackgroundRecovery)'s reach. The two
+    /// background sites have no caller to ask, so they send `None`.
+    pub proposal: Option<Uuid>,
 }
 
 /// Result of attempting unclean recovery for a single partition.
@@ -40,6 +50,10 @@ pub(crate) enum RecoveryOutcome {
     Stale,
     /// Another recovery for the same `(topic, partition)` is already running.
     InProgress,
+    /// KFC-9: `break_glass.background_unclean_recovery` is `require`, and no
+    /// proposal approved this recovery. The partition keeps no leader and
+    /// stays visibly offline.
+    BreakGlassRequired,
 }
 
 /// Cloneable handle that enqueues [`RecoveryJob`] values onto the URM task.

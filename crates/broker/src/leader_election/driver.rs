@@ -219,6 +219,13 @@ async fn fail_over_dead_broker(
                 partition,
                 strategy,
                 reply: None,
+                // KFC-9: nobody asked for this recovery, so there is no
+                // proposal to name and nobody to refuse. A dead leader at
+                // 03:00 has no caller waiting on an answer, and
+                // `break_glass.background_unclean_recovery` is what decides
+                // whether the URM runs it, audits it, or leaves the partition
+                // offline.
+                proposal: None,
             })
             .await;
     }

@@ -25,7 +25,10 @@ use self::{
     throttle::{finish_produce_response, produce_bytes_by_qos_tier},
     topic_settings::resolve_topic_compression,
 };
-use crate::{broker::Broker, codes, config_keys::resolve_schema_validation, error::BrokerError};
+use crate::{
+    broker::Broker, codes, config_keys::resolve_schema_validation, error::BrokerError,
+    freeze::resolve::resolve_topic_freeze,
+};
 
 mod append;
 mod authorization;
@@ -213,6 +216,14 @@ pub(crate) async fn handle(
         // such a topic then skips the check without reading a record body.
         let schema = resolve_schema_validation(&image, &topic_name);
 
+        // KFC-9, resolved here for the same reason once more: a write freeze
+        // is a property of the topic. `None` is a topic that accepts writes, and
+        // the image answers an empty registry in two emptiness tests, so every
+        // partition of an unfrozen topic then pays one test of an `Option` and
+        // nothing else. The borrow allocates nothing, and only a refused row
+        // turns the entry into a `FreezeVerdict` and a message.
+        let freeze = resolve_topic_freeze(&image, &topic_name);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the
@@ -230,6 +241,7 @@ pub(crate) async fn handle(
                         schema,
                         topic_name: topic_name.clone(),
                         topic_denied,
+                        freeze,
                         txn_id_denied,
                         acks: req.acks,
                         timeout,

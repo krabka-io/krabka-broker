@@ -38,6 +38,10 @@ pub(super) const UNKNOWN_TIMESTAMP: i64 = -1;
 /// Kafka's `ListOffsetsResponse.UNKNOWN_OFFSET`.
 pub(super) const UNKNOWN_OFFSET: i64 = -1;
 
+/// Response placeholder (-1) meaning "no leader epoch is being reported".
+/// Kafka's `ListOffsetsResponse.UNKNOWN_EPOCH`.
+pub(super) const UNKNOWN_EPOCH: i32 = -1;
+
 pub(super) fn timestamp_supported(timestamp: i64, version: i16) -> bool {
     let minimum_version = match timestamp {
         EARLIEST_TIMESTAMP | LATEST_TIMESTAMP => 0,

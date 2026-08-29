@@ -169,15 +169,45 @@ fn ineligible_replica_code_does_not_collide_with_duplicate_resource() {
     assert!(INELIGIBLE_REPLICA == 107);
 }
 
-#[test]
-fn krabka_private_error_codes_sit_above_every_kafka_code() {
-    let cases = [(
+/// Every krabka-private error code, with the name a failure reports.
+const KRABKA_PRIVATE_CODES: [(&str, i16, i16); 8] = [
+    (
         "BARRIER_INJECTION_IN_PROGRESS",
         BARRIER_INJECTION_IN_PROGRESS,
         1000,
-    )];
+    ),
+    (
+        "BREAK_GLASS_APPROVAL_REQUIRED",
+        BREAK_GLASS_APPROVAL_REQUIRED,
+        1006,
+    ),
+    (
+        "BREAK_GLASS_DUPLICATE_APPROVER",
+        BREAK_GLASS_DUPLICATE_APPROVER,
+        1007,
+    ),
+    (
+        "BREAK_GLASS_NOT_AN_APPROVER",
+        BREAK_GLASS_NOT_AN_APPROVER,
+        1008,
+    ),
+    (
+        "OPERATOR_SIGNATURE_INVALID",
+        OPERATOR_SIGNATURE_INVALID,
+        1009,
+    ),
+    (
+        "OPERATOR_SIGNATURE_REQUIRED",
+        OPERATOR_SIGNATURE_REQUIRED,
+        1010,
+    ),
+    ("FREEZE_SCOPE_INVALID", FREEZE_SCOPE_INVALID, 1011),
+    ("FREEZE_LIMIT_EXCEEDED", FREEZE_LIMIT_EXCEEDED, 1012),
+];
 
-    for (name, code, want) in cases {
+#[test]
+fn krabka_private_error_codes_sit_above_every_kafka_code() {
+    for (name, code, want) in KRABKA_PRIVATE_CODES {
         assert!(code == want, "{name}");
         // Above every code the Apache Kafka table assigns, and clear of
         // the two codes whose meaning a JVM client would act on.
@@ -185,6 +215,34 @@ fn krabka_private_error_codes_sit_above_every_kafka_code() {
         assert!(code != CONCURRENT_TRANSACTIONS, "{name}");
         assert!(code != REBALANCE_IN_PROGRESS, "{name}");
     }
+}
+
+#[test]
+fn krabka_private_error_codes_are_pairwise_distinct() {
+    for (index, (left_name, left, _)) in KRABKA_PRIVATE_CODES.iter().enumerate() {
+        for (right_name, right, _) in &KRABKA_PRIVATE_CODES[index + 1..] {
+            assert!(left != right, "{left_name} and {right_name}");
+        }
+    }
+}
+
+#[test]
+fn krabka_private_error_codes_leave_the_kfc6_range_free() {
+    // KFC-6 proposes 1001 to 1005 for the coordination-primitives api, so
+    // no code here takes one of them.
+    for (name, code, _) in KRABKA_PRIVATE_CODES {
+        assert!(!(1001..=1005).contains(&code), "{name}");
+    }
+}
+
+#[test]
+fn policy_violation_matches_the_kafka_error_table() {
+    assert!(POLICY_VIOLATION == 44);
+    // KFC-9 chose 44 and rejected both of these, because each one also
+    // changes the JVM client's metadata cache. 29 marks the topic
+    // unauthorized, and 17 marks the name permanently invalid.
+    assert!(POLICY_VIOLATION != TOPIC_AUTHORIZATION_FAILED);
+    assert!(POLICY_VIOLATION != INVALID_TOPIC_EXCEPTION);
 }
 
 #[test]

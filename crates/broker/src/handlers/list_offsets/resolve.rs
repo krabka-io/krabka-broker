@@ -12,13 +12,14 @@ use std::time::Duration;
 use krabka_protocol::owned::list_offsets_response::ListOffsetsPartitionResponse;
 
 use super::{
+    bound::{FetchBound, last_fetchable_offset},
     diskless::diskless_earliest_offset,
     local::{latest_offset, leader_epoch_for_offset},
     remote::await_remote,
     response::error_response,
     sentinels::{
         EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP, EARLIEST_TIMESTAMP,
-        LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP, UNKNOWN_OFFSET,
+        LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP, UNKNOWN_EPOCH, UNKNOWN_OFFSET,
         UNKNOWN_TIMESTAMP, timestamp_supported,
     },
     timestamp::resolve_timestamp_offset,
@@ -31,6 +32,7 @@ pub(super) async fn resolve_partition(
     request: krabka_protocol::owned::list_offsets_request::ListOffsetsPartition,
     version: i16,
     remote_timeout: Duration,
+    bound: FetchBound,
 ) -> ListOffsetsPartitionResponse {
     let index = request.partition_index;
     let mut response = ListOffsetsPartitionResponse {
@@ -71,6 +73,20 @@ pub(super) async fn resolve_partition(
         None
     };
     let remote_topic_id = if remote_enabled { topic_id } else { None };
+    // Kafka reads `lastFetchableOffset` for every request but EARLIEST and
+    // `EARLIEST_LOCAL`, which it answers from the start of the log without
+    // measuring them. Skipping the read for those two also skips the high
+    // watermark's async mutex. It is read here, ahead of the match, because
+    // several arms below hold the log mutex and the watermark must not be
+    // awaited under it.
+    let last_fetchable = if matches!(
+        request.timestamp,
+        EARLIEST_TIMESTAMP | EARLIEST_LOCAL_TIMESTAMP
+    ) {
+        None
+    } else {
+        Some(last_fetchable_offset(&partition, bound, local_end).await)
+    };
     let (offset, timestamp) = match request.timestamp {
         EARLIEST_TIMESTAMP => {
             let mut earliest = local_start;
@@ -193,6 +209,31 @@ pub(super) async fn resolve_partition(
             }
         }
         _ => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
+    };
+    // One bound, applied the two ways `Partition.fetchOffsetForTimestamp`
+    // applies it. EARLIEST and `EARLIEST_LOCAL` are absent from both arms
+    // because they resolve from the start of the log, which is never above the
+    // bound, and Kafka returns them unmeasured.
+    let (offset, timestamp) = match (request.timestamp, last_fetchable) {
+        // LATEST *is* the bound: Kafka answers it with `lastFetchableOffset`
+        // and never consults the log. KFC-1's delivery watermark is an
+        // independent cap on the same answer, so a scheduled topic takes the
+        // lower of the two. On a topic that delivers immediately `latest_offset`
+        // returned the log end offset, which is at or above every bound, and
+        // this collapses to the value Kafka returns.
+        (LATEST_TIMESTAMP, Some(last_fetchable)) => (offset.min(last_fetchable), timestamp),
+        // Every other sentinel resolves against record data, and Kafka refuses
+        // the answer when it lands at or above the bound -- the test in
+        // `ReplicaManager.fetchOffset` is `offset >= lastFetchableOffset`, so
+        // the bound itself is already out of reach. The refusal is not an
+        // error: `buildErrorResponse(Errors.NONE, partition)` reports no error
+        // with `UNKNOWN_OFFSET`, `UNKNOWN_TIMESTAMP`, and the leader epoch left
+        // at `UNKNOWN_EPOCH`, so an arm above that set an epoch gives it back.
+        (_, Some(last_fetchable)) if offset >= last_fetchable => {
+            response.leader_epoch = UNKNOWN_EPOCH;
+            (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
+        }
+        _ => (offset, timestamp),
     };
     response.error_code = codes::NONE;
     response.offset = offset;

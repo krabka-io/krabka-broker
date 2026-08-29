@@ -13,22 +13,27 @@ use krabka_units::{
     bytes, fraction, gibibytes, hours, kibibytes, mebibytes, millis, minutes, secs,
 };
 
-use crate::config::{
-    BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N,
-    DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_TOPIC,
-    DEFAULT_CONTROLLER_ELECTION_TIMEOUT, DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL,
-    DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL, DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME,
-    DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL,
-    DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
-    DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
-    DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
-    DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
-    DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
-    DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
-    DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
-    DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL, DEFAULT_REPLICA_LAG_TIME_MAX,
-    DEFAULT_TLS_RELOAD_INTERVAL, DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, KafkaRlmmConfig, NodeRole,
-    ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags,
+use crate::{
+    config::{
+        BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY,
+        DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX,
+        DEFAULT_AUDIT_TOPIC, DEFAULT_CONTROLLER_ELECTION_TIMEOUT,
+        DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL,
+        DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD,
+        DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
+        DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
+        DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_HEARTBEAT_INTERVAL,
+        DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, DEFAULT_JWKS_REFRESH_INTERVAL,
+        DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL, DEFAULT_LEADER_IMBALANCE_PER_BROKER,
+        DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
+        DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
+        DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
+        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
+        DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
+        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
+        ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags, shared_epoch_ms,
+    },
+    operator_keys::OperatorKeys,
 };
 
 impl Default for BrokerConfig {
@@ -170,6 +175,9 @@ impl Default for BrokerConfig {
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
             schema_validator: None,
+            operator_keys: OperatorKeys::default(),
+            freeze: FreezeConfig::default(),
+            break_glass: BreakGlassConfig::default(),
             tls_config: None,
             enabled_sasl_mechanisms: vec![],
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
@@ -179,12 +187,8 @@ impl Default for BrokerConfig {
             oauthbearer_idp_tls_trust: None,
             oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            oauthbearer_jwks_last_successful_fetch_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
-            oauthbearer_jwks_last_on_demand_refresh_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicI64::new(0),
-            ),
+            oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
+            oauthbearer_jwks_last_on_demand_refresh_ms: shared_epoch_ms(),
             oauthbearer_jwks_min_on_demand_pause: DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
             features: default_feature_flags(),
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's
