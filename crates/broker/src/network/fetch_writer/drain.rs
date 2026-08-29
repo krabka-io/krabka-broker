@@ -136,6 +136,11 @@ mod tests {
         drop(client);
     }
 
+    // ─── Increment D/E (cross-platform sendfile) tests ────────────────────
+    // Compiled on every SENDFILE-alias platform (Linux + Apple + FreeBSD/
+    // DragonFly). The loopback-TCP roundtrip exercises the real readiness +
+    // partial-write loop. The kTLS roundtrip below stays Linux-only (kTLS is a
+    // Linux-only dependency).
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",

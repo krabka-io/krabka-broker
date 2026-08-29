@@ -72,6 +72,10 @@ crate::sendfile_cfg! {
     }
 }
 
+// ─── Increment D/E (cross-platform sendfile) tests ────────────────────
+// Compiled on every SENDFILE-alias platform (Linux + Apple + FreeBSD/
+// DragonFly). The plan-shape + pread-fallback tests are pure userspace and
+// portable.
 #[cfg(test)]
 #[cfg(any(
     target_os = "linux",

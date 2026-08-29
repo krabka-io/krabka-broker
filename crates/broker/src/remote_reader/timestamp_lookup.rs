@@ -69,7 +69,6 @@ impl RemoteReader {
 mod tests {
     use assert2::assert;
 
-    use super::*;
     use crate::remote_reader::test_support::{
         populated_reader, sparse_remote_segment_reader,
         sparse_remote_segment_reader_with_max_timestamp, tp,
