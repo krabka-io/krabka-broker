@@ -196,7 +196,6 @@ impl GroupCoordinator {
 mod tests {
     use assert2::assert;
 
-    use super::*;
     use crate::coordinator::unified::test_support::{await_until, make_coord};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
