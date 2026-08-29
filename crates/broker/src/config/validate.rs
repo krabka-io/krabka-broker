@@ -5,7 +5,10 @@
 use std::time::Duration;
 
 use krabka_security::SaslMechanism;
-use krabka_units::{ByteSize, convert::TimeExt};
+use krabka_units::{
+    ByteSize,
+    convert::{ByteSizeExt, TimeExt},
+};
 
 use crate::{
     BrokerError,
