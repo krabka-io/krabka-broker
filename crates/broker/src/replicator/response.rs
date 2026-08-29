@@ -258,7 +258,7 @@ mod tests {
         ensure_local_partition,
         test_support::{
             LEADER_ID, NODE_ID, PARTITION, TOPIC, WIRE_TOPIC_ID, fetch_response, image_with_leader,
-            partition_response,
+            partition_response, test_config,
         },
     };
 

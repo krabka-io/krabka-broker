@@ -8,13 +8,11 @@ use std::sync::{
 };
 
 use arc_swap::ArcSwap;
-use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig};
 use tempfile::tempdir;
 use tokio::sync::{Notify, mpsc};
 
-use super::*;
 use crate::{
     delivery::DeliveryHandles,
     partition::{Partition, WriterMessage, initial_replication_target},
