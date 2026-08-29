@@ -1,4 +1,4 @@
-//! `DeleteRecords` (api_key 21): trimming a partition from a given offset, and
+//! `DeleteRecords` (`api_key` 21): trimming a partition from a given offset, and
 //! the agreement between the response's `low_watermark` and the partition's
 //! `log_start_offset`.
 

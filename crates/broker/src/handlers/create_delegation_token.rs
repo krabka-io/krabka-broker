@@ -19,6 +19,10 @@
 //! The HMAC-SHA-256 of `(secret_key, token_id)` becomes the token's password
 //! equivalent. Clients re-authenticate with the hex `token_id` as the SCRAM
 //! username and the HMAC bytes as the password.
+//!
+//! This file holds the request flow itself. The owner matrix lives in
+//! `owner`, the lifetime clamp and the deadline arithmetic in `lifetime`, and
+//! the two response shapes in `wire`.
 
 use std::{collections::HashSet, hash::BuildHasher};
 
@@ -31,26 +35,24 @@ use krabka_security::{KafkaPrincipal, SecretBytes};
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
+mod lifetime;
+mod owner;
+mod wire;
+
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod tests;
+
+use self::{
+    lifetime::{chosen_lifetime_ms, token_deadlines},
+    owner::resolve_owner,
+    wire::{err_response, minted_response},
+};
+
 /// A relative span of milliseconds, such as a token lifetime or a renew
 /// period. It is not an absolute epoch timestamp in milliseconds.
 pub(crate) type DurationMs = i64;
-
-/// Wire sentinel: `CreateDelegationToken.max_lifetime_ms == -1` defers to the
-/// broker's configured lifetime ceiling (`delegation.token.max.lifetime.ms`).
-const USE_BROKER_LIFETIME_CEILING: i64 = -1;
-
-/// The only `KafkaPrincipal` type that the broker supports as an act-as token
-/// owner. It is Kafka's `KafkaPrincipal.USER_TYPE`. mTLS-DN owners are not
-/// supported.
-const USER_PRINCIPAL_TYPE: &str = "User";
-
-/// Wire convention: the JVM admin client serializes "not act-as" in two ways.
-/// It omits the compact-nullable string, which gives `None`, or it sends an
-/// empty string. Treat both as absent, so that the act-as branch runs only
-/// when the caller supplied a principal.
-fn is_empty_owner_field(f: Option<&str>) -> bool {
-    f.is_none_or(str::is_empty)
-}
 
 #[tracing::instrument(
     name = "handle_create_delegation_token",
@@ -97,47 +99,15 @@ pub(crate) async fn handle<S: BuildHasher>(
         return err_response(crate::codes::UNSUPPORTED_VERSION);
     }
 
-    // KIP-48 owner resolution. The wire `owner_principal_type/name`
-    // pair drives the privileged "act-as" path: super-users may mint
-    // tokens owned by *other* principals so an operator can pre-mint
-    // tokens for KafkaUsers without first holding their credentials.
-    let owner_type_empty = is_empty_owner_field(req.owner_principal_type.as_deref());
-    let owner_name_empty = is_empty_owner_field(req.owner_principal_name.as_deref());
-    let owner = match (owner_type_empty, owner_name_empty) {
-        (true, true) => principal.to_kafka(),
-        (false, false) => {
-            // Both set → act-as. Only super-users may use this path; the
-            // permission is broker-wide because no token exists yet to
-            // hang an ACL on.
-            if !super_users.contains(&principal.name) {
-                return err_response(crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED);
-            }
-            let owner_type = req.owner_principal_type.as_deref().unwrap_or_default();
-            let owner_name = req.owner_principal_name.as_deref().unwrap_or_default();
-            // The act-as owner type is restricted to `User`
-            // (mTLS-DN owners are not supported). Match Kafka's behavior of
-            // returning INVALID_REQUEST for unsupported types here
-            // rather than authorization-failed — the request is
-            // syntactically wrong, not unauthorized.
-            if owner_type != USER_PRINCIPAL_TYPE {
-                return err_response(crate::codes::INVALID_REQUEST);
-            }
-            KafkaPrincipal {
-                principal_type: owner_type.to_string(),
-                name: owner_name.to_string(),
-            }
-        }
-        // Exactly one set → caller is confused; either both or neither.
-        _ => return err_response(crate::codes::INVALID_REQUEST),
+    // KIP-48 owner resolution.
+    let owner = match resolve_owner(req, principal, super_users) {
+        Ok(owner) => owner,
+        Err(code) => return err_response(code),
     };
 
-    // Validate + clamp `max_lifetime_ms`. `-1` defers to the broker
-    // ceiling; a positive value is clamped to the ceiling; anything
-    // else is invalid (zero or non-`-1` negatives).
-    let chosen_lifetime = match req.max_lifetime_ms {
-        USE_BROKER_LIFETIME_CEILING => max_lifetime_ms,
-        n if n > 0 => n.min(max_lifetime_ms),
-        _ => return err_response(crate::codes::INVALID_REQUEST),
+    // Validate + clamp `max_lifetime_ms`.
+    let Some(chosen_lifetime) = chosen_lifetime_ms(req.max_lifetime_ms, max_lifetime_ms) else {
+        return err_response(crate::codes::INVALID_REQUEST);
     };
 
     let now = now_ms();
@@ -153,24 +123,15 @@ pub(crate) async fn handle<S: BuildHasher>(
         })
         .collect();
 
-    // KIP-48 (matches org.apache.kafka.metadata.security.DelegationTokenManager):
-    // `max_timestamp_ms` is the absolute upper bound on the token's lifetime
-    // — `Renew` may never push expiry past it. `expiry_timestamp_ms` is the
-    // initial "next renewal due" instant, computed as `now + default_renew_period`
-    // clamped down so a tiny `chosen_lifetime` never produces an `expiry >
-    // max`. The two values are deliberately separate so that the typical
-    // case (7-day ceiling, 24h renew window) leaves room for `Renew` to
-    // actually extend `expiry_timestamp_ms` up to `max_timestamp_ms`.
-    let max_timestamp_ms = now + chosen_lifetime;
-    let initial_expiry_ms = now + default_renew_period_ms.min(chosen_lifetime);
+    let deadlines = token_deadlines(now, chosen_lifetime, default_renew_period_ms);
 
     let record = DelegationTokenRecord {
         token_id: token_id.clone(),
         owner: owner.clone(),
         hmac: hmac.clone(),
         issue_timestamp_ms: now,
-        expiry_timestamp_ms: initial_expiry_ms,
-        max_timestamp_ms,
+        expiry_timestamp_ms: deadlines.initial_expiry_ms,
+        max_timestamp_ms: deadlines.max_timestamp_ms,
         renewers,
     };
 
@@ -182,520 +143,12 @@ pub(crate) async fn handle<S: BuildHasher>(
         return err_response(crate::codes::INVALID_REQUEST);
     }
 
-    // Always populate `token_requester_*` with the caller's principal.
-    // On self-mint this equals the owner; on act-as it identifies the
-    // super-user who minted on behalf of `owner`. Matches Kafka's
-    // `DelegationTokenManager.createDelegationToken` (the JVM admin CLI
-    // displays both columns unconditionally).
-    let caller = principal.to_kafka();
-    let (requester_type, requester_name) = (caller.principal_type, caller.name);
-
-    CreateDelegationTokenResponse {
-        principal_type: owner.principal_type.clone(),
-        principal_name: owner.name.clone(),
-        token_requester_principal_type: requester_type,
-        token_requester_principal_name: requester_name,
-        issue_timestamp_ms: now,
-        expiry_timestamp_ms: initial_expiry_ms,
-        max_timestamp_ms,
+    minted_response(
+        &owner,
+        principal.to_kafka(),
+        now,
+        &deadlines,
         token_id,
-        hmac: bytes::Bytes::from(hmac),
-        ..Default::default()
-    }
-}
-
-fn err_response(code: i16) -> CreateDelegationTokenResponse {
-    CreateDelegationTokenResponse {
-        error_code: code,
-        ..Default::default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{collections::HashSet, sync::Arc, time::Duration};
-
-    use assert2::assert;
-    use krabka_raft::ControllerHandle;
-    use krabka_security::{AuthMethod, Principal, SaslMechanism};
-    use tempfile::TempDir;
-
-    use super::*;
-
-    /// Helper that produces an empty super-users set, for tests that do not
-    /// exercise the act-as path.
-    fn empty_super_users() -> HashSet<String> {
-        HashSet::new()
-    }
-
-    /// Helper that produces a super-users set with the given names.
-    fn super_users_with(names: &[&str]) -> HashSet<String> {
-        names.iter().map(|s| (*s).to_string()).collect()
-    }
-
-    /// Starts a single-voter `Controller` for tests and waits for the
-    /// leader.
-    async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = krabka_raft::ControllerConfig {
-            election_timeout: krabka_units::millis(200),
-            heartbeat_interval: Some(krabka_units::millis(50)),
-            client_id: "test".into(),
-            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
-        };
-        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
-        let mut rx = handle.watch_leader();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while rx.borrow().is_none() {
-            assert!(std::time::Instant::now() < deadline, "no leader in 5s");
-            let _ = tokio::time::timeout(Duration::from_millis(100), rx.changed()).await;
-        }
-        handle
-    }
-
-    fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
-        ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: name.into(),
-                auth_method: AuthMethod::SaslScramSha256,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha256,
-            expires_at_ms: None,
-            authenticated_via_token: via_token,
-        }
-    }
-
-    fn authed(name: &str) -> ConnectionAuth {
-        authed_with_token(name, false)
-    }
-
-    /// The KIP-48 24 h default. It matches Kafka's
-    /// `delegation.token.expiry.time.ms`. Tests that do not exercise
-    /// renew-period clamping pass this value.
-    const RENEW_24H_MS: i64 = 24 * 60 * 60 * 1_000;
-
-    #[tokio::test]
-    async fn returns_auth_disabled_when_no_secret_key() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let req = CreateDelegationTokenRequest::default();
-        let auth = authed("alice");
-        let resp = handle(
-            &req,
-            &auth,
-            None,
-            1_000,
-            RENEW_24H_MS,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn success_returns_token_id_and_hmac() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"master-key".to_vec());
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            ..Default::default()
-        };
-        // Broker ceiling 60s; default renew period 24h. KIP-48: the renew
-        // period is clamped down to chosen_lifetime when smaller, so for
-        // this 60s-ceiling case expiry == max == issue + 60s.
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        // token_id is a random UUID; the HMAC-SHA-256 output is 32 bytes and
-        // the response carries them raw.
-        assert!((resp.token_id.is_empty(), resp.hmac.len()) == (false, 32));
-        // 60s ceiling < 24h default renew period → both timestamps collapse
-        // to issue + 60s (the chosen_lifetime ceiling).
-        let expected = CreateDelegationTokenResponse {
-            error_code: 0,
-            principal_type: "User".into(),
-            principal_name: "alice".into(),
-            token_requester_principal_type: "User".into(),
-            token_requester_principal_name: "alice".into(),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.issue_timestamp_ms + 60_000,
-            max_timestamp_ms: resp.issue_timestamp_ms + 60_000,
-            token_id: resp.token_id.clone(),
-            hmac: resp.hmac.clone(),
-            throttle_time_ms: 0,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
-        // Persisted in image with the same hmac + owner + timestamps.
-        let img = controller.current_image();
-        let stored = img
-            .delegation_token_by_id(&resp.token_id)
-            .expect("token in image");
-        let expected_stored = krabka_metadata::DelegationToken {
-            token_id: resp.token_id.clone(),
-            owner: KafkaPrincipal {
-                principal_type: "User".into(),
-                name: "alice".into(),
-            },
-            hmac: resp.hmac.to_vec(),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.expiry_timestamp_ms,
-            max_timestamp_ms: resp.max_timestamp_ms,
-            renewers: vec![],
-        };
-        assert!(*stored == expected_stored);
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn token_authenticated_caller_is_rejected_with_request_not_allowed() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed_with_token("alice", true),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn max_lifetime_is_clamped_to_config_ceiling() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        // Caller requests 1 hour; broker ceiling is 5 minutes.
-        let ceiling_ms = 5 * 60 * 1_000;
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: 60 * 60 * 1_000,
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            ceiling_ms,
-            RENEW_24H_MS,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        // 5-minute ceiling < 24h default renew period → both timestamps
-        // collapse to issue + ceiling.
-        let expected = CreateDelegationTokenResponse {
-            error_code: 0,
-            principal_type: "User".into(),
-            principal_name: "alice".into(),
-            token_requester_principal_type: "User".into(),
-            token_requester_principal_name: "alice".into(),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.issue_timestamp_ms + ceiling_ms,
-            max_timestamp_ms: resp.issue_timestamp_ms + ceiling_ms,
-            token_id: resp.token_id.clone(),
-            hmac: resp.hmac.clone(),
-            throttle_time_ms: 0,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
-        controller.cancel().await;
-    }
-
-    /// KIP-48 separates `expiry_timestamp_ms`, which starts at
-    /// `issue + min(default_renew, chosen_lifetime)`, from `max_timestamp_ms`,
-    /// which is `issue + chosen_lifetime`. `Renew` can therefore extend the
-    /// first value up to the second, instead of an exact round trip. This test
-    /// pins both branches of the `min`.
-    #[tokio::test]
-    async fn initial_expiry_is_default_renew_period_clamped_by_max_lifetime() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-
-        let one_hour: i64 = 60 * 60 * 1_000;
-        let seven_days: i64 = 7 * 24 * 60 * 60 * 1_000;
-        // (broker ceiling, expected expiry delta, expected max delta), with
-        // default_renew_period_ms = 24h throughout.
-        let cases = [
-            // Branch 1: ceiling = 1h < 24h renew period. The renew period is
-            // clamped *down* to chosen_lifetime, so expiry must collapse to
-            // max, and both must equal issue + 1h (the chosen_lifetime).
-            (one_hour, one_hour, one_hour),
-            // Branch 2: ceiling = 7d > 24h renew period. Now the renew period
-            // is the smaller of the two, so expiry (issue + 24h) and max
-            // (issue + 7d, the ceiling untouched) must be SEPARATE, leaving
-            // room for Renew to extend expiry up to max.
-            (seven_days, RENEW_24H_MS, seven_days),
-        ];
-        for (ceiling_ms, expiry_delta, max_delta) in cases {
-            let req = CreateDelegationTokenRequest {
-                max_lifetime_ms: -1,
-                ..Default::default()
-            };
-            let resp = handle(
-                &req,
-                &authed("alice"),
-                Some(&secret),
-                ceiling_ms,
-                RENEW_24H_MS,
-                &*controller,
-                &empty_super_users(),
-            )
-            .await;
-            let expected = CreateDelegationTokenResponse {
-                error_code: 0,
-                principal_type: "User".into(),
-                principal_name: "alice".into(),
-                token_requester_principal_type: "User".into(),
-                token_requester_principal_name: "alice".into(),
-                issue_timestamp_ms: resp.issue_timestamp_ms,
-                expiry_timestamp_ms: resp.issue_timestamp_ms + expiry_delta,
-                max_timestamp_ms: resp.issue_timestamp_ms + max_delta,
-                token_id: resp.token_id.clone(),
-                hmac: resp.hmac.clone(),
-                throttle_time_ms: 0,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            };
-            assert!(resp == expected, "ceiling {ceiling_ms}: {resp:?}");
-        }
-
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn invalid_lifetime_returns_invalid_request() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        // Zero is invalid (only `-1` selects the default).
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: 0,
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        assert!(resp.error_code == crate::codes::INVALID_REQUEST);
-        controller.cancel().await;
-    }
-
-    /// Spec §1.2 and §1.4: a super-user caller can create a token owned by a
-    /// different principal, by setting `owner_principal_type` and
-    /// `owner_principal_name`. The response names the owner *and* records the
-    /// original caller in the `token_requester_*` fields, so that the JVM
-    /// admin CLI can show "minted by X on behalf of Y".
-    #[tokio::test]
-    async fn act_as_super_user_sets_specified_owner() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            owner_principal_type: Some("User".to_string()),
-            owner_principal_name: Some("alice".to_string()),
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("admin"),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &super_users_with(&["admin"]),
-        )
-        .await;
-        // Owner = the act-as target; requester = the caller (admin), set for
-        // act-as mints. 60s ceiling < 24h renew period → expiry == max ==
-        // issue + 60s.
-        let expected = CreateDelegationTokenResponse {
-            error_code: 0,
-            principal_type: "User".into(),
-            principal_name: "alice".into(),
-            token_requester_principal_type: "User".into(),
-            token_requester_principal_name: "admin".into(),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.issue_timestamp_ms + 60_000,
-            max_timestamp_ms: resp.issue_timestamp_ms + 60_000,
-            token_id: resp.token_id.clone(),
-            hmac: resp.hmac.clone(),
-            throttle_time_ms: 0,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected, "{resp:?}");
-        // Persisted owner matches the response owner.
-        let img = controller.current_image();
-        let stored = img
-            .delegation_token_by_id(&resp.token_id)
-            .expect("token in image");
-        let expected_stored = krabka_metadata::DelegationToken {
-            token_id: resp.token_id.clone(),
-            owner: KafkaPrincipal {
-                principal_type: "User".into(),
-                name: "alice".into(),
-            },
-            hmac: resp.hmac.to_vec(),
-            issue_timestamp_ms: resp.issue_timestamp_ms,
-            expiry_timestamp_ms: resp.expiry_timestamp_ms,
-            max_timestamp_ms: resp.max_timestamp_ms,
-            renewers: vec![],
-        };
-        assert!(*stored == expected_stored);
-        controller.cancel().await;
-    }
-
-    /// Spec §1.2: act-as is privileged. A caller that is NOT in `super_users`
-    /// and that tries act-as gets `DELEGATION_TOKEN_AUTHORIZATION_FAILED`
-    /// (65). The broker separates "you are not allowed to do this" (65) from
-    /// "your request is malformed" (42).
-    #[tokio::test]
-    async fn act_as_non_super_user_rejected_with_authorization_failed() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            owner_principal_type: Some("User".to_string()),
-            owner_principal_name: Some("alice".to_string()),
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            // `bob` is not in the super-users set.
-            &authed("bob"),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &super_users_with(&["admin"]),
-        )
-        .await;
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED);
-        controller.cancel().await;
-    }
-
-    /// Spec §1.2: act-as needs BOTH `owner_principal_type` and
-    /// `owner_principal_name`. A partial state is never valid, even for a
-    /// super-user. The broker returns `INVALID_REQUEST` (42), because the
-    /// request is malformed and not unauthorized.
-    #[tokio::test]
-    async fn act_as_with_only_one_field_set_returns_invalid_request() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-
-        let cases = [
-            // Type set but name empty.
-            ("name missing", Some("User".to_string()), None),
-            // Name set but type empty.
-            ("type missing", None, Some("alice".to_string())),
-        ];
-        for (case, owner_principal_type, owner_principal_name) in cases {
-            let req = CreateDelegationTokenRequest {
-                max_lifetime_ms: -1,
-                owner_principal_type,
-                owner_principal_name,
-                ..Default::default()
-            };
-            let resp = handle(
-                &req,
-                &authed("admin"),
-                Some(&secret),
-                60_000,
-                RENEW_24H_MS,
-                &*controller,
-                &super_users_with(&["admin"]),
-            )
-            .await;
-            assert!(resp.error_code == crate::codes::INVALID_REQUEST, "{case}");
-        }
-
-        controller.cancel().await;
-    }
-
-    #[test]
-    fn token_gate_uses_delegation_token_level() {
-        use krabka_metadata::{
-            FeatureLevelRecord, MetadataImage, MetadataRecord,
-            metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
-        };
-
-        let gate = |level: Option<i16>| {
-            let mut image = MetadataImage::new(uuid::Uuid::nil());
-            if let Some(level) = level {
-                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: crate::features::METADATA_VERSION.to_string(),
-                    level,
-                }));
-            }
-            crate::features::require_feature(
-                &image,
-                crate::features::METADATA_VERSION,
-                DELEGATION_TOKEN_MIN_LEVEL,
-            )
-            .is_err()
-        };
-
-        // (finalized metadata.version level; None = fresh image) → gated?
-        let cases = [(None, false), (Some(13), true), (Some(14), false)];
-        for (level, want_gated) in cases {
-            assert!(gate(level) == want_gated, "level {level:?}");
-        }
-    }
-
-    /// Spec §1.2: only `User` is valid as the act-as owner type, because
-    /// mTLS-DN owners are not supported. Any other type from a super-user
-    /// gives `INVALID_REQUEST` (42), because the request is syntactically
-    /// wrong and not unauthorized.
-    #[tokio::test]
-    async fn act_as_with_non_user_principal_type_returns_invalid_request() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let req = CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            owner_principal_type: Some("Group".to_string()),
-            owner_principal_name: Some("eng".to_string()),
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("admin"),
-            Some(&secret),
-            60_000,
-            RENEW_24H_MS,
-            &*controller,
-            &super_users_with(&["admin"]),
-        )
-        .await;
-        assert!(resp.error_code == crate::codes::INVALID_REQUEST);
-        controller.cancel().await;
-    }
+        hmac,
+    )
 }

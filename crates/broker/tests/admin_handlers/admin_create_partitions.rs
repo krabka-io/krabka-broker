@@ -1,4 +1,4 @@
-//! `CreatePartitions` (api_key 37): extending a topic's partition count, both
+//! `CreatePartitions` (`api_key` 37): extending a topic's partition count, both
 //! with broker-chosen placement and with an explicit `assignments` list, and
 //! the `INVALID_REPLICA_ASSIGNMENT` path that must add no partition at all.
 

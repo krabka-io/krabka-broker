@@ -1,6 +1,6 @@
 //! The two read-only listing APIs of this suite: `ListConfigResources`
-//! (api_key 74, KIP-1142), whose default set covers every topic and broker, and
-//! `ListGroups` (api_key 16). Both check the dispatch glue, the ACL gate's
+//! (`api_key` 74, KIP-1142), whose default set covers every topic and broker, and
+//! `ListGroups` (`api_key` 16). Both check the dispatch glue, the ACL gate's
 //! allow path, and the response encoding, so they share one file.
 
 use assert2::assert;

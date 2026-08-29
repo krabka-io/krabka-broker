@@ -1,4 +1,4 @@
-//! `AlterConfigs` (api_key 33): the round-trip that pushes a topic override
+//! `AlterConfigs` (`api_key` 33): the round-trip that pushes a topic override
 //! into the partition's log, the rejection of an unknown config key, and the
 //! `min.insync.replicas` pre-flight that gates an `acks=-1` produce but leaves
 //! `acks=1` alone.

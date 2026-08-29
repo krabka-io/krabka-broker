@@ -1,4 +1,4 @@
-//! `DescribeCluster` (api_key 60): the broker listing a client gets from a
+//! `DescribeCluster` (`api_key` 60): the broker listing a client gets from a
 //! broker endpoint, and the KIP-919 rejection of a controller projection asked
 //! for on that same endpoint.
 

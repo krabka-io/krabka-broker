@@ -1,4 +1,4 @@
-//! `DescribeQuorum` (api_key 55, KIP-595): the dispatch glue, the ACL allow
+//! `DescribeQuorum` (`api_key` 55, KIP-595): the dispatch glue, the ACL allow
 //! path, and the response encoding, driven against the `__cluster_metadata`
 //! topic of a one-broker cluster.
 
