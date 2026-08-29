@@ -1,0 +1,115 @@
+//! The operator-triggered preferred election: `ElectLeaders` with
+//! `election_type=0` moves leadership back to `replicas[0]` once that replica
+//! is alive and in the ISR again.
+
+use assert2::assert;
+
+use crate::{
+    cluster_lock, support,
+    wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
+    wire::{create_topic_plaintext, drive_elect_leaders},
+};
+
+/// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
+///
+/// Scenario:
+/// 1. Kill broker 1, the preferred replica. Broker 3 keeps the raft quorum
+///    (2/3).
+/// 2. Broker 2 becomes partition leader through the automatic on-broker-dead
+///    path.
+/// 3. Revive broker 1 with Rejoin. It catches up on replication and expands
+///    back into the ISR.
+/// 4. Send `ElectLeaders Preferred` with `election_type=0` over the wire.
+/// 5. Assert per-partition `error_code` = 0. Poll until leader == 1 again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preferred_election_via_wire_returns_success() {
+    let _g = cluster_lock().lock().await;
+
+    let mut cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+
+    // All three brokers' addresses captured before any shutdowns.
+    let broker1_addr = cluster[0].1.listen_addr;
+
+    // Create a rf=2 topic. With 3 registered brokers the scheduler assigns
+    // replicas [1, 2]; broker 1 is the preferred (first) replica.
+    create_topic_plaintext(broker1_addr, "foo-preferred", 1, 2).await;
+
+    // Wait for all rf brokers to see the partition in their image.
+    wait_partition_exists(&cluster[0].0, "foo-preferred", 0).await;
+    wait_partition_exists(&cluster[1].0, "foo-preferred", 0).await;
+
+    let initial_leader = cluster[0]
+        .0
+        .partition_leader_for_test("foo-preferred", 0)
+        .unwrap_or(1);
+    eprintln!("initial partition leader: {initial_leader}");
+
+    // Kill broker 1 (index 0). Raft quorum {2, 3} can still commit.
+    let (dead_h, dead_cfg, dead_dir) = cluster.remove(0);
+    dead_h.shutdown().await;
+
+    // Wait for the surviving cluster to elect a new partition leader
+    // (i.e., not broker 1).
+    cluster[0]
+        .0
+        .wait_until_partition_leader_changed("foo-preferred", 0, krabka_broker::NodeId(1))
+        .await;
+    let new_leader = cluster[0]
+        .0
+        .partition_leader_for_test("foo-preferred", 0)
+        .unwrap();
+    eprintln!("new partition leader after broker 1 death: {new_leader}");
+    let _ = new_leader; // used for diagnostics
+
+    // Revive broker 1 (Rejoin reads the existing raft log).
+    // The surviving 2/3 quorum continues committing.
+    let mut revived_cfg = dead_cfg.clone();
+    revived_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let revived_h = krabka_broker::Broker::start(revived_cfg)
+        .await
+        .expect("rejoin broker 1");
+
+    // Wait for broker 1 to be back in the ISR on broker 2's view.
+    // The ISR expand is committed by the surviving raft leader so broker 2
+    // (or 3) must reflect it.
+    wait_isr_contains(&cluster[0].0, "foo-preferred", 0, 1).await;
+
+    // The ElectLeaders request MUST go to the raft leader, which is the only
+    // broker with an authoritative liveness state (it receives all heartbeats).
+    // After broker 1's revive it heartbeats to the raft leader, which marks
+    // it as Alive. We discover which surviving broker is the raft leader and
+    // send there.
+    //
+    // Inlined here rather than extracted into a helper to avoid a complex
+    // `&[(BrokerHandle, BrokerConfig, TempDir)]` function signature that
+    // triggers the Rust 1.95 annotate-snippets ICE in clippy::type_complexity.
+    let elect_addr = {
+        let leader = cluster[0].0.wait_until_controller_leader().await;
+        let pos = cluster
+            .iter()
+            .position(|(_, cfg, _)| cfg.node_id == leader)
+            .expect("raft leader must be one of the surviving brokers");
+        cluster[pos].1.listen_addr
+    };
+    eprintln!("sending ElectLeaders Preferred to raft leader at {elect_addr}");
+
+    // Now send ElectLeaders Preferred (election_type=0). Broker 1 is the
+    // preferred replica (replicas[0]) and is now back in ISR and alive.
+    let result = drive_elect_leaders(elect_addr, "foo-preferred", vec![0], 0).await;
+    assert!(
+        result == vec![(0, 0)],
+        "expected error_code=0 for PREFERRED election; got {result:?}"
+    );
+
+    // Poll until the image reflects broker 1 as leader again.
+    wait_partition_leader(&cluster[0].0, "foo-preferred", 0, 1).await;
+    wait_partition_leader(&revived_h, "foo-preferred", 0, 1).await;
+
+    // Clean up.
+    revived_h.shutdown().await;
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+    drop(dead_dir);
+}
