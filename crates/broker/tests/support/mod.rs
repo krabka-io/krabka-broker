@@ -880,7 +880,7 @@ pub async fn start_with_operator_keys(
 
     let broker = Broker::start(config.clone()).await.expect("broker start");
     let client = Client::builder()
-        .bootstrap(&broker.listen_addr().to_string())
+        .bootstrap(broker.listen_addr().to_string())
         .client_id("crabka-broker-test")
         .build()
         .await
