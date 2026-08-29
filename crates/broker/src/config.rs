@@ -3,11 +3,10 @@
 //! Build the configuration directly for library use, or from CLI flags. The
 //! binary entry point is `bin/broker.rs`.
 
+pub use krabka_raft::BootstrapMode;
 use krabka_units::{
     ByteSize, Ratio, Time, days, gibibytes, hours, mebibytes, millis, minutes, percent, secs,
 };
-
-pub use krabka_raft::BootstrapMode;
 
 mod broker_config;
 mod defaults;

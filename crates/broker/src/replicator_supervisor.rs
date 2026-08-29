@@ -39,15 +39,14 @@ mod topic_config;
 mod wal_followers;
 
 use self::dir_assignments::{AssignDirsReporter, NetworkAssignDirsReporter};
-use crate::{
-    config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
-    throttle::ThrottleState, txn::coordinator::TxnCoordinator,
-};
-
 pub(crate) use self::{
     desired_sets::{desired_follower_set, desired_local_set, desired_wal_placements},
     materialize::{MaterializePartitionConfig, materialize_partition},
     topic_config::push_topic_configs,
+};
+use crate::{
+    config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
+    throttle::ThrottleState, txn::coordinator::TxnCoordinator,
 };
 
 /// A `(topic, partition)` pair. The supervisor keys follower tasks, local
