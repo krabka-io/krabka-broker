@@ -1,0 +1,250 @@
+//! The broker-only [`MetadataSource`]: reads come from a `MetadataObserver`
+//! and writes go out through a [`MetadataWriter`]. It lives apart from the
+//! controller implementation because every controller-only operation here is a
+//! deliberate refusal rather than a delegation.
+
+use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
+
+use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_raft::{
+    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
+    SubmitChangeResult, UpdateVoter,
+};
+use tokio::sync::watch;
+
+use super::{MetadataSource, MetadataWriter};
+use crate::metadata_observer::MetadataObserver;
+
+/// Broker-only metadata source: reads from a [`MetadataObserver`], writes
+/// by forwarding to the controller quorum.
+pub struct ObserverSource {
+    observer: Arc<MetadataObserver>,
+    writer: Arc<dyn MetadataWriter>,
+}
+
+impl ObserverSource {
+    #[must_use]
+    pub fn new(observer: Arc<MetadataObserver>, writer: Arc<dyn MetadataWriter>) -> Self {
+        Self { observer, writer }
+    }
+}
+
+#[async_trait::async_trait]
+impl MetadataSource for ObserverSource {
+    fn current_image(&self) -> Arc<MetadataImage> {
+        self.observer.current_image()
+    }
+    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
+        self.observer.watch_image()
+    }
+    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
+        self.observer.watch_leader()
+    }
+    fn current_metadata_offset(&self) -> i64 {
+        self.observer.current_metadata_offset()
+    }
+    fn quorum_state(&self) -> QuorumState {
+        // A broker-only node is not a voter and has no openraft state of its
+        // own, so only `current_leader` is meaningful here. `current_term` /
+        // `last_applied_index` / per-voter progress are unknown — DescribeQuorum
+        // on a broker-only node forwards to a controller in a later component.
+        QuorumState {
+            current_term: 0,
+            last_applied_index: 0,
+            current_leader: *self.observer.watch_leader().borrow(),
+            voters: Vec::new(),
+            voter_nodes: std::collections::BTreeMap::new(),
+            per_voter_matched_index: std::collections::BTreeMap::new(),
+        }
+    }
+    async fn submit_change(
+        &self,
+        records: Vec<MetadataRecord>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        self.writer.submit_change(records).await
+    }
+    async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    fn controller_bound_addr(&self) -> SocketAddr {
+        // A broker-only node runs no controller listener. The only callers
+        // (DescribeQuorum / KIP-853 reconfiguration) live on controllers, so
+        // this is never reached in practice; report an unspecified address.
+        SocketAddr::from(([0, 0, 0, 0], 0))
+    }
+    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
+        // A broker-only observer holds no checkpoint of its own to serve;
+        // FetchSnapshot is answered by the controller quorum.
+        SnapshotRange::NoSnapshot
+    }
+    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
+    async fn cancel(&self) {
+        self.observer.cancel().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::metadata_source::test_support::{topic_record, wait_for_controller_leader};
+
+    struct RecordingWriter {
+        calls: Mutex<Vec<Vec<MetadataRecord>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MetadataWriter for RecordingWriter {
+        async fn submit_change(
+            &self,
+            records: Vec<MetadataRecord>,
+        ) -> Result<SubmitChangeResult, RaftError> {
+            self.calls.lock().unwrap().push(records);
+            Ok(SubmitChangeResult::default())
+        }
+    }
+
+    fn not_leader_none<T>(result: &Result<T, RaftError>) {
+        assert!(matches!(
+            result,
+            Err(RaftError::NotLeader {
+                current_leader: None
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn observer_source_uses_observer_writer_and_denies_controller_only_ops() {
+        let cluster_id = Uuid::new_v4();
+        let observer = crate::metadata_observer::MetadataObserver::start(
+            crate::metadata_observer::ObserverConfig {
+                client_dispatch_queue_capacity:
+                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+                client_frame_max: krabka_client_core::ClientFrameMax::default(),
+                voters: vec![],
+                dialer: Arc::new(krabka_raft::PlaintextDialer),
+                client_id: "observer-source-test".into(),
+                cluster_id,
+                max_bytes: krabka_units::mebibytes(1),
+                poll_interval: krabka_units::minutes(1),
+                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+            },
+        );
+        let writer = Arc::new(RecordingWriter {
+            calls: Mutex::new(Vec::new()),
+        });
+        let source = ObserverSource::new(observer.clone(), writer.clone());
+
+        assert_eq!(source.current_image().cluster_id(), cluster_id);
+        assert_eq!(source.current_metadata_offset(), -1);
+        source
+            .submit_change(vec![topic_record("forwarded-topic")])
+            .await
+            .expect("submit via writer");
+        {
+            let calls = writer.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert!(
+                matches!(&calls[0][0], MetadataRecord::V1Topic(t) if t.name == "forwarded-topic")
+            );
+        }
+
+        not_leader_none(&source.change_membership(BTreeSet::new()).await);
+        not_leader_none(&source.add_learner(NodeId(2), Node::default()).await);
+        not_leader_none(&source.trigger_snapshot().await);
+        source.cancel().await;
+        assert!(observer.task_drained_for_test().await);
+    }
+
+    #[tokio::test]
+    async fn observer_source_reports_the_replicated_metadata_offset() {
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Bootstrap,
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg).await.expect("controller");
+        wait_for_controller_leader(&ctrl).await;
+        ctrl.submit_change(vec![topic_record("observed-through-source")])
+            .await
+            .expect("submit metadata");
+        ctrl.submit_change(vec![topic_record("observed-through-source-2")])
+            .await
+            .expect("submit second metadata record");
+        ctrl.submit_change(vec![topic_record("observed-through-source-3")])
+            .await
+            .expect("submit third metadata record");
+        let expected_offset = i64::try_from(ctrl.quorum_state().last_applied_index)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(1);
+        assert!(
+            ![-1, 0, 1].contains(&expected_offset),
+            "test must distinguish every constant-offset mutant"
+        );
+
+        let observer = crate::metadata_observer::MetadataObserver::start(
+            crate::metadata_observer::ObserverConfig {
+                client_dispatch_queue_capacity:
+                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+                client_frame_max: krabka_client_core::ClientFrameMax::default(),
+                voters: vec![(NodeId(1), ctrl.controller_bound_addr().to_string())],
+                dialer: Arc::new(krabka_raft::PlaintextDialer),
+                client_id: "observer-source-offset-test".into(),
+                cluster_id: Uuid::nil(),
+                max_bytes: krabka_units::mebibytes(1),
+                poll_interval: krabka_units::millis(10),
+                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+            },
+        );
+        let writer = Arc::new(RecordingWriter {
+            calls: Mutex::new(Vec::new()),
+        });
+        let source = ObserverSource::new(observer, writer);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if source.current_metadata_offset() == expected_offset {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("observer source catches up");
+
+        assert_eq!(source.current_metadata_offset(), expected_offset);
+        source.cancel().await;
+        ctrl.shutdown().await;
+    }
+}
