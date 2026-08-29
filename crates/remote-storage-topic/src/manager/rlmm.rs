@@ -16,10 +16,7 @@ use krabka_remote_storage::{
 };
 
 use super::{TopicBasedRemoteLogMetadataManager, assignment::ReadGate};
-use crate::{
-    error::MetadataLogError, log::MetadataEventLog, partitioning::metadata_partition_for,
-    serde::MetadataEvent,
-};
+use crate::{error::MetadataLogError, partitioning::metadata_partition_for, serde::MetadataEvent};
 
 impl TopicBasedRemoteLogMetadataManager {
     async fn wait_for_offset(&self, partition: i32, offset: i64) {
@@ -164,7 +161,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        log::InProcessMetadataEventLog,
+        log::{InProcessMetadataEventLog, MetadataEventLog},
         manager::test_support::{
             finish, on_blocking, start_manager, start_manager_all, started, tp,
         },

@@ -8,7 +8,7 @@
 use tracing::warn;
 
 use super::TopicBasedRemoteLogMetadataManager;
-use crate::log::{AssignmentHandle, MetadataEventLog, PartitionStart};
+use crate::log::PartitionStart;
 
 #[cfg(test)]
 mod tests;
@@ -103,7 +103,7 @@ impl TopicBasedRemoteLogMetadataManager {
     }
 
     /// Diff `desired` against the current assignment and drive the
-    /// [`AssignmentHandle`].
+    /// [`AssignmentHandle`](crate::log::AssignmentHandle).
     ///
     /// This method adds newly-needed partitions, seeded from the snapshot
     /// committed offset + 1, or from 0 when there is no committed event. It
