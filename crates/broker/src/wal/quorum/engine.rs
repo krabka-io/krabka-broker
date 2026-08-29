@@ -1,4 +1,11 @@
 //! In-process WAL quorum engine.
+//!
+//! This file is the module root. It holds the replica set, the shard engine
+//! state, and the local-replica durability path. Each child holds one concern:
+//! `batches` decodes a raw WAL byte range, `replica_io` runs the blocking log
+//! operations off the async worker threads, `recovery` picks and enforces the
+//! durable prefix a shard opens on, and `distributed` keeps the diskless
+//! voter-set quorum.
 
 use std::{
     collections::HashMap,

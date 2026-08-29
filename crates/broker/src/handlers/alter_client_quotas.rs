@@ -3,7 +3,7 @@
 //! This file holds the wire entry point: the cluster `Alter` authorization
 //! preamble, the loop that validates each entry, and the single metadata
 //! submit that carries every accepted entry. Entry validation and the records
-//! it produces live in [`entries`]; the response rows live in [`response`].
+//! it produces live in `entries`; the response rows live in `response`.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};

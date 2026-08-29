@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::coordinator::unified::streams::config::StreamsAssignorKind;
+
 /// One group member as the assignor sees it.
 ///
 /// It carries the member's current ownership, which drives stickiness, and its
