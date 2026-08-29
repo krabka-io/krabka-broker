@@ -49,7 +49,7 @@ mod transport;
 mod test_support;
 
 pub(crate) use self::{
-    connection_limiter::{ConnectionGuard, ConnectionLimiter},
+    connection_limiter::ConnectionLimiter,
     partition_spawn::{
         PartitionSpawnConfig, diskless_topic_config, spawn_partition,
         spawn_partition_with_replication_target, try_spawn_partition_with_replication_target,

@@ -19,13 +19,16 @@ mod scan;
 #[cfg(test)]
 mod test_support;
 
+// `leader_failover_model` checks the real per-partition policy, so these
+// two are re-exported for it alone.
+#[cfg(test)]
+pub(crate) use self::policy::{FailoverDecision, failover_one};
 pub(crate) use self::{
     driver::{LivenessTickState, run_liveness_tick},
     operator::{
         ElectError, ElectionType, select_new_leader_for_partition,
         select_replacement_leader_for_shutdown,
     },
-    policy::{FailoverDecision, failover_one},
     scan::compute_offline_dir_failover_changes,
 };
 

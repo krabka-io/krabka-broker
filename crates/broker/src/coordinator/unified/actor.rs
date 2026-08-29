@@ -47,7 +47,6 @@ mod tests;
 
 pub(crate) use self::{
     commit_validation::validate_group_commit,
-    heartbeat::{HeartbeatStep, step_heartbeat},
     pending_records::PendingRecords,
     persistence::{classic_group_metadata_record, full_pending_records},
 };
@@ -249,6 +248,11 @@ fn chrono_now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
 }
+
+// `reconciler_model` drives the real heartbeat step, so these two are
+// re-exported for it alone.
+#[cfg(test)]
+pub(crate) use self::heartbeat::{HeartbeatStep, step_heartbeat};
 
 #[cfg(test)]
 #[path = "reconciler_model.rs"]
