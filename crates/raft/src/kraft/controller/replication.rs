@@ -2,6 +2,8 @@
 //! or a snapshot hint, the apply of a leader's Fetch response, and the
 //! reassembly and install of a KIP-630 snapshot fetched from the leader.
 
+use std::sync::Arc;
+
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
 

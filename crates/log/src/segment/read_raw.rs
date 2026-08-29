@@ -139,6 +139,7 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
     use krabka_units::prelude::{bytes, mebibytes};
     use tempfile::tempdir;
 

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::{Engine, engine_loop::response_to_event, replication::fetch_epoch_for_request};
 use crate::kraft::{
     transport::{Command, api_key, wire},
-    types::{Epoch, NodeId},
+    types::{Epoch, LogView, NodeId},
 };
 
 impl Engine {
