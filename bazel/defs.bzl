@@ -98,9 +98,20 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
         `cargo test` runs those; without this they are simply not run.
       **kwargs: passed through to `rust_binary`.
     """
+
+    # A binary too large for one file puts its modules in a directory named
+    # after the entry point, the layout `crates/raft/src/server.rs` uses. Cargo
+    # finds them from the `mod` declarations alone; Bazel needs them named. The
+    # `crate_library` glob cannot supply them, because it excludes `src/bin/**`
+    # to keep the binaries out of the library.
+    module_srcs = native.glob(
+        [crate_root[:-len(".rs")] + "/**/*.rs"],
+        allow_empty = True,
+    )
+
     rust_binary(
         name = name,
-        srcs = [crate_root],
+        srcs = [crate_root] + module_srcs,
         aliases = _aliases(["deps"]),
         crate_features = _features(),
         crate_root = crate_root,
