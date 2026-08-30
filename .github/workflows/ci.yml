@@ -39,7 +39,7 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
+          disk-cache: false
           repository-cache: true
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
