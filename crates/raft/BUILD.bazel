@@ -14,6 +14,7 @@ crate_tests(
     # concurrent runs and passed at six. Declaring the cores keeps Bazel from
     # creating that starvation.
     cpu_heavy = ["kraft_engine_sim"],
+    docker = {"kraft_checkpoint_jvm": ["apache_kafka_4_0_0"]},
     lib = "raft",
     # The consensus engine is the highest-value mutation target here: its
     # decision logic is pure and almost entirely unit-tested, so a survivor is a
