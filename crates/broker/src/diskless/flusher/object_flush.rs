@@ -187,7 +187,7 @@ mod tests {
         let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
-        let index = DisklessIndexLog::start(event_log);
+        let index = DisklessIndexLog::start(event_log).await.unwrap();
         let topic_id = Uuid::from_u128(11);
         let cache = index.cache();
         let record = flush_once(
@@ -229,7 +229,9 @@ mod tests {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        );
+        )
+        .await
+        .unwrap();
         let cache = index.cache();
         let topic_id = Uuid::from_u128(11);
         let record = flush_once(
@@ -291,7 +293,9 @@ mod tests {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        );
+        )
+        .await
+        .unwrap();
         let cache = index.cache();
         let config = FlushConfig {
             max_size: ByteSize::from_bytes(1),

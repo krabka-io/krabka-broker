@@ -395,6 +395,8 @@ mod tests {
     fn config_file_mutually_exclusive_with_listen_addr() {
         use clap::Parser;
 
+        let _guard = env_guard();
+
         let res = Args::try_parse_from([
             "krabka-broker",
             "--config-file=/tmp/a.toml",
@@ -412,6 +414,8 @@ mod tests {
     fn config_file_mutually_exclusive_with_advertised_listener() {
         use clap::Parser;
 
+        let _guard = env_guard();
+
         let res = Args::try_parse_from([
             "krabka-broker",
             "--config-file=/tmp/a.toml",
@@ -428,6 +432,8 @@ mod tests {
     #[test]
     fn config_file_alone_parses() {
         use clap::Parser;
+
+        let _guard = env_guard();
 
         let args = Args::try_parse_from(["krabka-broker", "--config-file=/tmp/a.toml"]).unwrap();
         assert!(args.config_file.as_deref() == Some(std::path::Path::new("/tmp/a.toml")));

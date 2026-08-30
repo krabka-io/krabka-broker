@@ -9,6 +9,8 @@ use crate::test_support::env_guard;
 
 #[test]
 fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
+    let _guard = env_guard();
+
     let cases = [
         (vec!["krabka-broker", "--cleaner-interval=0ms"], false),
         (vec!["krabka-broker", "--cleaner-interval=1ms"], true),
@@ -196,6 +198,8 @@ fn runtime_policy_cli_reads_krabka_environment() {
 
 #[test]
 fn client_resource_policy_defaults_and_cli_precedence() {
+    let _guard = env_guard();
+
     let defaults = Args::try_parse_from(["krabka-broker"]).expect("parse defaults");
     let mut config = BrokerConfig::default();
     defaults
@@ -204,7 +208,6 @@ fn client_resource_policy_defaults_and_cli_precedence() {
     assert!(config.client_dispatch_queue_capacity.get() == 64);
     assert!(config.client_frame_max.size() == krabka_units::mebibytes(100));
 
-    let _guard = env_guard();
     temp_env::with_vars(
         [
             ("KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
@@ -228,6 +231,8 @@ fn client_resource_policy_defaults_and_cli_precedence() {
 
 #[test]
 fn group_member_limits_and_streams_switch_apply_from_cli() {
+    let _guard = env_guard();
+
     let args = Args::try_parse_from([
         "krabka-broker",
         "--share-group-max-size=17",
@@ -262,6 +267,8 @@ fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConf
 
 #[test]
 fn explicit_cli_default_runtime_values_override_file() {
+    let _guard = env_guard();
+
     let args = Args::try_parse_from([
         "krabka-broker",
         "--cleaner-interval=30s",
