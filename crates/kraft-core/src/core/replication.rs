@@ -93,30 +93,21 @@ impl QuorumStateMachine {
         // leader's log end, and the leader's HWM is always within its log.
         // Both are invariants of correct operation; clamping makes them
         // locally evident instead of a distributed assumption.
-        let mut follower_offsets: Vec<i64> = replicas
+        let follower_offsets: Vec<i64> = replicas
             .values()
             .map(|progress| progress.fetch_offset.min(log_end))
             .collect();
-        let new_hwm = if self.is_voter() {
-            krabka_verified::recompute_high_watermark(
-                log_end,
-                &follower_offsets,
-                self.state.majority(),
-                *epoch_start_offset,
-                (*high_watermark).min(log_end),
-            )
-        } else {
-            // A leader removed by its own VotersRecord continues serving Fetch
-            // until the record commits, but its local log cannot count toward
-            // the new configuration's majority.
-            follower_offsets.sort_unstable_by(|a, b| b.cmp(a));
-            follower_offsets
-                .get(self.state.majority().saturating_sub(1))
-                .copied()
-                .filter(|offset| *offset > *epoch_start_offset)
-                .unwrap_or(*high_watermark)
-                .max(*high_watermark)
-        };
+        // A leader removed by its own VotersRecord continues serving Fetch
+        // until the record commits, but its local log cannot count toward the
+        // new configuration's majority.
+        let new_hwm = krabka_verified::recompute_high_watermark(
+            log_end,
+            &follower_offsets,
+            self.state.majority(),
+            *epoch_start_offset,
+            (*high_watermark).min(log_end),
+            self.is_voter(),
+        );
         assert2::assert!(
             new_hwm <= log_end,
             "HWM {new_hwm} must not exceed leader log end {log_end}"

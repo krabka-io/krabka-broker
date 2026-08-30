@@ -1,30 +1,30 @@
-(* #"/home/user/krabka-broker/crates/verified/src/consensus.rs" 219 0 224 9 *)
+(* #"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 266 0 272 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconsensus = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 225 27 225 28
-let%span sconsensus'0 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 227 17 227 18
-let%span sconsensus'1 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 227 8 227 18
-let%span sconsensus'2 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 230 12 230 34
-let%span sconsensus'3 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 231 16 231 17
-let%span sconsensus'4 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 238 14 238 21
-let%span sconsensus'5 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 237 16 237 35
-let%span sconsensus'6 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 234 8 234 79
-let%span sconsensus'7 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 232 16 232 24
-let%span sconsensus'8 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 240 16 240 35
-let%span sconsensus'9 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 242 21 242 22
-let%span sconsensus'10 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 242 12 242 22
-let%span sconsensus'11 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 244 13 244 14
-let%span sconsensus'12 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 244 8 244 14
-let%span sconsensus'13 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 217 11 217 69
-let%span sconsensus'14 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 218 10 218 79
-let%span sconsensus'15 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 21 10 21 15
-let%span sconsensus'16 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 24 8 29 9
-let%span sconsensus'17 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 35 10 35 17
-let%span sconsensus'18 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 37 16 37 59
-let%span sconsensus'19 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 15 8 15 48
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconsensus = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 273 27 273 28
+let%span sconsensus'0 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 275 17 275 18
+let%span sconsensus'1 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 275 8 275 18
+let%span sconsensus'2 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 278 12 278 34
+let%span sconsensus'3 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 279 16 279 17
+let%span sconsensus'4 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 286 14 286 21
+let%span sconsensus'5 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 285 16 285 35
+let%span sconsensus'6 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 282 8 282 94
+let%span sconsensus'7 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 280 16 280 24
+let%span sconsensus'8 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 288 16 288 35
+let%span sconsensus'9 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 290 21 290 22
+let%span sconsensus'10 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 290 12 290 22
+let%span sconsensus'11 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 292 13 292 14
+let%span sconsensus'12 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 292 8 292 14
+let%span sconsensus'13 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 264 11 264 69
+let%span sconsensus'14 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 265 10 265 94
+let%span sconsensus'15 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 21 10 21 15
+let%span sconsensus'16 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 24 8 30 9
+let%span sconsensus'17 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 36 10 36 17
+let%span sconsensus'18 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 38 16 38 74
+let%span sconsensus'19 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 15 8 15 48
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 
 use creusot.int.UInt64
 use creusot.int.Int64
@@ -51,95 +51,100 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-function hwm_member_at [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 13 0 13 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 13 0 13 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sconsensus'19] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 22 0 22 76] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) : int
+function count_ge_prefix [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 22 0 22 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
-  forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int [count_ge_prefix log_end s v limit]. count_ge_prefix log_end s v limit
+  forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
     = ([%#sconsensus'16] if limit <= 0 then
       0
     else
-      count_ge_prefix log_end s v (limit - 1) + (if ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
+      count_ge_prefix log_end s v (limit - 1) leader_counts
+      + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 36 0 36 57] (log_end: int) (s: Seq.seq Int64.t) (v: int) : int
+function count_ge [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 37 0 37 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
-axiom count_ge_def: forall log_end: int, s: Seq.seq Int64.t, v: int [count_ge log_end s v]. count_ge log_end s v
-    = ([%#sconsensus'18] count_ge_prefix log_end s v (Seq.length s + 1))
+axiom count_ge_def:
+  forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
+    = ([%#sconsensus'18] count_ge_prefix log_end s v (Seq.length s + 1) leader_counts)
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let candidate_has_majority [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 219 0 224 9] (log_end: Int64.t)
-  (follower_offsets: Slice64.slice Int64.t) (cand: Int64.t) (majority: UInt64.t) (return (x: bool)) =
-{[@stop_split] [@expl:candidate_has_majority requires] [%#sconsensus'13] 1 <= UInt64.t'int majority
+let candidate_has_majority [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 266 0 272 9]
+  (log_end: Int64.t) (follower_offsets: Slice64.slice Int64.t) (cand: Int64.t) (majority: UInt64.t)
+  (leader_counts: bool) (return (x: bool)) = {[@stop_split] [@expl:candidate_has_majority requires] [%#sconsensus'13] 1
+    <= UInt64.t'int majority
   /\ UInt64.t'int majority <= Seq.length (Slice64.view follower_offsets) + 1}
   (! bb0
   [ bb0 = s0
     [ s0 = [ &count <- [%#sconsensus] (0: UInt64.t) ] s1
-    | s1 = [ &_15 <- Int64.ge log_end cand ] s2
-    | s2 = any [ br0 -> {_15 = false} (! bb6) | br1 -> {_15} (! bb1) ] ]
+    | s1 = any [ br0 -> {leader_counts = false} (! bb7) | br1 -> {leader_counts} (! bb1) ] ]
   | bb1 = s0
-    [ s0 = [ &_18 <- UInt64.lt count majority ] s1 | s1 = any [ br0 -> {_18 = false} (! bb6) | br1 -> {_18} (! bb2) ] ]
+    [ s0 = [ &_18 <- Int64.ge log_end cand ] s1 | s1 = any [ br0 -> {_18 = false} (! bb7) | br1 -> {_18} (! bb2) ] ]
   | bb2 = s0
+    [ s0 = [ &_21 <- UInt64.lt count majority ] s1 | s1 = any [ br0 -> {_21 = false} (! bb7) | br1 -> {_21} (! bb3) ] ]
+  | bb3 = s0
     [ s0 = UInt64.add [%#sconsensus'1] {count} {[%#sconsensus'0] (1: UInt64.t)}
         (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
-    | s1 = bb6 ]
-  | bb6 = s0
+    | s1 = bb7 ]
+  | bb7 = s0
     [ s0 = len_i64 [%#sconsensus'2] {follower_offsets} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)
     | s1 = [ &j <- [%#sconsensus'3] (0: UInt64.t) ] s2
-    | s2 = bb8 ]
-  | bb8 = bb8invariant
-    [ bb8 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb8 ([%#sconsensus'4] UInt64.t'int n
+    | s2 = bb9 ]
+  | bb9 = bb9invariant
+    [ bb9 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb9 ([%#sconsensus'4] UInt64.t'int n
       - UInt64.t'int j)}
-      bb8invariant
-    | bb8invariant = {[@expl:loop invariant #0] [%#sconsensus'7] UInt64.t'int j <= UInt64.t'int n}
+      bb9invariant
+    | bb9invariant = {[@expl:loop invariant #0] [%#sconsensus'7] UInt64.t'int j <= UInt64.t'int n}
       {[@expl:loop invariant #1] [%#sconsensus'6] let seen = count_ge_prefix (Int64.to_int log_end) (Slice64.view follower_offsets) (Int64.to_int cand) (UInt64.t'int j
-      + 1) in UInt64.t'int count = (if seen < UInt64.t'int majority then seen else UInt64.t'int majority)}
+      + 1) leader_counts in UInt64.t'int count = (if seen < UInt64.t'int majority then seen else UInt64.t'int majority)}
       {[@expl:loop invariant #2] [%#sconsensus'5] UInt64.t'int count <= UInt64.t'int majority}
-      (! [ &variant_old_bb8 <- [%#sconsensus'4] UInt64.t'int n - UInt64.t'int j ] s0)
-      [ s0 = [ &_43 <- UInt64.lt j n ] s1 | s1 = any [ br0 -> {_43 = false} (! bb18) | br1 -> {_43} (! bb10) ] ]
-      [ bb10 = s0
-        [ s0 = [ &_47 <- j ] s1
-        | s1 = [ &_48 <- Slice64.length follower_offsets ] s2
-        | s2 = [ &_49 <- UInt64.lt _47 _48 ] s3
-        | s3 = {[@expl:index in bounds] [%#sconsensus'8] _49} s4
-        | s4 = Slice64.get [%#sconsensus'8] <Int64.t> {follower_offsets} {_47} (fun (r: Int64.t) -> [ &x <- r ] s5)
-        | s5 = [ &_51 <- Int64.ge x cand ] s6
-        | s6 = any [ br0 -> {_51 = false} (! bb17) | br1 -> {_51} (! bb12) ] ]
-      | bb12 = s0
-        [ s0 = [ &_54 <- UInt64.lt count majority ] s1
-        | s1 = any [ br0 -> {_54 = false} (! bb17) | br1 -> {_54} (! bb13) ] ]
+      (! [ &variant_old_bb9 <- [%#sconsensus'4] UInt64.t'int n - UInt64.t'int j ] s0)
+      [ s0 = [ &_47 <- UInt64.lt j n ] s1 | s1 = any [ br0 -> {_47 = false} (! bb19) | br1 -> {_47} (! bb11) ] ]
+      [ bb11 = s0
+        [ s0 = [ &_51 <- j ] s1
+        | s1 = [ &_52 <- Slice64.length follower_offsets ] s2
+        | s2 = [ &_53 <- UInt64.lt _51 _52 ] s3
+        | s3 = {[@expl:index in bounds] [%#sconsensus'8] _53} s4
+        | s4 = Slice64.get [%#sconsensus'8] <Int64.t> {follower_offsets} {_51} (fun (r: Int64.t) -> [ &x <- r ] s5)
+        | s5 = [ &_55 <- Int64.ge x cand ] s6
+        | s6 = any [ br0 -> {_55 = false} (! bb18) | br1 -> {_55} (! bb13) ] ]
       | bb13 = s0
+        [ s0 = [ &_58 <- UInt64.lt count majority ] s1
+        | s1 = any [ br0 -> {_58 = false} (! bb18) | br1 -> {_58} (! bb14) ] ]
+      | bb14 = s0
         [ s0 = UInt64.add [%#sconsensus'10] {count} {[%#sconsensus'9] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
-        | s1 = bb17 ]
-      | bb17 = s0
+        | s1 = bb18 ]
+      | bb18 = s0
         [ s0 = UInt64.add [%#sconsensus'12] {j} {[%#sconsensus'11] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &j <- _x ] s1)
-        | s1 = bb8 ] ] ]
-  | bb18 = s0 [ s0 = [ &_ret <- UInt64.ge count majority ] s1 | s1 = return {_ret} ] ]
+        | s1 = bb9 ] ] ]
+  | bb19 = s0 [ s0 = [ &_ret <- UInt64.ge count majority ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & log_end: Int64.t = log_end
   | & follower_offsets: Slice64.slice Int64.t = follower_offsets
   | & cand: Int64.t = cand
   | & majority: UInt64.t = majority
+  | & leader_counts: bool = leader_counts
   | & count: UInt64.t = Any.any_l ()
-  | & _15: bool = Any.any_l ()
   | & _18: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
   | & n: UInt64.t = Any.any_l ()
   | & j: UInt64.t = Any.any_l ()
-  | & _43: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
   | & x: Int64.t = Any.any_l ()
-  | & _47: UInt64.t = Any.any_l ()
-  | & _48: UInt64.t = Any.any_l ()
-  | & _49: bool = Any.any_l ()
-  | & _51: bool = Any.any_l ()
-  | & _54: bool = Any.any_l ()
-  | & variant_old_bb8: int = Any.any_l () ])
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _55: bool = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & variant_old_bb9: int = Any.any_l () ])
   [ return (result: bool) -> {[@stop_split] [@expl:candidate_has_majority ensures] [%#sconsensus'14] result
-    = ge_log_Int (count_ge (Int64.to_int log_end) (Slice64.view follower_offsets) (Int64.to_int cand)) (UInt64.t'int majority)}
+    = ge_log_Int (count_ge (Int64.to_int log_end) (Slice64.view follower_offsets) (Int64.to_int cand) leader_counts) (UInt64.t'int majority)}
     (! return {result}) ]

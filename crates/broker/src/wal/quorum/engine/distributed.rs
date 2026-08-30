@@ -164,6 +164,7 @@ impl WalShardEngine {
             strict_majority(quorum.voters.len()),
             current.0,
             log_start.0.min(leader_end.0),
+            true,
         ));
         if durable <= current {
             return false;
