@@ -118,14 +118,12 @@ fn self_controller_registration_record(
     }
 }
 
-/// Submits one self-registration batch and retries it under backoff. The
-/// whole batch commits together, so a caller can pair the registration record
-/// with the configs that describe the same node.
-async fn submit_self_registration(
+/// Submits one startup metadata batch and retries it under backoff.
+async fn submit_startup_records(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-    registration: Vec<krabka_metadata::MetadataRecord>,
-    role: &str,
+    records: Vec<krabka_metadata::MetadataRecord>,
+    operation: &str,
 ) -> Result<(), BrokerError> {
     let backoff = exponential_backoff::Backoff::new(
         config.self_registration_max_attempts,
@@ -133,16 +131,16 @@ async fn submit_self_registration(
         Some(config.self_registration_backoff_max.to_std()),
     );
     for (attempt_index, delay) in backoff.into_iter().enumerate() {
-        match controller.submit_change(registration.clone()).await {
+        match controller.submit_change(records.clone()).await {
             Ok(_) => return Ok(()),
             Err(error) => match delay {
                 Some(delay) => {
-                    tracing::warn!(attempt = attempt_index + 1, %error, role, "registration retry");
+                    tracing::warn!(attempt = attempt_index + 1, %error, operation, "startup metadata submit retry");
                     tokio::time::sleep(delay).await;
                 }
                 None => {
                     return Err(BrokerError::Startup(format!(
-                        "{role} self-registration failed after {} attempts: {error}",
+                        "{operation} failed after {} attempts: {error}",
                         attempt_index + 1
                     )));
                 }
@@ -164,7 +162,13 @@ pub(super) async fn register_controller(
     else {
         return Ok(());
     };
-    submit_self_registration(config, controller, vec![record], "controller").await
+    submit_startup_records(
+        config,
+        controller,
+        vec![record],
+        "controller self-registration",
+    )
+    .await
 }
 
 fn controller_registration_update(
@@ -234,11 +238,11 @@ pub(super) async fn register_broker(
     if !config.is_broker() {
         return Ok(());
     }
-    submit_self_registration(
+    submit_startup_records(
         config,
         controller,
         broker_registration_batch(config),
-        "broker",
+        "broker self-registration",
     )
     .await
 }
@@ -265,11 +269,7 @@ pub(super) async fn submit_bootstrap_records(
         return Ok(());
     }
     tracing::info!(count = records.len(), "submitting bootstrap records");
-    controller
-        .submit_change(records)
-        .await
-        .map(|_| ())
-        .map_err(|error| BrokerError::Replication(format!("bootstrap submit failed: {error}")))
+    submit_startup_records(config, controller, records, "bootstrap submit").await
 }
 
 #[cfg(test)]
