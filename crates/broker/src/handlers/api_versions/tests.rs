@@ -74,10 +74,11 @@ async fn wait_for_leader(broker: &Broker) {
 }
 
 #[test]
-fn api_versions_advertises_legacy_produce_and_fetch_min() {
+fn api_versions_advertises_legacy_data_plane_min() {
     let table = crate::api_catalog::supported_apis();
     let produce = table.iter().find(|v| v.api_key == 0).expect("produce");
     let fetch = table.iter().find(|v| v.api_key == 1).expect("fetch");
+    let list_offsets = table.iter().find(|v| v.api_key == 2).expect("list offsets");
     assert!(
         produce.min_version == 0,
         "Produce min must be 0 to advertise the legacy v0-2 support"
@@ -85,6 +86,10 @@ fn api_versions_advertises_legacy_produce_and_fetch_min() {
     assert!(
         fetch.min_version == 0,
         "Fetch min must be 0 to advertise the legacy v0-3 support"
+    );
+    assert!(
+        list_offsets.min_version == 0,
+        "ListOffsets min must be 0 for historical librdkafka clients"
     );
 }
 

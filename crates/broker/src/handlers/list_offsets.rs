@@ -34,13 +34,18 @@
 //! [`fetch_bound`](self::bound::fetch_bound) and
 //! [`last_fetchable_offset`](self::bound::last_fetchable_offset).
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
-        list_offsets_request::ListOffsetsRequest,
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         list_offsets_response::{ListOffsetsResponse, ListOffsetsTopicResponse},
+    },
+    primitives::{
+        array::{get_array_len, put_array_len},
+        fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
+        string_bytes::{get_string_owned, put_string},
     },
 };
 
@@ -66,6 +71,61 @@ use self::{
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
+fn decode_request(req_bytes: &[u8], version: i16) -> Result<ListOffsetsRequest, BrokerError> {
+    if version != 0 {
+        return Ok(ListOffsetsRequest::decode(&mut &*req_bytes, version)?);
+    }
+
+    let mut cur = req_bytes;
+    let replica_id = get_i32(&mut cur)?;
+    let topic_count = get_array_len(&mut cur, false)?;
+    let mut topics = Vec::with_capacity(topic_count);
+    for _ in 0..topic_count {
+        let name = get_string_owned(&mut cur)?;
+        let partition_count = get_array_len(&mut cur, false)?;
+        let mut partitions = Vec::with_capacity(partition_count);
+        for _ in 0..partition_count {
+            let partition_index = get_i32(&mut cur)?;
+            let timestamp = get_i64(&mut cur)?;
+            let _max_num_offsets = get_i32(&mut cur)?;
+            partitions.push(ListOffsetsPartition {
+                partition_index,
+                timestamp,
+                ..Default::default()
+            });
+        }
+        topics.push(ListOffsetsTopic {
+            name,
+            partitions,
+            ..Default::default()
+        });
+    }
+    Ok(ListOffsetsRequest {
+        replica_id,
+        topics,
+        ..Default::default()
+    })
+}
+
+fn encode_v0_response(resp: &ListOffsetsResponse) -> Bytes {
+    let mut buf = BytesMut::new();
+    put_array_len(&mut buf, resp.topics.len(), false);
+    for topic in &resp.topics {
+        put_string(&mut buf, &topic.name);
+        put_array_len(&mut buf, topic.partitions.len(), false);
+        for partition in &topic.partitions {
+            put_i32(&mut buf, partition.partition_index);
+            put_i16(&mut buf, partition.error_code);
+            let offsets = usize::from(partition.error_code == codes::NONE);
+            put_array_len(&mut buf, offsets, false);
+            if offsets == 1 {
+                put_i64(&mut buf, partition.offset);
+            }
+        }
+    }
+    buf.freeze()
+}
+
 #[tracing::instrument(
     name = "handle_list_offsets",
     level = "info",
@@ -82,8 +142,7 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let controller = broker.controller.clone();
     {
-        let mut cur: &[u8] = req_bytes;
-        let req = ListOffsetsRequest::decode(&mut cur, version)?;
+        let req = decode_request(req_bytes, version)?;
         // `isolation_level` decodes only from v2 up; v1 leaves it at 0, which
         // is `read_uncommitted`, exactly as Kafka treats a v1 request.
         let bound = fetch_bound(req.replica_id, req.isolation_level);
@@ -141,6 +200,10 @@ pub(crate) async fn handle(
             topics: topics_out,
             ..Default::default()
         };
-        crate::handlers::encode_response(&resp, version)
+        if version == 0 {
+            Ok(encode_v0_response(&resp))
+        } else {
+            crate::handlers::encode_response(&resp, version)
+        }
     }
 }

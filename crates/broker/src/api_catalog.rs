@@ -43,7 +43,12 @@ fn client_facing_apis() -> Vec<ApiVersion> {
             max_version: owned::fetch_request::MAX_VERSION,
             ..Default::default()
         },
-        v!(list_offsets_request),
+        ApiVersion {
+            api_key: owned::list_offsets_request::API_KEY,
+            min_version: 0,
+            max_version: owned::list_offsets_request::MAX_VERSION,
+            ..Default::default()
+        },
         v!(metadata_request),
         v!(find_coordinator_request),
         v!(join_group_request),
