@@ -7,6 +7,7 @@ use krabka_units::prelude::{ByteSizeExt as _, kibibytes, mebibytes};
 use object_store::{memory::InMemory, path::Path as ObjectPath};
 use tempfile::TempDir;
 
+use super::object_entry;
 use crate::{
     error::RemoteStorageError,
     metadata::RemoteLogSegmentMetadata,
@@ -24,8 +25,6 @@ use crate::{
         verify_manifest_signature,
     },
 };
-
-use super::object_entry;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn copy_then_fetch_full_segment() {
