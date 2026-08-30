@@ -143,21 +143,27 @@ impl WalShardEngine {
             .iter()
             .filter(|voter| **voter != quorum.me)
             .map(|voter| {
+                // A remembered follower offset can outlive the leadership
+                // that produced it. Clamp it into the verified kernel's
+                // precondition domain for the current leader.
                 quorum
                     .durable_offsets
                     .get(voter)
                     .copied()
                     .unwrap_or(log_start)
                     .0
+                    .min(leader_end.0)
             })
             .collect::<Vec<_>>();
         let current = self.durable_watermark();
+        // A log normally has start <= end. Keep that kernel precondition local
+        // even if this internal boundary receives an inconsistent range.
         let durable = Offset(krabka_verified::recompute_high_watermark(
             leader_end.0,
             &follower_ends,
             strict_majority(quorum.voters.len()),
             current.0,
-            log_start.0,
+            log_start.0.min(leader_end.0),
         ));
         if durable <= current {
             return false;
@@ -166,5 +172,29 @@ impl WalShardEngine {
         drop(distributed);
         self.durable_advanced.notify_waiters();
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use assert2::assert;
+    use krabka_log::{Log, LogConfig};
+
+    use super::*;
+
+    #[test]
+    fn bounds_verified_watermark_inputs_to_the_leader_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::open(dir.path().join("source"), LogConfig::default()).unwrap();
+        let engine = WalShardEngine::new_distributed(Arc::new(Mutex::new(log)), 3).unwrap();
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+
+        assert!(engine.record_durable_offset(NodeId(2), Offset(2), Offset(0), Offset(1),));
+        assert!(!engine.record_durable_offset(NodeId(3), Offset(2), Offset(0), Offset(1),));
+        assert!(engine.durable_watermark() == Offset(1));
+        assert!(!engine.record_durable_offset(NodeId(2), Offset(2), Offset(2), Offset(1),));
+        assert!(engine.durable_watermark() == Offset(1));
     }
 }
