@@ -1,0 +1,162 @@
+//! A broker crashes mid-flush and comes back.
+//!
+//! A diskless flush is a multi-step commit: build the object from the
+//! committed tails, PUT it, publish the index record naming it, wait for that
+//! record to be projected, then trim the local logs behind the frontier. A
+//! crash can land between any two of those steps, and each gap leaves a
+//! different half-state -- an object nothing points at, an index record whose
+//! local prefix is still present, a trim that only got half way through the
+//! partitions.
+//!
+//! The invariant that has to hold across all of them is the only one that
+//! matters to a producer: an offset that was acknowledged is still readable.
+//! The case acknowledges a known prefix, then keeps a second producer writing
+//! so the flusher is genuinely mid-cycle when the crash lands, kills the
+//! broker without a controlled shutdown, brings it back on the same
+//! addresses, and requires the whole acknowledged prefix back.
+//!
+//! Only that prefix is asserted on. How many of the churn records were
+//! acknowledged is decided by exactly when the crash landed, so asserting on
+//! them would be asserting on the timing rather than on the invariant.
+
+use std::time::Duration;
+
+use assert2::assert;
+use krabka_client_core::Client;
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    RECORDS, TOPIC, VOTERS,
+    cluster::{start_diskless_cluster, wait_for},
+    topic::{await_wal_quorum, create_diskless_topic},
+    wire::{assert_matches_produced, fetch_log, produce_all, produce_until_stopped, value_at},
+};
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
+    // Flush on a tight cadence so the crash below lands inside a flush cycle
+    // rather than between two idle ticks.
+    let mut cluster = start_diskless_cluster(|config| {
+        config.diskless_wal_flush_interval = krabka_units::millis(50);
+        config.diskless_wal_trim_safety_lag = 0;
+    })
+    .await;
+    cluster.await_ready().await;
+
+    let admin = Client::builder()
+        .bootstrap(cluster.bootstrap_for_node(cluster.node_ids()[0]))
+        .client_id("diskless-e2e-admin")
+        .build()
+        .await
+        .expect("admin client");
+    let topic_id = create_diskless_topic(&admin).await;
+    let leader = await_wal_quorum(&cluster).await;
+
+    // The flusher runs on the leader, so the leader is the broker to crash.
+    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
+    let producer = Client::builder()
+        .bootstrap(cluster.bootstrap_for_node(leader))
+        .client_id("diskless-e2e-producer")
+        .build()
+        .await
+        .expect("producer client");
+    produce_all(&producer, topic_id, &values).await;
+
+    // Wait until the flusher has actually started moving objects, so the crash
+    // interrupts a running pipeline instead of one that never began.
+    let leader_broker = cluster
+        .handle_for_node(leader)
+        .expect("the diskless leader is up");
+    let committed = i64::try_from(RECORDS).expect("small count");
+    wait_for(
+        "the diskless flusher to reach the committed prefix",
+        Duration::from_secs(90),
+        || async {
+            leader_broker
+                .diskless_flush_state_for_test(TOPIC, 0)
+                .await
+                .is_some_and(|(_, _, _, _, _, frontier)| frontier == Some(committed))
+        },
+    )
+    .await;
+
+    // Keep the write path busy so the crash below lands inside a flush cycle
+    // and not in the gap between two of them.
+    let stop = CancellationToken::new();
+    let churn = tokio::spawn(produce_until_stopped(producer, topic_id, stop.clone()));
+
+    // No controlled shutdown: no leadership handover and no final flush.
+    cluster.crash(leader).await;
+    stop.cancel();
+    churn.await.expect("the churn producer task");
+    drop(admin);
+
+    // The surviving majority promotes one of the other voters, and it must
+    // serve everything the dead broker acknowledged. Some of those offsets
+    // come from the promoted broker's own WAL replica and some from the
+    // objects the dead broker had already flushed.
+    let survivor = cluster
+        .node_ids()
+        .into_iter()
+        .find(|node| *node != leader)
+        .expect("a surviving voter");
+    cluster
+        .handle_for_node(survivor)
+        .expect("the survivor is up")
+        .wait_until_partition_leader_changed(TOPIC, 0, leader)
+        .await;
+    let promoted = cluster
+        .handle_for_node(survivor)
+        .expect("the survivor is up")
+        .partition_leader_for_test(TOPIC, 0)
+        .map(krabka_broker::NodeId)
+        .expect("a promoted leader");
+    let after_crash = fetch_log(
+        &cluster.bootstrap_for_node(promoted),
+        topic_id,
+        0,
+        RECORDS,
+        Duration::from_mins(2),
+    )
+    .await;
+    assert_matches_produced(&after_crash, 0, RECORDS);
+
+    // Bring the crashed broker back on the addresses it vacated. Its WAL
+    // replica recovers to its own checkpoint, discarding any suffix it never
+    // fsynced, and it rejoins the quorum.
+    cluster.restart(leader).await;
+    cluster
+        .handle_for_node(leader)
+        .expect("the restarted broker is up")
+        .wait_until_brokers_registered(VOTERS)
+        .await;
+    cluster
+        .handle_for_node(leader)
+        .expect("the restarted broker is up")
+        .wait_until_partition_present(TOPIC, 0)
+        .await;
+
+    // Every acknowledged offset still reads back after the restart, from
+    // whichever broker now leads the partition.
+    let leader_now = cluster
+        .handle_for_node(survivor)
+        .expect("the survivor is up")
+        .partition_leader_for_test(TOPIC, 0)
+        .map(krabka_broker::NodeId)
+        .expect("a partition leader");
+    let after_restart = fetch_log(
+        &cluster.bootstrap_for_node(leader_now),
+        topic_id,
+        0,
+        RECORDS,
+        Duration::from_mins(2),
+    )
+    .await;
+    assert_matches_produced(&after_restart, 0, RECORDS);
+    assert!(
+        after_restart.bytes == after_crash.bytes,
+        "the restart changed the batches the cluster serves"
+    );
+
+    cluster.shutdown().await;
+}
