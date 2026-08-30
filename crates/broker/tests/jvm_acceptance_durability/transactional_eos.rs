@@ -1,5 +1,6 @@
 //! The transactional exactly-once case: a compiled JVM `KafkaProducer` commits
-//! one transaction and aborts another, and the `read_committed` and
+//! one transaction, aborts another, and appends a later record after rolling
+//! each batch into its own segment. The `read_committed` and
 //! `read_uncommitted` isolation levels must disagree in exactly that way.
 //!
 //! It is the only durability case that needs the split `EXTERNAL` and
@@ -19,7 +20,8 @@ use crate::jvm_acceptance::{KAFKA_IMAGE_TXN, TRANSACTIONAL_PRODUCER_JAVA, docker
 
 // Transactional EOS smoke: stand up a 3-broker Krabka cluster, compile and
 // run a small official JVM KafkaProducer client that commits 6 records and
-// aborts 2, then verify read_committed and read_uncommitted isolation.
+// aborts 2, appends a later record, then verifies read_committed and
+// read_uncommitted isolation across sealed segments.
 //
 // Fixed external ports 9792/9892/9992, controller ports 9793/9893/9993,
 // and loopback-only inter-broker ports 9794/9894/9994. The split listeners
@@ -132,12 +134,27 @@ async fn transactional_console_producer_eos() {
         "1",
         "--replication-factor",
         "1",
+        "--config",
+        "segment.bytes=14",
         "--bootstrap-server",
         &bootstrap_1,
     ]);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !cluster.iter().any(|(broker, _)| {
+        broker
+            .partition_log_config_for_test(TOPIC, 0)
+            .is_some_and(|config| config.segment_size == krabka_units::bytes(14))
+    }) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "segment.bytes did not reach the transaction log"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     // 2. Compile the small Java helper against the image's Kafka client jars.
-    //    It writes one committed transaction and one aborted transaction.
+    //    It writes one committed transaction, one aborted transaction, and a
+    //    later record that seals the abort marker's transaction index.
     let mut producer = Command::new("docker")
         .args([
             "run",
@@ -192,7 +209,8 @@ async fn transactional_console_producer_eos() {
     // not in the metadata image and have no krabka awaiter/metric.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // 4. read_committed must return exactly the committed transaction.
+    // 4. read_committed must return the committed transaction and the later
+    // record, even though the abort entry is now in a sealed segment.
     let committed_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
@@ -203,7 +221,7 @@ async fn transactional_console_producer_eos() {
         "read_committed",
         "--from-beginning",
         "--max-messages",
-        "6",
+        "7",
         "--timeout-ms",
         "20000",
     ]);
@@ -221,11 +239,13 @@ async fn transactional_console_producer_eos() {
                 "committed-3",
                 "committed-4",
                 "committed-5",
+                "after-abort",
             ],
         "read_committed returned the wrong records: {committed_stdout}",
     );
 
-    // 5. read_uncommitted must return both transactions in log order.
+    // 5. read_uncommitted must return both transactions and the later record
+    // in log order.
     let uncommitted_out = docker_run_kafka_tool(&[
         "kafka-console-consumer",
         "--bootstrap-server",
@@ -236,7 +256,7 @@ async fn transactional_console_producer_eos() {
         "read_uncommitted",
         "--from-beginning",
         "--max-messages",
-        "8",
+        "9",
         "--timeout-ms",
         "20000",
     ]);
@@ -256,6 +276,7 @@ async fn transactional_console_producer_eos() {
                 "committed-5",
                 "aborted-0",
                 "aborted-1",
+                "after-abort",
             ],
         "read_uncommitted returned the wrong records: {uncommitted_stdout}",
     );

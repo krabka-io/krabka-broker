@@ -28,7 +28,7 @@ use crate::{codes, error::BrokerError, partition::Partition};
 ///   batches stay in the byte stream, and the consumer drops them on the
 ///   client side with the list below
 /// - `out.last_stable_offset` is set to `min(lso, hw)`
-/// - `out.aborted_transactions` comes from the partition's `.txnindex`
+/// - `out.aborted_transactions` comes from the partition's `.txnindex` files
 ///
 /// When `is_follower_fetch` is `true`:
 /// - the raw bytes go up to LEO, with no HW clamp

@@ -143,6 +143,11 @@ public final class TransactionalProducer {
       }
       producer.abortTransaction();
     }
+
+    config.remove(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
+      producer.send(new ProducerRecord<>(args[1], "after-abort")).get();
+    }
     System.out.println("TXNPROBE OK");
   }
 }

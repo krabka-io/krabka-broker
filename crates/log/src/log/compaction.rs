@@ -9,7 +9,7 @@ use krabka_ids::{Offset, ProducerId};
 use tracing::instrument;
 
 use super::Log;
-use crate::{error::LogError, retention, segment::Segment};
+use crate::{error::LogError, retention, segment::Segment, txn_index::TxnIndex};
 
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
@@ -105,6 +105,10 @@ impl Log {
         let mut new_seg = Segment::open_active(&self.dir, rewrite.new_base_offset, true)?;
         new_seg.set_io(self.io.clone());
         new_seg.seal();
+        let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
+        self.sealed_txn_indexes.clear();
+        self.sealed_txn_indexes
+            .insert(rewrite.new_base_offset, txn_index);
         self.segments.push(new_seg);
         Ok(())
     }

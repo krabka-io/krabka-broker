@@ -146,6 +146,8 @@ impl Log {
         let drop_set: HashSet<Offset> = to_drop.iter().copied().collect();
         self.segments
             .retain(|s| !drop_set.contains(&s.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !drop_set.contains(base));
         self.stamp_indexes
             .retain(|base, _| !drop_set.contains(base));
         for base in &to_drop {

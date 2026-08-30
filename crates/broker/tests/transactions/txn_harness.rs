@@ -13,7 +13,7 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
 use krabka_client_core::security::{ClientSecurity, SaslCredentials};
 use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
     find_coordinator_request::FindCoordinatorRequest,
     init_producer_id_request::InitProducerIdRequest,
 };
@@ -30,6 +30,27 @@ pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
 }
 
 pub async fn create_topic(bootstrap: &str, name: &str) {
+    create_topic_with_configs(bootstrap, name, Vec::new()).await;
+}
+
+pub async fn create_topic_with_segment_bytes(bootstrap: &str, name: &str, bytes: u64) {
+    create_topic_with_configs(
+        bootstrap,
+        name,
+        vec![CreatableTopicConfig {
+            name: "segment.bytes".into(),
+            value: Some(bytes.to_string()),
+            ..Default::default()
+        }],
+    )
+    .await;
+}
+
+async fn create_topic_with_configs(
+    bootstrap: &str,
+    name: &str,
+    configs: Vec<CreatableTopicConfig>,
+) {
     let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
         .build()
@@ -41,6 +62,7 @@ pub async fn create_topic(bootstrap: &str, name: &str) {
                 name: name.into(),
                 num_partitions: 1,
                 replication_factor: 1,
+                configs,
                 ..Default::default()
             }],
             timeout_ms: 5_000,
