@@ -15,6 +15,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/krabka-io/krabka-broker
+  CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   release:
@@ -43,13 +44,13 @@ jobs:
       - name: build dependency SBOM
         run: bash tools/sbom.sh sbom.cdx.json
 
-      - name: push release image
-        run: bazel run //packaging:push -- --tag "${GITHUB_REF_NAME}" --tag latest
+      - name: push release candidate
+        run: bazel run //packaging:push -- --tag "${CANDIDATE_TAG}"
 
       - name: resolve image digest
         id: image
         run: |
-          digest="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}" |
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${CANDIDATE_TAG}" |
             awk '$1 == "Digest:" { print $2; exit }')"
           test "${digest#sha256:}" != "${digest}"
           echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
@@ -111,6 +112,21 @@ jobs:
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer "${issuer}" \
             "${reference}"
+
+      - name: publish release tags
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          reference="${IMAGE}@${DIGEST}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${GITHUB_REF_NAME}" \
+            --tag "${IMAGE}:latest" \
+            "${reference}"
+          for tag in "${GITHUB_REF_NAME}" latest; do
+            actual="$(docker buildx imagetools inspect "${IMAGE}:${tag}" |
+              awk '$1 == "Digest:" { print $2; exit }')"
+            test "${actual}" = "${DIGEST}"
+          done
 
       - name: publish GitHub release and SBOM
         env:

@@ -118,8 +118,10 @@ impl Model for BucketModel {
                 for req in 0..=self.max_req {
                     actions.push(Act::StartConsume(t, req));
                 }
-                for nr in [0, self.max_rate] {
-                    actions.push(Act::StartSetRate(t, nr));
+                if s.writers == 0 {
+                    for nr in [0, self.max_rate] {
+                        actions.push(Act::StartSetRate(t, nr));
+                    }
                 }
             } else {
                 actions.push(Act::Step(t));
@@ -147,7 +149,10 @@ impl Model for BucketModel {
                 };
             }
             Act::StartSetRate(t, new_rate) => {
-                s.writers += 1;
+                if s.writers != 0 {
+                    return None;
+                }
+                s.writers = 1;
                 for pc in &mut s.pcs {
                     if let Pc::Claimed { reset_seen, .. } = pc {
                         *reset_seen = true;
@@ -224,7 +229,7 @@ impl Model for BucketModel {
                     s.pcs[t] = Pc::SetRate3;
                 }
                 Pc::SetRate3 => {
-                    s.writers -= 1;
+                    s.writers = 0;
                     s.pcs[t] = Pc::Idle;
                 }
             },
@@ -238,6 +243,9 @@ impl Model for BucketModel {
             // The buggy fetch_sub drives it negative (RED); the CAS path holds it.
             Property::always("available_in_range", |m: &BucketModel, s: &BucketState| {
                 0 <= s.available && s.available <= m.max_rate
+            }),
+            Property::always("set_rate_is_serialized", |_, s: &BucketState| {
+                s.writers <= 1
             }),
             // Non-vacuity: >= 2 threads in flight at once (real interleaving).
             Property::sometimes("concurrent_inflight", |_, s: &BucketState| {

@@ -152,7 +152,6 @@ impl KraftLog {
     /// # Errors
     /// Returns [`RaftError`] if the underlying truncation fails.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), RaftError> {
-        assert2::assert!(offset >= self.log.log_start_offset());
         self.log.truncate_to(offset)?;
         self.hwm = self.hwm.min(offset);
         self.persist_hwm();
@@ -467,5 +466,21 @@ mod tests {
         log.truncate_to(Offset(2)).unwrap();
         assert2::assert!(log.log_end_offset().0 == 2);
         assert2::assert!(log.hwm().0 == 2);
+    }
+
+    #[test]
+    fn truncate_below_log_start_returns_error() {
+        let (mut log, _dir) = open_tmp();
+        for _ in 0..4 {
+            log.append(&mut batch(0, 1, b"x")).unwrap();
+        }
+        log.prune_to(Offset(2)).unwrap();
+
+        check!(matches!(
+            log.truncate_to(Offset(1)),
+            Err(RaftError::Storage(
+                krabka_log::LogError::OffsetTooLow { .. }
+            ))
+        ));
     }
 }
