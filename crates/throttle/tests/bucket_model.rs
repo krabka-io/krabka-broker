@@ -1,7 +1,7 @@
 //! Exhaustive stateright shared-memory interleaving model of the live
 //! `krabka_throttle::TokenBucket` concurrency.
 //!
-//! The model drives the production [`krabka_throttle::plan_consume`]
+//! The model drives the production [`krabka_verified::throttle::plan_consume`]
 //! arithmetic. The state is the shared `{rate, available, pending}` atomics,
 //! modeled small, plus a seqlock `generation` and a per-thread program counter
 //! for each in-flight `try_consume` or `set_rate`. `available` is an `i64`, so
@@ -31,7 +31,7 @@
 //! are `bucket_basic` and `bucket_wide`. See the design spec
 //! `docs/superpowers/specs/2026-06-14-krabka-token-bucket-quota-model-design.md`.
 
-use krabka_throttle::{
+use krabka_verified::throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
 use stateright::{Checker, Model, Property};

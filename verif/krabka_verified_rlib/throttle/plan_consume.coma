@@ -1,14 +1,14 @@
-(* #"/home/user/krabka-broker/crates/throttle/src/lib.rs" 49 0 54 34 *)
+(* #"/home/user/krabka-broker/crates/verified/src/throttle.rs" 92 0 97 34 *)
 
-let%span slib = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 55 17 55 53
-let%span slib'0 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 55 17 55 66
-let%span slib'1 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 56 16 56 39
-let%span slib'2 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 57 40 57 54
-let%span slib'3 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 40 10 40 37
-let%span slib'4 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 41 10 41 33
-let%span slib'5 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 42 10 42 80
-let%span slib'6 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 43 10 47 1
-let%span slib'7 = "/home/user/krabka-broker/crates/throttle/src/lib.rs" 24 4 28 5
+let%span slib = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 98 17 98 53
+let%span slib'0 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 98 17 98 66
+let%span slib'1 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 99 16 99 39
+let%span slib'2 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 100 40 100 54
+let%span slib'3 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 83 10 83 37
+let%span slib'4 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 84 10 84 33
+let%span slib'5 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 85 10 85 80
+let%span slib'6 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 86 10 90 1
+let%span slib'7 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 75 4 79 5
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
@@ -77,14 +77,14 @@ type t_NewAvailable = { f0'4: UInt64.t }
 
 type tup2_GrantedTokens_NewAvailable = { f0'5: t_GrantedTokens; f1'5: t_NewAvailable }
 
-function capped [#"/home/user/krabka-broker/crates/throttle/src/lib.rs" 23 0 23 61] (available: int) (refill: int) (burst: int) : int
+function capped [#"/home/user/krabka-broker/crates/verified/src/throttle.rs" 74 0 74 61] (available: int) (refill: int) (burst: int) : int
  = [%#slib'7] if available + refill <= burst then available + refill else burst
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let plan_consume [#"/home/user/krabka-broker/crates/throttle/src/lib.rs" 49 0 54 34] (available: t_AvailableTokens)
+let plan_consume [#"/home/user/krabka-broker/crates/verified/src/throttle.rs" 92 0 97 34] (available: t_AvailableTokens)
   (refill: t_RefillTokens) (burst: t_BurstCapacity) (requested: t_RequestedTokens)
   (return (x: tup2_GrantedTokens_NewAvailable)) = (! bb0
   [ bb0 = s0

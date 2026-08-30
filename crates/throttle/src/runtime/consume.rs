@@ -9,8 +9,11 @@
 
 use std::sync::atomic::{Ordering, Ordering::Relaxed};
 
+use krabka_verified::throttle::{
+    AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
+};
+
 use super::TokenBucket;
-use crate::{AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume};
 
 impl TokenBucket {
     /// Tries to consume up to `requested` tokens.

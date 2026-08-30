@@ -142,9 +142,8 @@ jobs:
   # at any other path always differs and a `git diff --exit-code` over `verif/`
   # would fail every run for a reason that says nothing about the proofs.
   #
-  # `cargo creusot` runs per crate. Run bare it builds the whole workspace, and
-  # `krabka-broker` does not compile under `--cfg creusot`, because
-  # `krabka-throttle` gates out `ThrottleState` and `TokenBucket` there.
+  # `cargo creusot` runs per crate. Running it bare builds the whole workspace,
+  # including crates with no proof contracts, so discover the relevant members.
   proofs:
     name: creusot proofs
     if: github.event_name != 'schedule'
@@ -201,12 +200,18 @@ jobs:
             prelude why3 provers why3-conf cargo-creusot creusot-rustc \
             cargo-creusot-config
 
-      # A non-zero exit or any unproved goal fails the job.
+      # A non-zero exit or any unproved goal fails the job. Check the explicit
+      # proof list first so adding a contract-bearing crate cannot silently
+      # leave it outside this gate.
       - name: prove
         run: |
           export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-          cargo creusot --package krabka-verified
-          cargo creusot --package krabka-throttle
+          python3 tools/test_creusot_packages.py
+          packages=(krabka-verified)
+          python3 tools/creusot_packages.py "${packages[@]}"
+          for package in "${packages[@]}"; do
+            cargo creusot --package "${package}"
+          done
 
   # Container suites, one runner each.
   #
