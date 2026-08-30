@@ -7,6 +7,9 @@ use crate::{BrokerError, config::BrokerConfig};
 /// witness site.
 const STRETCH_SITE_COUNT: i64 = 3;
 
+/// Largest replication factor covered by the stretch durability proof.
+const STRETCH_MAX_REPLICATION_FACTOR: i64 = 1024;
+
 /// A three-site stretch deployment: two sites that serve clients and one
 /// witness site that only replicates data and votes.
 ///
@@ -85,8 +88,18 @@ impl BrokerConfig {
             return Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() });
         }
 
+        let replication_factor = i64::from(self.offsets_topic_replication_factor);
+        // The scalar checks reject non-positive replication factors, and the
+        // exact-three-sites check above bounds `site_count`. Reject the one
+        // remaining out-of-domain input before calling the verified kernel.
+        if replication_factor > STRETCH_MAX_REPLICATION_FACTOR {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "offsets_topic_replication_factor exceeds the stretch verification bound of 1024"
+                    .into(),
+            ));
+        }
         if !krabka_verified::stretch::min_insync_is_site_loss_safe(
-            i64::from(self.offsets_topic_replication_factor),
+            replication_factor,
             site_count,
             i64::from(self.default_min_insync_replicas),
         ) {
@@ -273,5 +286,17 @@ mod tests {
                 }) if got == min_insync
             ));
         }
+    }
+
+    #[test]
+    fn stretch_rejects_replication_factor_above_the_verified_bound() {
+        let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
+        c.offsets_topic_replication_factor = 1025;
+
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::InvalidRuntimeConfig(message))
+                if message == "offsets_topic_replication_factor exceeds the stretch verification bound of 1024"
+        ));
     }
 }

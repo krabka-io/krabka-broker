@@ -82,12 +82,20 @@ impl Engine {
                 return;
             }
             if let MetadataRecord::V1PartitionOffsetAdvance(r) = r {
-                let (base_offset, _next_offset) = krabka_verified::reserve_offsets(
-                    scratch
-                        .partition_next_offset(&r.topic, r.partition)
-                        .unwrap_or(0),
-                    r.count,
-                );
+                let next_offset = scratch
+                    .partition_next_offset(&r.topic, r.partition)
+                    .unwrap_or(0);
+                // `reserve_offsets` is proved only for non-negative counts
+                // whose sum fits in i64, so reject untrusted metadata first.
+                if r.count < 0 || next_offset.checked_add(r.count).is_none() {
+                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                        "partition offset advance count {} is out of range at next offset {next_offset}",
+                        r.count
+                    ))));
+                    return;
+                }
+                let (base_offset, _next_offset) =
+                    krabka_verified::reserve_offsets(next_offset, r.count);
                 result.offset_reservations.push(OffsetReservation {
                     topic: r.topic.clone(),
                     partition: r.partition,

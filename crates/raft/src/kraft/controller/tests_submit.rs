@@ -66,6 +66,43 @@ fn offset_advance_submit_returns_actor_ordered_base() {
 }
 
 #[test]
+fn offset_advance_submit_rejects_counts_outside_verified_domain() {
+    use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+
+    let advance = |count| {
+        vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count,
+            },
+        )]
+    };
+
+    for records in [topic_record("topic"), advance(1)] {
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_submit_change(&records, reply);
+        assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    }
+    let log_end = engine.log.log_end_offset();
+
+    for count in [-1, i64::MAX] {
+        let (reply, mut rx) = oneshot::channel();
+        engine.on_submit_change(&advance(count), reply);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Err(RaftError::ChangeRejected(_)))
+        ));
+        assert!(engine.image.partition_next_offset("topic", 0) == Some(1));
+        assert!(engine.log.log_end_offset() == log_end);
+    }
+}
+
+#[test]
 fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     for offset in 0..5 {
