@@ -24,7 +24,7 @@ load("//tools/lint:linters.bzl", "clippy_test")
 # The clippy tables stay a Cargo-side gate: clippy runs as an aspect here, not
 # as part of a normal build.
 WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
-WORKSPACE_VERSION = "0.4.0"
+WORKSPACE_VERSION = "0.5.0"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
