@@ -1,7 +1,7 @@
 //! In-process WAL quorum engine.
 //!
 //! This file is the module root. It holds the replica set, the shard engine
-//! state, and the local-replica durability path. Each child holds one concern:
+//! state, and the distributed durability path. Each child holds one concern:
 //! `batches` decodes a raw WAL byte range, `replica_io` runs the blocking log
 //! operations off the async worker threads, `recovery` picks and enforces the
 //! durable prefix a shard opens on, and `distributed` keeps the diskless
@@ -24,22 +24,23 @@ use tokio::sync::Notify;
 
 mod batches;
 mod distributed;
+#[cfg(test)]
 mod recovery;
 mod replica_io;
 
+#[cfg(test)]
+use self::recovery::{bootstrap_durable_prefix, recover_durable_prefix};
+use self::replica_io::trim_log;
 pub(super) use self::{
     batches::{read_batches_exact, read_log_batches_exact, split_batches},
     replica_io::sync_replica,
-};
-use self::{
-    recovery::{bootstrap_durable_prefix, recover_durable_prefix},
-    replica_io::trim_log,
 };
 use crate::{error::BrokerError, wal::quorum::log_view::ShardLog};
 
 /// A single durable member of a WAL quorum.
 #[derive(Debug)]
 pub(crate) struct WalReplica {
+    #[cfg(test)]
     pub(super) id: NodeId,
     log: ShardLog,
     alive: AtomicBool,
@@ -47,14 +48,25 @@ pub(crate) struct WalReplica {
 
 impl WalReplica {
     #[must_use]
-    pub(crate) fn new(id: NodeId, log: Arc<Mutex<Log>>) -> Self {
+    fn new(log: Arc<Mutex<Log>>) -> Self {
         Self {
-            id,
+            #[cfg(test)]
+            id: NodeId(0),
             log: ShardLog::new(log),
             alive: AtomicBool::new(true),
         }
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(id: NodeId, log: Arc<Mutex<Log>>) -> Self {
+        Self {
+            id,
+            ..Self::new(log)
+        }
+    }
+
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn id(&self) -> NodeId {
         self.id
@@ -95,13 +107,14 @@ pub(crate) struct WalFetchData {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 pub(crate) enum OpenMode {
     BootstrapFrom(NodeId),
     Recover,
-    Distributed,
 }
 
 impl WalShardEngine {
+    #[cfg(test)]
     pub(crate) fn new(replicas: Vec<WalReplica>, mode: OpenMode) -> Result<Self, BrokerError> {
         if replicas.is_empty() {
             return Err(BrokerError::Replication(
@@ -114,7 +127,6 @@ impl WalShardEngine {
             OpenMode::Recover => {
                 recover_durable_prefix(&replicas, strict_majority(expected_voters))?
             }
-            OpenMode::Distributed => replicas[0].log.lock().log_start_offset(),
         };
         Ok(Self {
             replicas,
@@ -141,22 +153,23 @@ impl WalShardEngine {
                 "diskless WAL voter count must be odd".into(),
             ));
         }
-        let local_durable = {
+        let (log_start, local_durable) = {
             let mut log = source
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let log_start = log.log_start_offset();
             log.sync()?;
-            log.log_end_offset()
+            (log_start, log.log_end_offset())
         };
-        let mut engine = Self::new(
-            vec![WalReplica::new(NodeId(0), source)],
-            OpenMode::Distributed,
-        )?;
-        engine.expected_voters = expected_voters;
-        engine
-            .local_durable
-            .store(local_durable.0, Ordering::Release);
-        Ok(engine)
+        Ok(Self {
+            replicas: vec![WalReplica::new(source)],
+            expected_voters,
+            durable_watermark: AtomicI64::new(log_start.0),
+            local_durable: AtomicI64::new(local_durable.0),
+            distributed_required: AtomicBool::new(false),
+            distributed: Mutex::new(None),
+            durable_advanced: Notify::new(),
+        })
     }
 
     #[cfg(test)]
@@ -164,7 +177,7 @@ impl WalShardEngine {
     pub(crate) fn for_logs(logs: std::collections::BTreeMap<NodeId, Arc<Mutex<Log>>>) -> Self {
         let replicas = logs
             .into_iter()
-            .map(|(id, log)| WalReplica::new(id, log))
+            .map(|(id, log)| WalReplica::for_test(id, log))
             .collect();
         Self::new(replicas, OpenMode::Recover).expect("test WAL quorum recovers")
     }

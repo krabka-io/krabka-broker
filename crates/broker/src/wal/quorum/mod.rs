@@ -3,6 +3,7 @@
 pub(crate) mod engine;
 pub(crate) mod follower;
 pub(crate) mod log_view;
+#[cfg(test)]
 mod membership;
 pub(crate) mod placement;
 pub(crate) mod registry;
@@ -24,16 +25,21 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use krabka_ids::{Offset, PartitionIndex};
+#[cfg(test)]
 use krabka_kraft_core::NodeId;
-use krabka_log::{Log, LogConfig};
+use krabka_log::Log;
+#[cfg(test)]
+use krabka_log::LogConfig;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use uuid::Uuid;
 
+use self::engine::WalShardEngine;
 pub(crate) use self::shard_dirs::{
     prune_orphaned_shard_dirs, remove_leader_shard, remove_shard, shard_dir,
 };
+#[cfg(test)]
 use self::{
-    engine::{OpenMode, WalShardEngine},
+    engine::OpenMode,
     membership::{load_or_prepare_quorum_membership, persist_quorum_membership},
 };
 use super::WalStore;
@@ -65,6 +71,7 @@ impl QuorumWalStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn for_partition(
         topic: &str,
         topic_id: Option<Uuid>,
@@ -79,7 +86,7 @@ impl QuorumWalStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .config_snapshot();
         let mut replicas = Vec::with_capacity(replica_count);
-        replicas.push(engine::WalReplica::new(NodeId(0), source.clone()));
+        replicas.push(engine::WalReplica::for_test(NodeId(0), source.clone()));
         let root = shard_dir(log_dir, topic, topic_id, partition);
         for id in 1..replica_count {
             let id = NodeId(u64::try_from(id).map_err(|_| {
@@ -87,7 +94,7 @@ impl QuorumWalStore {
             })?);
             let replica_dir = root.join(format!("replica-{}", id.0));
             let log = Log::open(&replica_dir, replica_config(&config))?;
-            replicas.push(engine::WalReplica::new(id, Arc::new(Mutex::new(log))));
+            replicas.push(engine::WalReplica::for_test(id, Arc::new(Mutex::new(log))));
         }
         let voter_ids: Vec<_> = replicas.iter().map(engine::WalReplica::id).collect();
         let is_new = load_or_prepare_quorum_membership(&root, &voter_ids)?;
@@ -142,6 +149,7 @@ impl QuorumWalStore {
     }
 }
 
+#[cfg(test)]
 fn replica_config(config: &LogConfig) -> LogConfig {
     let mut config = config.clone();
     config.validate_on_open = true;
