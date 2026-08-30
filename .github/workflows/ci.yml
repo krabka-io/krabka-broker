@@ -108,6 +108,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: generated KIP matrix
+        run: |
+          generated="$(mktemp)"
+          trap 'rm -f "${generated}"' EXIT
+          python3 tools/generate-kip-matrix.py "${generated}"
+          diff -u docs/KIP_MATRIX.md "${generated}"
       - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}

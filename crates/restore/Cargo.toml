@@ -29,20 +29,20 @@ maplit = { workspace = true }
 # The target cluster is formatted through the same code path `krabka format`
 # uses, with the recovered topic and partition records seeded into the
 # bootstrap stream.
-krabka-format = { version = "0.4.0", path = "../format" }
+krabka-format = { version = "0.5.0", path = "../format" }
 krabka-ids = { version = "0.4.0" }
-krabka-log = { version = "0.4.0", path = "../log" }
+krabka-log = { version = "0.5.0", path = "../log" }
 krabka-metadata = { version = "0.4.0" }
 # The archive handle is built straight onto the object-store layer. The broker
 # owns the same mapping, but a recovery tool must not carry the broker.
-krabka-object-store = { version = "0.4.0", path = "../object-store" }
+krabka-object-store = { version = "0.5.0", path = "../object-store" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 # The KIP-405 archive key codec and segment metadata model.
-krabka-remote-storage = { version = "0.4.0", path = "../remote-storage" }
+krabka-remote-storage = { version = "0.5.0", path = "../remote-storage" }
 # `Snapshot::load` reads a broker's `remote-log-metadata/snapshot` for
 # `--rlmm-snapshot`, the authoritative-metadata cross-check against the
 # bucket scan.
-krabka-remote-storage-topic = { version = "0.4.0", path = "../remote-storage-topic" }
+krabka-remote-storage-topic = { version = "0.5.0", path = "../remote-storage-topic" }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 # The `.snapshot` sidecar's CRC32C header. `krabka-log` keeps its own decoder

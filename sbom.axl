@@ -40,6 +40,8 @@ def _impl(ctx):
         "deny",
         "--manifest-path",
         "crates/broker/Cargo.toml",
+        "--target",
+        "x86_64-unknown-linux-gnu",
         "--exclude-dev",
         "list",
         "--format",
@@ -48,7 +50,7 @@ def _impl(ctx):
     deny = set([line.split("\t")[0] for line in deny_output.split("\n")[1:] if line])
     missing = [package for package in cargo if package not in deny]
     if missing:
-        fail("Cargo packages in the Bazel image graph are missing from cargo deny:\n{}".format("\n".join(missing)))
+        fail("Cargo packages in the Bazel image graph are missing from cargo deny's x86_64 non-dev graph:\n{}".format("\n".join(missing)))
 
     components = []
     for purl in purls:

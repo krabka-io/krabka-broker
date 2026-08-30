@@ -18,6 +18,7 @@ use testcontainers_modules::kafka::{KAFKA_PORT, Kafka};
 
 const TOPIC: &str = "krabka-log-itest";
 const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka";
+const KAFKA_TAG: &str = "6.1.1";
 /// The deadline for a container to start, which includes the image pull.
 ///
 /// `AsyncRunner::start` waits for the pull with no bound of its own. A stalled
@@ -79,7 +80,10 @@ fn docker_cp(container_id: &str, src: &str, dst: &Path) {
 async fn read_jvm_produced_log_dir() {
     let kafka = tokio::time::timeout(
         CONTAINER_START_TIMEOUT,
-        Kafka::default().with_name(KAFKA_IMAGE).start(),
+        Kafka::default()
+            .with_name(KAFKA_IMAGE)
+            .with_tag(KAFKA_TAG)
+            .start(),
     )
     .await
     .expect("kafka container start timed out")
@@ -170,6 +174,7 @@ async fn jvm_consumes_rust_written_log_dir() {
         CONTAINER_START_TIMEOUT,
         Kafka::default()
             .with_name(KAFKA_IMAGE)
+            .with_tag(KAFKA_TAG)
             // The broker and the test process have different host UIDs. Root is
             // limited to this disposable container and can reopen both sets of
             // files after the restart.

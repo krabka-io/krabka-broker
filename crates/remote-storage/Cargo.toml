@@ -26,7 +26,7 @@ bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 krabka-audit = { workspace = true }
 krabka-ids = { version = "0.4.0" }
-krabka-object-store = { version = "0.4.0", path = "../object-store" }
+krabka-object-store = { version = "0.5.0", path = "../object-store" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 krabka-units = { workspace = true }
 derive_more = { workspace = true }
@@ -49,7 +49,7 @@ assert2 = { workspace = true }
 # `object_store::ObjectStore` is an `#[async_trait]` trait, so the versioned
 # test double in `worm::verify` has to be written with the same attribute.
 async-trait = { workspace = true }
-krabka-log = { version = "0.4.0", path = "../log" }
+krabka-log = { version = "0.5.0", path = "../log" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 proptest = { workspace = true }
 # Generates a throwaway Ed25519 key pair for the WORM manifest signing tests.
