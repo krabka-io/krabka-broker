@@ -14,6 +14,11 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
+//! One stored topic override is read-only too:
+//! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
+//! when it is opened, so both alter paths refuse to change it and
+//! `kafka-configs` must say so.
+//!
 //! A topic resource carries one synthesised key beside its stored overrides:
 //! KFC-9's [`crate::config_keys::WRITE_FREEZE`]. It is read-only for the same
 //! reason. The handler reads it from the freeze registry and not from the

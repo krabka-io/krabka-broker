@@ -40,7 +40,7 @@ impl ReplicatorSupervisor {
         let wal_dirs_to_keep = image
             .all_partitions()
             .filter(|partition| {
-                crate::broker::diskless_topic_config(image.topic_config(&partition.topic))
+                crate::config_keys::resolve_diskless(image.topic_config(&partition.topic))
             })
             .filter_map(|partition| {
                 let topic_id = image.topic(&partition.topic)?.topic_id;

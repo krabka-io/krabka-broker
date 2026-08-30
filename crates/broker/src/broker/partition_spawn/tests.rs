@@ -48,22 +48,7 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
 }
 
 #[test]
-fn diskless_topic_config_requires_exact_true() {
-    assert!(!diskless_topic_config(None));
-
-    let mut config = std::collections::BTreeMap::new();
-    config.insert("krabka.diskless".to_string(), "false".to_string());
-    assert!(!diskless_topic_config(Some(&config)));
-
-    config.insert("krabka.diskless".to_string(), "TRUE".to_string());
-    assert!(!diskless_topic_config(Some(&config)));
-
-    config.insert("krabka.diskless".to_string(), "true".to_string());
-    assert!(diskless_topic_config(Some(&config)));
-}
-
-#[test]
-fn partition_wal_is_created_only_for_diskless_partitions() {
+fn diskless_partition_requires_distributed_identity_and_registry() {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(
         krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).expect("open log"),
@@ -72,7 +57,6 @@ fn partition_wal_is_created_only_for_diskless_partitions() {
     assert!(
         partition_wal(
             ("topic", None, PartitionIndex(0)),
-            dir.path(),
             log.clone(),
             false,
             None,
@@ -83,65 +67,37 @@ fn partition_wal_is_created_only_for_diskless_partitions() {
         .0
         .is_none()
     );
-    assert!(
-        partition_wal(
-            ("topic", None, PartitionIndex(0)),
-            dir.path(),
-            log,
-            true,
-            None,
-            None,
-            3,
-        )
-        .expect("partition wal")
-        .0
-        .is_some()
-    );
-}
+    let error = partition_wal(
+        ("topic", None, PartitionIndex(0)),
+        log.clone(),
+        true,
+        None,
+        None,
+        3,
+    )
+    .err()
+    .expect("missing topic id must fail");
+    assert!(matches!(
+        error,
+        BrokerError::Replication(message)
+            if message == "diskless WAL topic id is not available for topic-0"
+    ));
 
-#[tokio::test]
-async fn diskless_partition_starts_at_recovered_wal_watermark() {
-    let dir = tempdir().expect("tempdir");
-    let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
-    std::fs::create_dir_all(&partition_dir).expect("partition directory");
-    let mut log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
-    let mut batch = krabka_protocol::records::RecordBatch {
-        last_offset_delta: 1,
-        records: vec![
-            krabka_protocol::records::Record::default(),
-            krabka_protocol::records::Record {
-                offset_delta: 1,
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    };
-    log.append(&mut batch).expect("append recovered records");
-
-    let partition = try_spawn_partition_with_sequencer(PartitionSpawnConfig {
-        topic: "recovered".into(),
-        topic_id: Some(uuid::Uuid::new_v4()),
-        partition_id: PartitionIndex(0),
-        log_dir: dir.path().to_path_buf(),
+    let error = partition_wal(
+        ("topic", Some(uuid::Uuid::new_v4()), PartitionIndex(0)),
         log,
-        log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
-        producer_state: Arc::new(crate::producer_state::ProducerState::new()),
-        producer_id_expiration: millis(1),
-        max_produce_group: 1_024,
-        partition_writer_queue_depth: 64,
-        diskless_wal_local_replica_count: 3,
-        diskless: true,
-        hot_tail: None,
-        wal_shards: None,
-        sequencer: None,
-    })
-    .expect("spawn recovered partition");
-
-    assert!(partition.high_watermark().await == krabka_log::Offset(2));
-    partition
-        .take_writer_handle()
-        .expect("partition writer handle")
-        .abort();
+        true,
+        None,
+        None,
+        3,
+    )
+    .err()
+    .expect("missing shard registry must fail");
+    assert!(matches!(
+        error,
+        BrokerError::Replication(message)
+            if message == "diskless WAL shard registry is not available for topic-0"
+    ));
 }
 
 #[tokio::test]
@@ -203,7 +159,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         krabka_units::mebibytes(1),
     );
     registry
-        .route_fetch_request(&acknowledgement)
+        .route_fetch_request(&acknowledgement, krabka_raft::NodeId(2))
         .expect("WAL route")
         .expect("WAL response");
 

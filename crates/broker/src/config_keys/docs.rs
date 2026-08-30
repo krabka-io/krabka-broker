@@ -8,6 +8,7 @@ use super::{
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC,
     },
+    diskless::DISKLESS,
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
     recovery::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
@@ -119,6 +120,13 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         description: "Krabka QoS tier used to partition producer quota buckets.",
     },
     TopicConfigDoc {
+        key: DISKLESS,
+        value_type: "boolean",
+        default: Some("false"),
+        kip: None,
+        description: "Route this topic through the diskless WAL data path instead of the local log. Fixed when the topic is created, and exclusive with both remote.storage.enable and delivery.mode=scheduled.",
+    },
+    TopicConfigDoc {
         key: DELIVERY_MODE,
         value_type: "string",
         default: Some(DELIVERY_MODE_IMMEDIATE),
@@ -220,6 +228,7 @@ mod tests {
             LOCAL_RETENTION_BYTES,
             DELETE_RETENTION_MS,
             QOS_TIER,
+            DISKLESS,
             DELIVERY_MODE,
             DELIVERY_MAX_DELAY_MS,
             DELIVERY_SCHEDULE_MONOTONIC,

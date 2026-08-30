@@ -1,7 +1,7 @@
 //! In-process WAL quorum engine.
 //!
 //! This file is the module root. It holds the replica set, the shard engine
-//! state, and the local-replica durability path. Each child holds one concern:
+//! state, and the distributed durability path. Each child holds one concern:
 //! `batches` decodes a raw WAL byte range, `replica_io` runs the blocking log
 //! operations off the async worker threads, `recovery` picks and enforces the
 //! durable prefix a shard opens on, and `distributed` keeps the diskless
@@ -24,22 +24,23 @@ use tokio::sync::Notify;
 
 mod batches;
 mod distributed;
+#[cfg(test)]
 mod recovery;
 mod replica_io;
 
+#[cfg(test)]
+use self::recovery::{bootstrap_durable_prefix, recover_durable_prefix};
+use self::replica_io::trim_log;
 pub(super) use self::{
     batches::{read_batches_exact, read_log_batches_exact, split_batches},
     replica_io::sync_replica,
-};
-use self::{
-    recovery::{bootstrap_durable_prefix, recover_durable_prefix},
-    replica_io::trim_log,
 };
 use crate::{error::BrokerError, wal::quorum::log_view::ShardLog};
 
 /// A single durable member of a WAL quorum.
 #[derive(Debug)]
 pub(crate) struct WalReplica {
+    #[cfg(test)]
     pub(super) id: NodeId,
     log: ShardLog,
     alive: AtomicBool,
@@ -47,14 +48,25 @@ pub(crate) struct WalReplica {
 
 impl WalReplica {
     #[must_use]
-    pub(crate) fn new(id: NodeId, log: Arc<Mutex<Log>>) -> Self {
+    fn new(log: Arc<Mutex<Log>>) -> Self {
         Self {
-            id,
+            #[cfg(test)]
+            id: NodeId(0),
             log: ShardLog::new(log),
             alive: AtomicBool::new(true),
         }
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(id: NodeId, log: Arc<Mutex<Log>>) -> Self {
+        Self {
+            id,
+            ..Self::new(log)
+        }
+    }
+
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn id(&self) -> NodeId {
         self.id
@@ -95,13 +107,14 @@ pub(crate) struct WalFetchData {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 pub(crate) enum OpenMode {
     BootstrapFrom(NodeId),
     Recover,
-    Distributed,
 }
 
 impl WalShardEngine {
+    #[cfg(test)]
     pub(crate) fn new(replicas: Vec<WalReplica>, mode: OpenMode) -> Result<Self, BrokerError> {
         if replicas.is_empty() {
             return Err(BrokerError::Replication(
@@ -114,7 +127,6 @@ impl WalShardEngine {
             OpenMode::Recover => {
                 recover_durable_prefix(&replicas, strict_majority(expected_voters))?
             }
-            OpenMode::Distributed => replicas[0].log.lock().log_start_offset(),
         };
         Ok(Self {
             replicas,
@@ -141,22 +153,23 @@ impl WalShardEngine {
                 "diskless WAL voter count must be odd".into(),
             ));
         }
-        let local_durable = {
+        let (log_start, local_durable) = {
             let mut log = source
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let log_start = log.log_start_offset();
             log.sync()?;
-            log.log_end_offset()
+            (log_start, log.log_end_offset())
         };
-        let mut engine = Self::new(
-            vec![WalReplica::new(NodeId(0), source)],
-            OpenMode::Distributed,
-        )?;
-        engine.expected_voters = expected_voters;
-        engine
-            .local_durable
-            .store(local_durable.0, Ordering::Release);
-        Ok(engine)
+        Ok(Self {
+            replicas: vec![WalReplica::new(source)],
+            expected_voters,
+            durable_watermark: AtomicI64::new(log_start.0),
+            local_durable: AtomicI64::new(local_durable.0),
+            distributed_required: AtomicBool::new(false),
+            distributed: Mutex::new(None),
+            durable_advanced: Notify::new(),
+        })
     }
 
     #[cfg(test)]
@@ -164,7 +177,7 @@ impl WalShardEngine {
     pub(crate) fn for_logs(logs: std::collections::BTreeMap<NodeId, Arc<Mutex<Log>>>) -> Self {
         let replicas = logs
             .into_iter()
-            .map(|(id, log)| WalReplica::new(id, log))
+            .map(|(id, log)| WalReplica::for_test(id, log))
             .collect();
         Self::new(replicas, OpenMode::Recover).expect("test WAL quorum recovers")
     }
@@ -374,4 +387,159 @@ pub(super) struct BatchBytes {
     pub(super) base_offset: Offset,
     pub(super) last_offset: Offset,
     pub(super) verbatim: VerbatimBatch,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use assert2::assert;
+    use bytes::{Bytes, BytesMut};
+    use krabka_log::LogConfig;
+    use krabka_protocol::records::RecordBatch;
+
+    use super::*;
+    use crate::wal::quorum::test_support::batch;
+
+    fn configured_engine(path: &Path) -> WalShardEngine {
+        let log = Log::open(path, LogConfig::default()).unwrap();
+        let engine = WalShardEngine::new_distributed(Arc::new(Mutex::new(log)), 3).unwrap();
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        engine
+    }
+
+    fn log_with_records(path: &Path, records: usize) -> Arc<Mutex<Log>> {
+        let mut log = Log::open(path, LogConfig::default()).unwrap();
+        for _ in 0..records {
+            log.append(&mut batch(1)).unwrap();
+        }
+        log.sync().unwrap();
+        Arc::new(Mutex::new(log))
+    }
+
+    #[test]
+    fn distributed_watermark_honors_membership_and_log_start_floor() {
+        for (name, from, offset, expected, remembered) in [
+            ("non-voter", NodeId(9), 10, 0, None),
+            ("below log start", NodeId(2), 4, 5, None),
+            ("at log start", NodeId(2), 5, 5, None),
+            ("past log start", NodeId(2), 6, 6, Some(6)),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let engine = configured_engine(dir.path());
+
+            let advanced =
+                engine.record_durable_offset(from, Offset(offset), Offset(5), Offset(10));
+            let stored = engine
+                .distributed
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .durable_offsets
+                .get(&from)
+                .copied();
+
+            assert!(advanced == (expected > 0), "case {name}");
+            assert!(
+                engine.durable_watermark() == Offset(expected),
+                "case {name}"
+            );
+            assert!(stored == remembered.map(Offset), "case {name}");
+        }
+    }
+
+    #[test]
+    fn distributed_reconfiguration_keeps_only_current_voter_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = configured_engine(dir.path());
+        engine.record_durable_offset(NodeId(2), Offset(8), Offset(0), Offset(10));
+        engine.record_durable_offset(NodeId(3), Offset(7), Offset(0), Offset(10));
+
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(3), NodeId(4)]);
+
+        let distributed = engine.distributed.lock().unwrap();
+        let quorum = distributed.as_ref().unwrap();
+        assert!(quorum.voters == [NodeId(1), NodeId(3), NodeId(4)]);
+        assert!(!quorum.durable_offsets.contains_key(&NodeId(2)));
+        assert!(quorum.durable_offsets.get(&NodeId(3)) == Some(&Offset(7)));
+        assert!(!quorum.durable_offsets.contains_key(&NodeId(4)));
+    }
+
+    #[test]
+    fn adopted_prefix_must_be_inside_its_log_bounds() {
+        for (name, durable, expected) in [
+            ("below start", 4, 0),
+            ("at start", 5, 5),
+            ("at end", 10, 10),
+            ("past end", 11, 0),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let engine = configured_engine(dir.path());
+
+            engine.adopt_local_durable_prefix(Offset(durable), Offset(5), Offset(10));
+
+            assert!(
+                engine.local_durable.load(Ordering::Acquire) == expected,
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_uses_the_majority_prefix_and_repairs_every_replica() {
+        for (ends, expected) in [([5, 3, 1], 3), ([5, 5, 1], 5)] {
+            let dir = tempfile::tempdir().unwrap();
+            let replicas = ends
+                .into_iter()
+                .enumerate()
+                .map(|(id, end)| {
+                    WalReplica::for_test(
+                        NodeId(u64::try_from(id).unwrap()),
+                        log_with_records(&dir.path().join(format!("replica-{id}")), end),
+                    )
+                })
+                .collect();
+
+            let engine = WalShardEngine::new(replicas, OpenMode::Recover).unwrap();
+
+            assert!(engine.durable_watermark() == Offset(expected));
+            assert!(engine.replica_end_offsets() == vec![Offset(expected); 3]);
+        }
+    }
+
+    #[test]
+    fn batch_parsing_rejects_invalid_offsets_and_inexact_ranges() {
+        let negative_delta = RecordBatch {
+            last_offset_delta: -1,
+            ..RecordBatch::default()
+        };
+        let mut overflowing_offset = batch(2);
+        overflowing_offset.base_offset = i64::MAX;
+        let mut negative_wire = BytesMut::new();
+        negative_delta.encode(&mut negative_wire).unwrap();
+        let mut overflowing_wire = BytesMut::new();
+        overflowing_offset.encode(&mut overflowing_wire).unwrap();
+
+        for (name, wire) in [
+            ("truncated batch", Bytes::from_static(&[0])),
+            ("negative offset delta", negative_wire.freeze()),
+            ("offset overflow", overflowing_wire.freeze()),
+        ] {
+            assert!(split_batches(&wire).is_err(), "case {name}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut batch(3)).unwrap();
+        for (name, start, target) in [
+            ("starts inside a batch", 1, 3),
+            ("ends inside a batch", 0, 2),
+        ] {
+            assert!(
+                read_log_batches_exact(&log, Offset(start), Offset(target)).is_err(),
+                "case {name}"
+            );
+        }
+    }
 }

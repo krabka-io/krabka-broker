@@ -4,6 +4,12 @@
 //! `AlterConfigs` replaces a topic's whole override map, so the per-key
 //! validation and the cross-key combination rules both apply to the map this
 //! module builds, and neither reads the topic's current overrides.
+//!
+//! One rule does read them. `krabka.diskless` is fixed when the topic is
+//! created, and a replacement that simply omits it would otherwise turn a
+//! diskless topic back into a local-log one, so the resulting map is compared
+//! against the stored one. See
+//! [`crate::config_keys::validate_diskless_unchanged`].
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -42,6 +48,11 @@ pub(super) fn topic_config_record(
     }
     config_keys::validate_config_combination(&overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_diskless_unchanged(
+        image.topic_config(&resource.resource_name),
+        &overrides,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
@@ -53,7 +64,9 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::handlers::alter_configs::test_support::{image_with_topic, topic_resource};
+    use crate::handlers::alter_configs::test_support::{
+        image_with_topic, image_with_topic_config, topic_resource,
+    };
 
     #[test]
     fn topic_replacement_rejects_compaction_on_a_scheduled_topic() {
@@ -127,6 +140,78 @@ mod tests {
                     "key {key} value {value:?}"
                 );
                 check!(!error.1.is_empty(), "key {key} value {value:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn topic_replacement_cannot_move_a_topic_between_data_paths() {
+        /// The topic's stored overrides, the complete replacement the request
+        /// carries, and whether the replacement is accepted.
+        type Replacement<'a> = (
+            &'a str,
+            &'a [(&'a str, &'a str)],
+            &'a [(&'a str, &'a str)],
+            bool,
+        );
+
+        let cases: [Replacement<'_>; 6] = [
+            (
+                "a replacement that restates the diskless flag",
+                &[(config_keys::DISKLESS, "true")],
+                &[
+                    (config_keys::DISKLESS, "true"),
+                    (config_keys::RETENTION_MS, "60000"),
+                ],
+                true,
+            ),
+            (
+                "a replacement that silently drops the diskless flag",
+                &[(config_keys::DISKLESS, "true")],
+                &[(config_keys::RETENTION_MS, "60000")],
+                false,
+            ),
+            (
+                "a replacement that turns the diskless flag off",
+                &[(config_keys::DISKLESS, "true")],
+                &[(config_keys::DISKLESS, "false")],
+                false,
+            ),
+            (
+                "a replacement that turns the diskless flag on",
+                &[(config_keys::RETENTION_MS, "60000")],
+                &[(config_keys::DISKLESS, "true")],
+                false,
+            ),
+            (
+                "a replacement that drops an explicit false, which changes nothing",
+                &[(config_keys::DISKLESS, "false")],
+                &[(config_keys::RETENTION_MS, "60000")],
+                true,
+            ),
+            (
+                "a replacement that adds tiered storage to a diskless topic",
+                &[(config_keys::DISKLESS, "true")],
+                &[
+                    (config_keys::DISKLESS, "true"),
+                    ("remote.storage.enable", "true"),
+                ],
+                false,
+            ),
+        ];
+
+        for (label, stored, replacement, want_ok) in cases {
+            let image = image_with_topic_config("orders", stored);
+
+            let result = topic_config_record(&topic_resource("orders", replacement), &image);
+
+            check!(result.is_ok() == want_ok, "{label}");
+            if let Err((code, message)) = result {
+                check!(code == codes::INVALID_CONFIG, "{label}");
+                check!(
+                    message.contains(config_keys::DISKLESS),
+                    "{label}: {message}"
+                );
             }
         }
     }

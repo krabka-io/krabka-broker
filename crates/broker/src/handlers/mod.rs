@@ -22,7 +22,10 @@ mod response_encoding;
 mod wire_types;
 
 pub(crate) use self::{
-    acl_gates::{acl_denied, cluster_alter_denied, cluster_describe_denied, group_read_denied},
+    acl_gates::{
+        acl_denied, cluster_action_denied, cluster_alter_denied, cluster_describe_denied,
+        group_read_denied,
+    },
     admin_audit::audit_admin,
     coordinator_routing::{group_coordinator_error, parse_advertised_host_port},
     internal_topics::is_internal_topic,

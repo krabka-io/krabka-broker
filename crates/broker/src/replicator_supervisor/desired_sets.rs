@@ -49,7 +49,7 @@ pub(crate) fn desired_wal_placements(
     image
         .all_partitions()
         .filter(|partition| {
-            crate::broker::diskless_topic_config(image.topic_config(&partition.topic))
+            crate::config_keys::resolve_diskless(image.topic_config(&partition.topic))
         })
         .filter(|partition| image.broker(partition.leader).is_some())
         .filter_map(|partition| {

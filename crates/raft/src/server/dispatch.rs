@@ -46,7 +46,7 @@ pub(super) async fn dispatch(
     body: Bytes,
     engine: &KraftController,
 ) -> Result<Bytes, RaftError> {
-    dispatch_with_router(api_key_n, body, engine, None).await
+    dispatch_with_router(api_key_n, body, engine, None, None).await
 }
 
 pub(super) async fn dispatch_with_router(
@@ -54,9 +54,12 @@ pub(super) async fn dispatch_with_router(
     body: Bytes,
     engine: &KraftController,
     shard_router: Option<&dyn crate::RaftShardRouter>,
+    principal: Option<&krabka_security::Principal>,
 ) -> Result<Bytes, RaftError> {
     if let Some(router) = shard_router
-        && let Some(resp) = router.route(api_key_n.get(), body.clone()).await?
+        && let Some(resp) = router
+            .route(api_key_n.get(), body.clone(), principal)
+            .await?
     {
         return Ok(resp);
     }

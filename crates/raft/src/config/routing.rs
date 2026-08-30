@@ -20,7 +20,12 @@ pub type ShardRouteFuture<'a> =
 
 /// Classifies and serves shard-addressed KIP-595 requests before metadata dispatch.
 pub trait RaftShardRouter: Send + Sync {
-    fn route(&self, api_key: i16, body: Bytes) -> ShardRouteFuture<'_>;
+    fn route(
+        &self,
+        api_key: i16,
+        body: Bytes,
+        principal: Option<&krabka_security::Principal>,
+    ) -> ShardRouteFuture<'_>;
 }
 
 /// One Kafka API version range served by a controller-listener Admin router.

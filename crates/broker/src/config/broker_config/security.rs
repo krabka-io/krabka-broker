@@ -33,6 +33,11 @@ macro_rules! security_fields {
             /// This is the default.
             pub inter_broker_credentials: Option<InterBrokerCredentials>,
 
+            /// Exact authenticated principal name to broker node ID bindings used
+            /// by diskless WAL follower fetches. Principals absent from this map
+            /// may still use the built-in `broker-<id>` naming convention.
+            pub inter_broker_principal_node_ids: HashMap<String, krabka_raft::NodeId>,
+
             /// Static PLAIN credentials: username → password. Empty by default.
             /// PLAIN auth stays disabled until you explicitly enable the mechanisms.
             pub plain_credentials: HashMap<String, String>,

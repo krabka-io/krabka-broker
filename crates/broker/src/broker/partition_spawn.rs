@@ -17,14 +17,6 @@ use crate::{
     partition::{Partition, WriterMessage},
 };
 
-pub(crate) fn diskless_topic_config(
-    config: Option<&std::collections::BTreeMap<String, String>>,
-) -> bool {
-    config
-        .and_then(|config| config.get("krabka.diskless"))
-        .is_some_and(|value| value == "true")
-}
-
 type PartitionWal = (
     Option<crate::wal::SharedWal>,
     Option<krabka_log::Offset>,
@@ -33,7 +25,6 @@ type PartitionWal = (
 
 fn partition_wal(
     identity: (&str, Option<uuid::Uuid>, PartitionIndex),
-    log_dir: &std::path::Path,
     log: Arc<Mutex<krabka_log::Log>>,
     diskless: bool,
     hot_tail: Option<Arc<crate::diskless::hot_tail::HotTailCache>>,
@@ -44,35 +35,33 @@ fn partition_wal(
     if !diskless {
         return Ok((None, None, None));
     }
-    let wal = if let (Some(topic_id), Some(_)) = (topic_id, wal_shards.as_ref()) {
-        crate::wal::quorum::QuorumWalStore::for_distributed_partition(
+    let topic_id = topic_id.ok_or_else(|| {
+        BrokerError::Replication(format!(
+            "diskless WAL topic id is not available for {topic}-{}",
+            partition_id.0
+        ))
+    })?;
+    let registry = wal_shards.ok_or_else(|| {
+        BrokerError::Replication(format!(
+            "diskless WAL shard registry is not available for {topic}-{}",
+            partition_id.0
+        ))
+    })?;
+    let wal = crate::wal::quorum::QuorumWalStore::for_distributed_partition(
+        topic_id,
+        partition_id,
+        log,
+        hot_tail,
+        replica_count,
+    )?;
+    registry.insert(
+        crate::wal::quorum::registry::ShardId {
             topic_id,
-            partition_id,
-            log,
-            hot_tail,
-            replica_count,
-        )?
-    } else {
-        crate::wal::quorum::QuorumWalStore::for_partition(
-            topic,
-            topic_id,
-            partition_id,
-            log_dir,
-            log,
-            hot_tail,
-            replica_count,
-        )?
-    };
+            partition: partition_id,
+        },
+        wal.engine(),
+    );
     let durable_watermark = wal.engine().durable_watermark();
-    if let (Some(topic_id), Some(registry)) = (topic_id, wal_shards) {
-        registry.insert(
-            crate::wal::quorum::registry::ShardId {
-                topic_id,
-                partition: partition_id,
-            },
-            wal.engine(),
-        );
-    }
     let engine = wal.engine();
     Ok((
         Some(Arc::new(wal) as crate::wal::SharedWal),
@@ -99,10 +88,14 @@ pub(crate) fn spawn_partition(
     producer_state: Arc<crate::producer_state::ProducerState>,
     diskless: bool,
 ) -> Arc<Partition> {
+    #[cfg(test)]
+    let topic_id = diskless.then(uuid::Uuid::new_v4);
+    #[cfg(not(test))]
+    let topic_id = None;
     spawn_partition_with_replication_target(
         topic,
         crate::partition::ReplicationTarget {
-            topic_id: None,
+            topic_id,
             leader_node_id: krabka_raft::NodeId(0),
             leader_epoch: krabka_metadata::LeaderEpoch(0),
         },
@@ -127,6 +120,30 @@ pub(crate) fn spawn_partition_with_replication_target(
     diskless: bool,
 ) -> Arc<Partition> {
     let broker_config = BrokerConfig::default();
+    #[cfg(test)]
+    let wal_shards = replication_target.topic_id.map(|topic_id| {
+        let registry = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
+            krabka_raft::NodeId(0),
+        ));
+        registry.replace_placements(&std::collections::HashMap::from([(
+            crate::wal::quorum::registry::ShardId {
+                topic_id,
+                partition: partition_id,
+            },
+            vec![krabka_raft::NodeId(0)],
+        )]));
+        registry
+    });
+    #[cfg(not(test))]
+    let wal_shards = None;
+    #[cfg(test)]
+    let diskless_wal_local_replica_count = if diskless {
+        1
+    } else {
+        broker_config.diskless_wal_local_replica_count
+    };
+    #[cfg(not(test))]
+    let diskless_wal_local_replica_count = broker_config.diskless_wal_local_replica_count;
     try_spawn_partition_with_replication_target(
         PartitionSpawnConfig {
             topic,
@@ -139,10 +156,10 @@ pub(crate) fn spawn_partition_with_replication_target(
             producer_id_expiration: broker_config.producer_id_expiration,
             max_produce_group: broker_config.max_produce_group,
             partition_writer_queue_depth: broker_config.partition_writer_queue_depth,
-            diskless_wal_local_replica_count: broker_config.diskless_wal_local_replica_count,
+            diskless_wal_local_replica_count,
             diskless,
             hot_tail: None,
-            wal_shards: None,
+            wal_shards,
             sequencer: None,
         },
         replication_target,
@@ -204,7 +221,6 @@ pub(crate) fn try_spawn_partition_with_replication_target(
     let log = Arc::new(Mutex::new(log));
     let (wal, recovered_durable_watermark, wal_engine) = partition_wal(
         (&topic, topic_id, partition_id),
-        &log_dir,
         Arc::clone(&log),
         diskless,
         hot_tail,

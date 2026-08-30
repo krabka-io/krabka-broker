@@ -83,6 +83,19 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
     })
 }
 
+pub(crate) fn conventional_node_id(principal_name: &str) -> Option<krabka_raft::NodeId> {
+    let id = principal_name
+        .strip_prefix("broker-")
+        .or_else(|| {
+            principal_name
+                .split(',')
+                .find_map(|rdn| rdn.trim().strip_prefix("CN=broker-"))
+        })?
+        .parse()
+        .ok()?;
+    Some(krabka_raft::NodeId(id))
+}
+
 pub(crate) fn fetch_response(
     group: QuorumGroup,
     hwm: i64,

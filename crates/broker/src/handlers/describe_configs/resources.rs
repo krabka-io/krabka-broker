@@ -51,7 +51,14 @@ pub(super) fn describe_one(
             .into_iter()
             .flatten()
             .filter(|(key, _)| wanted(key.as_str()))
-            .map(|(key, value)| make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC))
+            .map(|(key, value)| {
+                let mut entry = make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC);
+                // The data path is fixed when the topic is created, so
+                // `kafka-configs` must show the key the way it shows every
+                // other config no alter can change.
+                entry.read_only = key == config_keys::DISKLESS;
+                entry
+            })
             .collect();
         if wanted(config_keys::WRITE_FREEZE) {
             configs.push(write_freeze_entry(image, &r.resource_name));
