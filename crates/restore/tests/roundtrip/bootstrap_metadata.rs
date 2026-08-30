@@ -9,7 +9,17 @@
 
 use std::path::Path;
 
-use assert2::check;
+use assert2::{assert, check};
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_ids::LeaderEpoch;
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataImage, MetadataRecord, NodeId, PartitionRecord, PatternType,
+    PermissionType, ResourceType, TopicConfigRecord, TopicRecord,
+};
+use krabka_protocol::owned::{
+    describe_acls_request::DescribeAclsRequest,
+    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+};
 use krabka_restore::restore;
 use uuid::Uuid;
 
@@ -102,4 +112,122 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
             "topic name {topic:?} not found in bootstrap.records.bin"
         );
     }
+}
+
+/// Restored metadata must reach the broker's public admin APIs, not merely
+/// survive as bytes in the bootstrap file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
+    const ORDERS: &str = "orders";
+    let fixture = build_fixture();
+    let mut image = MetadataImage::new(Uuid::new_v4());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: ORDERS.to_owned(),
+        topic_id: fixture.orders_id,
+        partitions: 2,
+        replication_factor: 1,
+    }));
+    for partition in 0..2 {
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: ORDERS.to_owned(),
+            partition,
+            leader: NodeId(1),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            leader_epoch: LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        }));
+    }
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: ORDERS.to_owned(),
+        overrides: maplit::btreemap! {"cleanup.policy".to_owned() => "compact".to_owned()},
+    }));
+    image.apply(&MetadataRecord::V1AccessControlEntry(AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: ORDERS.to_owned(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".to_owned(),
+        host: "*".to_owned(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    }));
+
+    let snapshot_dir = tempfile::tempdir().expect("snapshot tempdir");
+    let snapshot_path = snapshot_dir
+        .path()
+        .join("00000000000000000042-0000000001.checkpoint");
+    std::fs::write(
+        &snapshot_path,
+        krabka_raft::serialize_metadata_snapshot(&image, 1_700_000_000_000)
+            .expect("serialize metadata snapshot"),
+    )
+    .expect("write metadata snapshot");
+
+    let target = tempfile::tempdir().expect("target parent");
+    let log_dir = target.path().join("restored");
+    let args = restore_args(
+        fixture.archive_root.path(),
+        &log_dir,
+        &["--metadata-snapshot", &snapshot_path.display().to_string()],
+    );
+    let report = restore(&args).await.expect("restore");
+    check!(report.metadata.topic_configs == 1);
+    check!(report.metadata.access_control_entries == 1);
+
+    let broker = Broker::start(BrokerConfig::for_tests(log_dir))
+        .await
+        .expect("restored broker starts");
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .client_id("restore-metadata-test")
+        .build()
+        .await
+        .expect("client");
+
+    let configs = client
+        .send(DescribeConfigsRequest {
+            resources: vec![DescribeConfigsResource {
+                resource_type: 2,
+                resource_name: ORDERS.to_owned(),
+                configuration_keys: None,
+                ..Default::default()
+            }],
+            include_synonyms: false,
+            include_documentation: false,
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeConfigs");
+    let result = configs.results.first().expect("one config result");
+    assert!(result.error_code == 0, "DescribeConfigs failed: {result:?}");
+    check!(result.configs.iter().any(|config| {
+        config.name == "cleanup.policy" && config.value.as_deref() == Some("compact")
+    }));
+
+    let acls = client
+        .send(DescribeAclsRequest {
+            resource_type_filter: 2,
+            resource_name_filter: Some(ORDERS.to_owned()),
+            pattern_type_filter: 3,
+            principal_filter: None,
+            host_filter: None,
+            operation: 1,
+            permission_type: 1,
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeAcls");
+    assert!(acls.error_code == 0, "DescribeAcls failed: {acls:?}");
+    check!(acls.resources.iter().any(|resource| {
+        resource.resource_name == ORDERS
+            && resource
+                .acls
+                .iter()
+                .any(|acl| acl.principal == "User:alice")
+    }));
+
+    broker.shutdown().await;
 }

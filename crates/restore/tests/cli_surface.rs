@@ -53,6 +53,7 @@ fn help_renders_every_flag_group() {
         "--archive-gcs-allow-http",
         "--archive-prefix",
         "--rlmm-snapshot",
+        "--metadata-snapshot",
         "--log-dir",
         "--cluster-id",
         "--node-id",
@@ -143,6 +144,7 @@ fn restore_args_are_constructible_without_an_argv() {
             gcs_allow_http: false,
             prefix: Some("tier".to_owned()),
             rlmm_snapshot: None,
+            metadata_snapshot: None,
         },
         target: TargetArgs {
             log_dir: Path::new("/target").to_path_buf(),

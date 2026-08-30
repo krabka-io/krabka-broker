@@ -97,6 +97,20 @@ pub fn serialize_metadata_snapshot(
 ) -> Result<bytes::Bytes, RaftError> {
     snapshot::SnapshotWriter::serialize(image, last_contained_log_timestamp)
 }
+
+/// Decode the KIP-630 metadata records from a Kafka metadata snapshot.
+///
+/// KIP-853 quorum controls are intentionally omitted: a restore formats a new
+/// quorum, while the returned records describe the cluster state it recovers.
+///
+/// # Errors
+/// Returns an error when the snapshot framing, ordering, or a metadata record
+/// is invalid.
+pub fn deserialize_metadata_snapshot(
+    bytes: &[u8],
+) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
+    Ok(snapshot::SnapshotReader::read(bytes)?.metadata_records)
+}
 pub use wire::{
     API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE, KrabkaMetadataFetchRequest,
     KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,

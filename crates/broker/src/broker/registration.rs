@@ -255,21 +255,38 @@ pub(super) async fn submit_bootstrap_records(
     if !matches!(config.bootstrap_mode, crate::BootstrapMode::Bootstrap) {
         return Ok(());
     }
-    records.retain(|record| {
-        !matches!(
-            record,
-            krabka_metadata::MetadataRecord::V1Voters(_)
-                | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
-        )
-    });
-    if config.is_controller() {
-        records.extend(stretch_default_records(config));
+    let checkpoint_loaded = controller.current_image().finalized_features_epoch() >= 0;
+    if checkpoint_loaded {
+        tracing::info!("bootstrap records already loaded from metadata checkpoint");
     }
+    records = bootstrap_records_to_submit(config, records, checkpoint_loaded);
     if records.is_empty() {
         return Ok(());
     }
     tracing::info!(count = records.len(), "submitting bootstrap records");
     submit_startup_records(config, controller, records, "bootstrap submit").await
+}
+
+fn bootstrap_records_to_submit(
+    config: &BrokerConfig,
+    mut records: Vec<krabka_metadata::MetadataRecord>,
+    checkpoint_loaded: bool,
+) -> Vec<krabka_metadata::MetadataRecord> {
+    if checkpoint_loaded {
+        records.clear();
+    } else {
+        records.retain(|record| {
+            !matches!(
+                record,
+                krabka_metadata::MetadataRecord::V1Voters(_)
+                    | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
+            )
+        });
+    }
+    if config.is_controller() {
+        records.extend(stretch_default_records(config));
+    }
+    records
 }
 
 #[cfg(test)]

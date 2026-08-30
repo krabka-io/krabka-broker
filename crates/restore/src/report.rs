@@ -38,10 +38,44 @@ pub struct RestoreReport {
     pub log_dir: PathBuf,
     /// The cluster id the target was formatted with.
     pub cluster_id: Uuid,
+    /// Cluster metadata recovered from the controller snapshot.
+    pub metadata: MetadataRestoreReport,
     /// One entry per restored partition, ordered by topic then partition.
     pub partitions: Vec<PartitionReport>,
     /// Segments that failed verification and were skipped.
     pub skipped: Vec<SkippedSegment>,
+}
+
+/// Cluster metadata recovered alongside the archived partition data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MetadataRestoreReport {
+    /// Snapshot used for recovery, absent when none was supplied.
+    pub snapshot: Option<PathBuf>,
+    /// Topic-configuration records restored for selected topics.
+    pub topic_configs: usize,
+    /// ACL records restored.
+    pub access_control_entries: usize,
+    /// Client-quota records restored.
+    pub client_quotas: usize,
+    /// SCRAM credential records restored.
+    pub scram_credentials: usize,
+    /// Finalized feature-level records restored.
+    pub feature_levels: usize,
+    /// Topics whose configuration was unavailable because no snapshot was supplied.
+    pub topics_without_configuration: Vec<String>,
+}
+
+impl MetadataRestoreReport {
+    /// Warning emitted when cluster metadata could not be recovered.
+    #[must_use]
+    pub fn warning(&self) -> Option<String> {
+        self.snapshot.is_none().then(|| {
+            format!(
+                "WARNING: no --metadata-snapshot; topic configuration was not recovered for: {}; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered",
+                self.topics_without_configuration.join(", ")
+            )
+        })
+    }
 }
 
 /// What the restore did for one partition.
@@ -123,6 +157,26 @@ impl RestoreReport {
                 .expect("String writer is infallible");
         }
         writeln!(out, "cluster id: {}", self.cluster_id).expect("String writer is infallible");
+
+        if let Some(warning) = self.metadata.warning() {
+            writeln!(out, "{warning}").expect("String writer is infallible");
+        } else {
+            writeln!(
+                out,
+                "metadata: {} topic config{}, {} ACL{}, {} client quota{}, {} SCRAM credential{}, {} feature level{}",
+                self.metadata.topic_configs,
+                plural(self.metadata.topic_configs as u64),
+                self.metadata.access_control_entries,
+                plural(self.metadata.access_control_entries as u64),
+                self.metadata.client_quotas,
+                plural(self.metadata.client_quotas as u64),
+                self.metadata.scram_credentials,
+                plural(self.metadata.scram_credentials as u64),
+                self.metadata.feature_levels,
+                plural(self.metadata.feature_levels as u64),
+            )
+            .expect("String writer is infallible");
+        }
 
         let mut current_topic: Option<(&str, Uuid)> = None;
         for partition in &self.partitions {
@@ -254,8 +308,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        PartitionReport, ReportFormat, RestoreReport, SegmentOutcome, SkippedSegment,
-        format_thousands, plural,
+        MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SegmentOutcome,
+        SkippedSegment, format_thousands, plural,
     };
 
     fn segment(
@@ -284,6 +338,15 @@ mod tests {
             dry_run,
             log_dir: "/var/lib/krabka/restored".into(),
             cluster_id: Uuid::from_u128(0xC1_A5_7E_00),
+            metadata: MetadataRestoreReport {
+                snapshot: Some("/backup/metadata.checkpoint".into()),
+                topic_configs: 2,
+                access_control_entries: 1,
+                client_quotas: 1,
+                scram_credentials: 1,
+                feature_levels: 2,
+                topics_without_configuration: vec![],
+            },
             partitions: vec![
                 PartitionReport {
                     topic: "orders".to_owned(),
@@ -368,6 +431,15 @@ mod tests {
             dry_run: false,
             log_dir: "/var/lib/krabka/restored".into(),
             cluster_id: Uuid::nil(),
+            metadata: MetadataRestoreReport {
+                snapshot: Some("/backup/metadata.checkpoint".into()),
+                topic_configs: 1,
+                access_control_entries: 0,
+                client_quotas: 0,
+                scram_credentials: 0,
+                feature_levels: 0,
+                topics_without_configuration: vec![],
+            },
             partitions: vec![PartitionReport {
                 topic: "orders-archive".to_owned(),
                 partition: 0,
@@ -379,6 +451,7 @@ mod tests {
 
         let expected = "krabka restore: wrote /var/lib/krabka/restored\n\
              cluster id: 00000000-0000-0000-0000-000000000000\n\
+             metadata: 1 topic config, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 0 feature levels\n\
              \n\
              orders-archive (topic id 00000000-0000-0000-0000-000000000000)\n\
              \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n";
@@ -428,6 +501,15 @@ mod tests {
             dry_run: true,
             log_dir: "/tmp/restore".into(),
             cluster_id: Uuid::nil(),
+            metadata: MetadataRestoreReport {
+                snapshot: None,
+                topic_configs: 0,
+                access_control_entries: 0,
+                client_quotas: 0,
+                scram_credentials: 0,
+                feature_levels: 0,
+                topics_without_configuration: vec!["empty-topic".to_owned()],
+            },
             partitions: vec![PartitionReport {
                 topic: "empty-topic".to_owned(),
                 partition: 0,
@@ -441,6 +523,8 @@ mod tests {
 
         check!(text.contains("empty-topic"));
         check!(text.contains("no segments restored"));
+        check!(text.contains("WARNING: no --metadata-snapshot"));
+        check!(text.contains("ACLs, client quotas, SCRAM credentials, and feature levels"));
     }
 
     #[test]

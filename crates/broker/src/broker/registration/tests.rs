@@ -153,6 +153,24 @@ fn a_node_without_a_stretch_profile_publishes_no_cluster_default() {
 }
 
 #[test]
+fn checkpoint_loaded_still_submits_the_stretch_cluster_default() {
+    let config = BrokerConfig {
+        stretch: Some(three_site_profile()),
+        ..BrokerConfig::for_tests(std::path::PathBuf::new())
+    };
+    let duplicate =
+        krabka_metadata::MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+            name: "metadata.version".into(),
+            level: 25,
+        });
+
+    assert!(
+        bootstrap_records_to_submit(&config, vec![duplicate], true)
+            == stretch_default_records(&config)
+    );
+}
+
+#[test]
 fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
     let config = BrokerConfig {
         node_id: krabka_metadata::NodeId(7),

@@ -31,7 +31,9 @@
 //! so its bytes are not identical to the archived bytes. `--exclude-key` and
 //! `--exclude-header` match raw bytes and decode no payload. Without
 //! `--rlmm-snapshot` a segment the old cluster had marked for deletion is
-//! indistinguishable from a live one.
+//! indistinguishable from a live one. Without `--metadata-snapshot`, topic
+//! configuration, ACLs, client quotas, SCRAM credentials, and finalized
+//! feature levels cannot be recovered.
 //!
 //! # Errors and exit codes
 //!
@@ -63,8 +65,8 @@ pub use self::{
         EXIT_ARCHIVE_UNREADABLE, EXIT_BAD_ARGUMENTS, EXIT_DIRTY_LOG_DIR, EXIT_INTEGRITY,
         EXIT_MATERIALIZE, EXIT_OK, RestoreError,
     },
-    materialize::{SegmentOutcome, format_target, write_segment},
-    report::{PartitionReport, ReportFormat, RestoreReport, SkippedSegment},
+    materialize::{FormatTargetOutcome, SegmentOutcome, format_target, write_segment},
+    report::{MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SkippedSegment},
     verify::{SegmentFacts, VerifiedSegment, verify_segment},
 };
 
@@ -96,6 +98,9 @@ pub async fn run(args: RestoreArgs) -> i32 {
     let format = args.report;
     match restore(&args).await {
         Ok(report) => {
+            if let Some(warning) = report.metadata.warning() {
+                eprintln!("krabka restore: {warning}");
+            }
             println!("{}", report.render(format));
             EXIT_OK
         }
@@ -148,7 +153,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     let store = open_archive(args)?;
     let archive = inventory(&store, args).await?;
     let predicates = Predicates::from_args(args)?;
-    let cluster_id = format_target(args, &archive).await?;
+    let format = format_target(args, &archive).await?;
 
     let mut partitions = Vec::with_capacity(archive.partitions.len());
     let mut skipped = Vec::new();
@@ -181,7 +186,8 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     Ok(RestoreReport {
         dry_run: args.dry_run,
         log_dir: args.target.log_dir.clone(),
-        cluster_id,
+        cluster_id: format.cluster_id,
+        metadata: format.metadata,
         partitions,
         skipped,
     })

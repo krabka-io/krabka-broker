@@ -113,6 +113,13 @@ pub struct ArchiveArgs {
     /// from a live one.
     #[arg(long, value_name = "PATH")]
     pub rlmm_snapshot: Option<PathBuf>,
+
+    /// A controller `<offset>-<epoch>.checkpoint` metadata snapshot.
+    ///
+    /// Topic configuration, ACLs, client quotas, SCRAM credentials, and
+    /// finalized feature levels are recovered from it.
+    #[arg(long, value_name = "PATH")]
+    pub metadata_snapshot: Option<PathBuf>,
 }
 
 /// The cluster the restore writes.
