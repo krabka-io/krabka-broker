@@ -56,13 +56,13 @@ pub(super) async fn bootstrap_diskless_index_log(
     flusher: DisklessFlusherStartup,
     shutdown: CancellationToken,
 ) {
-    let source = KafkaIndexLogSource {
-        log_config: metadata_log_config(
-            &config.cfg,
-            crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
-            format!("krabka-diskless-index-broker-{}", config.broker_id),
-        ),
-    };
+    let mut log_config = metadata_log_config(
+        &config.cfg,
+        crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC.to_owned(),
+        format!("krabka-diskless-index-broker-{}", config.broker_id),
+    );
+    log_config.compacted = true;
+    let source = KafkaIndexLogSource { log_config };
     bootstrap_from_source(&source, cache, &config, &flusher, &shutdown).await;
 }
 

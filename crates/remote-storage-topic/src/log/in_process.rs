@@ -65,8 +65,8 @@ struct SubscriptionState {
 }
 
 struct InProcessInner {
-    /// `log[partition][offset] = encoded event payload`.
-    log: Mutex<Vec<Vec<Bytes>>>,
+    /// `log[partition][offset] = event`.
+    log: Mutex<Vec<Vec<MetadataEventRecord>>>,
     /// Notify subscribers of new writes.
     tx: broadcast::Sender<MetadataEventRecord>,
     /// Constant for the life of the log.
@@ -99,15 +99,13 @@ impl InProcessMetadataEventLog {
             }),
         })
     }
-}
 
-#[async_trait]
-impl MetadataEventLog for InProcessMetadataEventLog {
-    fn partition_count(&self) -> i32 {
-        self.inner.partition_count
-    }
-
-    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+    fn append(
+        &self,
+        partition: i32,
+        key: Option<Bytes>,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
         if partition < 0 || partition >= self.inner.partition_count {
             return Err(MetadataLogError::PartitionOutOfRange {
                 partition,
@@ -121,17 +119,40 @@ impl MetadataEventLog for InProcessMetadataEventLog {
         let idx = usize::try_from(partition).expect("partition non-negative");
         let log_for_p = &mut guard[idx];
         let offset = i64::try_from(log_for_p.len()).expect("offset fits in i64");
-        log_for_p.push(event.clone());
+        let tombstone = event.is_none();
         let record = MetadataEventRecord {
             partition,
             offset,
-            payload: event,
+            key,
+            payload: event.unwrap_or_default(),
+            tombstone,
         };
+        log_for_p.push(record.clone());
         // `send` only errors when there are no active receivers; that
         // is fine — the record is still durable in the in-memory log
         // and any later subscriber's snapshot will see it.
         let _ = self.inner.tx.send(record);
         Ok(offset)
+    }
+}
+
+#[async_trait]
+impl MetadataEventLog for InProcessMetadataEventLog {
+    fn partition_count(&self) -> i32 {
+        self.inner.partition_count
+    }
+
+    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+        self.append(partition, None, Some(event))
+    }
+
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        self.append(partition, Some(key), event)
     }
 
     fn subscribe(
@@ -159,12 +180,8 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             }
             let records = &guard[idx];
             let begin = usize::try_from(ps.start_offset.max(0)).unwrap_or(usize::MAX);
-            for (offset, payload) in records.iter().enumerate().skip(begin) {
-                snapshot.push(MetadataEventRecord {
-                    partition: ps.partition,
-                    offset: i64::try_from(offset).expect("offset fits in i64"),
-                    payload: payload.clone(),
-                });
+            for record in records.iter().skip(begin) {
+                snapshot.push(record.clone());
             }
             assigned.insert(
                 ps.partition,
@@ -231,6 +248,32 @@ mod tests {
         check!(log.publish(1, Bytes::from_static(b"c")).await.unwrap() == 0);
         let hwms = log.high_water_marks().await.unwrap();
         assert!(hwms == vec![2, 1]);
+    }
+
+    #[tokio::test]
+    async fn keyed_tombstones_survive_replay() {
+        let log = InProcessMetadataEventLog::new(1);
+        log.publish_keyed(
+            0,
+            Bytes::from_static(b"range"),
+            Some(Bytes::from_static(b"object")),
+        )
+        .await
+        .unwrap();
+        log.publish_keyed(0, Bytes::from_static(b"range"), None)
+            .await
+            .unwrap();
+        let (mut stream, _) = log.subscribe(vec![PartitionStart {
+            partition: 0,
+            start_offset: 0,
+        }]);
+
+        let value = stream.next().await.unwrap();
+        let tombstone = stream.next().await.unwrap();
+        assert!(value.key.as_deref() == Some(b"range".as_slice()));
+        assert!(!value.tombstone);
+        assert!(tombstone.key.as_deref() == Some(b"range".as_slice()));
+        assert!(tombstone.tombstone);
     }
 
     #[tokio::test]

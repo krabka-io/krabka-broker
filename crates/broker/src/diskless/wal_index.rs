@@ -1,6 +1,6 @@
 //! Diskless WAL offset-to-object index records and in-memory projection.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,47 @@ pub struct WalIndexEntry {
     pub last_offset: i64,
     pub byte_start: u64,
     pub byte_len: u32,
+}
+
+/// Stable Kafka compaction key for one logical WAL range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct WalIndexKey {
+    pub(crate) topic_id: Uuid,
+    pub(crate) partition: i32,
+    pub(crate) first_offset: i64,
+}
+
+impl WalIndexKey {
+    const LEN: usize = 16 + 4 + 8;
+
+    #[must_use]
+    pub(crate) fn to_bytes(self) -> Bytes {
+        let mut bytes = Vec::with_capacity(Self::LEN);
+        bytes.extend_from_slice(self.topic_id.as_bytes());
+        bytes.extend_from_slice(&self.partition.to_be_bytes());
+        bytes.extend_from_slice(&self.first_offset.to_be_bytes());
+        Bytes::from(bytes)
+    }
+
+    #[must_use]
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
+        Some(Self {
+            topic_id: Uuid::from_bytes(bytes[..16].try_into().ok()?),
+            partition: i32::from_be_bytes(bytes[16..20].try_into().ok()?),
+            first_offset: i64::from_be_bytes(bytes[20..].try_into().ok()?),
+        })
+    }
+}
+
+impl From<&WalIndexEntry> for WalIndexKey {
+    fn from(entry: &WalIndexEntry) -> Self {
+        Self {
+            topic_id: entry.topic_id,
+            partition: entry.partition,
+            first_offset: entry.first_offset,
+        }
+    }
 }
 
 /// Durable index event for one flushed diskless WAL object.
@@ -66,6 +107,55 @@ impl WalIndexCache {
                     (record.object_key.clone(), entry.clone()),
                 );
         }
+    }
+
+    /// Remove one compacted range after its Kafka tombstone is committed.
+    pub(crate) fn remove(&mut self, key: WalIndexKey) {
+        let partition = (key.topic_id, key.partition);
+        let mut empty = false;
+        if let Some(entries) = self.by_topic_partition.get_mut(&partition) {
+            entries.remove(&key.first_offset);
+            empty = entries.is_empty();
+        }
+        if empty {
+            self.by_topic_partition.remove(&partition);
+        }
+    }
+
+    /// Keys currently held for a topic, used to publish compaction tombstones
+    /// after the topic disappears from the metadata image.
+    #[must_use]
+    pub(crate) fn keys_for_topic(&self, topic_id: Uuid) -> Vec<WalIndexKey> {
+        self.by_topic_partition
+            .iter()
+            .filter(|((id, _), _)| *id == topic_id)
+            .flat_map(|((_, partition), entries)| {
+                entries.keys().map(|first_offset| WalIndexKey {
+                    topic_id,
+                    partition: *partition,
+                    first_offset: *first_offset,
+                })
+            })
+            .collect()
+    }
+
+    /// Topic ids represented in the projection.
+    #[must_use]
+    pub(crate) fn topic_ids(&self) -> HashSet<Uuid> {
+        self.by_topic_partition
+            .keys()
+            .map(|(topic_id, _)| *topic_id)
+            .collect()
+    }
+
+    /// Object keys referenced by at least one projected range.
+    #[must_use]
+    pub(crate) fn referenced_objects(&self) -> HashSet<String> {
+        self.by_topic_partition
+            .values()
+            .flat_map(BTreeMap::values)
+            .map(|(object_key, _)| object_key.clone())
+            .collect()
     }
 
     /// Return whether every entry from this flush record is present in the
@@ -269,5 +359,41 @@ mod tests {
 
         assert!(c.earliest_covered(Uuid::from_u128(1), 0) == Some(0));
         assert!(c.earliest_covered(Uuid::from_u128(1), 1).is_none());
+    }
+
+    #[test]
+    fn compaction_key_round_trips() {
+        let key = WalIndexKey {
+            topic_id: Uuid::from_u128(7),
+            partition: 3,
+            first_offset: 42,
+        };
+        assert!(WalIndexKey::from_bytes(&key.to_bytes()) == Some(key));
+        assert!(WalIndexKey::from_bytes(&key.to_bytes()[..27]).is_none());
+    }
+
+    #[test]
+    fn replacing_a_range_drops_only_the_unreferenced_object() {
+        let mut cache = WalIndexCache::default();
+        let mut shared = entry(0, 0, 4);
+        cache.apply(&WalFlushRecord {
+            object_key: "old".into(),
+            format_version: 1,
+            entries: vec![shared.clone(), entry(1, 0, 4)],
+        });
+        shared.byte_len = 2;
+        cache.apply(&WalFlushRecord {
+            object_key: "new".into(),
+            format_version: 1,
+            entries: vec![shared],
+        });
+        assert!(cache.referenced_objects() == ["new".into(), "old".into()].into());
+
+        cache.remove(WalIndexKey {
+            topic_id: Uuid::from_u128(1),
+            partition: 1,
+            first_offset: 0,
+        });
+        assert!(cache.referenced_objects() == ["new".into()].into());
     }
 }

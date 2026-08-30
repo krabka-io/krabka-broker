@@ -32,8 +32,13 @@ pub struct MetadataEventRecord {
     pub partition: i32,
     /// Offset within that partition.
     pub offset: i64,
+    /// Record key. Compacted metadata topics use it to identify superseded
+    /// state; ordinary append-only metadata events leave it unset.
+    pub key: Option<Bytes>,
     /// Encoded event payload. See [`crate::serde`].
     pub payload: Bytes,
+    /// Whether Kafka carried a null value for this key.
+    pub tombstone: bool,
 }
 
 /// Boxed event stream the [`MetadataEventLog`] hands to subscribers.
@@ -94,6 +99,23 @@ pub trait MetadataEventLog: Send + Sync {
     /// happens when the partition is out of range, or when the log has been
     /// closed.
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError>;
+
+    /// Append a keyed value or tombstone to a compacted metadata topic.
+    ///
+    /// The default keeps existing append-only implementations small. A
+    /// transport used for compaction must override this method.
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        let event = event.ok_or_else(|| {
+            MetadataLogError::Other("metadata log does not support tombstones".into())
+        })?;
+        let _ = key;
+        self.publish(partition, event).await
+    }
 
     /// Start to consume the given partitions, each from its start offset,
     /// which is inclusive. Returns the event stream and a handle to mutate

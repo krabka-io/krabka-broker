@@ -2,13 +2,13 @@
 //!
 //! One admin round-trip at startup reuses an existing topic, whose real
 //! partition count and id then win over the configured values, or creates an
-//! absent one with `cleanup.policy=delete` and `retention.ms=-1`. The same
+//! absent one with the configured cleanup policy and `retention.ms=-1`. The same
 //! round-trip resolves the topic `Uuid`, which the manual fetch path needs
 //! because Fetch v13 and later carry `topic_id` and not the name.
 
 use std::collections::BTreeMap;
 
-use krabka_client_admin::{AdminClient, CreateTopicSpec};
+use krabka_client_admin::{AdminClient, CreateTopicSpec, IncrementalAlterOp};
 use krabka_client_core::ConnectionOptions;
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tracing::{debug, instrument, warn};
@@ -48,6 +48,9 @@ pub(super) async fn ensure_topic(
         && entry.error.is_none()
         && entry.partition_count > 0
     {
+        if cfg.compacted {
+            ensure_compacted(&mut admin, &cfg.topic).await?;
+        }
         debug!(
             topic = %cfg.topic,
             partition_count = entry.partition_count,
@@ -59,7 +62,10 @@ pub(super) async fn ensure_topic(
     }
 
     let mut configs = BTreeMap::new();
-    configs.insert("cleanup.policy".to_string(), "delete".to_string());
+    configs.insert(
+        "cleanup.policy".to_string(),
+        if cfg.compacted { "compact" } else { "delete" }.to_string(),
+    );
     configs.insert("retention.ms".to_string(), "-1".to_string());
     let spec = CreateTopicSpec {
         name: cfg.topic.clone(),
@@ -103,6 +109,25 @@ pub(super) async fn ensure_topic(
     };
     warn_if_zero_topic_id(&cfg.topic, topic_id);
     Ok((cfg.num_partitions, topic_id))
+}
+
+async fn ensure_compacted(admin: &mut AdminClient, topic: &str) -> Result<(), MetadataLogError> {
+    let outcomes = admin
+        .incremental_alter_configs(&[IncrementalAlterOp::Set {
+            topic: topic.to_owned(),
+            key: "cleanup.policy".into(),
+            value: "compact".into(),
+        }])
+        .await
+        .map_err(|error| {
+            MetadataLogError::Other(format!("set cleanup.policy=compact failed: {error}"))
+        })?;
+    if let Some(error) = outcomes.into_iter().find_map(|outcome| outcome.error) {
+        return Err(MetadataLogError::Other(format!(
+            "set cleanup.policy=compact for {topic} failed: {error:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// A zero topic id makes every Fetch v≥13 fail, because Fetch carries
