@@ -261,10 +261,13 @@ impl Log {
             .take()
             .expect("active segment must exist before rolling");
         old.seal();
+        let old_base = old.base_offset();
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;
         new_seg.set_io(self.io.clone());
-        self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
+        let new_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
+        let old_txn_index = std::mem::replace(&mut self.active_txn_index, new_txn_index);
+        self.sealed_txn_indexes.insert(old_base, old_txn_index);
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);
         self.dir_sync_needed = true;

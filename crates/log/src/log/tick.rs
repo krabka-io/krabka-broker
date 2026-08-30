@@ -95,6 +95,8 @@ impl Log {
         let evict: HashSet<Offset> = to_evict.iter().copied().collect();
         tracing::Span::current().record("evicted", evict.len());
         self.segments.retain(|s| !evict.contains(&s.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !evict.contains(base));
         self.stamp_indexes.retain(|base, _| !evict.contains(base));
         for base in to_evict {
             let _ = retention::delete_segment_files(&self.dir, base);

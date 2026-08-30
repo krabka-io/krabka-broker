@@ -125,6 +125,7 @@ impl Log {
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
+        self.sealed_txn_indexes.clear();
         self.stamp_indexes.clear();
         self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
         self.active = Some(new_active);
@@ -245,25 +246,31 @@ impl Log {
         }
     }
 
-    /// Return all aborted transactions from the active segment's
-    /// `.txnindex` whose offset range overlaps `[start, end)`.
-    ///
-    /// This method reads only the active segment's index. It does not load
-    /// the `.txnindex` files of older sealed segments into memory. In
-    /// practice the window `[fetch_offset, lso)` always falls within the
-    /// active segment, because the LSO can only advance past a commit or
-    /// abort marker, and that marker lands in the same segment as the
-    /// related transactional batches.
+    /// Return all aborted transactions whose offset range overlaps
+    /// `[start, end)`, including entries in sealed segments.
     #[must_use]
     pub fn aborted_in_range(
         &self,
         start: Offset,
         end: Offset,
     ) -> Vec<crate::txn_index::AbortedTxn> {
-        self.active_txn_index
-            .aborted_in_range(start, end)
-            .copied()
-            .collect()
+        let mut aborted = Vec::new();
+        if let Some(first_base) = self
+            .segments
+            .iter()
+            .find(|segment| segment.last_offset() >= start)
+            .map(Segment::base_offset)
+        {
+            for index in self
+                .sealed_txn_indexes
+                .range(first_base..)
+                .map(|(_, index)| index)
+            {
+                aborted.extend(index.aborted_in_range(start, end).copied());
+            }
+        }
+        aborted.extend(self.active_txn_index.aborted_in_range(start, end).copied());
+        aborted
     }
 
     /// Access the per-partition leader-epoch checkpoint.

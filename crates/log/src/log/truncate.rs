@@ -55,6 +55,7 @@ impl Log {
                 let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
                 let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
                 let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+                self.sealed_txn_indexes.remove(&base);
                 self.stamp_indexes.remove(&base);
             } else {
                 break;
@@ -79,11 +80,14 @@ impl Log {
         // truncate it in place. Otherwise, create a fresh one at `offset`.
         if self.active.is_none() {
             if let Some(mut seg) = self.segments.pop() {
+                let base = seg.base_offset();
                 let rel = u32::try_from(offset.0 - seg.base_offset().0)
                     .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
                 seg.truncate_to_relative(rel)?;
-                self.active_txn_index = TxnIndex::open(seg.txn_index_path())?;
-                let base = seg.base_offset();
+                self.active_txn_index = self
+                    .sealed_txn_indexes
+                    .remove(&base)
+                    .expect("sealed segment must have a cached transaction index");
                 let stamp_index_path = seg.stamp_index_path();
                 self.active = Some(seg);
                 self.stamp_indexes
@@ -191,6 +195,8 @@ impl Log {
         let drop_set: HashSet<Offset> = to_drop.iter().copied().collect();
         self.segments
             .retain(|s| !drop_set.contains(&s.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !drop_set.contains(base));
         self.stamp_indexes
             .retain(|base, _| !drop_set.contains(base));
         for base in &to_drop {

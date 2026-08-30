@@ -95,6 +95,7 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use krabka_ids::LeaderEpoch;
+    use krabka_units::prelude::bytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -104,6 +105,7 @@ mod tests {
             abort_marker, commit_marker, sample_batch, test_batch_at, transactional_batch,
             verbatim_from,
         },
+        name,
         txn_index::TxnIndex,
     };
 
@@ -189,6 +191,31 @@ mod tests {
         // (The 3-record txn batch occupies offsets 0-2; the marker lands at offset 3.)
         assert2::assert!(
             entries
+                == [AbortedTxn {
+                    start_offset: Offset(0),
+                    last_offset: Offset(3),
+                    producer_id: ProducerId(1000),
+                }]
+        );
+    }
+
+    #[test]
+    fn aborted_transaction_uses_cached_marker_segment_beyond_range_end() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut transaction = transactional_batch(1000, 0, &["a", "b", "c"]);
+        log.append(&mut transaction).unwrap();
+
+        log.set_config(LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        });
+        let marker_base = log.append(&mut abort_marker(1000, 0)).unwrap();
+        log.append(&mut sample_batch(1)).unwrap();
+        std::fs::remove_file(name::txnindex_path(dir.path(), marker_base.0)).unwrap();
+
+        assert2::assert!(
+            log.aborted_in_range(Offset(0), marker_base)
                 == [AbortedTxn {
                     start_offset: Offset(0),
                     last_offset: Offset(3),

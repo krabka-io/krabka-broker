@@ -102,6 +102,9 @@ pub struct Log {
     /// Active segment's `TxnIndex`. The log reopens it on segment roll.
     active_txn_index: TxnIndex,
 
+    /// Immutable transaction indexes keyed by sealed segment base offset.
+    sealed_txn_indexes: BTreeMap<Offset, TxnIndex>,
+
     /// Injected source of the additional internal stamp coordinate. `None`
     /// is the default and means this partition stamps nothing. Behavior and
     /// all wire-exact bytes stay exactly as they are without a stamp.

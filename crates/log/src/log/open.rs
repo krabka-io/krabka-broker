@@ -111,6 +111,15 @@ impl Log {
             None => (Segment::create(&dir, Offset(0))?, true),
         };
 
+        let sealed_txn_indexes = segments
+            .iter()
+            .map(|segment| {
+                Ok((
+                    segment.base_offset(),
+                    TxnIndex::open(segment.txn_index_path())?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, LogError>>()?;
         let active_txn_index = TxnIndex::open(active.txn_index_path())?;
         let mut epoch_checkpoint =
             LeaderEpochCheckpoint::open(active.leader_epoch_checkpoint_path())?;
@@ -138,6 +147,7 @@ impl Log {
             coordinator_epochs: HashMap::new(),
             producer_state: HashMap::new(),
             active_txn_index,
+            sealed_txn_indexes,
             stamp_source: None,
             stamp_indexes: BTreeMap::new(),
             epoch_checkpoint,
