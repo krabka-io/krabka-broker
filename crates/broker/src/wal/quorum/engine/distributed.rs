@@ -14,9 +14,8 @@ use krabka_kraft_core::NodeId;
 use super::{DistributedQuorum, WalShardEngine, strict_majority};
 
 impl WalShardEngine {
-    /// Switch this shard from the compatibility-only local replica harness to
-    /// the metadata-selected broker voter set. Production registries call this
-    /// before the shard can acknowledge another append.
+    /// Install the metadata-selected broker voter set. Production registries
+    /// call this before the shard can acknowledge another append.
     pub(crate) fn configure_distributed(&self, me: NodeId, voters: &[NodeId]) {
         self.distributed_required.store(true, Ordering::Release);
         let mut distributed = self
