@@ -48,21 +48,6 @@ async fn nondefault_partition_writer_queue_depth_backpressures_at_bound() {
 }
 
 #[test]
-fn diskless_topic_config_requires_exact_true() {
-    assert!(!diskless_topic_config(None));
-
-    let mut config = std::collections::BTreeMap::new();
-    config.insert("krabka.diskless".to_string(), "false".to_string());
-    assert!(!diskless_topic_config(Some(&config)));
-
-    config.insert("krabka.diskless".to_string(), "TRUE".to_string());
-    assert!(!diskless_topic_config(Some(&config)));
-
-    config.insert("krabka.diskless".to_string(), "true".to_string());
-    assert!(diskless_topic_config(Some(&config)));
-}
-
-#[test]
 fn partition_wal_is_created_only_for_diskless_partitions() {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(

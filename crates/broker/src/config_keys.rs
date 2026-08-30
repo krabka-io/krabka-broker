@@ -1,6 +1,6 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes twenty-one topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes twenty-two topic keys. Six propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
 //! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
@@ -23,6 +23,11 @@
 //! key is krabka's `QoS` routing key, `qos.tier`. Producer quota enforcement
 //! uses it to partition runtime buckets by topic tier.
 //!
+//! One key is krabka's data-path opt-in, `krabka.diskless`. It takes
+//! `true`/`false` and it is the only key a partition reads once, when it is
+//! opened, so [`validate_diskless_unchanged`] pins it for the life of the
+//! topic and `DescribeConfigs` reports it read-only.
+//!
 //! Three keys carry KFC-1 scheduled delivery: `delivery.mode`,
 //! `delivery.max.delay.ms`, and `delivery.schedule.monotonic`. Only the first
 //! propagates live to `Log.config`. The produce path reads the other two,
@@ -35,9 +40,11 @@
 //! turn the check on for record keys and for record values. The mode selects
 //! how much of each record the check reads.
 //!
-//! `cleanup.policy=compact` and `delivery.mode=scheduled` exclude each other.
-//! [`validate_topic_config`] sees one pair at a time and cannot see that, so
-//! [`validate_config_combination`] checks the rule over a whole override map.
+//! Two pairs of keys exclude each other: `cleanup.policy=compact` with
+//! `delivery.mode=scheduled`, and `krabka.diskless=true` with
+//! `remote.storage.enable=true`. [`validate_topic_config`] sees one pair at a
+//! time and cannot see either, so [`validate_config_combination`] checks both
+//! rules over a whole override map.
 //!
 //! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
 //! synthesised for `DescribeConfigs` and is never stored, so
@@ -48,6 +55,7 @@
 
 mod broker_scope;
 mod delivery;
+mod diskless;
 mod docs;
 mod log_config;
 mod qos;
@@ -77,6 +85,7 @@ pub(crate) use self::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
         resolve_delivery_schedule_monotonic,
     },
+    diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     qos::resolve_qos_tier,
     recovery::{

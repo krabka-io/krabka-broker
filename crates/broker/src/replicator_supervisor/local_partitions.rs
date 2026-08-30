@@ -130,7 +130,7 @@ impl ReplicatorSupervisor {
         topic: &str,
         partition: i32,
     ) -> Result<(), String> {
-        let diskless = crate::broker::diskless_topic_config(image.topic_config(topic));
+        let diskless = crate::config_keys::resolve_diskless(image.topic_config(topic));
         let topic_id = image.topic(topic).map(|topic| topic.topic_id);
         let initial_target = if diskless {
             None
