@@ -1,6 +1,6 @@
 //! Projection of committed diskless WAL index events.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
@@ -8,13 +8,27 @@ use tokio::sync::{Mutex, watch};
 
 use super::wal_index::{WalFlushRecord, WalIndexCache};
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub(crate) const DISKLESS_WAL_INDEX_TOPIC: &str = "__diskless_wal_index";
+
+/// How far the pump has walked the replay it started with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReplayProgress {
+    /// Records delivered for whichever still-unreplayed partition has seen
+    /// the fewest. It only rises when the slowest partition moves, so one
+    /// partition going silent freezes it however busy the rest are.
+    slowest_pending: u64,
+    /// Whether every partition has reached its replay target.
+    caught_up: bool,
+}
 
 #[derive(Clone)]
 pub(crate) struct DisklessIndexLog {
     log: Arc<dyn MetadataEventLog>,
     cache: Arc<Mutex<WalIndexCache>>,
-    caught_up: watch::Receiver<bool>,
+    progress: watch::Receiver<ReplayProgress>,
 }
 
 impl DisklessIndexLog {
@@ -29,8 +43,12 @@ impl DisklessIndexLog {
     /// Subscribe the projection to the index topic and replay it from the
     /// start.
     ///
-    /// The end offsets are read *before* the subscription so the replay is
-    /// guaranteed to cover them. They become the catch-up target that
+    /// The subscription is established *before* the end offsets are read.
+    /// `subscribe` replays each partition's backlog and then forwards live
+    /// appends, so a watermark taken afterwards names only offsets the stream
+    /// is bound to deliver — including a record another broker appended
+    /// between the two calls, which a watermark taken first would have left
+    /// out of the target. Those offsets are the catch-up target that
     /// [`Self::wait_until_caught_up`] reports against: until the pump has
     /// walked that far, the projection is a partial view of what object
     /// storage already holds.
@@ -42,12 +60,6 @@ impl DisklessIndexLog {
         log: Arc<dyn MetadataEventLog>,
         cache: Arc<Mutex<WalIndexCache>>,
     ) -> Result<Self, crate::error::BrokerError> {
-        let high_water_marks = log.high_water_marks().await.map_err(|error| {
-            crate::error::BrokerError::Txn(format!("diskless index end offsets: {error}"))
-        })?;
-        let mut pending = replay_targets(log.partition_count(), &high_water_marks);
-        let (caught_up_tx, caught_up_rx) = watch::channel(pending.is_empty());
-
         let starts = (0..log.partition_count())
             .map(|partition| PartitionStart {
                 partition,
@@ -55,38 +67,74 @@ impl DisklessIndexLog {
             })
             .collect();
         let (mut stream, _assignment) = log.subscribe(starts);
+
+        let high_water_marks = log.high_water_marks().await.map_err(|error| {
+            crate::error::BrokerError::Txn(format!("diskless index end offsets: {error}"))
+        })?;
+        let mut pending = replay_targets(log.partition_count(), &high_water_marks);
+        let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
+            slowest_pending: 0,
+            caught_up: pending.is_empty(),
+        });
+
         let pump_cache = cache.clone();
         tokio::spawn(async move {
+            let mut delivered: HashMap<i32, u64> =
+                pending.keys().map(|partition| (*partition, 0)).collect();
             while let Some(event) = stream.next().await {
                 if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
                     pump_cache.lock().await.apply(&record);
                 }
                 // A record that fails to decode still advances the replay:
                 // the gate tracks position in the topic, not content.
-                if pending
-                    .get(&event.partition)
-                    .is_some_and(|target| event.offset >= *target)
-                {
+                let Some(target) = pending.get(&event.partition).copied() else {
+                    continue;
+                };
+                *delivered.entry(event.partition).or_default() += 1;
+                if event.offset >= target {
                     pending.remove(&event.partition);
-                    if pending.is_empty() {
-                        let _ = caught_up_tx.send(true);
-                    }
+                    delivered.remove(&event.partition);
                 }
+                let next = ReplayProgress {
+                    slowest_pending: delivered.values().copied().min().unwrap_or(u64::MAX),
+                    caught_up: pending.is_empty(),
+                };
+                // Notify only on a real change, so a waiter's stall timer is
+                // not reset by a busy partition while another one is stuck.
+                progress_tx.send_if_modified(|progress| {
+                    let changed = *progress != next;
+                    *progress = next;
+                    changed
+                });
             }
         });
         Ok(Self {
             log,
             cache,
-            caught_up: caught_up_rx,
+            progress: progress_rx,
         })
     }
 
-    /// Resolve once the projection has replayed every record the index topic
-    /// held when this log started. Resolves to `false` when the pump stopped
-    /// first, which leaves the projection permanently incomplete.
-    pub(crate) async fn wait_until_caught_up(&self) -> bool {
-        let mut caught_up = self.caught_up.clone();
-        caught_up.wait_for(|done| *done).await.is_ok()
+    /// Resolve `true` once the projection has replayed every record the index
+    /// topic held when this log started.
+    ///
+    /// Resolve `false` when the replay makes no progress for `stall_timeout`,
+    /// or when the pump stops outright. Neither is recoverable on this
+    /// subscription: a [`krabka_remote_storage_topic::KafkaMetadataEventLog`]
+    /// partition whose fetch loop died while connecting goes silent forever
+    /// without closing the shared stream, so a caller that keeps waiting
+    /// never flushes again. Rebuild the log instead.
+    pub(crate) async fn wait_until_caught_up(&self, stall_timeout: Duration) -> bool {
+        let mut progress = self.progress.clone();
+        loop {
+            if progress.borrow_and_update().caught_up {
+                return true;
+            }
+            match tokio::time::timeout(stall_timeout, progress.changed()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => return false,
+            }
+        }
     }
 
     #[must_use]
@@ -136,10 +184,13 @@ fn index_partition(key: &str, partitions: i32) -> i32 {
 mod tests {
     use assert2::assert;
     use krabka_remote_storage_topic::InProcessMetadataEventLog;
-    use tokio::time::{Duration, timeout};
+    use tokio::time::timeout;
     use uuid::Uuid;
 
-    use super::*;
+    use super::{
+        test_support::{PacedReplayLog, RacingAppendLog, ReplayPace},
+        *,
+    };
     use crate::diskless::wal_index::WalIndexEntry;
 
     fn flush_record(object_key: &str, topic_id: Uuid, first: i64, last: i64) -> WalFlushRecord {
@@ -170,7 +221,7 @@ mod tests {
 
         // A restart against the now-populated topic.
         let restarted = DisklessIndexLog::start(event_log).await.unwrap();
-        assert!(restarted.wait_until_caught_up().await);
+        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
         assert!(
             restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
             "catch-up must not resolve before the whole backlog is projected"
@@ -182,9 +233,84 @@ mod tests {
         let index = DisklessIndexLog::start(InProcessMetadataEventLog::new(2))
             .await
             .unwrap();
-        timeout(Duration::from_secs(1), index.wait_until_caught_up())
+        timeout(
+            Duration::from_secs(1),
+            index.wait_until_caught_up(Duration::from_secs(5)),
+        )
+        .await
+        .expect("an empty topic has no backlog to replay");
+    }
+
+    #[tokio::test]
+    async fn catch_up_gives_up_when_the_replay_stops_making_progress() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        seed.publish_flush(&flush_record("object-a", Uuid::from_u128(7), 0, 3))
             .await
-            .expect("an empty topic has no backlog to replay");
+            .unwrap();
+
+        // A silent-but-open stream is what a dead partition fetch loop leaves
+        // behind. Waiting on it forever would never flush again.
+        let stalled = DisklessIndexLog::start(PacedReplayLog::new(event_log, ReplayPace::Never))
+            .await
+            .unwrap();
+        assert!(
+            !stalled
+                .wait_until_caught_up(Duration::from_millis(50))
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn catch_up_keeps_waiting_while_a_slow_replay_still_advances() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let topic_id = Uuid::from_u128(7);
+        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        for (key, first, last) in [("object-a", 0, 3), ("object-b", 4, 7)] {
+            seed.publish_flush(&flush_record(key, topic_id, first, last))
+                .await
+                .unwrap();
+        }
+
+        // Every record lands well inside the stall window, but the replay as a
+        // whole outlasts it: progress, not elapsed time, is what the gate
+        // measures.
+        let paced = DisklessIndexLog::start(PacedReplayLog::new(
+            event_log,
+            ReplayPace::OneEvery(Duration::from_millis(40)),
+        ))
+        .await
+        .unwrap();
+        assert!(paced.wait_until_caught_up(Duration::from_millis(400)).await);
+        assert!(paced.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8));
+    }
+
+    #[tokio::test]
+    async fn catch_up_covers_a_record_appended_while_the_subscription_opens() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let topic_id = Uuid::from_u128(7);
+        let seed = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        seed.publish_flush(&flush_record("object-a", topic_id, 0, 3))
+            .await
+            .unwrap();
+
+        // The previous leader's in-flight flush lands while this projection is
+        // subscribing. Pacing the replay keeps the assertion off the pump's
+        // heels, so a gate that stopped one record short stays caught short.
+        let racing = flush_record("object-b", topic_id, 4, 7).to_bytes().unwrap();
+        let restarted = DisklessIndexLog::start(RacingAppendLog::new(
+            PacedReplayLog::new(event_log, ReplayPace::OneEvery(Duration::from_millis(40))),
+            0,
+            racing,
+        ))
+        .await
+        .unwrap();
+
+        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
+        assert!(
+            restarted.cache().lock().await.flushed_frontier(topic_id, 0) == Some(8),
+            "the racing append must be part of the replay target"
+        );
     }
 
     #[tokio::test]

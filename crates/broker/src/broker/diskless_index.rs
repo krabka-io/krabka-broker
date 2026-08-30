@@ -61,31 +61,41 @@ pub(super) async fn bootstrap_diskless_index_log(
                 );
                 // `flusher.ready` flips inside `run`, once the projection has
                 // replayed the index topic and the first tick may fire.
-                crate::diskless::flusher::run(
+                let exit = crate::diskless::flusher::run(
                     crate::diskless::flusher::FlusherContext {
-                        partitions: flusher.partitions,
-                        image_rx: flusher.image_rx,
-                        object_store: flusher.object_store,
+                        partitions: Arc::clone(&flusher.partitions),
+                        image_rx: flusher.image_rx.clone(),
+                        object_store: Arc::clone(&flusher.object_store),
                         index_log,
                         node_id: flusher.node_id,
                         broker_id: flusher.broker_id,
-                        ready: flusher.ready,
+                        ready: Arc::clone(&flusher.ready),
                     },
-                    flusher.flush_config,
-                    shutdown,
+                    flusher.flush_config.clone(),
+                    shutdown.clone(),
                 )
                 .await;
-                return;
+                match exit {
+                    crate::diskless::flusher::FlusherExit::ShutDown => return,
+                    // A partition fetch loop that died while connecting goes
+                    // silent without closing the stream, so the projection
+                    // only recovers on a fresh log and subscription.
+                    crate::diskless::flusher::FlusherExit::ReplayStalled => {
+                        tracing::warn!(
+                            topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                            backoff_ms = backoff.as_millis(),
+                            "diskless WAL index replay stalled; rebuilding the index log"
+                        );
+                    }
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, backoff_ms = backoff.as_millis(),
                     "diskless WAL index log start failed; retrying");
-                if !rlmm_bootstrap_backoff(&mut backoff, config.bootstrap_backoff_max, &shutdown)
-                    .await
-                {
-                    return;
-                }
             }
+        }
+        if !rlmm_bootstrap_backoff(&mut backoff, config.bootstrap_backoff_max, &shutdown).await {
+            return;
         }
     }
 }

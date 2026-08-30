@@ -1,6 +1,6 @@
 //! Flush policy for the diskless WAL flusher: the tick cadence, the per-object
-//! size budget, the trim safety lag, and the index-projection timeout, in one
-//! `FlushConfig` that the broker derives from its own `BrokerConfig`.
+//! size budget, the trim safety lag, and the index-projection stall timeout,
+//! in one `FlushConfig` that the broker derives from its own `BrokerConfig`.
 
 use std::time::Duration;
 
@@ -16,6 +16,10 @@ pub(crate) struct FlushConfig {
     pub(crate) interval: Duration,
     pub(crate) max_size: ByteSize,
     pub(crate) trim_safety_lag: Option<i64>,
+    /// How long the flusher tolerates the index projection standing still:
+    /// both waiting for its own published record to come back, and waiting
+    /// for the startup replay to advance. It bounds a lack of *progress*, not
+    /// total elapsed time, so a large index-topic backlog does not trip it.
     pub(crate) index_projection_timeout: Duration,
 }
 
