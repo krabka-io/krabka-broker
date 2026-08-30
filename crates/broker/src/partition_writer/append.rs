@@ -103,9 +103,8 @@ fn append_produce_batch_at(
                 .map(|()| next)
                 .map_err(crate::error::BrokerError::from),
         };
-        if result.is_ok() {
-            next = Offset(next.0 + count);
-        }
+        next = Offset(next.0 + count);
+        guard.reconcile_next_offset(next);
         results.push(result);
     }
     let leo = guard.log_end_offset();
@@ -206,6 +205,40 @@ mod tests {
         ));
         assert!(leo == Offset(1));
         assert!(log.lock().unwrap().log_end_offset() == Offset(1));
+    }
+
+    #[test]
+    fn diskless_group_reanchors_after_partial_append_failure() {
+        let dir = tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+        log.test_set_io(Arc::new(FailNthWrite {
+            next: std::sync::atomic::AtomicUsize::new(0),
+            fail_at: 2,
+        }));
+        let log = Mutex::new(log);
+
+        let (results, leo) = append_produce_batch_at(
+            &log,
+            Offset(0),
+            vec![
+                ProduceData::Owned(sample_batch(1)),
+                ProduceData::Owned(sample_batch(1)),
+            ],
+        );
+
+        assert!(results[0].as_ref().unwrap() == &Offset(0));
+        assert!(matches!(
+            &results[1],
+            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
+                if error.kind() == std::io::ErrorKind::StorageFull
+        ));
+        assert!(leo == Offset(1));
+
+        let (results, leo) =
+            append_produce_batch_at(&log, Offset(2), vec![ProduceData::Owned(sample_batch(1))]);
+
+        assert!(results[0].as_ref().unwrap() == &Offset(2));
+        assert!(leo == Offset(3));
     }
 
     #[test]
