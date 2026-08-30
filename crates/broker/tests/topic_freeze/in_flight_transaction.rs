@@ -7,6 +7,8 @@
 //! offset and stops every `read_committed` consumer of a topic the freeze was
 //! meant to keep readable.
 
+use std::time::{Duration, Instant};
+
 use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_broker::codes;
@@ -61,6 +63,21 @@ async fn stable_offset(client: &Client, topic: &str) -> i64 {
         "ListOffsets({topic}): {partition:?}"
     );
     partition.offset
+}
+
+async fn wait_for_stable_offset(client: &Client, topic: &str, want: i64) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let offset = stable_offset(client, topic).await;
+        if offset == want {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stable offset for {topic} never reached {want}; last={offset}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 /// A transaction that enlisted the partition before the freeze still commits,
@@ -135,7 +152,7 @@ async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
     p.broker
         .wait_until_local_log_end_offset("orders", 0, 2)
         .await;
-    check!(stable_offset(&p.client, "orders").await == 2);
+    wait_for_stable_offset(&p.client, "orders", 2).await;
 
     check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
     producer.close().await.expect("producer close");
