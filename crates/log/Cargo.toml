@@ -30,7 +30,7 @@ assert2 = { workspace = true }
 krabka-ids = { version = "0.4.0" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 krabka-compression = { version = "0.4.0", default-features = false }
-krabka-verified = { version = "0.5.0", path = "../verified" }
+krabka-verified = { version = "0.5.1", path = "../verified" }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
 crc32c = { workspace = true }

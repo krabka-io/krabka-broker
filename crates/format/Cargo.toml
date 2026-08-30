@@ -28,7 +28,7 @@ krabka-metadata = { version = "0.4.0" }
 krabka-security = { workspace = true }
 # The singleton VotersRecord this writes is the one the consensus engine reads
 # back on the node's first boot.
-krabka-raft = { version = "0.5.0", path = "../raft" }
+krabka-raft = { version = "0.5.1", path = "../raft" }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 derive_more = { workspace = true }
@@ -44,5 +44,5 @@ tracing-subscriber = { workspace = true }
 assert2 = { workspace = true }
 
 [dev-dependencies]
-krabka-broker = { version = "0.5.0", path = "../broker" }
+krabka-broker = { version = "0.5.1", path = "../broker" }
 tempfile = { workspace = true }
