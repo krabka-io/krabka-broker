@@ -8,3 +8,7 @@ disallowed-macros = [
     { path = "std::assert_eq", reason = "use assert2::assert!; see CLAUDE.md" },
     { path = "std::assert_ne", reason = "use assert2::assert!; see CLAUDE.md" },
 ]
+
+disallowed-methods = [
+    { path = "stateright::CheckerBuilder::timeout", reason = "wall-clock timeouts make exhaustive model checks pass after partial exploration" },
+]
