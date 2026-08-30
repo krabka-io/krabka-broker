@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use object_store::{
-    GetOptions, GetRange, ObjectMeta, ObjectStoreExt as _, PutOptions, PutPayload, WriteMultipart,
-    path::Path,
+    GetOptions, GetRange, MultipartUpload, ObjectMeta, ObjectStoreExt as _, PutOptions, PutPayload,
+    PutResult, UploadPart, WriteMultipart, path::Path,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
@@ -32,6 +32,69 @@ use crate::{
 #[derive(Clone)]
 pub struct ObjectStoreClient {
     inner: Arc<dyn object_store::ObjectStore>,
+}
+
+#[derive(Debug)]
+struct AbortOnDrop {
+    upload: Option<Box<dyn MultipartUpload>>,
+    key: Path,
+}
+
+impl AbortOnDrop {
+    fn new(upload: Box<dyn MultipartUpload>, key: &Path) -> Self {
+        Self {
+            upload: Some(upload),
+            key: key.clone(),
+        }
+    }
+
+    fn upload(&mut self) -> &mut Box<dyn MultipartUpload> {
+        self.upload.as_mut().expect("upload is still active")
+    }
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for AbortOnDrop {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.upload().put_part(data)
+    }
+
+    async fn complete(&mut self) -> object_store::Result<PutResult> {
+        let result = self.upload().complete().await;
+        if result.is_ok() {
+            self.upload.take();
+        }
+        result
+    }
+
+    async fn abort(&mut self) -> object_store::Result<()> {
+        let Some(mut upload) = self.upload.take() else {
+            return Ok(());
+        };
+        let result = upload.abort().await;
+        if let Err(error) = &result {
+            tracing::warn!(key = %self.key, %error, "failed to abort multipart upload");
+        }
+        result
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        let Some(mut upload) = self.upload.take() else {
+            return;
+        };
+        let key = self.key.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(%key, "cannot abort multipart upload outside a Tokio runtime");
+            return;
+        };
+        runtime.spawn(async move {
+            if let Err(error) = upload.abort().await {
+                tracing::warn!(%key, %error, "failed to abort multipart upload");
+            }
+        });
+    }
 }
 
 impl ObjectStoreClient {
@@ -123,7 +186,7 @@ impl ObjectOps for ObjectStoreClient {
         // — it has no `mode` field, and `MultipartUpload::complete` takes no
         // precondition. A non-`Overwrite` mode on a file at or above
         // `threshold` therefore degrades to a plain multipart put.
-        let upload = self.inner.put_multipart(key).await?;
+        let upload = Box::new(AbortOnDrop::new(self.inner.put_multipart(key).await?, key));
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
         let mut file = tokio::fs::File::open(src).await?;
         let mut buf = vec![0u8; chunk_size];

@@ -15,7 +15,9 @@ use std::{fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
 use krabka_audit::chain::from_hex32;
-use krabka_object_store::{ObjectStoreConfig, S3Config, build_object_store};
+use krabka_object_store::{
+    ObjectStoreConfig, S3Config, build_object_store, list_s3_multipart_uploads,
+};
 use krabka_remote_storage::{
     ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyDepth,
     VerifyRequest, verify_archive,
@@ -138,7 +140,7 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let store = match open_store(&args) {
+    let (store, s3) = match open_store(&args) {
         Ok(store) => store,
         Err(message) => {
             eprintln!("error: {message}");
@@ -160,7 +162,28 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
         allow_epoch_restarts: args.grading.allow_epoch_restarts,
     };
     match verify_archive(&store, &request, &trusted).await {
-        Ok(report) => grade(&report, &args),
+        Ok(report) => {
+            if let Some(s3) = &s3 {
+                match list_s3_multipart_uploads(s3, args.prefix.as_deref()).await {
+                    Ok(uploads) if !uploads.is_empty() => {
+                        eprintln!(
+                            "INCOMPLETE MULTIPART UPLOADS: {} upload(s) still hold parts",
+                            uploads.len()
+                        );
+                        for upload in uploads.iter().take(ORPHANS_SHOWN) {
+                            eprintln!("  {} ({})", upload.key, upload.upload_id);
+                        }
+                        return ExitCode::FAILURE;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!("error: cannot list incomplete multipart uploads: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            grade(&report, &args)
+        }
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
@@ -179,7 +202,9 @@ fn trusted_keys(args: &VerifyArgs) -> Result<TrustedManifestKeys, String> {
 }
 
 /// Opens the archive named by `--local-dir` or by `--bucket`.
-fn open_store(args: &VerifyArgs) -> Result<Arc<dyn object_store::ObjectStore>, String> {
+fn open_store(
+    args: &VerifyArgs,
+) -> Result<(Arc<dyn object_store::ObjectStore>, Option<S3Config>), String> {
     let config = match (args.local_dir.as_ref(), args.bucket.as_ref()) {
         (Some(root), _) => ObjectStoreConfig::Local { root: root.clone() },
         (None, Some(bucket)) => ObjectStoreConfig::S3(S3Config {
@@ -192,7 +217,13 @@ fn open_store(args: &VerifyArgs) -> Result<Arc<dyn object_store::ObjectStore>, S
         // clap enforces that one of the two is present.
         (None, None) => return Err("give either --local-dir or --bucket".to_string()),
     };
-    build_object_store(&config).map_err(|e| e.to_string())
+    let s3 = match &config {
+        ObjectStoreConfig::S3(s3) => Some(s3.clone()),
+        _ => None,
+    };
+    build_object_store(&config)
+        .map(|store| (store, s3))
+        .map_err(|e| e.to_string())
 }
 
 /// Grades the report, prints the verdict, and returns the exit code.

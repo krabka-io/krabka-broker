@@ -3073,12 +3073,17 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
+ "http",
  "mockall",
  "object_store",
+ "quick-xml",
+ "reqwest 0.12.28",
+ "serde",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

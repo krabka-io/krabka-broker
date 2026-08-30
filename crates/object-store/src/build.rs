@@ -33,7 +33,9 @@ pub fn build_object_store(
     }
 }
 
-fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
+pub(crate) fn build_s3_store(
+    cfg: &S3Config,
+) -> Result<object_store::aws::AmazonS3, ObjectStoreError> {
     let mut builder = object_store::aws::AmazonS3Builder::new()
         .with_bucket_name(&cfg.bucket)
         .with_region(&cfg.region)
@@ -50,10 +52,13 @@ fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     if cfg.checksum_sha256 {
         builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
     }
-    let store = builder
+    builder
         .build()
-        .map_err(|e| ObjectStoreError::InvalidConfig(format!("S3 builder: {e}")))?;
-    Ok(Arc::new(store))
+        .map_err(|e| ObjectStoreError::InvalidConfig(format!("S3 builder: {e}")))
+}
+
+fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
+    Ok(Arc::new(build_s3_store(cfg)?))
 }
 
 fn build_gcs(cfg: &GcsConfig) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {

@@ -11,6 +11,7 @@
 mod build;
 mod config;
 mod error;
+mod multipart;
 mod ops;
 mod read;
 
@@ -20,5 +21,6 @@ pub use config::{
     S3Config,
 };
 pub use error::ObjectStoreError;
+pub use multipart::{IncompleteMultipartUpload, list_s3_multipart_uploads};
 pub use ops::{ObjectOps, ObjectStoreClient, PutMode, PutOutcome, PutRequest};
 pub use read::read_capped;
