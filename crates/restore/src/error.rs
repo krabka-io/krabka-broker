@@ -133,6 +133,21 @@ pub enum RestoreError {
         reason: String,
     },
 
+    /// A topic configuration belongs to a different incarnation of an
+    /// archived topic, or cannot be tied to one at all.
+    #[error(
+        "metadata snapshot topic id mismatch for {topic}: archive has {archive_topic_id}, \
+         snapshot has {snapshot_topic_id}"
+    )]
+    MetadataSnapshotTopicMismatch {
+        /// Topic name shared by the archive and snapshot.
+        topic: String,
+        /// Topic id carried by the archived partition paths.
+        archive_topic_id: Uuid,
+        /// Topic id in the snapshot, or `absent` when its topic record is missing.
+        snapshot_topic_id: String,
+    },
+
     /// A bound names a topic partition the archive does not hold. Left
     /// unreported this silently restores the partition whole, which is the
     /// opposite of what the operator asked for.
@@ -192,6 +207,7 @@ impl RestoreError {
             | Self::TornCopy { .. }
             | Self::MetadataDisagreement { .. }
             | Self::MetadataSnapshot { .. }
+            | Self::MetadataSnapshotTopicMismatch { .. }
             | Self::Records(_) => EXIT_INTEGRITY,
             Self::Format { .. } | Self::Log(_) | Self::Io(_) => EXIT_MATERIALIZE,
         }
@@ -278,6 +294,21 @@ mod tests {
                     partition: 0,
                     scanned: "4 segments".into(),
                     snapshot: "3 segments".into(),
+                },
+                EXIT_INTEGRITY,
+            ),
+            (
+                RestoreError::MetadataSnapshot {
+                    path: "metadata.checkpoint".into(),
+                    reason: "bad frame".into(),
+                },
+                EXIT_INTEGRITY,
+            ),
+            (
+                RestoreError::MetadataSnapshotTopicMismatch {
+                    topic: "orders".into(),
+                    archive_topic_id: Uuid::nil(),
+                    snapshot_topic_id: "absent".into(),
                 },
                 EXIT_INTEGRITY,
             ),
