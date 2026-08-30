@@ -83,18 +83,11 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
     })
 }
 
-pub(crate) fn authenticated_node_id(
-    principal: &krabka_security::Principal,
-) -> Option<krabka_raft::NodeId> {
-    if principal.auth_method == krabka_security::AuthMethod::Anonymous {
-        return None;
-    }
-    let id = principal
-        .name
+pub(crate) fn conventional_node_id(principal_name: &str) -> Option<krabka_raft::NodeId> {
+    let id = principal_name
         .strip_prefix("broker-")
         .or_else(|| {
-            principal
-                .name
+            principal_name
                 .split(',')
                 .find_map(|rdn| rdn.trim().strip_prefix("CN=broker-"))
         })?

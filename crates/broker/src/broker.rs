@@ -214,10 +214,16 @@ struct DisklessRuntime {
 }
 
 impl DisklessRuntime {
-    fn new(node_id: krabka_raft::NodeId) -> Self {
+    fn new(
+        node_id: krabka_raft::NodeId,
+        principal_node_ids: std::collections::HashMap<String, krabka_raft::NodeId>,
+    ) -> Self {
         Self {
             hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::default()),
-            wal_shards: Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(node_id)),
+            wal_shards: Arc::new(
+                crate::wal::quorum::registry::WalShardRegistry::new(node_id)
+                    .with_principal_node_ids(principal_node_ids),
+            ),
         }
     }
 }

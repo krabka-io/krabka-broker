@@ -111,8 +111,7 @@ pub(crate) async fn handle(
         if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return Ok((cluster_authorization_failed(), version));
         }
-        let Some(authenticated_node) =
-            crate::wal::quorum::wire::authenticated_node_id(ctx.principal)
+        let Some(authenticated_node) = broker.wal_shards.authenticated_node_id(ctx.principal)
         else {
             return Ok((cluster_authorization_failed(), version));
         };

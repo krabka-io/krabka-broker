@@ -27,6 +27,7 @@ pub(crate) struct ShardId {
 #[derive(Debug)]
 pub(crate) struct WalShardRegistry {
     local_node_id: krabka_raft::NodeId,
+    principal_node_ids: HashMap<String, krabka_raft::NodeId>,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
     placements: RwLock<HashMap<ShardId, Vec<krabka_raft::NodeId>>>,
     #[cfg(any(test, feature = "test-helpers"))]
@@ -38,11 +39,34 @@ impl WalShardRegistry {
     pub(crate) fn new(local_node_id: krabka_raft::NodeId) -> Self {
         Self {
             local_node_id,
+            principal_node_ids: HashMap::new(),
             engines: DashMap::new(),
             placements: RwLock::new(HashMap::new()),
             #[cfg(any(test, feature = "test-helpers"))]
             follower_fetchers: DashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_principal_node_ids(
+        mut self,
+        principal_node_ids: HashMap<String, krabka_raft::NodeId>,
+    ) -> Self {
+        self.principal_node_ids = principal_node_ids;
+        self
+    }
+
+    pub(crate) fn authenticated_node_id(
+        &self,
+        principal: &krabka_security::Principal,
+    ) -> Option<krabka_raft::NodeId> {
+        if principal.auth_method == krabka_security::AuthMethod::Anonymous {
+            return None;
+        }
+        self.principal_node_ids
+            .get(&principal.name)
+            .copied()
+            .or_else(|| super::wire::conventional_node_id(&principal.name))
     }
 
     pub(crate) fn insert(&self, shard_id: ShardId, engine: Arc<WalShardEngine>) {
@@ -222,7 +246,8 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
         body: bytes::Bytes,
         principal: Option<&krabka_security::Principal>,
     ) -> krabka_raft::ShardRouteFuture<'_> {
-        let authenticated_from = principal.and_then(super::wire::authenticated_node_id);
+        let authenticated_from =
+            principal.and_then(|principal| self.registry.authenticated_node_id(principal));
         Box::pin(async move {
             if api_key != krabka_raft::kraft::transport::api_key::FETCH {
                 return Ok(None);
@@ -297,7 +322,11 @@ mod tests {
         ));
         engine.replicate_and_sync(&source, Offset(1)).await.unwrap();
 
-        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
+        let registry = Arc::new(
+            WalShardRegistry::new(krabka_raft::NodeId(9)).with_principal_node_ids(
+                maplit::hashmap! {"admin".to_string() => krabka_raft::NodeId(9)},
+            ),
+        );
         let topic_id = uuid::Uuid::from_u128(17);
         let partition = PartitionIndex(2);
         registry.insert(
@@ -318,7 +347,11 @@ mod tests {
             0,
             0,
         );
-        let principal = broker_principal(9);
+        let principal = krabka_security::Principal {
+            name: "admin".to_string(),
+            auth_method: krabka_security::AuthMethod::SaslPlain,
+            groups: Vec::new(),
+        };
 
         let response = router
             .route(
