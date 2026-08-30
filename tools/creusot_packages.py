@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 
 
-CONTRACT = re.compile(r"^\s*#\s*\[\s*(?:requires|ensures)\b", re.MULTILINE)
+CONTRACT = re.compile(
+    r"^\s*#\s*\[\s*(?:(?:requires|ensures)\b|cfg_attr\s*\(\s*creusot\s*,\s*(?:requires|ensures)\b)",
+    re.MULTILINE,
+)
 
 
 def discover(root: Path) -> list[str]:
