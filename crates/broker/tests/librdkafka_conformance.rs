@@ -90,7 +90,7 @@ async fn round_trip_group_join_and_api_versions_across_librdkafka_versions() {
                     name: topic.clone(),
                     partitions: 1,
                     replicas: 1,
-                    configs: Default::default(),
+                    configs: std::collections::BTreeMap::default(),
                 }],
                 krabka_units::secs(5),
             )
