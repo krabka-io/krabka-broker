@@ -14,6 +14,7 @@ async fn mock_seam_compiles_and_returns() {
             sha256: None,
             e_tag: None,
             version_id: None,
+            create_precondition: false,
         })
     });
 
@@ -35,6 +36,7 @@ async fn mock_seam_compiles_and_returns() {
                 sha256: None,
                 e_tag: None,
                 version_id: None,
+                create_precondition: false,
             }
     );
 }

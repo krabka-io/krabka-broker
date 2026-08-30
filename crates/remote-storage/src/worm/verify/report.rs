@@ -55,6 +55,10 @@ pub struct PartitionVerifyReport {
     pub manifests: u64,
     /// Object entries checked before the walk stopped.
     pub objects_checked: u64,
+    /// Verified object keys written with an atomic create precondition.
+    pub create_precondition_objects: Vec<String>,
+    /// Verified object keys whose multipart write relied on bucket retention.
+    pub bucket_retention_objects: Vec<String>,
     /// Chain runs found, ordered by their lowest segment start offset.
     pub epochs: Vec<EpochSpan>,
     /// Manifests that carry no signature at all.
@@ -130,6 +134,8 @@ pub(super) fn broken_before_walk(
         partition_dir: dir.to_string(),
         manifests: 0,
         objects_checked: 0,
+        create_precondition_objects: Vec::new(),
+        bucket_retention_objects: Vec::new(),
         epochs: Vec::new(),
         unsigned_manifests: 0,
         untrusted_manifests: 0,

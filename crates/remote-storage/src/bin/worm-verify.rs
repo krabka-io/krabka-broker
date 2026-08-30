@@ -438,43 +438,57 @@ fn total(report: &ArchiveVerifyReport, count: impl Fn(&PartitionVerifyReport) ->
 
 /// One line per partition, naming the tip an operator feeds to `--expect-head`.
 fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
-    report
-        .partitions
-        .iter()
-        .map(|partition| {
-            let tip = partition
-                .head
-                .map_or_else(|| "none".to_string(), |head| head.to_string());
-            let start = partition
-                .epochs
-                .iter()
-                .map(|epoch| epoch.start_offset)
-                .min();
-            let end = partition.epochs.iter().map(|epoch| epoch.end_offset).max();
-            let offsets = match (start, end) {
-                (Some(start), Some(end)) => format!("offsets {start}..{end}"),
-                _ => "no offsets".to_string(),
-            };
-            let mut line = format!(
-                "  {}: tip {tip}, {} manifest(s), {} object(s), {offsets}, {} epoch(s)",
-                partition.partition_dir,
-                partition.manifests,
-                partition.objects_checked,
-                partition.epochs.len()
+    let mut lines = Vec::new();
+    for partition in &report.partitions {
+        let tip = partition
+            .head
+            .map_or_else(|| "none".to_string(), |head| head.to_string());
+        let start = partition
+            .epochs
+            .iter()
+            .map(|epoch| epoch.start_offset)
+            .min();
+        let end = partition.epochs.iter().map(|epoch| epoch.end_offset).max();
+        let offsets = match (start, end) {
+            (Some(start), Some(end)) => format!("offsets {start}..{end}"),
+            _ => "no offsets".to_string(),
+        };
+        let mut line = format!(
+            "  {}: tip {tip}, {} manifest(s), {} object(s), {offsets}, {} epoch(s)",
+            partition.partition_dir,
+            partition.manifests,
+            partition.objects_checked,
+            partition.epochs.len()
+        );
+        if !partition.offset_gaps.is_empty() {
+            let _ = write!(line, ", {} offset gap(s)", partition.offset_gaps.len());
+        }
+        if !partition.orphan_objects.is_empty() {
+            let _ = write!(
+                line,
+                ", {} orphan object(s)",
+                partition.orphan_objects.len()
             );
-            if !partition.offset_gaps.is_empty() {
-                let _ = write!(line, ", {} offset gap(s)", partition.offset_gaps.len());
-            }
-            if !partition.orphan_objects.is_empty() {
-                let _ = write!(
-                    line,
-                    ", {} orphan object(s)",
-                    partition.orphan_objects.len()
-                );
-            }
-            line
-        })
-        .collect()
+        }
+        lines.push(line);
+        lines.push(format!(
+            "    create precondition: {}",
+            listed(&partition.create_precondition_objects)
+        ));
+        lines.push(format!(
+            "    bucket retention: {}",
+            listed(&partition.bucket_retention_objects)
+        ));
+    }
+    lines
+}
+
+fn listed(keys: &[String]) -> String {
+    if keys.is_empty() {
+        "none".to_string()
+    } else {
+        keys.join(", ")
+    }
 }
 
 #[cfg(test)]
@@ -513,6 +527,8 @@ mod tests {
                 partition_dir: "archive/orders-0-id".into(),
                 manifests: 0,
                 objects_checked: 0,
+                create_precondition_objects: Vec::new(),
+                bucket_retention_objects: Vec::new(),
                 epochs: Vec::new(),
                 unsigned_manifests: 0,
                 untrusted_manifests: 0,

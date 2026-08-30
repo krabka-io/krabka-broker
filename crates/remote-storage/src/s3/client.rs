@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use krabka_object_store::{
     DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, ObjectStoreClient,
-    ObjectStoreConfig, ObjectStoreError, S3Config, build_object_store,
+    ObjectStoreConfig, ObjectStoreError, S3Config, build_object_store, verify_s3_worm_bucket,
 };
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use object_store::ObjectStore;
 
-use super::{S3RemoteStorage, WormMode, size_from_usize};
+use super::{S3RemoteStorage, WormBucket, WormMode, size_from_usize};
 use crate::{
     error::RemoteStorageError,
     worm::{WormArchiver, WormConfig},
@@ -39,6 +39,7 @@ impl S3RemoteStorage {
             multipart_threshold: ByteSize::from_bytes(DEFAULT_MULTIPART_THRESHOLD),
             multipart_chunk_size: size_from_usize(DEFAULT_MULTIPART_CHUNK_SIZE),
             worm: None,
+            worm_bucket: WormBucket::Unverified,
         }
     }
 
@@ -50,14 +51,50 @@ impl S3RemoteStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteStorageError::Worm`] when `cfg`'s signing key cannot be
-    /// loaded.
-    pub fn with_worm(mut self, cfg: &WormConfig) -> Result<Self, RemoteStorageError> {
+    /// Returns an error when the bucket policy cannot be confirmed or `cfg`'s
+    /// signing key cannot be loaded.
+    pub fn with_worm(self, cfg: &WormConfig) -> Result<Self, RemoteStorageError> {
+        match &self.worm_bucket {
+            WormBucket::S3(s3) => {
+                if !s3.conditional_put {
+                    return Err(RemoteStorageError::InvalidArgument(
+                        "WORM mode requires remote_storage.s3.conditional_put = true".into(),
+                    ));
+                }
+                verify_worm_bucket(s3)?;
+            }
+            WormBucket::Gcs => {
+                return Err(RemoteStorageError::InvalidArgument(
+                    "WORM mode cannot confirm GCS bucket versioning and default retention".into(),
+                ));
+            }
+            WormBucket::Unverified => {
+                return Err(RemoteStorageError::InvalidArgument(
+                    "WORM mode requires an S3 configuration so bucket versioning and default \
+                     retention can be confirmed"
+                        .into(),
+                ));
+            }
+        }
+        self.enable_worm(cfg, true)
+    }
+
+    fn enable_worm(
+        mut self,
+        cfg: &WormConfig,
+        require_version_id: bool,
+    ) -> Result<Self, RemoteStorageError> {
         self.worm = Some(WormMode {
             archiver: WormArchiver::from_config(cfg)?,
             write_only: cfg.write_only,
+            require_version_id,
         });
         Ok(self)
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_worm_unchecked(self, cfg: &WormConfig) -> Result<Self, RemoteStorageError> {
+        self.enable_worm(cfg, false)
     }
 
     /// Overrides the multipart threshold and chunk size. Returns `self` for
@@ -79,12 +116,12 @@ impl S3RemoteStorage {
     pub fn from_s3_config(cfg: &S3Config) -> Result<Self, RemoteStorageError> {
         let store = build_object_store(&ObjectStoreConfig::S3(cfg.clone()))
             .map_err(|e| RemoteStorageError::InvalidArgument(e.to_string()))?;
-        Ok(
-            Self::with_store(store, cfg.prefix.clone()).with_multipart_tuning(
-                ByteSize::from_bytes(cfg.multipart_threshold),
-                size_from_usize(cfg.multipart_chunk_size),
-            ),
-        )
+        let mut storage = Self::with_store(store, cfg.prefix.clone()).with_multipart_tuning(
+            ByteSize::from_bytes(cfg.multipart_threshold),
+            size_from_usize(cfg.multipart_chunk_size),
+        );
+        storage.worm_bucket = WormBucket::S3(cfg.clone());
+        Ok(storage)
     }
 
     /// Runs an async [`ObjectOps`](krabka_object_store::ObjectOps) call to
@@ -104,16 +141,36 @@ impl S3RemoteStorage {
     }
 }
 
+fn verify_worm_bucket(cfg: &S3Config) -> Result<(), RemoteStorageError> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(ObjectStoreError::from)?
+                    .block_on(verify_s3_worm_bucket(cfg))
+            })
+            .join()
+            .map_err(|_| ObjectStoreError::Backend("WORM bucket check panicked".into()))?
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::check;
-    use krabka_object_store::{DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD};
+    use krabka_object_store::{
+        DEFAULT_MULTIPART_CHUNK_SIZE, DEFAULT_MULTIPART_THRESHOLD, S3Config,
+    };
     use krabka_units::prelude::{ByteSizeExt as _, kibibytes, mebibytes};
     use object_store::memory::InMemory;
+    use tempfile::TempDir;
 
     use super::S3RemoteStorage;
+    use crate::s3::test_support::worm_config;
 
     /// The multipart tunables cross two seams: in from
     /// [`krabka_object_store`]'s primitive config, and back out to the
@@ -130,5 +187,23 @@ mod tests {
         let tuned = store.with_multipart_tuning(mebibytes(64), kibibytes(512));
         check!(tuned.multipart_threshold.bytes_u64() == 64 * 1024 * 1024);
         check!(tuned.multipart_chunk_size.bytes_usize() == 512 * 1024);
+    }
+
+    #[test]
+    fn worm_refuses_disabled_conditional_put_before_contacting_s3() {
+        let keys = TempDir::new().unwrap();
+        let s3 = S3Config {
+            bucket: "archive".into(),
+            region: "us-east-1".into(),
+            conditional_put: false,
+            ..Default::default()
+        };
+
+        let error = S3RemoteStorage::from_s3_config(&s3)
+            .unwrap()
+            .with_worm(&worm_config(keys.path(), false))
+            .unwrap_err();
+
+        check!(error.to_string().contains("conditional_put = true"));
     }
 }

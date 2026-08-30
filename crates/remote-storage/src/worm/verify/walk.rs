@@ -28,6 +28,8 @@ use crate::worm::{
 pub(super) struct Walk {
     manifests: u64,
     objects_checked: u64,
+    create_precondition_objects: Vec<String>,
+    bucket_retention_objects: Vec<String>,
     unsigned: u64,
     untrusted: u64,
     epochs: Vec<EpochSpan>,
@@ -45,6 +47,13 @@ impl Walk {
         self.objects_checked = self
             .objects_checked
             .saturating_add(u64::try_from(body.objects.len()).unwrap_or(u64::MAX));
+        for object in &body.objects {
+            if object.create_precondition {
+                self.create_precondition_objects.push(object.key.clone());
+            } else {
+                self.bucket_retention_objects.push(object.key.clone());
+            }
+        }
         self.segments
             .push((body.segment.start_offset, body.segment.end_offset));
         self.head = Some(head);
@@ -66,6 +75,8 @@ impl Walk {
             partition_dir: dir.to_string(),
             manifests: self.manifests,
             objects_checked: self.objects_checked,
+            create_precondition_objects: self.create_precondition_objects,
+            bucket_retention_objects: self.bucket_retention_objects,
             epochs: self.epochs,
             unsigned_manifests: self.unsigned,
             untrusted_manifests: self.untrusted,

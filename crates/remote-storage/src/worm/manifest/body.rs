@@ -36,6 +36,12 @@ pub struct ObjectEntry {
     /// A **locator, not an integrity proof**. It names which version of the
     /// key to read back. [`Self::sha256`] is the only integrity claim.
     pub version_id: Option<String>,
+    /// Whether this write used an atomic create precondition.
+    ///
+    /// `false` means the object relied on the bucket's versioning and default
+    /// retention policy, as multipart uploads do.
+    #[serde(default)]
+    pub create_precondition: bool,
 }
 
 /// The segment this manifest describes, flattened out of
@@ -178,6 +184,19 @@ mod tests {
             "signature": null,
         });
         check!(serde_json::from_value::<SegmentManifest>(with_extra).is_err());
+
+        let mut legacy = serde_json::to_value(SegmentManifest {
+            body: sample_body(),
+            signature: None,
+        })
+        .unwrap();
+        legacy["body"]["format_version"] = serde_json::Value::from(1);
+        legacy["body"]["objects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("create_precondition");
+        let legacy: SegmentManifest = serde_json::from_value(legacy).unwrap();
+        check!(!legacy.body.objects[0].create_precondition);
     }
 
     #[test]

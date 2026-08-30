@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures_util::TryStreamExt as _;
 use object_store::{
     GetOptions, GetRange, MultipartUpload, ObjectMeta, ObjectStoreExt as _, PutOptions, PutPayload,
     PutResult, UploadPart, WriteMultipart, path::Path,
@@ -121,6 +122,7 @@ impl ObjectOps for ObjectStoreClient {
         bytes: Bytes,
         req: PutRequest,
     ) -> Result<PutOutcome, ObjectStoreError> {
+        let create_precondition = matches!(req.mode, object_store::PutMode::Create);
         let size_bytes = bytes.len() as u64;
         let sha256 = req.digest.then(|| {
             let mut hasher = Sha256::new();
@@ -143,6 +145,7 @@ impl ObjectOps for ObjectStoreClient {
             sha256,
             e_tag: result.e_tag,
             version_id: result.version,
+            create_precondition,
         })
     }
 
@@ -164,6 +167,7 @@ impl ObjectOps for ObjectStoreClient {
 
         let len = tokio::fs::metadata(src).await?.len();
         if len < threshold {
+            let create_precondition = matches!(req.mode, object_store::PutMode::Create);
             let bytes = tokio::fs::read(src).await?;
             let size_bytes = bytes.len() as u64;
             let sha256 = req.digest.then(|| {
@@ -187,13 +191,19 @@ impl ObjectOps for ObjectStoreClient {
                 sha256,
                 e_tag: result.e_tag,
                 version_id: result.version,
+                create_precondition,
             });
         }
-        // `req.mode` cannot reach the multipart path: object_store 0.13's
-        // `PutMultipartOptions` carries only tags, attributes, and extensions
-        // — it has no `mode` field, and `MultipartUpload::complete` takes no
-        // precondition. A non-`Overwrite` mode on a file at or above
-        // `threshold` therefore degrades to a plain multipart put.
+        // `req.mode` cannot reach multipart completion. Refuse an obvious
+        // replay before initiating it; WORM callers additionally require
+        // bucket retention to close the HEAD-to-complete race.
+        if matches!(req.mode, object_store::PutMode::Create) {
+            match self.inner.head(key).await {
+                Ok(_) => return Err(ObjectStoreError::AlreadyExists(key.clone())),
+                Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         let upload = Box::new(AbortOnDrop::new(self.inner.put_multipart(key).await?, key));
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
         let mut file = tokio::fs::File::open(src).await?;
@@ -212,11 +222,50 @@ impl ObjectOps for ObjectStoreClient {
             writer.write(&buf[..n]);
         }
         let result = writer.finish().await?;
+        let expected_sha256 = hasher.map(|hasher| hasher.finalize().into());
+        let mut verified_sha256 = expected_sha256;
+        let mut e_tag = result.e_tag;
+        let mut version_id = result.version;
+        if matches!(req.mode, object_store::PutMode::Create) {
+            let meta = self.inner.head(key).await?;
+            if version_id.is_some() && meta.version != version_id {
+                return Err(ObjectStoreError::Precondition {
+                    key: key.clone(),
+                    reason: format!(
+                        "completed multipart version {:?} does not match HEAD version {:?}",
+                        version_id, meta.version
+                    ),
+                });
+            }
+            version_id = meta.version;
+            if let Some(expected) = expected_sha256 {
+                let options = GetOptions {
+                    version: version_id.clone(),
+                    ..GetOptions::default()
+                };
+                let mut stored = self.inner.get_opts(key, options).await?.into_stream();
+                let mut hasher = Sha256::new();
+                while let Some(chunk) = stored.try_next().await? {
+                    hasher.update(&chunk);
+                }
+                let actual: [u8; 32] = hasher.finalize().into();
+                if expected != actual {
+                    return Err(ObjectStoreError::Precondition {
+                        key: key.clone(),
+                        reason: "completed multipart object does not match the uploaded SHA-256"
+                            .into(),
+                    });
+                }
+                verified_sha256 = Some(actual);
+            }
+            e_tag = meta.e_tag;
+        }
         Ok(PutOutcome {
             size_bytes,
-            sha256: hasher.map(|hasher| hasher.finalize().into()),
-            e_tag: result.e_tag,
-            version_id: result.version,
+            sha256: verified_sha256,
+            e_tag,
+            version_id,
+            create_precondition: false,
         })
     }
 

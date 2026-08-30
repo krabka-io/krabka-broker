@@ -43,6 +43,10 @@ pub struct PutOutcome {
     pub e_tag: Option<String>,
     /// Version id on a versioned bucket, when the backend returned one.
     pub version_id: Option<String>,
+    /// Whether the backend applied an atomic create precondition to this put.
+    /// Multipart uploads currently return `false`: their absence check is a
+    /// replay guard, while bucket retention closes the race until completion.
+    pub create_precondition: bool,
 }
 
 /// Async object-store operations. The trait is `Send + Sync`, so tasks can

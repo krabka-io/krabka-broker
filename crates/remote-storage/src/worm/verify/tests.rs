@@ -302,6 +302,12 @@ async fn verify_reports_a_clean_archive_in_full() {
             partition_dir: archive.dir.clone(),
             manifests: 3,
             objects_checked: 6,
+            create_precondition_objects: Vec::new(),
+            bucket_retention_objects: archive
+                .segments
+                .iter()
+                .flat_map(|segment| segment.entries.iter().map(|entry| entry.key.clone()))
+                .collect(),
             epochs: vec![EpochSpan {
                 epoch_id: last.chain.epoch_id,
                 first_seq: ManifestSeq(0),

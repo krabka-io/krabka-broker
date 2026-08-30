@@ -91,7 +91,7 @@ pub(super) fn worm_rsm(
     write_only: bool,
 ) -> S3RemoteStorage {
     S3RemoteStorage::with_store(store, None)
-        .with_worm(&worm_config(keys.path(), write_only))
+        .with_worm_unchecked(&worm_config(keys.path(), write_only))
         .unwrap()
 }
 

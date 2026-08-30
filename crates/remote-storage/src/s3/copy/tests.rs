@@ -169,6 +169,7 @@ fn expected_entry(suffix: &str, key: &ObjectPath, body: &[u8], e_tag: &str) -> O
         sha256: Sha256Digest::of(body),
         e_tag: Some(e_tag.to_string()),
         version_id: None,
+        create_precondition: true,
     }
 }
 
@@ -321,15 +322,17 @@ async fn worm_copy_returns_a_receipt_with_the_new_head() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn worm_copy_refuses_to_overwrite_an_existing_manifest() {
+async fn worm_multipart_copy_refuses_replay() {
     let src = TempDir::new().unwrap();
     let keys = TempDir::new().unwrap();
-    let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
+    let store = worm_rsm(Arc::new(InMemory::new()), &keys, false)
+        .with_multipart_tuning(krabka_units::bytes(8), krabka_units::bytes(4));
     let md = stamped_metadata(54, 0, ChainHead::GENESIS);
     tokio::task::spawn_blocking(move || {
         let data = sample_data(src.path(), true);
         store.copy_log_segment_data(&md, &data).unwrap();
         let first = read_manifest(&store, &md);
+        check!(!first.body.objects[0].create_precondition);
 
         // A replayed copy stops at the very first object: `PutMode::Create`
         // refuses the `.log` key before the manifest is ever reached.

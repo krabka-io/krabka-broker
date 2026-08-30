@@ -17,6 +17,7 @@ pub(super) fn located_object() -> ObjectEntry {
         sha256: Sha256Digest::of(b"log body"),
         e_tag: Some("\"d41d8cd98f00b204e9800998ecf8427e-3\"".to_string()),
         version_id: Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string()),
+        create_precondition: false,
     }
 }
 
@@ -28,6 +29,7 @@ pub(super) fn bare_object() -> ObjectEntry {
         sha256: Sha256Digest::of(b"index body"),
         e_tag: None,
         version_id: None,
+        create_precondition: true,
     }
 }
 

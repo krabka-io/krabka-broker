@@ -65,6 +65,7 @@ impl RemoteStorageManager for FakeWormArchive {
             sha256: Sha256Digest::of(&body),
             e_tag: None,
             version_id: None,
+            create_precondition: true,
         };
         let sealed = self.archiver.seal(metadata, vec![entry])?;
         self.manifests
