@@ -17,6 +17,7 @@ use testcontainers::{ImageExt, core::Mount, runners::AsyncRunner};
 use testcontainers_modules::kafka::{KAFKA_PORT, Kafka};
 
 const TOPIC: &str = "krabka-log-itest";
+const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka";
 /// The deadline for a container to start, which includes the image pull.
 ///
 /// `AsyncRunner::start` waits for the pull with no bound of its own. A stalled
@@ -76,10 +77,13 @@ fn docker_cp(container_id: &str, src: &str, dst: &Path) {
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn read_jvm_produced_log_dir() {
-    let kafka = tokio::time::timeout(CONTAINER_START_TIMEOUT, Kafka::default().start())
-        .await
-        .expect("kafka container start timed out")
-        .expect("start kafka container");
+    let kafka = tokio::time::timeout(
+        CONTAINER_START_TIMEOUT,
+        Kafka::default().with_name(KAFKA_IMAGE).start(),
+    )
+    .await
+    .expect("kafka container start timed out")
+    .expect("start kafka container");
     let container_id = kafka.id().to_string();
 
     // testcontainers-modules' Confluent Kafka module advertises
@@ -165,6 +169,7 @@ async fn jvm_consumes_rust_written_log_dir() {
     let kafka = tokio::time::timeout(
         CONTAINER_START_TIMEOUT,
         Kafka::default()
+            .with_name(KAFKA_IMAGE)
             // The broker and the test process have different host UIDs. Root is
             // limited to this disposable container and can reopen both sets of
             // files after the restart.
