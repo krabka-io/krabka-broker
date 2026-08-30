@@ -34,6 +34,7 @@ mod session;
 mod test_support;
 #[cfg(test)]
 mod tests;
+mod unsupported_version;
 
 pub use self::accept::serve_connection_on_listener;
 use self::{
@@ -127,9 +128,10 @@ fn begin_request(
     (started, InFlightGuard::new(&broker.metrics, parsed.api_key))
 }
 
-async fn send_api_versions_fallback<S>(
+async fn send_unsupported_version<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     broker: &Broker,
+    entry: crate::handlers::registry::DispatchEntry,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     started: std::time::Instant,
@@ -137,21 +139,37 @@ async fn send_api_versions_fallback<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    assert2::assert!(parsed.api_key == API_VERSIONS_KEY);
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let body = match crate::handlers::api_versions::unsupported_version_response() {
+    let response_version = if parsed.api_key == API_VERSIONS_KEY {
+        0
+    } else {
+        entry.nearest_supported_version(parsed.api_version)
+    };
+    let encoded_body = if parsed.api_key == API_VERSIONS_KEY {
+        Some(crate::handlers::api_versions::unsupported_version_response())
+    } else {
+        unsupported_version::body(parsed.api_key, response_version)
+    };
+    let Some(encoded_body) = encoded_body else {
+        tracing::warn!(
+            api_key = parsed.api_key,
+            "missing unsupported-version response shape, closing"
+        );
+        return false;
+    };
+    let body = match encoded_body {
         Ok(body) => body,
         Err(error) => {
-            tracing::warn!(%error, "ApiVersions fallback encode error, closing");
+            tracing::warn!(%error, "unsupported-version response encode error, closing");
             return false;
         }
     };
     let response = match encode_response(
         parsed.api_key,
         parsed.correlation_id,
-        parsed.body_flexible,
+        entry.body_flexible(response_version),
         &body,
         broker.config.socket_request_max.bytes_usize(),
     ) {
@@ -259,13 +277,8 @@ async fn serve_connection_stream<S>(
                 api_version = parsed.api_version,
                 "unsupported api version"
             );
-            if parsed.api_key != API_VERSIONS_KEY {
-                broker
-                    .metrics
-                    .record_unsupported_api_request(parsed.api_key);
-                break;
-            }
-            if !send_api_versions_fallback(&mut framed, &broker, &parsed, &auth, started).await {
+            if !send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, started).await
+            {
                 break;
             }
             continue;

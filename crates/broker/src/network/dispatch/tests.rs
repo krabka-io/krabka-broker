@@ -169,7 +169,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
 }
 
 #[tokio::test]
-async fn unsupported_versions_fallback_only_for_api_versions() {
+async fn unsupported_versions_return_typed_errors_before_dispatch() {
     use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -184,62 +184,76 @@ async fn unsupported_versions_fallback_only_for_api_versions() {
         .expect("bind loopback");
     let addr = listener.local_addr().expect("listener addr");
     let server = tokio::spawn(async move {
-        for _ in 0..2 {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            let spec = crate::config::ListenerSpec {
-                name: "PLAINTEXT".to_string(),
-                bind_addr: addr,
-                advertised: "127.0.0.1:9092".to_string(),
-                protocol: krabka_security::ListenerProtocol::Plaintext,
-                tls_config: None,
-                sasl_mechanisms: None,
-            };
-            serve_connection_stream(broker.clone(), stream, spec, peer, None).await;
-        }
+        let (stream, peer) = listener.accept().await.expect("accept");
+        let spec = crate::config::ListenerSpec {
+            name: "PLAINTEXT".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+        };
+        serve_connection_stream(broker, stream, spec, peer, None).await;
     });
 
-    let client = TcpStream::connect(addr).await.expect("connect ApiVersions");
+    let client = TcpStream::connect(addr).await.expect("connect");
     let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
-    let frame = request_frame(API_VERSIONS_KEY, 99, 99, None, Some(0), &[]);
-    framed.send(frame.freeze()).await.expect("send v99 request");
-    let response = framed
-        .next()
-        .await
-        .expect("v99 response frame")
-        .expect("v99 response decode");
-    let decoded =
-        ApiVersionsResponse::decode(&mut &response[4..], 0).expect("v99 response uses the v0 body");
-    check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
-    check!(decoded.api_keys == crate::api_catalog::supported_apis());
 
-    let heartbeat = registry
-        .get(ApiKey::Heartbeat as i16)
-        .expect("Heartbeat entry");
-    let version = heartbeat
-        .version_range()
-        .end()
-        .checked_add(1)
-        .expect("Heartbeat max version has a successor");
-    let frame = request_frame(
-        ApiKey::Heartbeat as i16,
-        version,
-        100,
-        None,
-        heartbeat.body_flexible(version).then_some(0),
-        &[],
-    );
-    framed
-        .send(frame.freeze())
-        .await
-        .expect("send unsupported Heartbeat");
-    check!(
-        framed.next().await.is_none(),
-        "non-ApiVersions unsupported version must close connection"
-    );
+    for (correlation_id, api) in crate::api_catalog::supported_apis().into_iter().enumerate() {
+        let entry = registry.get(api.api_key).expect("advertised API entry");
+        let version = api
+            .max_version
+            .checked_add(1)
+            .expect("maximum API version has a successor");
+        let correlation_id = i32::try_from(correlation_id).expect("correlation id");
+        let frame = request_frame(
+            api.api_key,
+            version,
+            correlation_id,
+            None,
+            entry.body_flexible(version).then_some(0),
+            &[],
+        );
+        framed
+            .send(frame.freeze())
+            .await
+            .expect("send max+1 request");
+        let response = framed
+            .next()
+            .await
+            .expect("unsupported-version response frame")
+            .expect("unsupported-version response decode");
+        check!(
+            i32::from_be_bytes(response[..4].try_into().expect("response correlation id"))
+                == correlation_id,
+            "api_key {}",
+            api.api_key
+        );
 
-    let client = TcpStream::connect(addr).await.expect("connect unknown api");
-    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
-    let frame = request_frame(i16::MAX, 0, 101, None, None, &[]);
+        let response_version = if api.api_key == API_VERSIONS_KEY {
+            0
+        } else {
+            entry.nearest_supported_version(version)
+        };
+        let header_len =
+            crate::network::response_header_len(api.api_key, entry.body_flexible(response_version));
+        check!(
+            response[header_len..]
+                .windows(2)
+                .any(|bytes| bytes == codes::UNSUPPORTED_VERSION.to_be_bytes()),
+            "api_key {} response carries error 35",
+            api.api_key
+        );
+
+        if api.api_key == API_VERSIONS_KEY {
+            let decoded = ApiVersionsResponse::decode(&mut &response[header_len..], 0)
+                .expect("max+1 ApiVersions uses the v0 body");
+            check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
+            check!(decoded.api_keys == crate::api_catalog::supported_apis());
+        }
+    }
+
+    let frame = request_frame(i16::MAX, 0, 10_000, None, None, &[]);
     framed.send(frame.freeze()).await.expect("send unknown api");
     check!(
         framed.next().await.is_none(),
@@ -250,6 +264,6 @@ async fn unsupported_versions_fallback_only_for_api_versions() {
     };
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 
-    server.await.expect("serve loop joins after unknown api");
+    server.await.expect("serve loop joins after unknown API");
     handle.shutdown().await;
 }

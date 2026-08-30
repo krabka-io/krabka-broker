@@ -116,8 +116,14 @@ pub(crate) fn audit_transition(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::{assert, check};
-    use krabka_audit::{AuditEndpoint, AuditEvent, AuditPrincipal};
+    use krabka_audit::{
+        AuditEndpoint, AuditEvent, AuditMode, AuditPrincipal, AuditRecord, AuditSink, AuditStats,
+        AuditWriter, AuditWriterParams, ChainState, LifecycleKind, Spool,
+    };
+    use krabka_units::prelude::{hours, mebibytes};
 
     use super::*;
     use crate::break_glass::handlers::tests::{audit_channel, context, peer, principal};
@@ -139,6 +145,89 @@ mod tests {
             proposal_id: Some(PROPOSAL),
             reason: "records deleted below the trim point",
         }
+    }
+
+    #[derive(Debug)]
+    struct FailingSink;
+
+    #[async_trait::async_trait]
+    impl AuditSink for FailingSink {
+        async fn write(&self, _record: AuditRecord, _durable: bool) -> Result<(), AuditError> {
+            Err(AuditError::Sink("offline".into()))
+        }
+    }
+
+    fn full_spool() -> (tempfile::TempDir, Spool) {
+        let existing = AuditRecord::from_event(
+            &AuditEvent::Lifecycle {
+                kind: LifecycleKind::BrokerStarted,
+                node_id: 1,
+                time_ms: 1,
+            },
+            &crate::broker::Broker::audit_product(),
+        );
+        let probe = tempfile::tempdir().expect("probe tempdir");
+        let one = {
+            let mut spool = Spool::open(probe.path(), mebibytes(1)).expect("open probe spool");
+            check!(spool.append(&existing).expect("append probe record"));
+            spool.size()
+        };
+
+        let dir = tempfile::tempdir().expect("spool tempdir");
+        let mut spool = Spool::open(dir.path(), one).expect("open exact spool");
+        check!(spool.append(&existing).expect("fill spool"));
+        (dir, spool)
+    }
+
+    async fn saturated_transition(mode: AuditMode) -> (Result<(), AuditError>, u64) {
+        let (_dir, spool) = full_spool();
+        let stats = Arc::new(AuditStats::new());
+        let (log, receiver) = AuditLog::new_with_mode_and_spool(8, mode, &spool);
+        let writer = AuditWriter::new(
+            receiver,
+            AuditWriterParams {
+                sink: Arc::new(FailingSink),
+                product: crate::broker::Broker::audit_product(),
+                signer: None,
+                checkpoint_every_n: 0,
+                checkpoint_every: hours(1),
+                chain: ChainState::new(),
+                spool: Some(spool),
+                stats: Arc::clone(&stats),
+                replay_every: hours(1),
+                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+            },
+        );
+        let writer = tokio::spawn(writer.run());
+        let principal = principal("alice");
+        let peer = peer();
+        let result =
+            require_transition(&log, &gated_config(), &context(&principal, &peer), &trim()).await;
+        if result.is_ok() {
+            audit_transition(&log, &gated_config(), &context(&principal, &peer), &trim());
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while stats.dropped() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("audit loss is counted");
+        log.close();
+        writer.await.expect("audit writer stops");
+        (result, stats.dropped())
+    }
+
+    #[tokio::test]
+    async fn saturated_audit_spool_applies_fail_open_and_refuses_fail_closed() {
+        let (open, open_dropped) = saturated_transition(AuditMode::FailOpen).await;
+        check!(open.is_ok(), "fail-open transition is applied");
+        check!(open_dropped == 1, "fail-open audit loss is counted");
+
+        let (closed, closed_dropped) = saturated_transition(AuditMode::FailClosed).await;
+        assert!(let Err(error) = closed);
+        check!(error.to_string().contains("spool is full"));
+        check!(closed_dropped == 1, "fail-closed refusal is counted");
     }
 
     #[test]
