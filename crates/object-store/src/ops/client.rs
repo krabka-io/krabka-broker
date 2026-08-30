@@ -194,15 +194,21 @@ impl ObjectOps for ObjectStoreClient {
                 create_precondition,
             });
         }
-        // `req.mode` cannot reach multipart completion. Refuse an obvious
-        // replay before initiating it; WORM callers additionally require
-        // bucket retention to close the HEAD-to-complete race.
+        // `req.mode` cannot reach multipart completion. Atomically reserve the
+        // key with a retained empty version so only its winner may proceed.
+        // A failed upload deliberately leaves the reservation behind: WORM
+        // safety wins over retrying a key whose ownership is now ambiguous.
         if matches!(req.mode, object_store::PutMode::Create) {
-            match self.inner.head(key).await {
-                Ok(_) => return Err(ObjectStoreError::AlreadyExists(key.clone())),
-                Err(object_store::Error::NotFound { .. }) => {}
-                Err(error) => return Err(error.into()),
-            }
+            self.inner
+                .put_opts(
+                    key,
+                    PutPayload::from_bytes(Bytes::new()),
+                    PutOptions {
+                        mode: object_store::PutMode::Create,
+                        ..PutOptions::default()
+                    },
+                )
+                .await?;
         }
         let upload = Box::new(AbortOnDrop::new(self.inner.put_multipart(key).await?, key));
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);

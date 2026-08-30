@@ -25,4 +25,4 @@ pub use error::ObjectStoreError;
 pub use multipart::{IncompleteMultipartUpload, list_s3_multipart_uploads};
 pub use ops::{ObjectOps, ObjectStoreClient, PutMode, PutOutcome, PutRequest};
 pub use read::read_capped;
-pub use worm::verify_s3_worm_bucket;
+pub use worm::{verify_gcs_worm_bucket, verify_s3_worm_bucket};

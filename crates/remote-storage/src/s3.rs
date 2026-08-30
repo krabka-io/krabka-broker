@@ -37,7 +37,7 @@
 //! and `delete` hold one storage operation each, and `manager` binds those
 //! three to the trait.
 
-use krabka_object_store::{ObjectStoreClient, S3Config};
+use krabka_object_store::{GcsConfig, ObjectStoreClient, S3Config};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 mod client;
@@ -75,7 +75,7 @@ pub struct S3RemoteStorage {
 
 pub(crate) enum WormBucket {
     S3(S3Config),
-    Gcs,
+    Gcs(GcsConfig),
     Unverified,
 }
 

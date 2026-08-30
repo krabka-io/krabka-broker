@@ -241,6 +241,7 @@ fn a_clean_archive_verifies_and_prints_its_tip() {
     check!(result.stdout.contains("create precondition:"));
     check!(result.stdout.contains(&fixture.log_keys[0]));
     check!(result.stdout.contains("bucket retention: none"));
+    check!(result.stdout.contains("unknown (legacy manifest): none"));
 }
 
 #[test]

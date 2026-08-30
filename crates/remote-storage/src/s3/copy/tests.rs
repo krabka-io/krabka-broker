@@ -25,6 +25,8 @@ use crate::{
     },
 };
 
+use super::object_entry;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn copy_then_fetch_full_segment() {
     let store = rsm(None);
@@ -171,6 +173,28 @@ fn expected_entry(suffix: &str, key: &ObjectPath, body: &[u8], e_tag: &str) -> O
         version_id: None,
         create_precondition: true,
     }
+}
+
+#[test]
+fn multipart_manifest_entry_requires_a_version() {
+    let key = ObjectPath::from("archive/segment.log");
+    let error = object_entry(
+        ".log",
+        &key,
+        krabka_object_store::PutOutcome {
+            size_bytes: 1,
+            sha256: Some(Sha256Digest::of(b"x").0),
+            e_tag: None,
+            version_id: None,
+            create_precondition: false,
+        },
+        true,
+    )
+    .unwrap_err();
+
+    check!(
+        matches!(error, WormError::MissingVersionId { key: missing } if missing == key.to_string())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

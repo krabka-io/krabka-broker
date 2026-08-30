@@ -473,21 +473,29 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
         lines.push(line);
         lines.push(format!(
             "    create precondition: {}",
-            listed(&partition.create_precondition_objects)
+            protection(&partition.create_precondition_objects)
         ));
         lines.push(format!(
             "    bucket retention: {}",
-            listed(&partition.bucket_retention_objects)
+            protection(&partition.bucket_retention_objects)
+        ));
+        lines.push(format!(
+            "    unknown (legacy manifest): {}",
+            protection(&partition.unknown_protection_objects)
         ));
     }
     lines
 }
 
-fn listed(keys: &[String]) -> String {
-    if keys.is_empty() {
+fn protection(report: &krabka_remote_storage::ObjectProtectionReport) -> String {
+    if report.count == 0 {
         "none".to_string()
     } else {
-        keys.join(", ")
+        format!(
+            "{} object(s), sample: {}",
+            report.count,
+            report.sample.join(", ")
+        )
     }
 }
 
@@ -527,8 +535,11 @@ mod tests {
                 partition_dir: "archive/orders-0-id".into(),
                 manifests: 0,
                 objects_checked: 0,
-                create_precondition_objects: Vec::new(),
-                bucket_retention_objects: Vec::new(),
+                create_precondition_objects: krabka_remote_storage::ObjectProtectionReport::default(
+                ),
+                bucket_retention_objects: krabka_remote_storage::ObjectProtectionReport::default(),
+                unknown_protection_objects: krabka_remote_storage::ObjectProtectionReport::default(
+                ),
                 epochs: Vec::new(),
                 unsigned_manifests: 0,
                 untrusted_manifests: 0,
@@ -546,6 +557,20 @@ mod tests {
             key: key.into(),
             upload_id: "upload-id".into(),
         }
+    }
+
+    #[test]
+    fn protection_summary_prints_only_the_bounded_sample() {
+        let report = krabka_remote_storage::ObjectProtectionReport {
+            count: 1_000_000,
+            sample: (0..10).map(|index| format!("key-{index}")).collect(),
+        };
+
+        let rendered = protection(&report);
+
+        assert!(rendered.contains("1000000 object(s)"));
+        assert!(rendered.contains("key-0"));
+        assert!(rendered.contains("key-9"));
     }
 
     #[test]

@@ -58,17 +58,17 @@
 //! ## Write-once (WORM) archive mode
 //!
 //! [`S3RemoteStorage::with_worm`] puts a verified S3 backend into archive
-//! mode. Startup confirms versioning and a compliance-mode Object Lock default
-//! retention. Each copy writes small objects with `PutMode::Create`; multipart
-//! objects first assert that the key is absent, then read back and verify the
-//! completed digest and version. The manifest records which protection each
-//! object used, joins the partition's hash chain, and is signed with Ed25519.
+//! mode. Startup confirms versioning and locked default retention (S3 Object
+//! Lock in compliance mode or GCS Bucket Lock). Each copy writes small objects
+//! with `PutMode::Create`; multipart objects atomically reserve the key, then
+//! read back and verify the completed digest and version. The manifest records
+//! which protection each object used, joins the partition's hash chain, and is
+//! signed with Ed25519.
 //! The backend refuses every delete, and a [`WormConfig::write_only`] archive
 //! refuses every remote fetch as well.
 //!
-//! The bucket enforces the retention, not this crate. `object_store` 0.13
-//! models no `x-amz-object-lock-*` header, so the archive layer cannot set one;
-//! it refuses to start unless the bucket already has the required policy.
+//! The bucket enforces the retention, not this crate. The archive layer refuses
+//! to start unless the bucket already has the required policy.
 //!
 //! [`verify_archive`] reads a finished archive back with nothing but the
 //! objects. It recomputes every chain head, checks every signature against a
@@ -172,9 +172,9 @@ pub use storage_manager::{
 pub use worm::{
     ArchiveVerifyReport, ChainHead, ChainStamp, EpochId, EpochSpan, HexBytes, MANIFEST_BODY_DOMAIN,
     MANIFEST_DOMAIN, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, MAX_MANIFEST_BYTES, ManifestBody,
-    ManifestSeq, ManifestSignature, ObjectEntry, OffsetGap, PartitionVerifyReport, SealedManifest,
-    SegmentIdentity, SegmentManifest, Sha256Digest, TrustedManifestKeys, VerifyBreak, VerifyDepth,
-    VerifyRequest, WormArchiver, WormChainRecord, WormConfig, WormError, canonical_manifest_bytes,
-    manifest_head, manifest_signing_bytes, next_chain_stamp, verify_archive,
-    verify_manifest_signature,
+    ManifestSeq, ManifestSignature, ObjectEntry, ObjectProtectionReport, OffsetGap,
+    PartitionVerifyReport, SealedManifest, SegmentIdentity, SegmentManifest, Sha256Digest,
+    TrustedManifestKeys, VerifyBreak, VerifyDepth, VerifyRequest, WormArchiver, WormChainRecord,
+    WormConfig, WormError, canonical_manifest_bytes, manifest_head, manifest_signing_bytes,
+    next_chain_stamp, verify_archive, verify_manifest_signature,
 };

@@ -44,8 +44,9 @@ pub struct PutOutcome {
     /// Version id on a versioned bucket, when the backend returned one.
     pub version_id: Option<String>,
     /// Whether the backend applied an atomic create precondition to this put.
-    /// Multipart uploads currently return `false`: their absence check is a
-    /// replay guard, while bucket retention closes the race until completion.
+    /// Multipart uploads return `false`: an atomic empty-object reservation
+    /// serializes creators, while bucket retention protects the completed
+    /// version.
     pub create_precondition: bool,
 }
 

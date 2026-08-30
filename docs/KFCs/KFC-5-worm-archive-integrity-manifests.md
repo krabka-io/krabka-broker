@@ -194,13 +194,13 @@ This residue is the standing cost of a tier that can take nothing back, and it i
 
 Two halves make the guarantee, and neither is enough alone.
 
-The broker's half is that it issues no delete and no overwrite. Every data object goes up as a conditional create, so a second write to the same key fails rather than replaces. Every delete returns an error before any request reaches the store, and the refusal covers even an object that is absent, because a store that is never asked cannot be talked into obliging.
+The broker's half is that it issues no delete and serializes creation of every key. Small objects use a conditional create directly. Multipart objects first claim their key with an atomic empty-object create, then pin and verify the completed version and digest before committing the manifest. Every delete returns an error before any request reaches the store.
 
-The bucket's half is what stops somebody who is not the broker. S3 Object Lock in compliance mode with a default retention period is what a compliance deployment configures anyway, and it is what refuses the delete when an administrator with full rights issues one.
+The bucket's half is what stops somebody who is not the broker. S3 uses versioning and Object Lock in compliance mode with a default retention period. GCS uses versioning and a locked retention policy. The broker confirms the selected policy before enabling WORM mode.
 
 krabka does not set the lock, and that is a decision rather than a gap. `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so bumping it alone splits the dependency graph. There is an untyped way through with default headers, and [Setting Object Lock Headers from the Broker](#setting-object-lock-headers-from-the-broker) says why that way is worse than the bucket default.
 
-One limit of the broker's half is worth stating plainly, because it is invisible from the config. `PutMode::Create` binds a single-PUT write only. `object_store` 0.13's `PutMultipartOptions` carries no mode, and `MultipartUpload::complete` takes no precondition, so a `.log` body above the multipart threshold uploads with no precondition at all. A large segment body is protected by the bucket's Object Lock and not by the broker's create mode. Manifests are small and always take the single-PUT path, so "one manifest per segment, never rewritten" holds whatever the segment size is.
+`PutMode::Create` still cannot bind multipart completion itself. The atomic reservation serializes cooperating writers, while bucket retention protects both the reservation and the completed version. A failed multipart upload deliberately consumes the key: retrying is less important than avoiding two writers that both believe they own it. Manifests are small and always take the direct conditional-create path.
 
 ### `write_only` Makes the Archive a Sink, Not a Tier
 
@@ -338,7 +338,7 @@ Three things are not proved, and no gate reports them.
 
 No test covers what a JVM consumer sees under `write_only = true`. The refusal has a unit test at the backend, and the mapping to `OFFSET_OUT_OF_RANGE` rests on reading the fetch path rather than on a differential test.
 
-The multipart branch of the copy path has no conditional-create coverage, because there is no precondition to cover. The API cannot express one, and the Object Lock suite deliberately sets a threshold above its segment size to keep every object on the path that can be covered.
+The multipart branch has behavioural coverage that forces a WORM segment above the threshold, replays the copy, and requires the reservation to reject the replay. The Object Lock suite separately proves bucket-side retention against deletion.
 
 Nothing covers a key rotation across a chain, because the command line cannot express one yet.
 

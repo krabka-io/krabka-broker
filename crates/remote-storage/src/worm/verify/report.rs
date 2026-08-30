@@ -7,6 +7,26 @@
 
 use crate::worm::manifest::{ChainHead, EpochId, ManifestBody, ManifestSeq};
 
+const PROTECTION_SAMPLE_LIMIT: usize = 10;
+
+/// Count and bounded key sample for one object-protection mechanism.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectProtectionReport {
+    /// Number of verified objects in this class.
+    pub count: u64,
+    /// Up to ten representative object keys.
+    pub sample: Vec<String>,
+}
+
+impl ObjectProtectionReport {
+    pub(super) fn record(&mut self, key: &str) {
+        self.count = self.count.saturating_add(1);
+        if self.sample.len() < PROTECTION_SAMPLE_LIMIT {
+            self.sample.push(key.to_string());
+        }
+    }
+}
+
 /// One unbroken run of a partition's chain, as the archive holds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpochSpan {
@@ -55,10 +75,12 @@ pub struct PartitionVerifyReport {
     pub manifests: u64,
     /// Object entries checked before the walk stopped.
     pub objects_checked: u64,
-    /// Verified object keys written with an atomic create precondition.
-    pub create_precondition_objects: Vec<String>,
-    /// Verified object keys whose multipart write relied on bucket retention.
-    pub bucket_retention_objects: Vec<String>,
+    /// Objects written with an atomic create precondition.
+    pub create_precondition_objects: ObjectProtectionReport,
+    /// Objects whose multipart write relied on bucket retention.
+    pub bucket_retention_objects: ObjectProtectionReport,
+    /// Legacy objects whose manifests did not record the protection mechanism.
+    pub unknown_protection_objects: ObjectProtectionReport,
     /// Chain runs found, ordered by their lowest segment start offset.
     pub epochs: Vec<EpochSpan>,
     /// Manifests that carry no signature at all.
@@ -134,8 +156,9 @@ pub(super) fn broken_before_walk(
         partition_dir: dir.to_string(),
         manifests: 0,
         objects_checked: 0,
-        create_precondition_objects: Vec::new(),
-        bucket_retention_objects: Vec::new(),
+        create_precondition_objects: ObjectProtectionReport::default(),
+        bucket_retention_objects: ObjectProtectionReport::default(),
+        unknown_protection_objects: ObjectProtectionReport::default(),
         epochs: Vec::new(),
         unsigned_manifests: 0,
         untrusted_manifests: 0,
@@ -207,6 +230,19 @@ mod tests {
             verify_archive,
         },
     };
+
+    #[test]
+    fn object_protection_samples_are_bounded() {
+        let mut report = ObjectProtectionReport::default();
+        for index in 0..25 {
+            report.record(&format!("object-{index}"));
+        }
+
+        check!(report.count == 25);
+        check!(report.sample.len() == PROTECTION_SAMPLE_LIMIT);
+        check!(report.sample[0] == "object-0");
+        check!(report.sample[9] == "object-9");
+    }
 
     #[tokio::test]
     async fn a_hole_between_segments_is_reported_as_an_offset_gap() {

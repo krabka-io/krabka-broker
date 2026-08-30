@@ -84,9 +84,10 @@ impl S3RemoteStorage {
         // `PutMode::Create` binds only below `multipart_threshold`:
         // object_store 0.13's `PutMultipartOptions` carries no mode and
         // `MultipartUpload::complete` takes no precondition, so a large `.log`
-        // body uses an absence check plus version-pinned digest readback, and
-        // depends on the bucket's Object Lock policy to close the race. The
-        // manifest is always small, so its create is always conditional.
+        // body uses an atomic empty-object reservation plus version-pinned
+        // digest readback, and depends on bucket retention to protect the
+        // completed version. The manifest is always small, so its create is
+        // always conditional.
         let put = if worm.is_some() {
             PutRequest {
                 mode: PutMode::Create,

@@ -102,15 +102,15 @@ An unsigned archive is legal: leave both key fields unset and the archive keeps 
 
 ### The bucket enforces WORM, not the broker
 
-The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, which is how a compliance deployment is built anyway. Krabka does not set the lock. `object_store` 0.13 models no `x-amz-object-lock-*` header, and the crate is pinned in lock-step with the datafusion revision and `parquet 59`, so bumping it alone splits the dependency graph.
+The retention that stops an administrator with delete rights lives on the bucket. Configure S3 Object Lock in compliance mode with a default retention period, or GCS versioning with a locked retention policy. Krabka verifies that policy before enabling WORM mode; it does not set the lock.
 
 There is an untyped way through — `ClientOptions::with_default_headers` — and it was considered and rejected rather than missed. `x-amz-object-lock-retain-until-date` is an absolute timestamp, so a default header pins one date for the lifetime of the process instead of holding each object for a period measured from its own write, and the header would ride every request the client makes, reads included. A bucket default expresses the policy correctly and outlives any broker that writes to it.
 
 The broker's contribution is narrower and still worth having. It never issues a delete, it never overwrites, and it leaves a signed chain that shows what the archive held. A bucket with Object Lock and a broker that writes once are the two halves of the guarantee. Neither half is enough alone.
 
-### Conditional create binds only below the multipart threshold
+### Multipart writes reserve their key first
 
-`PutMode::Create` applies to a single-PUT write. `object_store` 0.13's `PutMultipartOptions` has no mode field, so a `.log` body above the multipart threshold uploads as a plain multipart put with no precondition. A large segment body is protected by the bucket's Object Lock and not by the broker's precondition.
+`PutMode::Create` applies directly to a single-PUT write. `object_store` 0.13's multipart completion has no precondition, so a large body first claims its key with an atomic empty-object create. Only that winner starts multipart upload; the completed version is then read back by version id and checked against the uploaded digest. A failed upload leaves its reservation behind rather than making an ambiguously owned key retryable.
 
 Manifests are small and always take the single-PUT path, so every manifest is a conditional create. "One manifest per segment, and never rewritten" holds whatever the segment size is.
 

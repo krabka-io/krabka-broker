@@ -23,7 +23,7 @@ pub fn build_object_store(
 ) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     match cfg {
         ObjectStoreConfig::S3(s3) => build_s3(s3),
-        ObjectStoreConfig::Gcs(gcs) => build_gcs(gcs),
+        ObjectStoreConfig::Gcs(gcs) => Ok(Arc::new(build_gcs_store(gcs)?)),
         ObjectStoreConfig::Local { root } => {
             let store = object_store::local::LocalFileSystem::new_with_prefix(root)
                 .map_err(|e| ObjectStoreError::InvalidConfig(format!("local: {e}")))?;
@@ -61,7 +61,9 @@ fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     Ok(Arc::new(build_s3_store(cfg)?))
 }
 
-fn build_gcs(cfg: &GcsConfig) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
+pub(crate) fn build_gcs_store(
+    cfg: &GcsConfig,
+) -> Result<object_store::gcp::GoogleCloudStorage, ObjectStoreError> {
     let mut builder =
         object_store::gcp::GoogleCloudStorageBuilder::new().with_bucket_name(&cfg.bucket);
     if let Some(path) = &cfg.service_account_path {
@@ -82,7 +84,7 @@ fn build_gcs(cfg: &GcsConfig) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> 
     let store = builder
         .build()
         .map_err(|e| ObjectStoreError::InvalidConfig(format!("GCS builder: {e}")))?;
-    Ok(Arc::new(store))
+    Ok(store)
 }
 
 #[cfg(test)]

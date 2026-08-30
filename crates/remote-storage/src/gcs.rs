@@ -59,7 +59,7 @@ impl S3RemoteStorage {
             ByteSize::from_bytes(cfg.multipart_threshold),
             size_from_usize(cfg.multipart_chunk_size),
         );
-        storage.worm_bucket = WormBucket::Gcs;
+        storage.worm_bucket = WormBucket::Gcs(cfg.clone());
         Ok(storage)
     }
 }
@@ -67,9 +67,11 @@ impl S3RemoteStorage {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::Write,
+        io::{Read, Write},
+        net::TcpListener,
         path::{Path, PathBuf},
         sync::Arc,
+        thread,
     };
 
     use assert2::assert;
@@ -85,6 +87,7 @@ mod tests {
             RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
         },
         storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
+        worm::WormConfig,
     };
 
     // The GCS backend reuses the generic `S3RemoteStorage` engine, so the
@@ -151,5 +154,43 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn worm_accepts_gcs_with_versioning_and_locked_retention() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let read = socket.read(&mut request).unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..read])
+                    .starts_with("GET /storage/v1/b/archive?fields=")
+            );
+            let body = r#"{"versioning":{"enabled":true},"retentionPolicy":{"retentionPeriod":"86400","isLocked":true}}"#;
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let config = GcsConfig {
+            bucket: "archive".into(),
+            endpoint: Some(endpoint),
+            service_account_key: Some(
+                r#"{"private_key":"unused","private_key_id":"unused","client_email":"unused","disable_oauth":true}"#
+                    .into(),
+            ),
+            allow_http: true,
+            ..Default::default()
+        };
+
+        S3RemoteStorage::from_gcs_config(&config)
+            .unwrap()
+            .with_worm(&WormConfig::default())
+            .unwrap();
+        server.join().unwrap();
     }
 }
