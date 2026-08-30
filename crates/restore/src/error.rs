@@ -124,6 +124,15 @@ pub enum RestoreError {
         snapshot: String,
     },
 
+    /// A controller metadata snapshot could not be decoded.
+    #[error("cannot read metadata snapshot {path}: {reason}")]
+    MetadataSnapshot {
+        /// Snapshot path supplied by `--metadata-snapshot`.
+        path: PathBuf,
+        /// Decoder failure.
+        reason: String,
+    },
+
     /// A bound names a topic partition the archive does not hold. Left
     /// unreported this silently restores the partition whole, which is the
     /// opposite of what the operator asked for.
@@ -182,6 +191,7 @@ impl RestoreError {
             | Self::TruncatedSegment { .. }
             | Self::TornCopy { .. }
             | Self::MetadataDisagreement { .. }
+            | Self::MetadataSnapshot { .. }
             | Self::Records(_) => EXIT_INTEGRITY,
             Self::Format { .. } | Self::Log(_) | Self::Io(_) => EXIT_MATERIALIZE,
         }

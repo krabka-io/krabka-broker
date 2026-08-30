@@ -37,6 +37,7 @@ krabka-metadata = { version = "0.4.0" }
 # owns the same mapping, but a recovery tool must not carry the broker.
 krabka-object-store = { version = "0.5.0", path = "../object-store" }
 krabka-protocol = { version = "0.4.0", default-features = false }
+krabka-raft = { version = "0.5.0", path = "../raft" }
 # The KIP-405 archive key codec and segment metadata model.
 krabka-remote-storage = { version = "0.5.0", path = "../remote-storage" }
 # `Snapshot::load` reads a broker's `remote-log-metadata/snapshot` for
@@ -65,4 +66,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+krabka-broker = { version = "0.5.0", path = "../broker", features = ["test-helpers"] }
+krabka-client-core = { version = "0.4.0" }
+krabka-security = { workspace = true }
 tempfile = { workspace = true }

@@ -32,6 +32,6 @@ mod segment;
 mod test_support;
 
 pub use self::{
-    format::format_target,
+    format::{FormatTargetOutcome, format_target},
     segment::{SegmentOutcome, write_segment},
 };

@@ -255,6 +255,21 @@ pub(super) async fn submit_bootstrap_records(
     if !matches!(config.bootstrap_mode, crate::BootstrapMode::Bootstrap) {
         return Ok(());
     }
+    if controller
+        .current_image()
+        .to_records()
+        .iter()
+        .any(|record| {
+            !matches!(
+                record,
+                krabka_metadata::MetadataRecord::V1Voters(_)
+                    | krabka_metadata::MetadataRecord::V1KRaftVersion(_)
+            )
+        })
+    {
+        tracing::info!("bootstrap records already loaded from metadata checkpoint");
+        return Ok(());
+    }
     records.retain(|record| {
         !matches!(
             record,

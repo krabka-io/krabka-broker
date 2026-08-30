@@ -4,7 +4,9 @@
 
 use assert2::check;
 use krabka_ids::Offset;
-use krabka_restore::{PartitionReport, ReportFormat, RestoreReport, SegmentOutcome, restore};
+use krabka_restore::{
+    MetadataRestoreReport, PartitionReport, ReportFormat, RestoreReport, SegmentOutcome, restore,
+};
 use uuid::Uuid;
 
 use crate::{args::restore_args, fixture::build_fixture};
@@ -30,6 +32,15 @@ async fn json_report_matches_the_fixtures_exact_record_and_segment_counts() {
         dry_run: false,
         log_dir: log_dir.clone(),
         cluster_id,
+        metadata: MetadataRestoreReport {
+            snapshot: None,
+            topic_configs: 0,
+            access_control_entries: 0,
+            client_quotas: 0,
+            scram_credentials: 0,
+            feature_levels: 0,
+            topics_without_configuration: vec!["orders".to_owned(), "payments".to_owned()],
+        },
         partitions: fixture
             .partitions()
             .iter()

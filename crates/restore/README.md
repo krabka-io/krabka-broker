@@ -26,6 +26,7 @@ krabka restore \
   --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
   --rlmm-snapshot /var/lib/krabka/remote-log-metadata/snapshot \
+  --metadata-snapshot /var/lib/krabka/__cluster_metadata/@metadata-0/00000000000000123456-0000000042.checkpoint \
   --log-dir /var/lib/krabka-restored \
   --cluster-id 4c9e2f1a-1f7d-4a53-9a1e-7c0c8a2b6d31 \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
@@ -52,6 +53,8 @@ A batch that a predicate filters is re-encoded from the records that survive. It
 `--exclude-key` and `--exclude-header` match the raw key and header bytes. The tool decodes no payload and knows no schema, so a pattern written against a JSON field or an Avro field does not match.
 
 Without `--rlmm-snapshot` the restore has only the object keys to work from. A segment that the old cluster had marked for deletion is then indistinguishable from a live one, and the restore includes it. Supply the snapshot from a broker's `<log.dir>/remote-log-metadata/snapshot` when the archive holds segments that retention had already released.
+
+Without `--metadata-snapshot`, topic configuration, ACLs, client quotas, SCRAM credentials, and finalized feature levels cannot be recovered. The report warns and names every restored topic whose configuration is unavailable. Supply a controller `<offset>-<epoch>.checkpoint` from `<log.dir>/__cluster_metadata/@metadata-0/` to restore that state.
 
 ## License
 
