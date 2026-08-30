@@ -309,6 +309,7 @@ impl object_store::ObjectStore for CountingStore {
                 pending,
                 parts: self.parts.clone(),
                 aborts: self.aborts.clone(),
+                abort_release: None,
             }));
         }
         self.inner.put_multipart_opts(location, opts).await
@@ -442,6 +443,7 @@ struct FailingUpload {
     pending: bool,
     parts: Arc<std::sync::atomic::AtomicUsize>,
     aborts: Arc<std::sync::atomic::AtomicUsize>,
+    abort_release: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -463,9 +465,12 @@ impl object_store::MultipartUpload for FailingUpload {
     }
 
     async fn abort(&mut self) -> object_store::Result<()> {
-        self.parts.store(0, std::sync::atomic::Ordering::SeqCst);
         self.aborts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(release) = &self.abort_release {
+            release.notified().await;
+        }
+        self.parts.store(0, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }
@@ -530,4 +535,35 @@ async fn put_from_path_aborts_when_cancelled() {
     task.await.unwrap_err();
     wait_for_abort(&store).await;
     assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}
+
+#[tokio::test]
+async fn explicit_abort_survives_caller_cancellation() {
+    let parts = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+    let aborts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut guard = AbortOnDrop::new(
+        Box::new(FailingUpload {
+            pending: false,
+            parts: parts.clone(),
+            aborts: aborts.clone(),
+            abort_release: Some(release.clone()),
+        }),
+        &Path::from("seg/abort-cancelled"),
+    );
+    let task = tokio::spawn(async move { guard.abort().await });
+    while aborts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    task.abort();
+    task.await.unwrap_err();
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while parts.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("independent abort task did not finish");
 }

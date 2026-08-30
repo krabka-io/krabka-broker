@@ -71,11 +71,19 @@ impl MultipartUpload for AbortOnDrop {
         let Some(mut upload) = self.upload.take() else {
             return Ok(());
         };
-        let result = upload.abort().await;
-        if let Err(error) = &result {
-            tracing::warn!(key = %self.key, %error, "failed to abort multipart upload");
-        }
-        result
+        let key = self.key.clone();
+        tokio::spawn(async move {
+            let result = upload.abort().await;
+            if let Err(error) = &result {
+                tracing::warn!(%key, %error, "failed to abort multipart upload");
+            }
+            result
+        })
+        .await
+        .map_err(|error| object_store::Error::Generic {
+            store: "multipart upload",
+            source: Box::new(error),
+        })?
     }
 }
 

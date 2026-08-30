@@ -16,7 +16,8 @@ use std::{fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 use clap::{Args, Parser, Subcommand};
 use krabka_audit::chain::from_hex32;
 use krabka_object_store::{
-    ObjectStoreConfig, S3Config, build_object_store, list_s3_multipart_uploads,
+    IncompleteMultipartUpload, ObjectStoreConfig, S3Config, build_object_store,
+    list_s3_multipart_uploads,
 };
 use krabka_remote_storage::{
     ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyDepth,
@@ -163,26 +164,13 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
     };
     match verify_archive(&store, &request, &trusted).await {
         Ok(report) => {
-            if let Some(s3) = &s3 {
-                match list_s3_multipart_uploads(s3, args.prefix.as_deref()).await {
-                    Ok(uploads) if !uploads.is_empty() => {
-                        eprintln!(
-                            "INCOMPLETE MULTIPART UPLOADS: {} upload(s) still hold parts",
-                            uploads.len()
-                        );
-                        for upload in uploads.iter().take(ORPHANS_SHOWN) {
-                            eprintln!("  {} ({})", upload.key, upload.upload_id);
-                        }
-                        return ExitCode::FAILURE;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        eprintln!("error: cannot list incomplete multipart uploads: {error}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-            grade(&report, &args)
+            let uploads = match s3 {
+                Some(s3) => list_s3_multipart_uploads(&s3, args.prefix.as_deref())
+                    .await
+                    .map_err(|error| error.to_string()),
+                None => Ok(Vec::new()),
+            };
+            grade(&report, &args, uploads)
         }
         Err(e) => {
             eprintln!("error: {e}");
@@ -227,7 +215,11 @@ fn open_store(
 }
 
 /// Grades the report, prints the verdict, and returns the exit code.
-fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
+fn grade(
+    report: &ArchiveVerifyReport,
+    args: &VerifyArgs,
+    uploads: Result<Vec<IncompleteMultipartUpload>, String>,
+) -> ExitCode {
     if let Some(found) = report.first_break() {
         let seq = found
             .seq
@@ -318,6 +310,32 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let mut uploads = match uploads {
+        Ok(uploads) => uploads,
+        Err(error) => {
+            eprintln!("error: cannot list incomplete multipart uploads: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if args.topic.is_some() || args.partition.is_some() {
+        let dirs: Vec<&str> = report
+            .partitions
+            .iter()
+            .map(|partition| partition.partition_dir.as_str())
+            .collect();
+        uploads.retain(|upload| upload_in_partition(&upload.key, &dirs));
+    }
+    if !uploads.is_empty() {
+        eprintln!(
+            "INCOMPLETE MULTIPART UPLOADS: {} upload(s) still hold parts",
+            uploads.len()
+        );
+        for upload in uploads.iter().take(ORPHANS_SHOWN) {
+            eprintln!("  {} ({})", upload.key, upload.upload_id);
+        }
+        return ExitCode::FAILURE;
+    }
+
     // Carried by both verdicts below: a directory holding nothing but orphans
     // reports no manifests, and calling that "empty" would contradict the
     // objects just listed on stderr.
@@ -340,6 +358,13 @@ fn grade(report: &ArchiveVerifyReport, args: &VerifyArgs) -> ExitCode {
         println!("{line}");
     }
     ExitCode::SUCCESS
+}
+
+fn upload_in_partition(key: &str, partition_dirs: &[&str]) -> bool {
+    partition_dirs.iter().any(|dir| {
+        key.strip_prefix(dir)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+    })
 }
 
 /// Prints the orphan objects and says what they mean under the chosen grading.
@@ -450,4 +475,109 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
             line
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_remote_storage::VerifyBreak;
+    use std::process::ExitCode;
+
+    use super::*;
+
+    fn args(topic: Option<&str>) -> VerifyArgs {
+        VerifyArgs {
+            local_dir: Some(".".into()),
+            bucket: None,
+            region: "us-east-1".into(),
+            endpoint: None,
+            allow_http: false,
+            prefix: None,
+            topic: topic.map(str::to_string),
+            partition: None,
+            key_id: None,
+            public_key: None,
+            expect_head: None,
+            deep: false,
+            grading: GradingArgs {
+                allow_epoch_restarts: false,
+                strict_orphans: false,
+            },
+        }
+    }
+
+    fn report(first_break: Option<VerifyBreak>) -> ArchiveVerifyReport {
+        ArchiveVerifyReport {
+            partitions: vec![PartitionVerifyReport {
+                partition_dir: "archive/orders-0-id".into(),
+                manifests: 0,
+                objects_checked: 0,
+                epochs: Vec::new(),
+                unsigned_manifests: 0,
+                untrusted_manifests: 0,
+                orphan_objects: Vec::new(),
+                offset_gaps: Vec::new(),
+                head: None,
+                ok: first_break.is_none(),
+                first_break,
+            }],
+        }
+    }
+
+    fn upload(key: &str) -> IncompleteMultipartUpload {
+        IncompleteMultipartUpload {
+            key: key.into(),
+            upload_id: "upload-id".into(),
+        }
+    }
+
+    #[test]
+    fn multipart_upload_filter_matches_whole_partition_directory() {
+        let dirs = ["archive/orders-0-id"];
+
+        assert!(upload_in_partition(
+            "archive/orders-0-id/segment.log",
+            &dirs
+        ));
+        assert!(!upload_in_partition(
+            "archive/orders-0-id-other/segment.log",
+            &dirs
+        ));
+        assert!(!upload_in_partition(
+            "archive/payments-0-id/segment.log",
+            &dirs
+        ));
+    }
+
+    #[test]
+    fn multipart_findings_are_filtered_and_graded() {
+        let report = report(None);
+
+        assert!(
+            grade(
+                &report,
+                &args(Some("orders")),
+                Ok(vec![upload("archive/payments-0-id/segment.log")])
+            ) == ExitCode::SUCCESS
+        );
+        assert!(
+            grade(
+                &report,
+                &args(Some("orders")),
+                Ok(vec![upload("archive/orders-0-id/segment.log")])
+            ) == ExitCode::FAILURE
+        );
+        assert!(grade(&report, &args(None), Err("denied".into())) == ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn tampering_is_graded_before_multipart_errors() {
+        let report = report(Some(VerifyBreak {
+            manifest_key: "archive/orders-0-id/manifest".into(),
+            seq: None,
+            reason: "digest mismatch".into(),
+        }));
+
+        assert!(grade(&report, &args(None), Err("denied".into())) == ExitCode::FAILURE);
+    }
 }

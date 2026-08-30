@@ -52,7 +52,13 @@ pub async fn list_s3_multipart_uploads(
         || format!("https://s3.{}.amazonaws.com/{}", cfg.region, cfg.bucket),
         |endpoint| format!("{}/{}", endpoint.trim_end_matches('/'), cfg.bucket),
     );
-    let client = reqwest::Client::new();
+    let mut client = reqwest::Client::builder();
+    if cfg.endpoint.is_some() {
+        client = client.no_proxy();
+    }
+    let client = client
+        .build()
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
     let mut key_marker = None;
     let mut upload_id_marker = None;
     let mut found = Vec::new();
@@ -125,6 +131,54 @@ mod tests {
 
     use super::*;
 
+    async fn serve_pages(
+        pages: Vec<(&'static str, &'static str, &'static str)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (expected_request, status, body) in pages {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut chunk = [0; 1024];
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                check!(request.starts_with(expected_request));
+                check!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: aws4-hmac-sha256")
+                );
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (endpoint, server)
+    }
+
+    fn config(endpoint: String) -> S3Config {
+        S3Config {
+            bucket: "bucket".into(),
+            region: "us-east-1".into(),
+            endpoint: Some(endpoint),
+            access_key_id: Some("key".into()),
+            secret_access_key: Some("secret".into()),
+            allow_http: true,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn parses_incomplete_uploads_and_pagination() {
         let page: ListResponse = quick_xml::de::from_str(
@@ -148,46 +202,15 @@ mod tests {
 
     #[tokio::test]
     async fn lists_incomplete_uploads_under_the_prefix() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                let mut chunk = [0; 1024];
-                let read = socket.read(&mut chunk).await.unwrap();
-                request.extend_from_slice(&chunk[..read]);
-            }
-            let request = String::from_utf8(request).unwrap();
-            check!(request.starts_with("GET /bucket?uploads=&prefix=worm%2F HTTP/1.1"));
-            check!(
-                request
-                    .to_ascii_lowercase()
-                    .contains("authorization: aws4-hmac-sha256")
-            );
-            let body = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-        });
-        let cfg = S3Config {
-            bucket: "bucket".into(),
-            region: "us-east-1".into(),
-            endpoint: Some(endpoint),
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
-            allow_http: true,
-            ..Default::default()
-        };
+        let body = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
+        let (endpoint, server) = serve_pages(vec![(
+            "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
+            "200 OK",
+            body,
+        )])
+        .await;
 
-        let uploads = list_s3_multipart_uploads(&cfg, Some("worm/"))
+        let uploads = list_s3_multipart_uploads(&config(endpoint), Some("worm/"))
             .await
             .unwrap();
         server.await.unwrap();
@@ -199,5 +222,64 @@ mod tests {
                     upload_id: "one".into(),
                 }]
         );
+    }
+
+    #[tokio::test]
+    async fn follows_multipart_pagination_markers() {
+        let first = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated><NextKeyMarker>worm/a</NextKeyMarker><NextUploadIdMarker>one</NextUploadIdMarker><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
+        let second = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/b</Key><UploadId>two</UploadId></Upload></ListMultipartUploadsResult>";
+        let (endpoint, server) = serve_pages(vec![
+            (
+                "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
+                "200 OK",
+                first,
+            ),
+            (
+                "GET /bucket?uploads=&prefix=worm%2F&key-marker=worm%2Fa&upload-id-marker=one HTTP/1.1",
+                "200 OK",
+                second,
+            ),
+        ])
+        .await;
+
+        let uploads = list_s3_multipart_uploads(&config(endpoint), Some("worm/"))
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        check!(uploads.len() == 2);
+        check!(uploads[1].key == "worm/b");
+        check!(uploads[1].upload_id == "two");
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_page_without_markers() {
+        let body = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated></ListMultipartUploadsResult>";
+        let (endpoint, server) =
+            serve_pages(vec![("GET /bucket?uploads= HTTP/1.1", "200 OK", body)]).await;
+
+        let error = list_s3_multipart_uploads(&config(endpoint), None)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        check!(error.to_string().contains("no continuation marker"));
+    }
+
+    #[tokio::test]
+    async fn reports_unsuccessful_multipart_listing() {
+        let (endpoint, server) = serve_pages(vec![(
+            "GET /bucket?uploads= HTTP/1.1",
+            "403 Forbidden",
+            "denied",
+        )])
+        .await;
+
+        let error = list_s3_multipart_uploads(&config(endpoint), None)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        check!(error.to_string().contains("403 Forbidden: denied"));
     }
 }
