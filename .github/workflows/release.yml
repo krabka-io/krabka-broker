@@ -42,7 +42,7 @@ jobs:
         run: cargo install cargo-deny --version 0.20.2 --locked
 
       - name: build dependency SBOM
-        run: bash tools/sbom.sh sbom.cdx.json
+        run: aspect sbom --output sbom.cdx.json
 
       - name: push release candidate
         run: bazel run //packaging:push -- --tag "${CANDIDATE_TAG}"
