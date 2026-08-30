@@ -154,6 +154,10 @@ impl DispatchEntry {
         (self.min_version..=self.max_version).contains(&version)
     }
 
+    pub(crate) fn nearest_supported_version(self, version: ApiVersion) -> ApiVersion {
+        version.clamp(self.min_version, self.max_version)
+    }
+
     #[cfg(test)]
     pub(crate) fn version_range(self) -> std::ops::RangeInclusive<ApiVersion> {
         self.min_version..=self.max_version
