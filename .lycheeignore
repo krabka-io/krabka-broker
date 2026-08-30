@@ -1,0 +1,2 @@
+# Template links are relative to the future crate README, not this style guide.
+/docs/style_guides/docs/(?:design|test_coverage_report)\.md$

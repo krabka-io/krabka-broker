@@ -245,7 +245,7 @@ let drain: Time = quota.time_to_transfer(mebibytes(50));
 
 The same two exceptions apply as for newtypes, plus one more. The **generated wire codec stays raw**. Convert at the hand-written boundary with the extension traits in `krabka_units::convert`. **Instants are not magnitudes.** An offset, an epoch, or an epoch-milliseconds timestamp is a coordinate and stays a `krabka-ids` newtype, and `Time` is always an *extent*. And **dimensionless counts stay integers**: a partition count or a retry budget has no unit to get wrong.
 
-Drop the unit from the name once the type carries it. `fetch_max_bytes: i32` becomes `fetch_max: ByteSize`. Keep the suffix only where the name matches a Kafka config key or a wire field that is still a raw integer. See [`docs/uom-adoption.md`](../uom-adoption.md).
+Drop the unit from the name once the type carries it. `fetch_max_bytes: i32` becomes `fetch_max: ByteSize`. Keep the suffix only where the name matches a Kafka config key or a wire field that is still a raw integer.
 
 ## Feature Flags
 
