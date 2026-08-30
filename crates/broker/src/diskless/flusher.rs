@@ -402,14 +402,19 @@ mod tests {
         assert!(cache.lock().await.flushed_frontier(topic_id, 0) == Some(3));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn worker_reports_a_stalled_replay_instead_of_flushing_or_hanging() {
-        let dir = tempdir().unwrap();
+    /// A flusher over one led diskless partition whose index topic already
+    /// holds a flush record, but whose replay never delivers -- the shape a
+    /// dead partition fetch loop leaves behind, with the stream open and
+    /// silent. Returns the context and the object store behind it.
+    async fn silent_replay_flusher(
+        dir: &std::path::Path,
+        ready: Arc<AtomicBool>,
+    ) -> (FlusherContext, Arc<dyn ObjectStore>) {
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            test_partition(dir.path(), "orders", 0, true, NodeId(1)),
+            test_partition(dir, "orders", 0, true, NodeId(1)),
         );
 
         let topic_id = Uuid::from_u128(11);
@@ -442,30 +447,43 @@ mod tests {
         .await
         .unwrap();
 
-        // A replay that never delivers, which is what a dead partition fetch
-        // loop leaves behind: the stream stays open and silent.
         let index = DisklessIndexLog::start(PacedReplayLog::new(event_log, ReplayPace::Never))
             .await
             .unwrap();
+        (
+            FlusherContext {
+                partitions,
+                image_rx,
+                object_store: Arc::clone(&store),
+                index_log: index,
+                node_id: NodeId(1),
+                broker_id: 7,
+                ready,
+            },
+            store,
+        )
+    }
+
+    fn stall_after(timeout: Duration) -> FlushConfig {
+        FlushConfig {
+            interval: Duration::from_millis(1),
+            index_projection_timeout: timeout,
+            trim_safety_lag: None,
+            ..FlushConfig::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_reports_a_stalled_replay_instead_of_flushing_or_hanging() {
+        let dir = tempdir().unwrap();
         let ready = Arc::new(AtomicBool::new(false));
+        let (context, store) = silent_replay_flusher(dir.path(), Arc::clone(&ready)).await;
+
         let exit = tokio::time::timeout(
             Duration::from_secs(5),
             run(
-                FlusherContext {
-                    partitions,
-                    image_rx,
-                    object_store: Arc::clone(&store),
-                    index_log: index,
-                    node_id: NodeId(1),
-                    broker_id: 7,
-                    ready: Arc::clone(&ready),
-                },
-                FlushConfig {
-                    interval: Duration::from_millis(1),
-                    index_projection_timeout: Duration::from_millis(50),
-                    trim_safety_lag: None,
-                    ..FlushConfig::default()
-                },
+                context,
+                stall_after(Duration::from_millis(50)),
                 CancellationToken::new(),
             ),
         )
@@ -475,6 +493,28 @@ mod tests {
         // The bootstrap needs this to rebuild the index log; a fetch loop that
         // died on connect never recovers on its own subscription.
         assert!(exit == FlusherExit::ReplayStalled);
+        assert!(!ready.load(Ordering::Acquire));
+        assert!(object_keys(&store).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_stops_at_shutdown_without_finishing_the_replay() {
+        let dir = tempdir().unwrap();
+        let ready = Arc::new(AtomicBool::new(false));
+        let (context, store) = silent_replay_flusher(dir.path(), Arc::clone(&ready)).await;
+
+        // Shutdown during a replay must not wait it out: the stall window is
+        // far longer than this test would tolerate.
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        let exit = tokio::time::timeout(
+            Duration::from_secs(1),
+            run(context, stall_after(Duration::from_mins(1)), shutdown),
+        )
+        .await
+        .expect("shutdown during a replay returns promptly");
+
+        assert!(exit == FlusherExit::ShutDown);
         assert!(!ready.load(Ordering::Acquire));
         assert!(object_keys(&store).await.is_empty());
     }
