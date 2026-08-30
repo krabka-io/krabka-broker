@@ -1,10 +1,8 @@
-//! The concurrent [`TokenBucket`] runtime around the pure [`plan_consume`](crate::plan_consume)
-//! arithmetic.
+//! The concurrent [`TokenBucket`] runtime around the pure
+//! [`plan_consume`](krabka_verified::throttle::plan_consume) arithmetic.
 //!
 //! This module holds the atomics, the seqlock generation protocol, and the
-//! injected [`NanoClock`]. It is separate from `lib.rs` so that the Creusot
-//! verifier sees the pure kernel only. Creusot cannot translate the atomics and
-//! `dyn` trait objects that this module uses.
+//! injected [`NanoClock`].
 //!
 //! The bucket's own operations live in submodules that each add an
 //! `impl TokenBucket` block: [`self::rate`] holds the rate and burst

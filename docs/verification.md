@@ -31,7 +31,7 @@ types.
 | [`site_loss_survivors`](../crates/verified/src/stretch.rs) computes the replica count after one site fails. | `krabka-verified` calls it from `min_insync_is_site_loss_safe`; the [`krabka-broker` stretch model](../crates/broker/src/stretch_cluster_model/config.rs) calls it directly. | [`proof.json`](../verif/krabka_verified_rlib/stretch/site_loss_survivors/proof.json) | `1 <= rf <= 1024`; `1 <= sites <= 1024`. |
 | [`min_insync_is_site_loss_safe`](../crates/verified/src/stretch.rs) checks the lower and upper durability bounds for `min.insync.replicas`. | [`krabka-broker`](../crates/broker/src/config/stretch.rs) | [`proof.json`](../verif/krabka_verified_rlib/stretch/min_insync_is_site_loss_safe/proof.json) | `1 <= rf <= 1024`; `1 <= sites <= 1024`. |
 | [`quorum_survives_any_single_site_loss`](../crates/verified/src/stretch.rs) checks that each one-site loss leaves a strict voter majority. | The [`krabka-broker` stretch model](../crates/broker/src/stretch_cluster_model/config.rs); no production caller. | [`proof.json`](../verif/krabka_verified_rlib/stretch/quorum_survives_any_single_site_loss/proof.json) | At most 1024 sites; each site has between 0 and 1024 voters. |
-| [`plan_consume`](../crates/throttle/src/lib.rs) caps a refill, grants at most the request, and conserves the capped tokens. | [`krabka-throttle`](../crates/throttle/src/runtime/consume.rs) | [`proof.json`](../verif/krabka_throttle_rlib/plan_consume/proof.json) | None. |
+| [`plan_consume`](../crates/verified/src/throttle.rs) caps a refill, grants at most the request, and conserves the capped tokens. | [`krabka-throttle`](../crates/throttle/src/runtime/consume.rs) | [`proof.json`](../verif/krabka_verified_rlib/throttle/plan_consume/proof.json) | None. |
 
 Creusot also creates sessions for logic functions, lemmas, private helper
 functions, and generated `Clone` implementations. These sessions support the
@@ -53,14 +53,20 @@ the repository root:
 
 ```sh
 export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-cargo creusot --package krabka-verified
-cargo creusot --package krabka-throttle
+python3 tools/test_creusot_packages.py
+packages=(krabka-verified)
+python3 tools/creusot_packages.py "${packages[@]}"
+for package in "${packages[@]}"; do
+  cargo creusot --package "${package}"
+done
 ```
 
-Each command updates its package directory under `verif/`. A nonzero exit or
-an unproved goal fails the CI job. CI checks the proof result, not a clean Git
-diff. Generated `.coma` files contain an absolute source path, so another
-checkout can change them without a change to the proof result.
+The package check fails if a workspace package that depends on `creusot-std`
+or contains a Creusot contract is absent from the explicit proof list. Each
+`cargo creusot` command updates its package directory under `verif/`. A
+nonzero exit or an unproved goal fails the CI job. CI checks the proof result,
+not a clean Git diff. Generated `.coma` files contain an absolute source path,
+so another checkout can change them without a change to the proof result.
 
 ## Stateright Model-Check Tier
 

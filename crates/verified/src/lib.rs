@@ -1,4 +1,4 @@
-//! Formally verified pure kernels shared by Krabka's consensus and log crates.
+//! Formally verified pure kernels shared by Krabka crates.
 //!
 //! Every function here is a total, synchronous, allocation-light kernel, and
 //! Creusot proves its functional contract. See `docs/verification.md`. Host
@@ -13,6 +13,7 @@ pub mod log_index;
 pub mod offset_allocator;
 pub mod producer;
 pub mod stretch;
+pub mod throttle;
 
 pub use broker::{
     FetchVisibility, FetchWatermarks, delete_records_offset_out_of_range, delete_records_target,
