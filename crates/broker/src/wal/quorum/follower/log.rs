@@ -94,6 +94,14 @@ impl FollowerLog {
         self.log.lock().log_start_offset()
     }
 
+    pub(super) fn last_epoch(&self) -> i32 {
+        self.log
+            .lock()
+            .epoch_checkpoint()
+            .latest_epoch()
+            .map_or(-1, |epoch| epoch.0)
+    }
+
     pub(super) async fn trim_to(&self, offset: Offset) -> Result<(), crate::BrokerError> {
         if offset <= self.start_offset() {
             return Ok(());
@@ -128,6 +136,25 @@ impl FollowerLog {
                 DurableRange {
                     start: offset,
                     end: offset,
+                },
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub(super) async fn truncate_to(&self, offset: Offset) -> Result<(), crate::BrokerError> {
+        let log = self.log.clone();
+        let durable_offset_path = self.durable_offset_path.clone();
+        run_blocking(move || {
+            let mut log = log.lock();
+            log.truncate_to(offset)?;
+            log.sync()?;
+            write_durable_offset(
+                &durable_offset_path,
+                DurableRange {
+                    start: log.log_start_offset(),
+                    end: log.log_end_offset(),
                 },
             )?;
             Ok(())

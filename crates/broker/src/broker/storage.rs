@@ -61,7 +61,9 @@ pub(super) async fn recover_storage_and_groups(
                         topic_id,
                         partition: PartitionIndex(partition_id),
                     };
-                    if wal_placements.get(&shard).and_then(|voters| voters.first())
+                    if wal_placements
+                        .get(&shard)
+                        .and_then(|placement| placement.voters.first())
                         == Some(&config.node_id)
                     {
                         // Promotion hydration is deliberately repeated before

@@ -16,7 +16,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use krabka_ids::Offset;
+use krabka_ids::{LeaderEpoch, Offset};
 use krabka_kraft_core::{LogView as _, NodeId};
 use krabka_log::{Log, VerbatimBatch};
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
@@ -104,6 +104,7 @@ pub(crate) struct WalFetchData {
     pub(crate) log_start_offset: Offset,
     pub(crate) records: Bytes,
     pub(crate) offset_out_of_range: bool,
+    pub(crate) diverging_epoch: Option<(LeaderEpoch, Offset)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -308,6 +309,7 @@ impl WalShardEngine {
     pub(crate) fn serve_fetch(
         &self,
         fetch_offset: Offset,
+        last_fetched_epoch: i32,
         max_size: ByteSize,
     ) -> Result<WalFetchData, BrokerError> {
         let replica = self
@@ -321,7 +323,16 @@ impl WalShardEngine {
         let log_start_offset = log.log_start_offset();
         let log_end_offset = log.log_end_offset();
         let offset_out_of_range = fetch_offset < log_start_offset || fetch_offset > log_end_offset;
-        let records = if offset_out_of_range
+        let diverging_epoch = (last_fetched_epoch >= 0)
+            .then(|| {
+                log.epoch_checkpoint()
+                    .epoch_and_offset_for(LeaderEpoch(last_fetched_epoch), log_end_offset)
+            })
+            .filter(|(found_epoch, end_offset)| {
+                found_epoch.0 < last_fetched_epoch || *end_offset < fetch_offset
+            });
+        let records = if diverging_epoch.is_some()
+            || offset_out_of_range
             || fetch_offset == log_end_offset
             || max_size == ByteSize::ZERO
         {
@@ -339,6 +350,7 @@ impl WalShardEngine {
             log_start_offset,
             records,
             offset_out_of_range,
+            diverging_epoch,
         })
     }
 

@@ -10,6 +10,8 @@ const KRAFT_METADATA_TOPIC_ID: krabka_protocol::primitives::uuid::Uuid =
 pub(crate) const KIP_595_FETCH_VERSION: i16 = 17;
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 pub(crate) const OFFSET_OUT_OF_RANGE: i16 = 1;
+pub(crate) const FENCED_LEADER_EPOCH: i16 = 74;
+pub(crate) const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const WAL_FETCH_RACK_ID: &str = "__krabka_diskless_wal";
 
 /// Group discriminator for KIP-595 traffic carried by the broker listener.
@@ -28,6 +30,8 @@ pub(crate) enum QuorumGroup {
 pub(crate) struct WalFetchRequest {
     pub(crate) group: QuorumGroup,
     pub(crate) from: krabka_raft::NodeId,
+    pub(crate) current_leader_epoch: i32,
+    pub(crate) last_fetched_epoch: i32,
     pub(crate) fetch_offset: i64,
     pub(crate) max_size: ByteSize,
 }
@@ -78,6 +82,8 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
     Some(WalFetchRequest {
         group,
         from: krabka_raft::NodeId(u64::try_from(request.replica_state.replica_id).ok()?),
+        current_leader_epoch: partition.current_leader_epoch,
+        last_fetched_epoch: partition.last_fetched_epoch,
         fetch_offset: partition.fetch_offset,
         max_size: ByteSize::from_bytes(u64::from(max_bytes.get())),
     })
@@ -103,6 +109,7 @@ pub(crate) fn fetch_response(
     log_start_offset: i64,
     records: Bytes,
     error_code: i16,
+    diverging_epoch: Option<(i32, i64)>,
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
     use krabka_protocol::{owned::fetch_response as fetch_resp, records::RecordsPayload};
 
@@ -131,6 +138,14 @@ pub(crate) fn fetch_response(
                 last_stable_offset: log_end_offset,
                 log_start_offset,
                 records: (!records.is_empty()).then_some(RecordsPayload::Raw(records)),
+                diverging_epoch: diverging_epoch.map_or_else(
+                    Default::default,
+                    |(epoch, end_offset)| fetch_resp::EpochEndOffset {
+                        epoch,
+                        end_offset,
+                        ..Default::default()
+                    },
+                ),
                 ..Default::default()
             }],
             ..Default::default()
@@ -142,7 +157,15 @@ pub(crate) fn fetch_response(
 pub(crate) fn unknown_shard_fetch_response(
     group: QuorumGroup,
 ) -> krabka_protocol::owned::fetch_response::FetchResponse {
-    fetch_response(group, 0, 0, 0, Bytes::new(), UNKNOWN_TOPIC_OR_PARTITION)
+    fetch_response(
+        group,
+        0,
+        0,
+        0,
+        Bytes::new(),
+        UNKNOWN_TOPIC_OR_PARTITION,
+        None,
+    )
 }
 
 pub(crate) fn encode_fetch_response_struct(
@@ -156,7 +179,8 @@ pub(crate) fn encode_fetch_response_struct(
 pub(crate) fn fetch_request(
     group: QuorumGroup,
     from: krabka_raft::NodeId,
-    fetch_epoch: i32,
+    current_leader_epoch: i32,
+    last_fetched_epoch: i32,
     fetch_offset: i64,
     max_size: ByteSize,
 ) -> FetchRequest {
@@ -188,9 +212,9 @@ pub(crate) fn fetch_request(
             topic_id,
             partitions: vec![fetch_req::FetchPartition {
                 partition,
-                current_leader_epoch: fetch_epoch,
+                current_leader_epoch,
                 fetch_offset,
-                last_fetched_epoch: fetch_epoch,
+                last_fetched_epoch,
                 partition_max_bytes: max_size.bytes_i32(),
                 ..Default::default()
             }],
@@ -210,6 +234,7 @@ pub(crate) fn encode_fetch_for_group(
     let request = fetch_request(
         group,
         from,
+        fetch_epoch,
         fetch_epoch,
         fetch_offset,
         ByteSize::from_bytes(u64::MAX),
@@ -272,17 +297,20 @@ mod tests {
     fn fetch_request_applies_both_byte_caps() {
         let group = QuorumGroup::diskless_wal(uuid::Uuid::from_u128(42), PartitionIndex(3));
         let max_size = ByteSize::from_bytes(4_096);
-        let request = fetch_request(group, NodeId(2), 7, 11, max_size);
+        let request = fetch_request(group, NodeId(2), 7, 6, 11, max_size);
 
         assert2::check!(request.max_bytes == 4_096);
         assert2::check!(request.topics[0].partitions[0].partition_max_bytes == 4_096);
-        assert2::check!(decode_fetch_request(&request).unwrap().max_size == max_size);
+        let decoded = decode_fetch_request(&request).unwrap();
+        assert2::check!(decoded.max_size == max_size);
+        assert2::check!(decoded.current_leader_epoch == 7);
+        assert2::check!(decoded.last_fetched_epoch == 6);
     }
 
     #[test]
     fn decode_fetch_request_requires_positive_effective_byte_cap() {
         let group = QuorumGroup::diskless_wal(uuid::Uuid::from_u128(42), PartitionIndex(3));
-        let mut request = fetch_request(group, NodeId(2), 7, 11, ByteSize::from_bytes(4_096));
+        let mut request = fetch_request(group, NodeId(2), 7, 6, 11, ByteSize::from_bytes(4_096));
 
         request.max_bytes = 0;
         assert2::check!(decode_fetch_request(&request).is_none());

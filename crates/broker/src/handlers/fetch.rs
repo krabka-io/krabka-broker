@@ -375,7 +375,10 @@ mod tests {
             .replace_placements(&maplit::hashmap! {ShardId {
                 topic_id,
                 partition: PartitionIndex(0),
-            } => vec![local_node_id, krabka_raft::NodeId(2)]});
+            } => crate::wal::quorum::registry::WalPlacement {
+                voters: vec![local_node_id, krabka_raft::NodeId(2)],
+                leader_epoch: 0,
+            }});
         let principal = Principal {
             name: "broker-2".into(),
             auth_method: AuthMethod::SaslPlain,
@@ -389,6 +392,7 @@ mod tests {
                 QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
                 krabka_raft::NodeId(2),
                 0,
+                -1,
                 0,
                 krabka_units::mebibytes(1),
             );

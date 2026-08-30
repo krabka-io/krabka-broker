@@ -35,7 +35,7 @@ async fn wal_fetch_serves_the_uncommitted_tail_with_separate_frontiers() {
 
     let fetch = store
         .engine
-        .serve_fetch(first, ByteSize::from_bytes(u64::MAX))
+        .serve_fetch(first, -1, ByteSize::from_bytes(u64::MAX))
         .unwrap();
 
     assert!(fetch.high_watermark == first);
@@ -65,12 +65,15 @@ async fn wal_fetch_accepts_the_log_end_and_a_zero_byte_limit() {
 
     let at_end = store
         .engine
-        .serve_fetch(log_end, ByteSize::from_bytes(u64::MAX))
+        .serve_fetch(log_end, -1, ByteSize::from_bytes(u64::MAX))
         .unwrap();
     assert!(!at_end.offset_out_of_range);
     assert!(at_end.records.is_empty());
 
-    let zero_bytes = store.engine.serve_fetch(Offset(0), ByteSize::ZERO).unwrap();
+    let zero_bytes = store
+        .engine
+        .serve_fetch(Offset(0), -1, ByteSize::ZERO)
+        .unwrap();
     assert!(!zero_bytes.offset_out_of_range);
     assert!(zero_bytes.records.is_empty());
 }

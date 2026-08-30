@@ -62,14 +62,15 @@ pub(crate) async fn run(config: Config) {
             return;
         }
         match FollowerLog::open(&config) {
-            Ok(follower) => {
-                if let Err(error) = run_inner(&config, &follower).await {
+            Ok(follower) => match run_inner(&config, &follower).await {
+                Ok(()) => return,
+                Err(error) => {
                     if config.shutdown.is_cancelled() {
                         return;
                     }
                     warn!(error = %error, "diskless WAL follower stopped; retrying");
                 }
-            }
+            },
             Err(error) => {
                 warn!(error = %error, "diskless WAL follower could not open its log; retrying");
             }
@@ -94,6 +95,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
             QuorumGroup::diskless_wal(config.shard.topic_id, config.shard.partition),
             config.node_id,
             config.leader_epoch,
+            follower.last_epoch(),
             requested.0,
             config.replication.fetch_max,
         );
@@ -128,6 +130,17 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
         };
         match partition.error_code {
             codes::NONE => {
+                if partition.diverging_epoch.end_offset >= 0 {
+                    let divergence = krabka_ids::Offset(partition.diverging_epoch.end_offset);
+                    if !(follower.start_offset()..=requested).contains(&divergence) {
+                        return Err("leader returned invalid WAL divergence offset".into());
+                    }
+                    follower
+                        .truncate_to(divergence)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    continue;
+                }
                 let frontiers = validate_fetch_frontiers(&partition)?;
                 follower
                     .trim_to(frontiers.start)
@@ -185,12 +198,19 @@ mod tests {
     use std::{path::Path, sync::Mutex};
 
     use assert2::assert;
+    use bytes::Bytes;
     use krabka_ids::{Offset, PartitionIndex};
     use krabka_log::Log;
     use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
-    use crate::wal::{WalStore as _, quorum::registry::WalShardRegistry};
+    use crate::wal::{
+        WalStore as _,
+        quorum::{
+            engine::WalShardEngine,
+            registry::{WalPlacement, WalShardRegistry},
+        },
+    };
 
     fn test_config(root: &Path, shutdown: CancellationToken) -> Config {
         Config {
@@ -275,8 +295,10 @@ mod tests {
             partition: PartitionIndex(0),
         };
         let registry = WalShardRegistry::new(NodeId(1));
-        registry
-            .replace_placements(&maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]});
+        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: 0,
+        }});
         registry.insert(shard, store.engine());
         let follower =
             FollowerLog::for_log(Log::open(follower_dir.path(), LogConfig::default()).unwrap());
@@ -293,6 +315,7 @@ mod tests {
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             NodeId(2),
             0,
+            -1,
             0,
             krabka_units::mebibytes(1),
         );
@@ -315,6 +338,7 @@ mod tests {
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             NodeId(2),
             0,
+            0,
             follower_end.0,
             krabka_units::mebibytes(1),
         );
@@ -325,5 +349,120 @@ mod tests {
 
         assert2::assert!((sync.await.unwrap().unwrap()) == (leo));
         assert2::assert!((store.engine().durable_watermark()) == (leo));
+    }
+
+    #[tokio::test]
+    async fn follower_truncates_a_divergent_epoch_and_replicates_the_leader_tail() {
+        let leader_dir = tempfile::tempdir().unwrap();
+        let follower_dir = tempfile::tempdir().unwrap();
+        let leader = Arc::new(Mutex::new(
+            Log::open(leader_dir.path(), LogConfig::default()).unwrap(),
+        ));
+        let mut shared = batch(0, b"shared");
+        leader
+            .lock()
+            .unwrap()
+            .append_at(&mut shared, Offset(0))
+            .unwrap();
+        let mut leader_tail = batch(1, b"leader");
+        leader
+            .lock()
+            .unwrap()
+            .append_at(&mut leader_tail, Offset(1))
+            .unwrap();
+        leader.lock().unwrap().sync().unwrap();
+
+        let mut follower_log = Log::open(follower_dir.path(), LogConfig::default()).unwrap();
+        follower_log
+            .append_at(&mut batch(0, b"shared"), Offset(0))
+            .unwrap();
+        follower_log
+            .append_at(&mut batch(0, b"divergent"), Offset(1))
+            .unwrap();
+        follower_log.sync().unwrap();
+        let follower = FollowerLog::for_log(follower_log);
+
+        let shard = ShardId {
+            topic_id: uuid::Uuid::from_u128(100),
+            partition: PartitionIndex(0),
+        };
+        let registry = WalShardRegistry::new(NodeId(1));
+        registry.insert(
+            shard,
+            Arc::new(WalShardEngine::for_logs(
+                maplit::btreemap! {NodeId(1) => Arc::clone(&leader)},
+            )),
+        );
+        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
+            voters: vec![NodeId(1), NodeId(2)],
+            leader_epoch: 1,
+        }});
+
+        let response = registry
+            .route_fetch_request(&fetch_request(
+                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                NodeId(2),
+                1,
+                follower.last_epoch(),
+                follower.end_offset().0,
+                krabka_units::mebibytes(1),
+            ))
+            .unwrap()
+            .unwrap();
+        let partition = response_partition(response, shard).unwrap();
+        assert2::assert!((partition.diverging_epoch.end_offset) == (1));
+
+        follower
+            .truncate_to(Offset(partition.diverging_epoch.end_offset))
+            .await
+            .unwrap();
+        let response = registry
+            .route_fetch_request(&fetch_request(
+                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                NodeId(2),
+                1,
+                follower.last_epoch(),
+                follower.end_offset().0,
+                krabka_units::mebibytes(1),
+            ))
+            .unwrap()
+            .unwrap();
+        let partition = response_partition(response, shard).unwrap();
+        follower
+            .append(
+                Offset(1),
+                Offset(partition.last_stable_offset),
+                partition.records,
+            )
+            .await
+            .unwrap();
+
+        assert2::assert!((follower.end_offset()) == (Offset(2)));
+        assert2::assert!((follower.last_epoch()) == (1));
+        assert2::assert!(
+            follower
+                .log
+                .lock()
+                .read_raw(Offset(0), Offset(2), krabka_units::mebibytes(1))
+                .unwrap()
+                .bytes
+                == leader
+                    .lock()
+                    .unwrap()
+                    .read_raw(Offset(0), Offset(2), krabka_units::mebibytes(1))
+                    .unwrap()
+                    .bytes
+        );
+    }
+
+    fn batch(epoch: i32, value: &'static [u8]) -> RecordBatch {
+        RecordBatch {
+            partition_leader_epoch: epoch,
+            records: vec![Record {
+                value: Some(Bytes::from_static(value)),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        }
     }
 }
