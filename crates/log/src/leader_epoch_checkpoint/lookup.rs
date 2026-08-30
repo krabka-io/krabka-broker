@@ -6,7 +6,9 @@
 
 use krabka_ids::{LeaderEpoch, Offset};
 
-use super::{EpochEntry, LeaderEpochCheckpoint, UNDEFINED_EPOCH, UNDEFINED_OFFSET};
+#[cfg(test)]
+use super::UNDEFINED_EPOCH;
+use super::{LeaderEpochCheckpoint, UNDEFINED_OFFSET, epoch_and_offset_for_entries};
 
 impl LeaderEpochCheckpoint {
     /// End offset of `epoch`. It is the `start_offset` of the next-larger
@@ -74,46 +76,6 @@ impl LeaderEpochCheckpoint {
         log_end_offset: Offset,
     ) -> (LeaderEpoch, Offset) {
         epoch_and_offset_for_entries(&self.entries, requested_epoch, log_end_offset)
-    }
-}
-
-/// Pure core of [`LeaderEpochCheckpoint::epoch_and_offset_for`] over a raw
-/// slice, so that tests can check it exhaustively and by property without a
-/// file. The method delegates to this function. See `leader_epoch_model.rs` for
-/// the divergence-safety model.
-#[must_use]
-pub fn epoch_and_offset_for_entries(
-    entries: &[EpochEntry],
-    requested_epoch: LeaderEpoch,
-    log_end_offset: Offset,
-) -> (LeaderEpoch, Offset) {
-    if requested_epoch == UNDEFINED_EPOCH {
-        return (UNDEFINED_EPOCH, log_end_offset);
-    }
-    if entries.iter().map(|e| e.epoch).max() == Some(requested_epoch) {
-        return (requested_epoch, log_end_offset);
-    }
-    // Smallest recorded epoch strictly greater than `requested`.
-    let higher = entries
-        .iter()
-        .filter(|e| e.epoch > requested_epoch)
-        .min_by_key(|e| e.epoch);
-    match higher {
-        // `requested` is in the future relative to this log.
-        None => (UNDEFINED_EPOCH, log_end_offset),
-        Some(next) => {
-            // Largest recorded epoch <= requested (the floor).
-            let floor = entries
-                .iter()
-                .filter(|e| e.epoch <= requested_epoch)
-                .map(|e| e.epoch)
-                .max();
-            match floor {
-                Some(f) => (f, next.start_offset),
-                // `requested` is below the first recorded epoch.
-                None => (requested_epoch, next.start_offset),
-            }
-        }
     }
 }
 

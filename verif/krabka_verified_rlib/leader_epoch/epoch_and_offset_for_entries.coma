@@ -1,0 +1,243 @@
+(* #"/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 46 0 50 26 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sleader_epoch = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 51 28 51 43
+let%span sleader_epoch'0 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 52 16 52 31
+let%span sleader_epoch'1 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 55 16 55 22
+let%span sleader_epoch'2 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 59 14 59 33
+let%span sleader_epoch'3 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 60 14 60 27
+let%span sleader_epoch'4 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 57 16 58 54
+let%span sleader_epoch'5 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 56 16 56 36
+let%span sleader_epoch'6 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 60 31 60 41
+let%span sleader_epoch'7 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 60 31 60 49
+let%span sleader_epoch'8 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 61 13 61 14
+let%span sleader_epoch'9 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 61 8 61 14
+let%span sleader_epoch'10 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 64 12 64 25
+let%span sleader_epoch'11 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 65 15 65 16
+let%span sleader_epoch'12 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 65 32 65 33
+let%span sleader_epoch'13 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 65 28 65 33
+let%span sleader_epoch'14 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 65 20 65 34
+let%span sleader_epoch'15 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 65 20 65 42
+let%span sleader_epoch'16 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 68 13 68 28
+let%span sleader_epoch'17 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 70 19 70 20
+let%span sleader_epoch'18 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 71 26 71 36
+let%span sleader_epoch'19 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 71 26 71 49
+let%span sleader_epoch'20 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 21 73 22
+let%span sleader_epoch'21 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 17 73 22
+let%span sleader_epoch'22 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 9 73 23
+let%span sleader_epoch'23 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 9 73 29
+let%span sleader_epoch'24 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 31 73 41
+let%span sleader_epoch'25 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 73 31 73 54
+let%span sleader_epoch'26 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 22 11 24 68
+let%span sleader_epoch'27 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 25 10 26 61
+let%span sleader_epoch'28 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 27 10 29 77
+let%span sleader_epoch'29 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 30 10 33 61
+let%span sleader_epoch'30 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 34 10 44 9
+let%span sleader_epoch'31 = "/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 10 49 10 51
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use int.Int
+
+type t_LeaderEpoch = { f0: Int32.t }
+
+constant const_UNDEFINED_EPOCH [#"/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 10 0 10 34] : t_LeaderEpoch
+
+let set_UNDEFINED_EPOCH (return) = bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- { f0 = ([%#sleader_epoch'31] (-1: Int32.t)) } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LeaderEpoch = Any.any_l () ]
+  [ return (_const: t_LeaderEpoch) -> -{const_UNDEFINED_EPOCH = _const}- return ]
+
+type t_Offset = { f0'0: Int64.t }
+
+type tup2_LeaderEpoch_Offset = { f0'1: t_LeaderEpoch; f1'1: t_Offset }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_EpochEntry = { epoch: t_LeaderEpoch; start_offset: t_Offset }
+
+let len_EpochEntry (self_: Slice64.slice t_EpochEntry) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let epoch_and_offset_for_entries [#"/home/matt/.codex/worktrees/3f7d/krabka-broker/crates/verified/src/leader_epoch.rs" 46 0 50 26]
+  (entries: Slice64.slice t_EpochEntry) (requested_epoch: t_LeaderEpoch) (log_end_offset: t_Offset)
+  (return (x: tup2_LeaderEpoch_Offset)) =
+{[@stop_split] [@expl:epoch_and_offset_for_entries requires] [%#sleader_epoch'26] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view entries)
+    -> Int32.to_int (Seq.get (Slice64.view entries) i).epoch.f0
+      < Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0
+    /\ Int64.to_int (Seq.get (Slice64.view entries) i).start_offset.f0'0
+    < Int64.to_int (Seq.get (Slice64.view entries) j).start_offset.f0'0}
+  (! set_UNDEFINED_EPOCH
+    (bb0
+    [ bb0 = s0
+      [ s0 = [ &_24 <- [%#sleader_epoch] const_UNDEFINED_EPOCH ] s1
+      | s1 = [ &_21 <- requested_epoch.f0 = _24.f0 ] s2
+      | s2 = any [ br0 -> {_21 = false} (! bb2) | br1 -> {_21} (! bb1) ] ]
+    | bb1 = s0
+      [ s0 = [ &_ret <- { f0'1 = ([%#sleader_epoch'0] const_UNDEFINED_EPOCH); f1'1 = log_end_offset } ] s1
+      | s1 = return {_ret} ]
+    | bb2 = s0 [ s0 = [ &i <- [%#sleader_epoch'1] (0: UInt64.t) ] s1 | s1 = bb3 ]
+    | bb3 = bb3invariant
+      [ bb3 =
+        {[@expl:loop variant] well_founded_relation_Int variant_old_bb3 ([%#sleader_epoch'2] Seq.length (Slice64.view entries)
+        - UInt64.t'int i)}
+        bb3invariant
+      | bb3invariant = {[@expl:loop invariant #0] [%#sleader_epoch'5] UInt64.t'int i
+        <= Seq.length (Slice64.view entries)}
+        {[@expl:loop invariant #1] [%#sleader_epoch'4] forall j: int. 0 <= j /\ j < UInt64.t'int i
+          -> Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0 <= Int32.to_int requested_epoch.f0}
+        (! [ &variant_old_bb3 <- [%#sleader_epoch'2] Seq.length (Slice64.view entries) - UInt64.t'int i ] s0)
+        [ s0 = len_EpochEntry [%#sleader_epoch'3] {entries} (fun (_x: UInt64.t) -> [ &_43 <- _x ] s1)
+        | s1 = [ &_41 <- UInt64.lt i _43 ] s2
+        | s2 = any [ br0 -> {_41 = false} (! bb11) | br1 -> {_41} (! bb6) ] ]
+        [ bb6 = s0
+          [ s0 = [ &_47 <- i ] s1
+          | s1 = [ &_48 <- Slice64.length entries ] s2
+          | s2 = [ &_49 <- UInt64.lt _47 _48 ] s3
+          | s3 = {[@expl:index in bounds] [%#sleader_epoch'6] _49} s4
+          | s4 = Slice64.get [%#sleader_epoch'7] <t_EpochEntry> {entries} {_47}
+              (fun (r: t_EpochEntry) -> [ &_46 <- r.epoch.f0 ] s5)
+          | s5 = [ &_45 <- Int32.le _46 requested_epoch.f0 ] s6
+          | s6 = any [ br0 -> {_45 = false} (! bb11) | br1 -> {_45} (! bb8) ] ]
+        | bb8 = s0
+          [ s0 = UInt64.add [%#sleader_epoch'9] {i} {[%#sleader_epoch'8] (1: UInt64.t)}
+              (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+          | s1 = bb3 ] ] ]
+    | bb11 = s0
+      [ s0 = len_EpochEntry [%#sleader_epoch'10] {entries} (fun (_x: UInt64.t) -> [ &_54 <- _x ] s1)
+      | s1 = [ &_52 <- i = _54 ] s2
+      | s2 = any [ br0 -> {_52 = false} (! bb21) | br1 -> {_52} (! bb13) ] ]
+    | bb13 = s0
+      [ s0 = [ &_56 <- UInt64.gt i ([%#sleader_epoch'11] (0: UInt64.t)) ] s1
+      | s1 = any [ br0 -> {_56 = false} (! bb19) | br1 -> {_56} (! bb14) ] ]
+    | bb14 = s0
+      [ s0 = UInt64.sub [%#sleader_epoch'13] {i} {[%#sleader_epoch'12] (1: UInt64.t)}
+          (fun (_x: UInt64.t) -> [ &_60 <- _x ] s1)
+      | s1 = [ &_62 <- Slice64.length entries ] s2
+      | s2 = [ &_63 <- UInt64.lt _60 _62 ] s3
+      | s3 = {[@expl:index in bounds] [%#sleader_epoch'14] _63} s4
+      | s4 = Slice64.get [%#sleader_epoch'15] <t_EpochEntry> {entries} {_60}
+          (fun (r: t_EpochEntry) -> [ &_59 <- r.epoch.f0 ] s5)
+      | s5 = [ &_58 <- _59 = requested_epoch.f0 ] s6
+      | s6 = any [ br0 -> {_58 = false} (! bb19) | br1 -> {_58} (! bb16) ] ]
+    | bb16 = s0 [ s0 = [ &_ret <- { f0'1 = requested_epoch; f1'1 = log_end_offset } ] s1 | s1 = return {_ret} ]
+    | bb19 = s0
+      [ s0 = [ &_ret <- { f0'1 = ([%#sleader_epoch'16] const_UNDEFINED_EPOCH); f1'1 = log_end_offset } ] s1
+      | s1 = return {_ret} ]
+    | bb21 = s0
+      [ s0 = [ &_68 <- i = ([%#sleader_epoch'17] (0: UInt64.t)) ] s1
+      | s1 = any [ br0 -> {_68 = false} (! bb24) | br1 -> {_68} (! bb22) ] ]
+    | bb22 = s0
+      [ s0 = [ &_72 <- i ] s1
+      | s1 = [ &_73 <- Slice64.length entries ] s2
+      | s2 = [ &_74 <- UInt64.lt _72 _73 ] s3
+      | s3 = {[@expl:index in bounds] [%#sleader_epoch'18] _74} s4
+      | s4 = Slice64.get [%#sleader_epoch'19] <t_EpochEntry> {entries} {_72}
+          (fun (r: t_EpochEntry) -> [ &_71 <- r.start_offset ] s5)
+      | s5 = [ &_ret <- { f0'1 = requested_epoch; f1'1 = _71 } ] s6
+      | s6 = return {_ret} ]
+    | bb24 = s0
+      [ s0 = UInt64.sub [%#sleader_epoch'21] {i} {[%#sleader_epoch'20] (1: UInt64.t)}
+          (fun (_x: UInt64.t) -> [ &_76 <- _x ] s1)
+      | s1 = [ &_78 <- Slice64.length entries ] s2
+      | s2 = [ &_79 <- UInt64.lt _76 _78 ] s3
+      | s3 = {[@expl:index in bounds] [%#sleader_epoch'22] _79} s4
+      | s4 = Slice64.get [%#sleader_epoch'23] <t_EpochEntry> {entries} {_76}
+          (fun (r: t_EpochEntry) -> [ &_75 <- r.epoch ] s5)
+      | s5 = [ &_81 <- i ] s6
+      | s6 = [ &_82 <- Slice64.length entries ] s7
+      | s7 = [ &_83 <- UInt64.lt _81 _82 ] s8
+      | s8 = {[@expl:index in bounds] [%#sleader_epoch'24] _83} s9
+      | s9 = Slice64.get [%#sleader_epoch'25] <t_EpochEntry> {entries} {_81}
+          (fun (r: t_EpochEntry) -> [ &_80 <- r.start_offset ] s10)
+      | s10 = [ &_ret <- { f0'1 = _75; f1'1 = _80 } ] s11
+      | s11 = return {_ret} ] ]
+    [ & _ret: tup2_LeaderEpoch_Offset = Any.any_l ()
+    | & entries: Slice64.slice t_EpochEntry = entries
+    | & requested_epoch: t_LeaderEpoch = requested_epoch
+    | & log_end_offset: t_Offset = log_end_offset
+    | & _21: bool = Any.any_l ()
+    | & _24: t_LeaderEpoch = Any.any_l ()
+    | & i: UInt64.t = Any.any_l ()
+    | & _41: bool = Any.any_l ()
+    | & _43: UInt64.t = Any.any_l ()
+    | & _45: bool = Any.any_l ()
+    | & _46: Int32.t = Any.any_l ()
+    | & _47: UInt64.t = Any.any_l ()
+    | & _48: UInt64.t = Any.any_l ()
+    | & _49: bool = Any.any_l ()
+    | & _52: bool = Any.any_l ()
+    | & _54: UInt64.t = Any.any_l ()
+    | & _56: bool = Any.any_l ()
+    | & _58: bool = Any.any_l ()
+    | & _59: Int32.t = Any.any_l ()
+    | & _60: UInt64.t = Any.any_l ()
+    | & _62: UInt64.t = Any.any_l ()
+    | & _63: bool = Any.any_l ()
+    | & _68: bool = Any.any_l ()
+    | & _71: t_Offset = Any.any_l ()
+    | & _72: UInt64.t = Any.any_l ()
+    | & _73: UInt64.t = Any.any_l ()
+    | & _74: bool = Any.any_l ()
+    | & _75: t_LeaderEpoch = Any.any_l ()
+    | & _76: UInt64.t = Any.any_l ()
+    | & _78: UInt64.t = Any.any_l ()
+    | & _79: bool = Any.any_l ()
+    | & _80: t_Offset = Any.any_l ()
+    | & _81: UInt64.t = Any.any_l ()
+    | & _82: UInt64.t = Any.any_l ()
+    | & _83: bool = Any.any_l ()
+    | & variant_old_bb3: int = Any.any_l () ]))
+  [ return (result: tup2_LeaderEpoch_Offset) ->
+  {[@stop_split] [@expl:epoch_and_offset_for_entries ensures] ([@stop_split] [@expl:epoch_and_offset_for_entries ensures #0] [%#sleader_epoch'27] Int32.to_int requested_epoch.f0
+        = - 1 -> Int32.to_int result.f0'1.f0 = - 1 /\ Int64.to_int result.f1'1.f0'0 = Int64.to_int log_end_offset.f0'0)
+    /\ ([@stop_split] [@expl:epoch_and_offset_for_entries ensures #1] [%#sleader_epoch'28] gt_log_Int (Seq.length (Slice64.view entries)) 0
+        /\ Int32.to_int requested_epoch.f0
+        = Int32.to_int (Seq.get (Slice64.view entries) (Seq.length (Slice64.view entries) - 1)).epoch.f0
+      -> Int32.to_int result.f0'1.f0 = Int32.to_int requested_epoch.f0
+      /\ Int64.to_int result.f1'1.f0'0 = Int64.to_int log_end_offset.f0'0)
+    /\ ([@stop_split] [@expl:epoch_and_offset_for_entries ensures #2] [%#sleader_epoch'29] Int32.to_int requested_epoch.f0
+          <> - 1
+        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view entries)
+          -> Int32.to_int (Seq.get (Slice64.view entries) i).epoch.f0 < Int32.to_int requested_epoch.f0)
+      -> Int32.to_int result.f0'1.f0 = - 1 /\ Int64.to_int result.f1'1.f0'0 = Int64.to_int log_end_offset.f0'0)
+    /\ ([@stop_split] [@expl:epoch_and_offset_for_entries ensures #3] [%#sleader_epoch'30] forall i: int. Int32.to_int requested_epoch.f0
+          <> - 1
+        /\ 0 <= i
+        /\ i < Seq.length (Slice64.view entries)
+        /\ gt_log_Int (Int32.to_int (Seq.get (Slice64.view entries) i).epoch.f0) (Int32.to_int requested_epoch.f0)
+        /\ (forall j: int. 0 <= j /\ j < i
+          -> Int32.to_int (Seq.get (Slice64.view entries) j).epoch.f0 <= Int32.to_int requested_epoch.f0)
+      -> Int64.to_int result.f1'1.f0'0 = Int64.to_int (Seq.get (Slice64.view entries) i).start_offset.f0'0
+      /\ Int32.to_int result.f0'1.f0
+      = (if i = 0 then
+        Int32.to_int requested_epoch.f0
+      else
+        Int32.to_int (Seq.get (Slice64.view entries) (i - 1)).epoch.f0
+      ))}
+    (! return {result}) ]
