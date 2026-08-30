@@ -355,11 +355,11 @@ mod tests {
         let leader = Arc::new(Mutex::new(
             Log::open(leader_dir.path(), LogConfig::default()).unwrap(),
         ));
-        let mut shared = batch(0, b"shared");
+        let mut common_batch = batch(0, b"shared");
         leader
             .lock()
             .unwrap()
-            .append_at(&mut shared, Offset(0))
+            .append_at(&mut common_batch, Offset(0))
             .unwrap();
         let mut leader_tail = batch(1, b"leader");
         leader
