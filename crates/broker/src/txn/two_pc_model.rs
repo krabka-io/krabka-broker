@@ -25,10 +25,7 @@
 //! generation and aborts the next is not a false violation.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
-//! each run is fenced with `within_boundary`, `target_state_count`, and
-//! `timeout`.
-
-use std::time::Duration;
+//! each run is fenced with `within_boundary` and `target_state_count`.
 
 use stateright::{Checker, Model, Property};
 
@@ -40,7 +37,6 @@ use super::{
 
 const MAX_STATES: usize = 300_000;
 const MAX_DEPTH: usize = 80;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 const PID: i64 = 1000; // fixed; epoch is the fencing dimension
 const CLASSIC_TIMEOUT_MS: i32 = 60_000;
 /// The transaction's notional start. The reaper measures elapsed time from
@@ -273,7 +269,6 @@ fn run(model: TwoPcModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

@@ -2,9 +2,9 @@
 //! `model/mod.rs`.
 //!
 //! Memory safety: the stateright BFS keeps every visited unique state resident.
-//! Each checker run is therefore fenced with `target_state_count` and `timeout`
-//! backstops, on top of the model's tight `within_boundary`, so a runaway space
-//! cannot exhaust the host RAM.
+//! Each checker run is therefore fenced with a `target_state_count` backstop,
+//! on top of the model's tight `within_boundary`, so a runaway space cannot
+//! exhaust the host RAM.
 //!
 //! There are two configs, because the linearizability tester keeps its history
 //! in the fingerprinted state and so blows the space up by about 30x:
@@ -13,8 +13,6 @@
 //! - `two_voters_linearizable`: 2 voters with client appends. This covers
 //!   committed-log linearizability over a tightly-bounded space.
 mod model;
-
-use std::time::Duration;
 
 use krabka_ids::NodeId;
 use model::ConsensusModel;
@@ -26,9 +24,6 @@ use stateright::{Checker, Model};
 /// a truncation would spuriously fail a `sometimes` witness, or leave an
 /// `always` only partially verified.
 const MAX_STATES: usize = 2_000_000;
-/// Wall-clock backstop. It is generous, because the configs below complete in a
-/// few seconds.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(90);
 /// Depth backstop. It must exceed the reachable-graph diameter of each config,
 /// or the search is depth-truncated and therefore incomplete. The configs below
 /// are bounded, so their diameter sits well under this value.
@@ -39,7 +34,6 @@ fn run(model: ConsensusModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

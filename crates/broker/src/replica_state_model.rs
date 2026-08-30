@@ -9,14 +9,14 @@
 //! `docs/superpowers/specs/2026-06-13-krabka-isr-replica-state-model-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
-//! this module fences each run with `within_boundary` + `target_state_count` +
-//! `timeout`. You MUST run each config under the host memory watchdog while you
-//! tune the bounds.
+//! this module fences each run with `within_boundary` + `target_state_count`.
+//! You MUST run each config under the host memory watchdog while you tune the
+//! bounds.
 
 use std::{
     collections::HashSet,
     hash::{Hash, Hasher},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use krabka_log::Offset;
@@ -30,9 +30,6 @@ use super::ReplicaState;
 const MAX_STATES: usize = 200_000;
 /// Depth backstop; must exceed each config's reachable-graph diameter.
 const MAX_DEPTH: usize = 80;
-/// Wall-clock backstop.
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
-
 /// Bounded model config. It is held here, not in the fingerprinted state.
 struct IsrModel {
     /// Constant injected `now`. The model does not model wall-clock time.
@@ -296,7 +293,6 @@ fn run(model: IsrModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

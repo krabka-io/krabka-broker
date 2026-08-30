@@ -4,8 +4,6 @@
 //! exhaustive, because a truncated search proves nothing and the two must move
 //! together.
 
-use std::time::Duration;
-
 use assert2::assert;
 use stateright::{Checker, Model};
 
@@ -13,14 +11,12 @@ use super::config::StretchModel;
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub fn run(model: StretchModel, label: &str) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

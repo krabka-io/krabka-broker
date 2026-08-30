@@ -19,11 +19,9 @@
 //! aborts the next is not a false violation.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
-//! this module fences each run with `within_boundary` + `target_state_count` +
-//! `timeout`. You MUST run each config under the host memory watchdog while you
-//! tune the bounds.
-
-use std::time::Duration;
+//! this module fences each run with `within_boundary` + `target_state_count`.
+//! You MUST run each config under the host memory watchdog while you tune the
+//! bounds.
 
 use krabka_log::ProducerId;
 use stateright::{Checker, Model, Property};
@@ -38,7 +36,6 @@ use super::{
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 const PID: ProducerId = ProducerId(1000); // fixed; epoch is the fencing dimension
 
 struct TxnModel {
@@ -297,7 +294,6 @@ fn run(model: TxnModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

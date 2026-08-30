@@ -22,8 +22,6 @@
 //! created at zero and expires at [`EXPIRES_AT`], and an expire action advances
 //! the clock by one. The bound keeps the state graph exhaustive.
 
-use std::time::Duration;
-
 use krabka_metadata::{
     BreakGlassAction, BreakGlassApproval, BreakGlassProposalRecord, MetadataImage, MetadataRecord,
 };
@@ -57,7 +55,6 @@ const PROPOSER: &str = "User:alice";
 const TARGET_STATE_COUNT: usize = 1_000_000;
 const MAX_UNIQUE_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 20;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// One proposal, projected onto the fields a transition reads.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -283,7 +280,6 @@ fn run(model: BreakGlassModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(
@@ -292,6 +288,7 @@ fn run(model: BreakGlassModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
+    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
     assert2::assert!(
         checker.state_count() < TARGET_STATE_COUNT,
         "[{label}] truncated, so the run is not exhaustive"

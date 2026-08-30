@@ -9,14 +9,10 @@
 //! `docs/superpowers/specs/2026-06-13-krabka-reassignment-model-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
-//! each run is fenced with `within_boundary`, `target_state_count`, and
-//! `timeout`. While bounds are tuned, every run MUST execute under the host
-//! memory watchdog.
+//! each run is fenced with `within_boundary` and `target_state_count`. While
+//! bounds are tuned, every run MUST execute under the host memory watchdog.
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    time::Duration,
-};
+use std::collections::{BTreeSet, HashSet};
 
 use krabka_metadata::PartitionRecord;
 use krabka_raft::NodeId;
@@ -26,7 +22,6 @@ use super::reassign_one;
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 80;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Bounded config for the reassignment model. It lives here, not in the state.
 struct ReassignModel {
@@ -348,7 +343,6 @@ fn run(model: ReassignModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

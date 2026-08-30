@@ -3,8 +3,6 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use std::time::Duration;
-
 use assert2::assert;
 use stateright::{Checker, Model};
 
@@ -18,8 +16,6 @@ const MAX_STATES: usize = 200_000;
 /// Otherwise the search is depth-truncated and incomplete, and the `run`
 /// harness fails.
 const MAX_DEPTH: usize = 80;
-/// Wall-clock backstop.
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Run one bounded config to completion. Assert that the run was exhaustive,
 /// that is, that no cap truncated it, and that all properties hold.
@@ -28,7 +24,6 @@ pub(super) fn run(model: ShareModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(
