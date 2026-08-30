@@ -1,11 +1,9 @@
 //! The checker bounds and the two entry points the model tests call.
 //!
-//! stateright's BFS keeps every visited unique state resident, so the depth,
-//! state-count and timeout fences live next to the assertions that prove a run
-//! was exhaustive: a search that hit either cap proves nothing, and the two
-//! must be tuned together.
-
-use std::time::Duration;
+//! stateright's BFS keeps every visited unique state resident, so the depth and
+//! state-count fences live next to the assertions that prove a run was
+//! exhaustive: a search that hit either cap proves nothing, and the two must
+//! be tuned together.
 
 use assert2::assert;
 use stateright::{Checker, Model};
@@ -14,14 +12,12 @@ use super::{failover_state::FailoverModel, recovery_state::RecoveryModel};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 80;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub(super) fn run_failover(model: FailoverModel, label: &str) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(
@@ -46,7 +42,6 @@ pub(super) fn run_recovery(model: RecoveryModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

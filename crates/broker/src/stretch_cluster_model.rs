@@ -95,9 +95,8 @@
 //! not evidence.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
-//! `within_boundary` + `target_state_count` + `timeout` fence each run. You
-//! MUST run these models under the host memory watchdog while you tune the
-//! bounds.
+//! `within_boundary` + `target_state_count` fence each run. You MUST run these
+//! models under the host memory watchdog while you tune the bounds.
 //!
 //! # Module layout
 //!

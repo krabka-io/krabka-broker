@@ -30,7 +30,6 @@
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
-    time::Duration,
 };
 
 use krabka_protocol::{
@@ -49,7 +48,6 @@ use super::{CachedPartitionState, FetchSessionKey, apply_incremental};
 const TARGET_STATE_COUNT: usize = 30_000_000;
 const MAX_UNIQUE_STATES: usize = 500_000;
 const MAX_DEPTH: usize = 30;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 // Tiny symbolic universe. Names {A,B}, ids {U,V} (a rename = same id, new name).
 const NAME_A: &str = "A";
@@ -289,7 +287,6 @@ fn run(model: FsModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

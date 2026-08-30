@@ -11,15 +11,12 @@
 //! them. Adding them explodes the space with a monotonic counter that adds no
 //! behavior.
 
-use std::time::Duration;
-
 use stateright::{Checker, Model, Property};
 
 use super::{Decision, ProducerEntry, check_pure};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 40;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 struct ProducerModel {
     max_epoch: i16,
@@ -153,7 +150,6 @@ fn run(model: ProducerModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

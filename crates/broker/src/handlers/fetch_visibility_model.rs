@@ -22,8 +22,6 @@
 //! all. See the design spec
 //! `docs/superpowers/specs/2026-06-14-krabka-fetch-hwm-visibility-model-design.md`.
 
-use std::time::Duration;
-
 use assert2::assert;
 use stateright::{Checker, Model, Property};
 
@@ -31,7 +29,6 @@ use super::{FetchWatermarks, Offset, compute_visibility_window};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 40;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 struct VisModel {
     max_offset: i64,
@@ -290,7 +287,6 @@ fn run(model: VisModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

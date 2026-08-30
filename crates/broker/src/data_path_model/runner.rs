@@ -5,8 +5,6 @@
 //! the depth cap, the generated-state cap or the unique-state bound proves
 //! nothing, and the two must be tuned together.
 
-use std::time::Duration;
-
 use stateright::{Checker, Model};
 
 use super::model::DpModel;
@@ -14,14 +12,12 @@ use super::model::DpModel;
 const TARGET_STATE_COUNT: usize = 60_000_000;
 const MAX_UNIQUE_STATES: usize = 8_000_000;
 const MAX_DEPTH: usize = 70;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub(super) fn run(model: DpModel, label: &str) {
     let checker = model
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

@@ -55,8 +55,6 @@
 //! The clock is a small integer of logical milliseconds, bounded exactly as the
 //! sibling model bounds it, so the state graph stays exhaustive.
 
-use std::time::Duration;
-
 use krabka_metadata::BreakGlassAction;
 use krabka_units::millis;
 use stateright::{Checker, Model};
@@ -74,7 +72,6 @@ mod universe;
 const TARGET_STATE_COUNT: usize = 4_000_000;
 const MAX_UNIQUE_STATES: usize = 1_000_000;
 const MAX_DEPTH: usize = 12;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
 fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
     BreakGlassConfig {
@@ -91,7 +88,6 @@ fn run(model: CrossSpendModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(
@@ -100,6 +96,7 @@ fn run(model: CrossSpendModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
+    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
     assert2::assert!(
         checker.state_count() < TARGET_STATE_COUNT,
         "[{label}] truncated, so the run is not exhaustive"

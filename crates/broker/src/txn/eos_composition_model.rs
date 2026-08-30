@@ -35,8 +35,6 @@
 //!
 //! See the design spec.
 
-use std::time::Duration;
-
 use krabka_log::{Offset, ProducerId};
 use stateright::{Checker, Model, Property};
 
@@ -50,7 +48,6 @@ use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
 const TARGET_STATE_COUNT: usize = 20_000_000;
 const MAX_UNIQUE_STATES: usize = 2_000_000;
 const MAX_DEPTH: usize = 50;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 const PID0: i64 = 1000; // base producer id; per-producer pid = PID0 + producer index
 
 fn model_offset(value: usize) -> i64 {
@@ -412,7 +409,6 @@ fn run(model: EosModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

@@ -7,15 +7,12 @@
 //! before the index commit. An fsync can tear the active tail. Any WAL member
 //! can start a reservation. A trim must stop at the committed index frontier.
 
-use std::time::Duration;
-
 use stateright::{Checker, Model, Property};
 
 const MAX_OFFSET: i64 = 2;
 const APPENDERS: usize = 2;
 const MAX_DEPTH: usize = 24;
 const TARGET_STATE_COUNT: usize = 100_000;
-const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 const WITNESS_KRAFT_FSYNC_GAP: u8 = 1 << 0;
 const WITNESS_PUT_BEFORE_INDEX: u8 = 1 << 1;
@@ -298,7 +295,6 @@ fn run() {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(

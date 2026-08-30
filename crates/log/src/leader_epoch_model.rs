@@ -30,16 +30,12 @@
 //! for it.
 
 use krabka_ids::{LeaderEpoch, Offset};
-use krabka_units::prelude::{Time, TimeExt as _, minutes};
 use stateright::{Checker, Model, Property};
 
 use super::{EpochEntry, UNDEFINED_EPOCH, epoch_and_offset_for_entries};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 40;
-/// Wall-clock budget for the exhaustive BFS. It is a runaway guard, not a
-/// bound on the model.
-const CHECK_TIMEOUT: Time = minutes(2);
 
 struct EpochModel {
     max_epoch: i32,
@@ -223,7 +219,6 @@ fn run(model: EpochModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(MAX_STATES)
-        .timeout(CHECK_TIMEOUT.to_std())
         .spawn_bfs()
         .join();
     eprintln!(

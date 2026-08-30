@@ -31,8 +31,6 @@
 //! are `bucket_basic` and `bucket_wide`. See the design spec
 //! `docs/superpowers/specs/2026-06-14-krabka-token-bucket-quota-model-design.md`.
 
-use std::time::Duration;
-
 use krabka_throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
@@ -40,7 +38,8 @@ use stateright::{Checker, Model, Property};
 
 const TARGET_STATE_COUNT: usize = 4_000_000;
 const MAX_DEPTH: usize = 60;
-const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
+// ponytail: two reset cycles cover overlap; raise for reset-count properties.
+const MAX_GENERATION: i64 = 4;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Pc {
@@ -270,6 +269,7 @@ impl Model for BucketModel {
         s.available >= -(self.max_rate + self.max_req + 1)
             && s.available <= self.max_rate
             && s.pending <= self.max_pending
+            && s.generation <= MAX_GENERATION
     }
 }
 
@@ -278,7 +278,6 @@ fn green_run(model: BucketModel, label: &str) {
         .checker()
         .target_max_depth(MAX_DEPTH)
         .target_state_count(TARGET_STATE_COUNT)
-        .timeout(CHECK_TIMEOUT)
         .spawn_bfs()
         .join();
     eprintln!(
@@ -287,13 +286,8 @@ fn green_run(model: BucketModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
-    // Bounded model check: `target_max_depth` / `target_state_count` / `timeout`
-    // are hard exploration caps (project policy: never run stateright unbounded —
-    // it OOM'd once). We do NOT require the search to be exhaustive; within the
-    // explored envelope we assert the `available_in_range` safety property is
-    // never violated and every non-vacuity (`sometimes`) witness is reached. The
-    // companion `race_underflows_without_cas` RED witness proves the model still
-    // detects a genuine violation on the buggy non-CAS path.
+    assert2::assert!(checker.max_depth() < MAX_DEPTH);
+    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT);
     checker.assert_properties();
 }
 
@@ -340,7 +334,6 @@ fn race_underflows_without_cas() {
     .checker()
     .target_max_depth(MAX_DEPTH)
     .target_state_count(TARGET_STATE_COUNT)
-    .timeout(CHECK_TIMEOUT)
     .spawn_bfs()
     .join();
     assert2::assert!(checker.discovery("available_in_range").is_some());
