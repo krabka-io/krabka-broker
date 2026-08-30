@@ -140,6 +140,8 @@ async fn round_trip_group_join_and_api_versions_across_librdkafka_versions() {
                 "auto.offset.reset=earliest",
                 "-X",
                 "enable.auto.commit=false",
+                "-X",
+                "enable.auto.offset.store=false",
                 "-c",
                 "1",
                 "-f",

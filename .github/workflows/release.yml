@@ -41,8 +41,11 @@ jobs:
       - name: install cargo-deny
         run: cargo install cargo-deny --version 0.20.2 --locked
 
-      - name: build dependency SBOM
-        run: aspect sbom --output sbom.cdx.json
+      - name: validate dependency policy and build SBOM
+        run: |
+          cargo deny --manifest-path crates/broker/Cargo.toml \
+            --target x86_64-unknown-linux-gnu --exclude-dev check
+          aspect sbom --output sbom.cdx.json
 
       - name: push release candidate
         run: bazel run //packaging:push -- --tag "${CANDIDATE_TAG}"
