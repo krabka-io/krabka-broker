@@ -83,6 +83,26 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
     })
 }
 
+pub(crate) fn authenticated_node_id(
+    principal: &krabka_security::Principal,
+) -> Option<krabka_raft::NodeId> {
+    if principal.auth_method == krabka_security::AuthMethod::Anonymous {
+        return None;
+    }
+    let id = principal
+        .name
+        .strip_prefix("broker-")
+        .or_else(|| {
+            principal
+                .name
+                .split(',')
+                .find_map(|rdn| rdn.trim().strip_prefix("CN=broker-"))
+        })?
+        .parse()
+        .ok()?;
+    Some(krabka_raft::NodeId(id))
+}
+
 pub(crate) fn fetch_response(
     group: QuorumGroup,
     hwm: i64,

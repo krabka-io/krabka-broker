@@ -44,7 +44,10 @@ use self::{
     session::finalize_fetch_session,
     throttle::{apply_consumer_fetch_quota, throttle_follower_responses},
 };
-use crate::{broker::Broker, error::BrokerError, fetch_session::INVALID_SESSION_ID};
+use crate::{
+    broker::Broker, error::BrokerError, fetch_session::INVALID_SESSION_ID,
+    handlers::cluster_action_denied,
+};
 
 /// Handle a `Fetch` request and return the not-yet-encoded response
 /// **struct** with the negotiated `version`.
@@ -103,10 +106,23 @@ pub(crate) async fn handle(
     } = preparation;
 
     if version >= crate::wal::quorum::wire::KIP_595_FETCH_VERSION
-        && denied_topics.is_empty()
-        && let Some(response) = broker.wal_shards.route_fetch_request(&req)
+        && crate::wal::quorum::wire::decode_fetch_request(&req).is_some()
     {
-        return Ok((response?, version));
+        if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return Ok((cluster_authorization_failed(), version));
+        }
+        let Some(authenticated_node) =
+            crate::wal::quorum::wire::authenticated_node_id(ctx.principal)
+        else {
+            return Ok((cluster_authorization_failed(), version));
+        };
+        if denied_topics.is_empty()
+            && let Some(response) = broker
+                .wal_shards
+                .route_fetch_request(&req, authenticated_node)
+        {
+            return Ok((response?, version));
+        }
     }
 
     let plan_context = PendingPlanContext {
@@ -159,6 +175,14 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     Ok((resp, version))
+}
+
+fn cluster_authorization_failed() -> FetchResponse {
+    FetchResponse {
+        error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+        session_id: INVALID_SESSION_ID,
+        ..Default::default()
+    }
 }
 
 /// The pure read-path visibility decision.
@@ -272,6 +296,7 @@ mod tests {
     use bytes::{Bytes, BytesMut};
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig, Offset};
+    use krabka_metadata::AclOperation;
     use krabka_protocol::{
         Encode as _,
         records::{Record, RecordBatch, RecordsPayload},
@@ -279,6 +304,7 @@ mod tests {
     use krabka_security::{AuthMethod, Principal};
 
     use crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
         broker::Broker,
         handlers::RequestContext,
         wal::quorum::{
@@ -287,6 +313,23 @@ mod tests {
             wire::{KIP_595_FETCH_VERSION, QuorumGroup, fetch_request},
         },
     };
+
+    #[derive(Debug)]
+    struct TopicReadOnly;
+
+    impl Authorizer for TopicReadOnly {
+        fn authorize(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            request: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            if request.operation == AclOperation::Read {
+                AuthorizationResult::Allow
+            } else {
+                AuthorizationResult::Deny
+            }
+        }
+    }
 
     #[tokio::test]
     async fn handle_routes_discriminated_wal_fetch_on_broker_listener() {
@@ -333,10 +376,10 @@ mod tests {
             .replace_placements(&maplit::hashmap! {ShardId {
                 topic_id,
                 partition: PartitionIndex(0),
-            } => vec![local_node_id]});
+            } => vec![local_node_id, krabka_raft::NodeId(2)]});
         let principal = Principal {
             name: "broker-2".into(),
-            auth_method: AuthMethod::Anonymous,
+            auth_method: AuthMethod::SaslPlain,
             groups: Vec::new(),
         };
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
@@ -345,7 +388,7 @@ mod tests {
         for version in [KIP_595_FETCH_VERSION, 18] {
             let request = fetch_request(
                 QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
-                local_node_id,
+                krabka_raft::NodeId(2),
                 0,
                 0,
                 krabka_units::mebibytes(1),
@@ -367,6 +410,41 @@ mod tests {
                 Some(RecordsPayload::Raw(ref records)) if !records.is_empty()
             ));
         }
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn wal_fetch_requires_cluster_action() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.authorizer = std::sync::Arc::new(TopicReadOnly);
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let request = fetch_request(
+            QuorumGroup::diskless_wal(uuid::Uuid::from_u128(0xD15C), PartitionIndex(0)),
+            krabka_raft::NodeId(2),
+            0,
+            0,
+            krabka_units::mebibytes(1),
+        );
+        let mut encoded = BytesMut::new();
+        request
+            .encode(&mut encoded, KIP_595_FETCH_VERSION)
+            .expect("encode WAL fetch");
+        let principal = Principal {
+            name: "broker-2".into(),
+            auth_method: AuthMethod::SaslPlain,
+            groups: Vec::new(),
+        };
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
+
+        let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
+            .await
+            .expect("deny WAL fetch");
+
+        assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
+        assert!(response.responses.is_empty());
         broker_handle.shutdown().await;
     }
 }
