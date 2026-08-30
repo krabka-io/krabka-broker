@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use krabka_audit::{
-    AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal, PrivilegedPhase,
+    AuditEndpoint, AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, AuditPrincipal,
+    PrivilegedPhase,
 };
 use krabka_metadata::BreakGlassAction;
 use krabka_raft::NodeId;
@@ -129,6 +130,27 @@ impl BackgroundRecovery {
         );
     }
 
+    /// Durably admit the data-losing election before it reaches raft.
+    pub(super) async fn require_audit(
+        &self,
+        job: &RecoveryJob,
+        node_id: NodeId,
+        winner: NodeId,
+    ) -> Result<(), AuditError> {
+        if self.audit_log.mode() != AuditMode::FailClosed {
+            return Ok(());
+        }
+        self.audit_log
+            .emit_required(self.event(
+                PrivilegedPhase::Attempted,
+                AuditOutcome::Success,
+                job,
+                node_id,
+                format!("unclean recovery admitted for broker {}", winner.0),
+            ))
+            .await
+    }
+
     /// Emit one `PrivilegedAction` event for this path.
     ///
     /// The event names the controller that acted rather than a person, and its
@@ -142,7 +164,19 @@ impl BackgroundRecovery {
         node_id: NodeId,
         reason: String,
     ) {
-        self.audit_log.emit(AuditEvent::PrivilegedAction {
+        self.audit_log
+            .emit(self.event(phase, outcome, job, node_id, reason));
+    }
+
+    fn event(
+        &self,
+        phase: PrivilegedPhase,
+        outcome: AuditOutcome,
+        job: &RecoveryJob,
+        node_id: NodeId,
+        reason: String,
+    ) -> AuditEvent {
+        AuditEvent::PrivilegedAction {
             outcome,
             phase,
             action: action_name(BreakGlassAction::UncleanRecovery).to_owned(),
@@ -165,6 +199,6 @@ impl BackgroundRecovery {
             },
             reason,
             time_ms: now_ms(),
-        });
+        }
     }
 }

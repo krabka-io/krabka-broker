@@ -175,6 +175,7 @@ pub(super) fn apply_config_tail(
     }
     let audit = tail.audit.unwrap_or_default();
     cfg.audit_enabled = audit.enabled;
+    cfg.audit_failure_mode = audit.failure_mode;
     cfg.audit_topic = audit.topic;
     if let Some(signing) = audit.signing {
         cfg.audit_signing_key_path = Some(signing.key_path.into());
@@ -187,6 +188,7 @@ pub(super) fn apply_config_tail(
     let spool = audit.spool.unwrap_or_default();
     cfg.audit_spool_dir = spool.dir.into();
     cfg.audit_spool_max = ByteSize::from_bytes(spool.max_bytes);
+    cfg.audit_spool_sync_every_n = spool.sync_every_n;
     Ok(())
 }
 

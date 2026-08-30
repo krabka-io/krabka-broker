@@ -138,6 +138,39 @@ pub async fn run_with_sequencer(
                 )
                 .await;
             }
+            WriterMessage::SyncDurable { leo, ack } => {
+                let result = if let Some(wal) = wal.as_ref() {
+                    if replica_state.lock().await.hw >= leo {
+                        Ok(())
+                    } else {
+                        match wal.sync_durable(leo).await {
+                            Ok(durable) => {
+                                let mut state = replica_state.lock().await;
+                                let previous = state.hw;
+                                state.recompute_hw_for_wal_durable(durable);
+                                if state.hw > previous {
+                                    hw_advance_notify.notify_waiters();
+                                }
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                } else {
+                    let log = Arc::clone(&log);
+                    storage::run_log_mutation(
+                        move || {
+                            lock_log(&log)
+                                .sync()
+                                .map_err(crate::error::BrokerError::from)
+                        },
+                        "durable sync task panicked",
+                        (&log_dir, &log_dir_status),
+                    )
+                    .await
+                };
+                let _ = ack.send(result);
+            }
             WriterMessage::Replicate { batch, ack } => {
                 handle_replicate(&log, &log_dir, &log_dir_status, batch, ack, &append_notify).await;
             }

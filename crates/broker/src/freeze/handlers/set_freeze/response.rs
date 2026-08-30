@@ -20,11 +20,11 @@ use crate::{
 };
 
 /// The audit action name of a freeze.
-const FREEZE_ACTION: &str = "set_topic_freeze";
+pub(super) const FREEZE_ACTION: &str = "set_topic_freeze";
 
 /// The audit action name of a thaw. It is the break-glass action's own name, so
 /// the audit event and the `break_glass_*` metric labels read alike.
-const THAW_ACTION: &str = "thaw_topic_freeze";
+pub(super) const THAW_ACTION: &str = "thaw_topic_freeze";
 
 /// Audit the outcome and build the response.
 ///

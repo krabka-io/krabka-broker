@@ -5,6 +5,8 @@
 //! secure setting, so a broker with no `[audit]` block still audits to the
 //! standard internal topic.
 
+use std::num::NonZeroU64;
+
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -16,6 +18,10 @@ pub struct FileAuditConfig {
     /// Whether the audit subsystem is active.
     #[serde(default = "default_audit_enabled")]
     pub enabled: bool,
+    /// Whether privileged operations continue when audit processing fails.
+    #[serde(default = "default_audit_failure_mode")]
+    #[schemars(with = "String")]
+    pub failure_mode: krabka_audit::AuditMode,
     /// Internal topic name for audit records.
     #[serde(default = "default_audit_topic")]
     pub topic: String,
@@ -31,6 +37,7 @@ impl Default for FileAuditConfig {
     fn default() -> Self {
         Self {
             enabled: default_audit_enabled(),
+            failure_mode: krabka_audit::AuditMode::FailOpen,
             topic: default_audit_topic(),
             signing: None,
             checkpoint: None,
@@ -47,6 +54,9 @@ pub struct FileAuditSpoolConfig {
     pub dir: String,
     #[serde(default = "default_spool_max_bytes")]
     pub max_bytes: u64,
+    /// Number of appended records between durable file syncs.
+    #[serde(default = "default_spool_sync_every_n")]
+    pub sync_every_n: NonZeroU64,
 }
 
 impl Default for FileAuditSpoolConfig {
@@ -54,6 +64,7 @@ impl Default for FileAuditSpoolConfig {
         Self {
             dir: default_spool_dir(),
             max_bytes: default_spool_max_bytes(),
+            sync_every_n: default_spool_sync_every_n(),
         }
     }
 }
@@ -64,6 +75,10 @@ fn default_spool_dir() -> String {
 
 fn default_spool_max_bytes() -> u64 {
     crate::config::DEFAULT_AUDIT_SPOOL_MAX.bytes_u64()
+}
+
+fn default_spool_sync_every_n() -> NonZeroU64 {
+    crate::config::DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N
 }
 
 /// `[audit.signing]` — Ed25519 checkpoint signing key.
@@ -107,6 +122,10 @@ fn default_audit_enabled() -> bool {
     true
 }
 
+fn default_audit_failure_mode() -> krabka_audit::AuditMode {
+    krabka_audit::AuditMode::FailOpen
+}
+
 fn default_audit_topic() -> String {
     crate::config::DEFAULT_AUDIT_TOPIC.to_string()
 }
@@ -132,6 +151,7 @@ mod tests {
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(cfg.audit_enabled);
+        assert2::check!(cfg.audit_failure_mode == krabka_audit::AuditMode::FailOpen);
         assert2::check!(cfg.audit_topic == "__krabka_audit");
     }
 
@@ -142,6 +162,7 @@ mod tests {
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc.apply_to(&mut cfg).expect("apply");
         assert2::check!(cfg.audit_enabled);
+        assert2::check!(cfg.audit_failure_mode == krabka_audit::AuditMode::FailOpen);
         assert2::check!(cfg.audit_topic == "__krabka_audit");
     }
 
@@ -186,9 +207,11 @@ mod tests {
         let toml = r#"
             [audit]
             enabled = true
+            failure_mode = "fail-closed"
             [audit.spool]
             dir = "/var/lib/krabka/audit-spool"
             max_bytes = 2048
+            sync_every_n = 7
         "#;
         let fc: FileConfig = toml::from_str(toml).expect("parse");
         let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
@@ -197,11 +220,19 @@ mod tests {
             cfg.audit_spool_dir == std::path::PathBuf::from("/var/lib/krabka/audit-spool")
         );
         assert2::check!(cfg.audit_spool_max == krabka_units::kibibytes(2));
+        assert2::check!(cfg.audit_failure_mode == krabka_audit::AuditMode::FailClosed);
+        assert2::check!(cfg.audit_spool_sync_every_n.get() == 7);
 
         let fc2: FileConfig = toml::from_str("[audit]\nenabled = true\n").expect("parse");
         let mut cfg2 = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
         fc2.apply_to(&mut cfg2).expect("apply");
         assert2::check!(cfg2.audit_spool_dir == std::path::PathBuf::from("audit-spool"));
         assert2::check!(cfg2.audit_spool_max == krabka_units::gibibytes(1));
+        assert2::check!(cfg2.audit_spool_sync_every_n.get() == 1);
+    }
+
+    #[test]
+    fn audit_spool_rejects_zero_sync_cadence() {
+        assert2::check!(toml::from_str::<FileConfig>("[audit.spool]\nsync_every_n = 0\n").is_err());
     }
 }

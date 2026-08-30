@@ -23,6 +23,29 @@ pub struct AuditRecord {
 }
 
 impl AuditRecord {
+    /// Build the chained meta-record that declares fail-open audit loss.
+    #[must_use]
+    pub fn records_lost(count: u64) -> Self {
+        Self::records_lost_value(format!(r#"{{"records_lost":{count}}}"#))
+    }
+
+    pub(crate) fn records_lost_with_generation(count: u64, generation: u64) -> Self {
+        Self::records_lost_value(format!(
+            r#"{{"records_lost":{count},"loss_generation":{generation}}}"#
+        ))
+    }
+
+    fn records_lost_value(value: String) -> Self {
+        Self {
+            class: AuditEventClass::RecordsLost,
+            value: value.into_bytes(),
+            headers: vec![(
+                "event_class".to_string(),
+                AuditEventClass::RecordsLost.as_header().as_bytes().to_vec(),
+            )],
+        }
+    }
+
     /// Stamp the hash-chain headers onto this record.
     ///
     /// The `seq` header is decimal and the `prev_hash` header is lowercase
@@ -97,12 +120,21 @@ pub enum AuditError {
     Key(String),
     #[error("audit spool I/O: {0}")]
     Io(String),
+    #[error("audit unavailable: {0}")]
+    Unavailable(String),
+    /// The sink may have appended the record but could not prove durability.
+    #[error("audit durability indeterminate: {0}")]
+    Indeterminate(String),
+    #[error("audit spool requires explicit recovery: {0}")]
+    Poisoned(String),
 }
 
 /// Destination for serialized audit records.
 #[async_trait]
 pub trait AuditSink: Send + Sync + std::fmt::Debug {
-    async fn write(&self, record: AuditRecord) -> Result<(), AuditError>;
+    /// Write one record. When `durable` is true, return only after the record
+    /// has reached stable storage.
+    async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError>;
 }
 
 /// In-memory sink for tests.
@@ -125,7 +157,7 @@ impl MemorySink {
 
 #[async_trait]
 impl AuditSink for MemorySink {
-    async fn write(&self, record: AuditRecord) -> Result<(), AuditError> {
+    async fn write(&self, record: AuditRecord, _durable: bool) -> Result<(), AuditError> {
         self.records
             .lock()
             .expect("audit memory sink poisoned")
@@ -144,6 +176,30 @@ mod tests {
     fn io_error_displays() {
         let e = AuditError::Io("disk full".to_string());
         check!(format!("{e}").contains("disk full"));
+    }
+
+    #[test]
+    fn records_lost_is_a_distinct_meta_record() {
+        let record = AuditRecord::records_lost(3);
+        check!(
+            (
+                record.class,
+                record.value.as_slice(),
+                hdr(&record, "event_class")
+            ) == (
+                AuditEventClass::RecordsLost,
+                br#"{"records_lost":3}"#.as_slice(),
+                Some("records_lost".into()),
+            )
+        );
+    }
+
+    #[test]
+    fn unavailable_error_displays() {
+        check!(
+            AuditError::Unavailable("spool full".into()).to_string()
+                == "audit unavailable: spool full"
+        );
     }
 
     fn hdr(r: &AuditRecord, k: &str) -> Option<String> {

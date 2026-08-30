@@ -47,7 +47,7 @@ use krabka_units::{Time, convert::TimeExt};
 
 use crate::{
     break_glass::{
-        handlers::audit::{GatedTransition, audit_transition},
+        handlers::audit::{GatedTransition, audit_transition, require_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -224,6 +224,24 @@ pub(crate) async fn handle(
                 }
             };
         let proposal_id = records.first().and_then(consumed_proposal_id);
+        if let Err(error) = require_transition(
+            &broker.audit_log,
+            &broker.config.break_glass,
+            ctx,
+            &GatedTransition {
+                action: BreakGlassAction::DeleteTopic,
+                target: &name,
+                phase: PrivilegedPhase::Applied,
+                proposal_id,
+                reason: "topic deletion admitted",
+            },
+        )
+        .await
+        {
+            let message = format!("privileged action refused: {error}");
+            results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+            continue;
+        }
 
         // Snapshot every local partition before committing the metadata
         // deletion. The metadata image watcher can remove registry entries as

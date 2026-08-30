@@ -21,6 +21,7 @@ pub struct KafkaTopicAuditSink {
     partitions: Arc<PartitionRegistry>,
     topic: String,
     partition_index: PartitionIndex,
+    node_id: krabka_raft::NodeId,
     metrics: BrokerMetrics,
 }
 
@@ -41,12 +42,14 @@ impl KafkaTopicAuditSink {
         partitions: Arc<PartitionRegistry>,
         topic: String,
         partition_index: PartitionIndex,
+        node_id: krabka_raft::NodeId,
         metrics: BrokerMetrics,
     ) -> Self {
         Self {
             partitions,
             topic,
             partition_index,
+            node_id,
             metrics,
         }
     }
@@ -54,7 +57,7 @@ impl KafkaTopicAuditSink {
 
 #[async_trait]
 impl AuditSink for KafkaTopicAuditSink {
-    async fn write(&self, record: AuditRecord) -> Result<(), AuditError> {
+    async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError> {
         let Some(partition) = self.partitions.get(&self.topic, self.partition_index) else {
             self.metrics.audit_write_failures_total.inc();
             return Err(AuditError::Sink(format!(
@@ -62,6 +65,14 @@ impl AuditSink for KafkaTopicAuditSink {
                 self.topic, self.partition_index
             )));
         };
+        let leadership = partition.lock_produce_transition().await;
+        if leadership.leader_node_id != self.node_id {
+            self.metrics.audit_write_failures_total.inc();
+            return Err(AuditError::Sink(format!(
+                "audit partition {}-{} is led by node {}, not this node {}",
+                self.topic, self.partition_index, leadership.leader_node_id.0, self.node_id.0
+            )));
+        }
 
         let headers = record
             .headers
@@ -82,16 +93,24 @@ impl AuditSink for KafkaTopicAuditSink {
         });
         batch.last_offset_delta = 0;
 
-        match partition.produce_batch(batch).await {
-            Ok(_) => {
-                self.metrics.audit_events_total.inc();
-                Ok(())
-            }
-            Err(e) => {
-                self.metrics.audit_write_failures_total.inc();
-                Err(AuditError::Sink(e.to_string()))
-            }
+        let result = if durable {
+            partition.produce_batch_durable_outcome(batch).await
+        } else {
+            partition.produce_batch_outcome(batch).await
+        };
+        if let Err(error) = result {
+            self.metrics.audit_write_failures_total.inc();
+            return Err(match error {
+                crate::partition::ProduceBatchError::Rejected(error) => {
+                    AuditError::Sink(error.to_string())
+                }
+                crate::partition::ProduceBatchError::Indeterminate(error) => {
+                    AuditError::Indeterminate(error)
+                }
+            });
         }
+        self.metrics.audit_events_total.inc();
+        Ok(())
     }
 }
 
@@ -138,14 +157,18 @@ mod tests {
             partitions,
             "__audit".to_string(),
             PartitionIndex(0),
+            krabka_raft::NodeId(0),
             BrokerMetrics::new(),
         );
 
-        sink.write(AuditRecord {
-            class: krabka_audit::AuditEventClass::ApiActivity,
-            value: b"{\"ok\":true}".to_vec(),
-            headers: vec![("event_class".to_string(), b"admin".to_vec())],
-        })
+        sink.write(
+            AuditRecord {
+                class: krabka_audit::AuditEventClass::ApiActivity,
+                value: b"{\"ok\":true}".to_vec(),
+                headers: vec![("event_class".to_string(), b"admin".to_vec())],
+            },
+            true,
+        )
         .await
         .expect("write audit record");
 
@@ -169,5 +192,40 @@ mod tests {
                 Some(&b"admin"[..]),
             )
         );
+    }
+
+    #[tokio::test]
+    async fn write_refuses_a_partition_after_leadership_moves_away() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let partitions = Arc::new(PartitionRegistry::new());
+        let partition = fixture_partition(dir.path(), "__audit", 0);
+        partitions.insert(
+            "__audit".to_string(),
+            PartitionIndex(0),
+            Arc::clone(&partition),
+        );
+        partition.install_leader_change(1, 1).await;
+        let sink = KafkaTopicAuditSink::new(
+            partitions,
+            "__audit".to_string(),
+            PartitionIndex(0),
+            krabka_raft::NodeId(0),
+            BrokerMetrics::new(),
+        );
+
+        let error = sink
+            .write(
+                AuditRecord {
+                    class: krabka_audit::AuditEventClass::ApiActivity,
+                    value: b"{}".to_vec(),
+                    headers: Vec::new(),
+                },
+                true,
+            )
+            .await
+            .expect_err("former leader must reject audit write");
+
+        assert!(error.to_string().contains("led by node 1"));
+        assert!(partition.log_end_offset() == Offset(0));
     }
 }

@@ -36,15 +36,22 @@
 
 use bytes::Bytes;
 use krabka_protocol::{Decode, krabka::freeze::SetTopicFreezeRequest};
+use uuid::Uuid;
 
 use self::{
     checks::{FreezeEnv, prepare},
     commit::submit,
-    response::respond,
+    outcome::Refusal,
+    response::{FREEZE_ACTION, THAW_ACTION, respond},
 };
 use crate::{
     broker::Broker,
+    codes,
     error::BrokerError,
+    freeze::{
+        freeze_target,
+        handlers::{FreezeAudit, pattern_type_concrete, require_freeze},
+    },
     handlers::{RequestContext, encode_response},
 };
 
@@ -81,7 +88,39 @@ pub(crate) async fn handle(
     };
     let outcome = match prepare(&env, &req) {
         Err(refusal) => Err(refusal),
-        Ok(accepted) => submit(broker, accepted).await,
+        Ok(accepted) => {
+            let target = pattern_type_concrete(req.pattern_type)
+                .map_or_else(|| req.scope.clone(), |kind| freeze_target(kind, &req.scope));
+            let audit = FreezeAudit {
+                action: if req.frozen {
+                    FREEZE_ACTION
+                } else {
+                    THAW_ACTION
+                },
+                target,
+                proposal_id: Uuid::from_bytes(req.proposal_id.0),
+                key_id: &req.key_id,
+                signature: &req.signature,
+                signature_verified: accepted.signature_verified,
+                set_at_ms: accepted.record.set_at_ms,
+                reason: req.reason.clone(),
+            };
+            match require_freeze(
+                broker.audit_log.as_ref(),
+                ctx,
+                &audit,
+                &broker.config.break_glass.approvers,
+            )
+            .await
+            {
+                Ok(()) => submit(broker, accepted).await,
+                Err(error) => Err(Refusal {
+                    code: codes::POLICY_VIOLATION,
+                    message: format!("privileged action refused: {error}"),
+                    signature_verified: accepted.signature_verified,
+                }),
+            }
+        }
     };
     let response = respond(broker, ctx, &req, &outcome);
     encode_response(&response, version)

@@ -17,7 +17,7 @@ use crate::{
     config::{
         BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY,
         DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX,
-        DEFAULT_AUDIT_TOPIC, DEFAULT_CONTROLLER_ELECTION_TIMEOUT,
+        DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC, DEFAULT_CONTROLLER_ELECTION_TIMEOUT,
         DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL,
         DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD,
         DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
@@ -247,6 +247,7 @@ impl Default for BrokerConfig {
             remote_storage_worm: None,
             // Audit enabled by default (secure-by-default / `FedRAMP` MLA).
             audit_enabled: true,
+            audit_failure_mode: krabka_audit::AuditMode::FailOpen,
             audit_topic: DEFAULT_AUDIT_TOPIC.to_string(),
             audit_signing_key_path: None,
             audit_signing_key_id: None,
@@ -254,6 +255,7 @@ impl Default for BrokerConfig {
             audit_checkpoint_every: DEFAULT_AUDIT_CHECKPOINT_EVERY,
             audit_spool_dir: std::path::PathBuf::from(DEFAULT_AUDIT_SPOOL_DIR),
             audit_spool_max: DEFAULT_AUDIT_SPOOL_MAX,
+            audit_spool_sync_every_n: DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N,
         }
     }
 }

@@ -30,19 +30,19 @@ fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Si
     }
 }
 
-fn open_audit_spool(config: &BrokerConfig) -> Option<krabka_audit::Spool> {
+fn open_audit_spool(
+    config: &BrokerConfig,
+) -> Result<krabka_audit::Spool, krabka_audit::AuditError> {
     let directory = if config.audit_spool_dir.is_absolute() {
         config.audit_spool_dir.clone()
     } else {
         config.log_dir.join(&config.audit_spool_dir)
     };
-    match krabka_audit::Spool::open(&directory, config.audit_spool_max) {
-        Ok(spool) => Some(spool),
-        Err(error) => {
-            tracing::error!(%error, "failed to open audit spool; spooling disabled");
-            None
-        }
-    }
+    krabka_audit::Spool::open_with_sync_every(
+        &directory,
+        config.audit_spool_max,
+        config.audit_spool_sync_every_n,
+    )
 }
 
 fn spawn_audit_metrics(
@@ -108,15 +108,47 @@ pub(super) fn start_audit_pipeline(
         })
         .find(|(_, record)| record.leader == config.node_id)
         .map(|(index, _)| PartitionIndex(index));
-    let (log, receiver) = krabka_audit::AuditLog::new(config.audit_event_queue_capacity);
-    let writer_handle = if let Some(partition_index) = led_partition {
+    let (spool, replay_poisoned) = if led_partition.is_some() {
+        match open_audit_spool(config) {
+            Ok(spool) => (Some(spool), false),
+            Err(error @ krabka_audit::AuditError::Poisoned(_)) => {
+                tracing::error!(%error, "audit writer disabled pending explicit spool recovery");
+                (None, true)
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to open audit spool; spooling disabled");
+                (None, false)
+            }
+        }
+    } else {
+        (None, false)
+    };
+    let (log, receiver) = spool.as_ref().map_or_else(
+        || {
+            krabka_audit::AuditLog::new_with_mode(
+                config.audit_event_queue_capacity,
+                config.audit_failure_mode,
+            )
+        },
+        |spool| {
+            krabka_audit::AuditLog::new_with_mode_and_spool(
+                config.audit_event_queue_capacity,
+                config.audit_failure_mode,
+                spool,
+            )
+        },
+    );
+    let writer_handle = if replay_poisoned {
+        drop(receiver);
+        None
+    } else if let Some(partition_index) = led_partition {
         let sink = Arc::new(crate::audit_sink::KafkaTopicAuditSink::new(
             Arc::clone(partitions),
             config.audit_topic.clone(),
             partition_index,
+            config.node_id,
             metrics.clone(),
         ));
-        let spool = open_audit_spool(config);
         let resume = spool
             .as_ref()
             .and_then(|spool| spool.resume_point().ok().flatten())

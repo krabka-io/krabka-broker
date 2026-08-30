@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-use krabka_audit::PrivilegedPhase;
+use krabka_audit::{AuditError, PrivilegedPhase};
 use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::owned::{
     alter_partition_reassignments_request::ReassignablePartition,
@@ -28,7 +28,7 @@ use super::{
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
-        handlers::audit::{GatedTransition, audit_transition},
+        handlers::audit::{GatedTransition, audit_transition, require_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -72,6 +72,30 @@ impl ReassignBatch {
             self.records.insert(0, consumed);
         }
         Some(proposal_id)
+    }
+
+    /// Durably admit every queued cancel before the raft append.
+    pub(super) async fn require_audit(
+        &self,
+        broker: &Broker,
+        ctx: &RequestContext<'_>,
+    ) -> Result<(), AuditError> {
+        for (target, proposal_id) in &self.applied {
+            require_transition(
+                &broker.audit_log,
+                &broker.config.break_glass,
+                ctx,
+                &GatedTransition {
+                    action: BreakGlassAction::CancelReassignment,
+                    target,
+                    phase: PrivilegedPhase::Applied,
+                    proposal_id: *proposal_id,
+                    reason: "reassignment cancel admitted",
+                },
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Audit every cancel this append carried.

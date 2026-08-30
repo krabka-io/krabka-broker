@@ -54,6 +54,8 @@ pub(crate) enum RecoveryOutcome {
     /// proposal approved this recovery. The partition keeps no leader and
     /// stays visibly offline.
     BreakGlassRequired,
+    /// Fail-closed audit storage could not durably record the election intent.
+    AuditUnavailable,
 }
 
 /// Cloneable handle that enqueues [`RecoveryJob`] values onto the URM task.

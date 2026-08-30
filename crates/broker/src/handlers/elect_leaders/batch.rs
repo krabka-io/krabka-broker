@@ -7,13 +7,13 @@
 
 use std::collections::HashSet;
 
-use krabka_audit::PrivilegedPhase;
+use krabka_audit::{AuditError, PrivilegedPhase};
 use krabka_metadata::{BreakGlassAction, MetadataRecord};
 use uuid::Uuid;
 
 use super::unclean_gate::consumed_proposal_id;
 use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition},
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
     broker::Broker,
     handlers::RequestContext,
 };
@@ -50,6 +50,30 @@ impl ElectionBatch {
             self.records.insert(0, consumed);
         }
         Some(proposal_id)
+    }
+
+    /// Durably admit every queued unclean election before the raft append.
+    pub(super) async fn require_audit(
+        &self,
+        broker: &Broker,
+        ctx: &RequestContext<'_>,
+    ) -> Result<(), AuditError> {
+        for (target, proposal_id) in &self.applied {
+            require_transition(
+                &broker.audit_log,
+                &broker.config.break_glass,
+                ctx,
+                &GatedTransition {
+                    action: BreakGlassAction::UncleanElectLeaders,
+                    target,
+                    phase: PrivilegedPhase::Applied,
+                    proposal_id: *proposal_id,
+                    reason: "unclean leader election admitted",
+                },
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Audit every transition this append carried.

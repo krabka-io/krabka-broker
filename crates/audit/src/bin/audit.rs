@@ -69,6 +69,15 @@ fn main() -> ExitCode {
                     );
                     ExitCode::FAILURE
                 }
+                Ok(report) if !report.losses.is_empty() => {
+                    for loss in &report.losses {
+                        eprintln!(
+                            "RECORDS LOST at offset {} (seq {}): {} record(s)",
+                            loss.offset, loss.seq, loss.records
+                        );
+                    }
+                    ExitCode::FAILURE
+                }
                 Ok(report) if report.records == 0 => {
                     println!("OK: empty partition");
                     ExitCode::SUCCESS

@@ -5,14 +5,19 @@
 //! the controller, and where a rejected append becomes a wire error code that
 //! an operator can act on.
 
+use krabka_audit::{AuditOutcome, PrivilegedPhase};
 use krabka_metadata::{BreakGlassProposalRecord, MetadataRecord};
 use krabka_protocol::krabka::break_glass::ApproveBreakGlassRequest;
 
 use super::{Attempt, decide};
 use crate::{
     break_glass::{
+        action_name,
         config::BreakGlassPolicy,
-        handlers::{Refusal, from_wire_uuid, principal_name, submit_error},
+        handlers::{
+            PrivilegedAudit, Refusal, from_wire_uuid, principal_name, require_privileged,
+            submit_error,
+        },
     },
     broker::Broker,
     codes,
@@ -48,6 +53,39 @@ pub(super) async fn settle(
             now_ms: crate::time_util::now_ms(),
         },
     )?;
+    let counterparties: Vec<String> = updated
+        .approvals
+        .iter()
+        .map(|approval| approval.principal.clone())
+        .collect();
+    require_privileged(
+        broker.audit_log.as_ref(),
+        ctx,
+        policy.fingerprint(),
+        &PrivilegedAudit {
+            outcome: AuditOutcome::Success,
+            phase: if req.withdraw {
+                PrivilegedPhase::Consumed
+            } else {
+                PrivilegedPhase::Approved
+            },
+            action: action_name(updated.action),
+            target: &updated.target,
+            proposal_id: Some(updated.proposal_id),
+            counterparties: &counterparties,
+            key_id: &req.key_id,
+            signature: &req.signature,
+            signature_verified: !req.key_id.is_empty(),
+            reason: &updated.reason,
+        },
+    )
+    .await
+    .map_err(|error| {
+        Refusal::new(
+            codes::POLICY_VIOLATION,
+            format!("privileged action refused: {error}"),
+        )
+    })?;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1BreakGlassProposal(updated.clone())])
