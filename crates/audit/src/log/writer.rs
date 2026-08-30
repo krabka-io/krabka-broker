@@ -128,6 +128,9 @@ impl AuditWriter {
                                 self.stats.inc_dropped();
                                 if !durable {
                                     self.pending_losses.add(1);
+                                    if let Err(error) = self.pending_losses.persist() {
+                                        tracing::error!(%error, "failed to persist pending audit loss count");
+                                    }
                                 }
                             }
                             if let Some(acknowledgement) = message.acknowledgement {
@@ -240,8 +243,9 @@ impl AuditWriter {
         let head = self.chain.head();
         let cp = Checkpoint::signed(signer.as_ref(), seq_high, &head, EpochMs(now_ms()));
         let record = cp.to_record();
-        if self.write_or_spool(&record, false).await.is_ok() {
-            self.since_checkpoint = 0;
+        match self.write_or_spool(&record, false).await {
+            Ok(()) => self.since_checkpoint = 0,
+            Err(_) => self.stats.inc_dropped(),
         }
     }
 }
@@ -454,5 +458,26 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&cps[0].value).unwrap();
         let cp = Checkpoint::from_value(&v).unwrap();
         check!((cp.verify(&pubkey), cp.seq_high) == (true, Seq(2)));
+    }
+
+    #[tokio::test]
+    async fn failed_checkpoint_increments_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let sink = Arc::new(crate::log::test_support::FailableSink::default());
+        sink.allow_n(1);
+        let stats = Arc::new(AuditStats::new());
+        let (log, rx) = AuditLog::new(4);
+        let mut params = crate::log::test_support::params(sink, spool, Arc::clone(&stats));
+        params.signer = Some(test_signer().0);
+        params.checkpoint_every_n = 1;
+        params.spool = None;
+        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+
+        log.emit(life(1));
+        drop(log);
+        handle.await.unwrap();
+
+        check!(stats.dropped() >= 1);
     }
 }

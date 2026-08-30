@@ -84,6 +84,12 @@ pub enum WriterMessage {
     /// Append a batch and assign `base_offset` from the log. The `Produce`
     /// handler sends this message.
     Produce(ProduceJob),
+    /// Make the log prefix ending at `leo` durable before acknowledging.
+    /// Diskless partitions sync their WAL; ordinary partitions fsync the log.
+    SyncDurable {
+        leo: Offset,
+        ack: oneshot::Sender<Result<(), BrokerError>>,
+    },
     /// Append a batch at the caller-supplied offset, which the partition's
     /// leader already assigned. The per-(topic, partition) replicator on a
     /// follower broker sends this message.

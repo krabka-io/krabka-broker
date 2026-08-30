@@ -123,6 +123,76 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
     drop(tx);
 }
 
+#[tokio::test]
+async fn durable_sync_ack_waits_for_diskless_wal() {
+    let dir = tempdir().expect("tempdir");
+    let log = Arc::new(Mutex::new(
+        Log::open(dir.path(), LogConfig::default()).expect("open log"),
+    ));
+    let (sync_started_tx, sync_started_rx) = oneshot::channel();
+    let (release_sync_tx, release_sync_rx) = oneshot::channel();
+    let wal: crate::wal::SharedWal = Arc::new(GatedWal::new(sync_started_tx, release_sync_rx));
+    let (tx, rx) = mpsc::channel(2);
+    let writer = tokio::spawn(run_with_sequencer(
+        ("t".to_string(), PartitionIndex(0)),
+        (
+            log,
+            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+        ),
+        rx,
+        (
+            Arc::new(Notify::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                crate::replica_state::ReplicaState::new(),
+            )),
+            Arc::new(Notify::new()),
+            DeliveryHandles::new(),
+        ),
+        (
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(ProducerState::new()),
+            Some(wal),
+        ),
+        (
+            crate::config::BrokerConfig::default().producer_id_expiration,
+            1,
+        ),
+        Some(test_sequencer()),
+    ));
+
+    let (append_ack, append_ack_rx) = oneshot::channel();
+    tx.send(WriterMessage::Produce(ProduceJob {
+        data: ProduceData::Owned(sample_batch(1)),
+        ack: append_ack,
+    }))
+    .await
+    .expect("send produce");
+    assert!(append_ack_rx.await.expect("append ack").expect("append") == 0);
+
+    let (durable_ack, mut durable_ack_rx) = oneshot::channel();
+    tx.send(WriterMessage::SyncDurable {
+        leo: Offset(1),
+        ack: durable_ack,
+    })
+    .await
+    .expect("send durable sync");
+    sync_started_rx.await.expect("WAL sync started");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), &mut durable_ack_rx)
+            .await
+            .is_err(),
+        "durable ack must wait for WAL"
+    );
+
+    release_sync_tx.send(()).expect("release WAL sync");
+    durable_ack_rx
+        .await
+        .expect("durable ack")
+        .expect("durable sync");
+    drop(tx);
+    writer.await.expect("writer join");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writer_appends_and_acks_on_multi_thread_runtime() {
     let dir = tempdir().expect("tempdir");

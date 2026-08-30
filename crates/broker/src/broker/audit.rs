@@ -146,6 +146,7 @@ pub(super) fn start_audit_pipeline(
             Arc::clone(partitions),
             config.audit_topic.clone(),
             partition_index,
+            config.node_id,
             metrics.clone(),
         ));
         let resume = spool

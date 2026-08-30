@@ -171,18 +171,67 @@ async fn cancel_via_null_replicas_reverts() {
     let new_replica: i32 = (1..=3)
         .find(|n| !original_replicas.contains(&node_id(*n)))
         .expect("free");
+    let new_replica_id = u64::try_from(new_replica).expect("broker ID is non-negative");
     let staying = broker_id(*original_replicas.first().unwrap());
     let target = vec![staying, new_replica];
 
-    let raft_addr = controller_leader_addr(&[&h1, &h2, &h3]).await;
+    // Stop the target broker after registration. It remains a valid target in
+    // metadata, but cannot join the ISR and let the background task complete
+    // the reassignment before this test cancels it.
+    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    let offline = handles
+        .iter_mut()
+        .find(|handle| {
+            handle
+                .as_ref()
+                .is_some_and(|handle| handle.node_id() == new_replica_id)
+        })
+        .and_then(Option::take)
+        .expect("new replica handle");
+    offline.shutdown().await;
+
+    let observer = handles
+        .iter()
+        .flatten()
+        .find(|handle| {
+            original_replicas
+                .iter()
+                .any(|replica| replica.0 == handle.node_id())
+        })
+        .expect("live original replica");
+    let mut leader_rx = observer.watch_leader_for_test();
+    let leader = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let Some(leader) = *leader_rx.borrow_and_update()
+                && handles
+                    .iter()
+                    .flatten()
+                    .any(|handle| handle.node_id() == leader.0)
+            {
+                return leader;
+            }
+            leader_rx
+                .changed()
+                .await
+                .expect("leader watch remains open");
+        }
+    })
+    .await
+    .expect("surviving controller leader");
+    let raft_addr = handles
+        .iter()
+        .flatten()
+        .find(|handle| handle.node_id() == leader.0)
+        .expect("leader handle")
+        .listen_addr();
     drive_alter_reassignments(raft_addr, vec![("foo", 0, Some(target))]).await;
 
-    // Wait for the image to reflect adding_replicas (reassignment started).
-    h1.wait_for_image(|img| {
-        img.partition("foo", 0)
-            .is_some_and(|p| !p.adding_replicas.is_empty())
-    })
-    .await;
+    observer
+        .wait_for_image(|img| {
+            img.partition("foo", 0)
+                .is_some_and(|p| !p.adding_replicas.is_empty())
+        })
+        .await;
 
     // Cancel: replicas = None.
     let resp = drive_alter_reassignments(raft_addr, vec![("foo", 0, None)]).await;
@@ -193,18 +242,24 @@ async fn cancel_via_null_replicas_reverts() {
     );
 
     // Wait for the image to reflect the cancellation.
-    h1.wait_for_image(|img| {
-        img.partition("foo", 0)
-            .is_some_and(|p| p.adding_replicas.is_empty() && p.removing_replicas.is_empty())
-    })
-    .await;
-    let pr_after_cancel = h1.partition_record_for_test("foo", 0).expect("partition");
+    observer
+        .wait_for_image(|img| {
+            img.partition("foo", 0).is_some_and(|p| {
+                p.replicas == original_replicas
+                    && p.adding_replicas.is_empty()
+                    && p.removing_replicas.is_empty()
+            })
+        })
+        .await;
+    let pr_after_cancel = observer
+        .partition_record_for_test("foo", 0)
+        .expect("partition");
     assert!(
         pr_after_cancel.replicas == original_replicas,
         "replicas should revert to original after cancel; pr={pr_after_cancel:?}"
     );
     // Clean up.
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    for handle in handles.into_iter().flatten() {
+        handle.shutdown().await;
+    }
 }

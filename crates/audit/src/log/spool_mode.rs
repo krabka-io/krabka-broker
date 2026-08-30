@@ -90,21 +90,14 @@ impl AuditWriter {
             }
         };
         let mut replayed = 0usize;
-        // ponytail: rewrite per record keeps replay crash-safe; batch only with
-        // a transactional sink/spool commit protocol.
         while replayed < records.len() {
             let record = &records[replayed];
             spool.begin_replay(record)?;
             match self.sink.write(record.clone(), true).await {
                 Ok(()) => {
-                    if let Err(error) = spool.rewrite(&records[replayed + 1..]) {
+                    if let Err(error) = spool.commit_replay(record) {
                         return Err(AuditError::Indeterminate(format!(
-                            "replay append succeeded but spool rewrite failed: {error}"
-                        )));
-                    }
-                    if let Err(error) = spool.finish_replay() {
-                        return Err(AuditError::Indeterminate(format!(
-                            "replay committed but poison latch could not be cleared: {error}"
+                            "replay append succeeded but cursor commit failed: {error}"
                         )));
                     }
                     replayed += 1;
@@ -113,7 +106,7 @@ impl AuditWriter {
                 }
                 Err(error @ AuditError::Indeterminate(_)) => return Err(error),
                 Err(_) => {
-                    spool.finish_replay()?;
+                    spool.abort_replay()?;
                     break;
                 }
             }
@@ -122,6 +115,8 @@ impl AuditWriter {
         span.record("replayed", replayed);
         span.record("total", records.len());
         if replayed == records.len() {
+            spool.truncate()?;
+            self.stats.set_depth(spool.count(), spool.size());
             self.spooling = false;
             tracing::info!(replayed, "audit spool drained; resumed direct topic writes");
         }
@@ -134,7 +129,7 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::check;
-    use krabka_units::prelude::{TimeExt as _, bytes};
+    use krabka_units::prelude::{ByteSizeExt as _, TimeExt as _, bytes};
 
     use super::*;
     use crate::{
@@ -416,13 +411,19 @@ mod tests {
         log.emit(life(1));
         log.emit(life(2));
         await_until("one spooled and two lost", || stats.dropped() == 2).await;
+        check!(
+            std::fs::metadata(dir.path().join("audit.spool"))
+                .unwrap()
+                .len()
+                <= one.bytes_u64()
+        );
 
         sink.set_fail(false);
         timeline.advance(REPLAY_EVERY.to_std());
-        await_until("loss marker persisted", || sink.inner.records().len() == 2).await;
+        await_until("record replayed", || sink.inner.records().len() == 1).await;
         timeline.advance(REPLAY_EVERY.to_std());
-        await_until("all loss markers persisted", || {
-            sink.inner.records().len() == 3
+        await_until("coalesced loss marker replayed", || {
+            sink.inner.records().len() == 2
         })
         .await;
         let records = sink.inner.records();
@@ -436,6 +437,12 @@ mod tests {
             })
             .sum();
         check!(lost == 2);
+        check!(
+            std::fs::metadata(dir.path().join("audit.spool"))
+                .unwrap()
+                .len()
+                <= one.bytes_u64()
+        );
 
         drop(log);
         handle.await.unwrap();

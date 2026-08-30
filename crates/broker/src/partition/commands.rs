@@ -182,6 +182,31 @@ impl Partition {
             .map_err(ProduceBatchError::Rejected)
     }
 
+    /// Append a batch and acknowledge it only after its resulting log prefix
+    /// is durable in the partition's configured storage medium.
+    pub(crate) async fn produce_batch_durable_outcome(
+        &self,
+        batch: RecordBatch,
+    ) -> Result<Offset, ProduceBatchError> {
+        let record_count = i64::from(batch.last_offset_delta) + 1;
+        let base_offset = self.produce_batch_outcome(batch).await?;
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::SyncDurable {
+                leo: base_offset + record_count,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| {
+                ProduceBatchError::Indeterminate("durable sync command rejected".into())
+            })?;
+        ack_rx
+            .await
+            .map_err(|_| ProduceBatchError::Indeterminate("durable sync ack dropped".into()))?
+            .map_err(|error| ProduceBatchError::Indeterminate(error.to_string()))?;
+        Ok(base_offset)
+    }
+
     /// Append an internally built COMMIT marker with a coordinator-supplied
     /// commit stamp. The partition writer keeps it ordered with all produce
     /// and replication appends.

@@ -239,6 +239,19 @@ mod tests {
         check!(rx.pending_losses.count() == 9);
     }
 
+    #[test]
+    fn full_queue_does_not_persist_losses_on_the_emit_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), krabka_units::prelude::bytes(0)).unwrap();
+        let (log, _rx) = AuditLog::new_with_mode_and_spool(1, AuditMode::FailOpen, &spool);
+        log.emit(life(1));
+        log.emit(life(2));
+
+        let state = std::fs::read(dir.path().join("audit.losses")).unwrap();
+        check!(u64::from_be_bytes(state[8..].try_into().unwrap()) == 0);
+        check!(log.dropped() == 1);
+    }
+
     #[tokio::test]
     async fn fail_closed_refuses_queue_backpressure() {
         let (log, _rx) = AuditLog::new_with_mode(1, AuditMode::FailClosed);

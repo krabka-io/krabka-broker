@@ -41,6 +41,8 @@ const SPOOL_FILE: &str = "audit.spool";
 const LOSS_STATE_FILE: &str = "audit.losses";
 const LOSS_STATE_TMP: &str = "audit.losses.tmp";
 const LOSS_STATE_LEN: usize = 16;
+const REPLAY_OFFSET_FILE: &str = "audit.replay-offset";
+const REPLAY_OFFSET_TMP: &str = "audit.replay-offset.tmp";
 const REPLAY_POISON_FILE: &str = "audit.replay-poison";
 const REPLAY_POISON_TMP: &str = "audit.replay-poison.tmp";
 
@@ -56,7 +58,7 @@ struct LossState {
     count: u64,
 }
 
-/// Crash-durable count of fail-open records awaiting a chain marker.
+/// Writer-persisted count of fail-open records awaiting a chain marker.
 #[derive(Debug)]
 pub(crate) struct PendingLosses {
     state: Mutex<LossState>,
@@ -105,7 +107,6 @@ impl PendingLosses {
             state.generation = state.generation.saturating_add(1);
         }
         state.count = state.count.saturating_add(count);
-        self.persist_or_warn(*state);
     }
 
     #[cfg(test)]
@@ -128,13 +129,28 @@ impl PendingLosses {
     }
 
     pub(crate) fn commit(&self, batch: LossBatch) {
-        let mut state = self
+        let state = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.generation != batch.generation {
+                return;
+            }
+            state.count = state.count.saturating_sub(batch.count);
+            *state
+        };
+        self.persist_or_warn(state);
+    }
+
+    pub(crate) fn persist(&self) -> Result<(), AuditError> {
+        let state = *self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.generation == batch.generation {
-            state.count = state.count.saturating_sub(batch.count);
-            self.persist_or_warn(*state);
+        match &self.path {
+            Some(path) => persist_loss_state(path, state),
+            None => Ok(()),
         }
     }
 
@@ -142,42 +158,36 @@ impl PendingLosses {
         &self,
         write_marker: impl FnOnce(LossBatch) -> Result<T, AuditError>,
     ) -> Result<Option<T>, AuditError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.count == 0 {
+        let Some(batch) = self.snapshot() else {
             return Ok(None);
-        }
-        let batch = LossBatch {
-            generation: state.generation,
-            count: state.count,
         };
+        self.persist()?;
         let result = write_marker(batch)?;
-        state.count = 0;
-        self.persist_or_warn(*state);
+        self.commit(batch);
         Ok(Some(result))
     }
 
     fn reconcile(&self, records: &[AuditRecord]) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.count == 0 {
-            return;
-        }
-        let covered = records.iter().any(|record| {
-            record.class == crate::event::AuditEventClass::RecordsLost
-                && serde_json::from_slice::<serde_json::Value>(&record.value)
-                    .ok()
-                    .and_then(|value| value.get("loss_generation")?.as_u64())
-                    == Some(state.generation)
-        });
-        if covered {
+        let state = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.count == 0
+                || !records.iter().any(|record| {
+                    record.class == crate::event::AuditEventClass::RecordsLost
+                        && serde_json::from_slice::<serde_json::Value>(&record.value)
+                            .ok()
+                            .and_then(|value| value.get("loss_generation")?.as_u64())
+                            == Some(state.generation)
+                })
+            {
+                return;
+            }
             state.count = 0;
-            self.persist_or_warn(*state);
-        }
+            *state
+        };
+        self.persist_or_warn(state);
     }
 
     fn persist_or_warn(&self, state: LossState) {
@@ -198,6 +208,23 @@ fn persist_loss_state(path: &Path, state: LossState) -> Result<(), AuditError> {
     bytes[..8].copy_from_slice(&state.generation.to_be_bytes());
     bytes[8..].copy_from_slice(&state.count.to_be_bytes());
     persist_bytes(path, LOSS_STATE_TMP, &bytes)
+}
+
+fn read_or_create_u64(path: &Path, tmp_name: &str) -> Result<u64, AuditError> {
+    match std::fs::read(path) {
+        Ok(bytes) => <[u8; 8]>::try_from(bytes.as_slice())
+            .map(u64::from_be_bytes)
+            .map_err(|_| AuditError::Io(format!("invalid state length for {}", path.display()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            persist_u64(path, tmp_name, 0)?;
+            Ok(0)
+        }
+        Err(error) => Err(io(error)),
+    }
+}
+
+fn persist_u64(path: &Path, tmp_name: &str, value: u64) -> Result<(), AuditError> {
+    persist_bytes(path, tmp_name, &value.to_be_bytes())
 }
 
 fn persist_bytes(path: &Path, tmp_name: &str, bytes: &[u8]) -> Result<(), AuditError> {
@@ -230,6 +257,7 @@ pub struct Spool {
     recovered_torn_tail: bool,
     sync_every: NonZeroU64,
     unsynced: u64,
+    replay_offset: u64,
     pending_losses: Arc<PendingLosses>,
 }
 
@@ -272,6 +300,8 @@ impl Spool {
         std::fs::create_dir_all(dir).map_err(io)?;
         let pending_losses = PendingLosses::open(dir)?;
         let path = dir.join(SPOOL_FILE);
+        let replay_offset_path = dir.join(REPLAY_OFFSET_FILE);
+        let replay_offset = read_or_create_u64(&replay_offset_path, REPLAY_OFFSET_TMP)?;
         let created = !path.exists();
         let file = OpenOptions::new()
             .read(true)
@@ -289,6 +319,7 @@ impl Spool {
             recovered_torn_tail: false,
             sync_every,
             unsynced: 0,
+            replay_offset,
             pending_losses,
         };
         if created {
@@ -307,10 +338,14 @@ impl Spool {
                 "audit spool: truncated torn tail frame on open"
             );
         }
-        s.count = RecordCount(u64::try_from(records.len()).unwrap_or(u64::MAX));
         s.bytes = valid_bytes;
-        s.reconcile_replay_poison(&records)?;
+        let unread = s.unread_records(&records, valid_bytes)?;
+        s.count = RecordCount(u64::try_from(unread.len()).unwrap_or(u64::MAX));
+        s.reconcile_replay_poison()?;
         s.pending_losses.reconcile(&records);
+        if s.count.0 == 0 && s.replay_offset > 0 {
+            s.truncate()?;
+        }
         let span = tracing::Span::current();
         span.record("count", s.count.0);
         span.record("bytes", s.bytes.0);
@@ -362,21 +397,45 @@ impl Spool {
     /// Returns an error if the seek, write, rollback, or configured sync on the
     /// spool file fails.
     pub fn append(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
-        self.append_inner(record, true)
+        self.append_inner(record)
     }
 
-    /// Persist a loss marker even when ordinary records have reached the cap.
+    /// Persist a loss marker within the configured cap.
     pub(crate) fn append_loss_marker(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
-        let _ = self.append_inner(record, false)?;
+        if !self.append(record)? {
+            return Err(AuditError::Unavailable("audit spool is full".into()));
+        }
         self.sync()
     }
 
     pub(crate) fn begin_replay(&self, record: &AuditRecord) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
-        persist_bytes(&path, REPLAY_POISON_TMP, &encode_frame(record))
+        let mut poison = self.replay_offset.to_be_bytes().to_vec();
+        poison.extend_from_slice(&encode_frame(record));
+        persist_bytes(&path, REPLAY_POISON_TMP, &poison)
     }
 
-    pub(crate) fn finish_replay(&self) -> Result<(), AuditError> {
+    pub(crate) fn commit_replay(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
+        let frame_len = u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX);
+        let replay_offset = self
+            .replay_offset
+            .checked_add(frame_len)
+            .ok_or_else(|| AuditError::Io("audit replay offset overflow".into()))?;
+        persist_u64(
+            &self.path.with_file_name(REPLAY_OFFSET_FILE),
+            REPLAY_OFFSET_TMP,
+            replay_offset,
+        )?;
+        self.replay_offset = replay_offset;
+        self.count.0 = self.count.0.saturating_sub(1);
+        self.clear_replay_poison()
+    }
+
+    pub(crate) fn abort_replay(&self) -> Result<(), AuditError> {
+        self.clear_replay_poison()
+    }
+
+    fn clear_replay_poison(&self) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
         match std::fs::remove_file(&path) {
             Ok(()) => sync_parent(&path),
@@ -385,33 +444,33 @@ impl Spool {
         }
     }
 
-    fn reconcile_replay_poison(&self, records: &[AuditRecord]) -> Result<(), AuditError> {
+    fn reconcile_replay_poison(&self) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(io(error)),
         };
-        let valid = bytes
-            .get(..4)
+        let poison_offset = bytes
+            .get(..8)
+            .and_then(|prefix| <[u8; 8]>::try_from(prefix).ok())
+            .map(u64::from_be_bytes);
+        let valid_frame = bytes
+            .get(8..12)
             .and_then(|prefix| <[u8; 4]>::try_from(prefix).ok())
             .map(u32::from_be_bytes)
             .and_then(|len| usize::try_from(len).ok())
-            .is_some_and(|len| len.checked_add(4) == Some(bytes.len()));
-        if !valid || records.iter().any(|record| encode_frame(record) == bytes) {
+            .is_some_and(|len| len.checked_add(12) == Some(bytes.len()));
+        if !valid_frame || poison_offset.is_none_or(|offset| offset >= self.replay_offset) {
             return Err(AuditError::Poisoned(path.display().to_string()));
         }
-        self.finish_replay()
+        self.clear_replay_poison()
     }
 
-    fn append_inner(
-        &mut self,
-        record: &AuditRecord,
-        enforce_cap: bool,
-    ) -> Result<bool, AuditError> {
+    fn append_inner(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
         let frame = encode_frame(record);
         let frame_len = SpoolBytes(u64::try_from(frame.len()).unwrap_or(u64::MAX));
-        if enforce_cap && (self.bytes + frame_len).0 > self.max_bytes.0 {
+        if (self.bytes + frame_len).0 > self.max_bytes.0 {
             return Ok(false);
         }
         let old_len = self.file.metadata().map_err(io)?.len();
@@ -504,46 +563,51 @@ impl Spool {
         Ok((out, valid_bytes))
     }
 
+    fn unread_records(
+        &self,
+        records: &[AuditRecord],
+        valid_bytes: SpoolBytes,
+    ) -> Result<Vec<AuditRecord>, AuditError> {
+        if self.replay_offset > valid_bytes.0 {
+            if valid_bytes.0 == 0 {
+                return Ok(Vec::new());
+            }
+            return Err(AuditError::Io(format!(
+                "audit replay offset {} exceeds spool length {}",
+                self.replay_offset, valid_bytes.0
+            )));
+        }
+        let mut offset = 0_u64;
+        let mut unread = Vec::new();
+        let mut at_boundary = self.replay_offset == 0;
+        for record in records {
+            if offset == self.replay_offset {
+                at_boundary = true;
+            }
+            if at_boundary {
+                unread.push(record.clone());
+            }
+            offset = offset
+                .saturating_add(u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX));
+        }
+        if offset == self.replay_offset {
+            at_boundary = true;
+        }
+        if !at_boundary {
+            return Err(AuditError::Io(format!(
+                "audit replay offset {} is not a frame boundary",
+                self.replay_offset
+            )));
+        }
+        Ok(unread)
+    }
+
     /// Read every record from the start of the spool, in order.
     /// # Errors
     /// Returns an error if the spool file cannot be opened or read.
     pub fn read_all(&self) -> Result<Vec<AuditRecord>, AuditError> {
-        Ok(self.scan()?.0)
-    }
-
-    /// Replace the spool contents with exactly `remaining`, atomically.
-    #[tracing::instrument(level = "debug", skip_all, fields(remaining = remaining.len()), err)]
-    /// # Errors
-    /// Returns an error if the temporary file cannot be written. Returns an
-    /// error if the rename or the reopen of the spool file fails.
-    pub fn rewrite(&mut self, remaining: &[AuditRecord]) -> Result<(), AuditError> {
-        let tmp = self.path.with_extension("spool.tmp");
-        let bytes = {
-            let mut f = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&tmp)
-                .map_err(io)?;
-            let mut bytes = SpoolBytes(0);
-            for rec in remaining {
-                let frame = encode_frame(rec);
-                f.write_all(&frame).map_err(io)?;
-                bytes += SpoolBytes(u64::try_from(frame.len()).unwrap_or(u64::MAX));
-            }
-            f.sync_all().map_err(io)?;
-            bytes
-        };
-        std::fs::rename(&tmp, &self.path).map_err(io)?;
-        self.file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.path)
-            .map_err(io)?;
-        self.bytes = bytes;
-        self.count = RecordCount(u64::try_from(remaining.len()).unwrap_or(u64::MAX));
-        self.unsynced = 0;
-        sync_parent(&self.path)
+        let (records, valid_bytes) = self.scan()?;
+        self.unread_records(&records, valid_bytes)
     }
 
     /// Clear the spool.
@@ -558,6 +622,12 @@ impl Spool {
         self.unsynced = 0;
         self.file.seek(SeekFrom::Start(0)).map_err(io)?;
         self.file.sync_all().map_err(io)?;
+        persist_u64(
+            &self.path.with_file_name(REPLAY_OFFSET_FILE),
+            REPLAY_OFFSET_TMP,
+            0,
+        )?;
+        self.replay_offset = 0;
         Ok(())
     }
 }
@@ -670,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_keeps_only_remainder_and_truncate_clears() {
+    fn replay_cursor_keeps_only_unacknowledged_records_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         let r0 = chained_record(0, &GENESIS_HEAD, b"a");
@@ -679,9 +749,15 @@ mod tests {
         s.append(&r0).unwrap();
         s.append(&r1).unwrap();
         s.append(&r2).unwrap();
-        s.rewrite(&[r1.clone(), r2.clone()]).unwrap(); // drop r0 (replayed)
+        let physical_size = s.size();
+        s.begin_replay(&r0).unwrap();
+        s.commit_replay(&r0).unwrap();
+        drop(s);
+
+        let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(s.size() > ByteSize::ZERO); // `*=` mutant would leave bytes at 0
-        check!((s.count().0, s.read_all().unwrap()) == (2, vec![r1.clone(), r2.clone()]));
+        check!(s.size() == physical_size);
+        check!((s.count().0, s.read_all().unwrap()) == (2, vec![r1, r2]));
         s.truncate().unwrap();
         check!((s.is_empty(), s.read_all().unwrap().is_empty()) == (true, true));
     }
@@ -852,6 +928,7 @@ mod tests {
         let spool = Spool::open(dir.path(), ByteSize::from_bytes(0)).unwrap();
         let losses = spool.pending_losses();
         losses.add(3);
+        losses.persist().unwrap();
         let batch = losses.snapshot().unwrap();
         drop(losses);
         drop(spool);
@@ -860,6 +937,11 @@ mod tests {
         check!(reopened.pending_losses().count() == 3);
         let mut marker = AuditRecord::records_lost_with_generation(batch.count, batch.generation);
         marker.push_chain_headers(0, &GENESIS_HEAD);
+        check!(reopened.append_loss_marker(&marker).is_err());
+        check!(reopened.size() == ByteSize::ZERO);
+        drop(reopened);
+
+        let mut reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         reopened.append_loss_marker(&marker).unwrap();
         // Model a crash after the marker fsync but before clearing the sidecar.
         drop(reopened);
@@ -876,17 +958,14 @@ mod tests {
         let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(spool.append(&record).unwrap());
         spool.begin_replay(&record).unwrap();
-        drop(spool);
 
         check!(matches!(
             Spool::open(dir.path(), ROOMY_CAP),
             Err(AuditError::Poisoned(_))
         ));
 
-        let spool_path = dir.path().join(SPOOL_FILE);
-        let file = OpenOptions::new().write(true).open(&spool_path).unwrap();
-        file.set_len(0).unwrap();
-        file.sync_all().unwrap();
+        spool.commit_replay(&record).unwrap();
+        drop(spool);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(spool.is_empty());
         check!(!dir.path().join(REPLAY_POISON_FILE).exists());
