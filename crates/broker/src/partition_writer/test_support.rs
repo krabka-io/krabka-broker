@@ -61,6 +61,11 @@ pub(super) struct GatedWal {
     sync_started: Mutex<Option<oneshot::Sender<()>>>,
     release_sync: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
     pub(super) trimmed_to: AtomicI64,
+    hot_tail: Option<(
+        Arc<crate::diskless::hot_tail::HotTailCache>,
+        uuid::Uuid,
+        PartitionIndex,
+    )>,
 }
 
 impl GatedWal {
@@ -72,7 +77,19 @@ impl GatedWal {
             sync_started: Mutex::new(Some(sync_started)),
             release_sync: tokio::sync::Mutex::new(Some(release_sync)),
             trimmed_to: AtomicI64::new(-1),
+            hot_tail: None,
         }
+    }
+
+    #[must_use]
+    pub(super) fn with_hot_tail(
+        mut self,
+        cache: Arc<crate::diskless::hot_tail::HotTailCache>,
+        topic_id: uuid::Uuid,
+        partition: PartitionIndex,
+    ) -> Self {
+        self.hot_tail = Some((cache, topic_id, partition));
+        self
     }
 }
 
@@ -95,6 +112,12 @@ impl crate::wal::WalStore for GatedWal {
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, crate::error::BrokerError> {
         self.trimmed_to.store(new_start.0, Ordering::SeqCst);
         Ok(new_start)
+    }
+
+    fn invalidate_hot_tail(&self) {
+        if let Some((cache, topic_id, partition)) = &self.hot_tail {
+            cache.remove_partition(*topic_id, *partition);
+        }
     }
 }
 

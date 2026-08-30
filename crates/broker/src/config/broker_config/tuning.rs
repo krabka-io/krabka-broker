@@ -113,6 +113,8 @@ macro_rules! tuning_fields {
             pub diskless_wal_flush_interval: Time,
             /// Maximum bytes included in one diskless WAL object-store flush.
             pub diskless_wal_flush_max_size: ByteSize,
+            /// Broker-wide byte ceiling for quorum-committed hot-tail batches.
+            pub diskless_wal_hot_tail_max_size: ByteSize,
             /// Committed offsets retained behind the diskless WAL trim frontier.
             pub diskless_wal_trim_safety_lag: i64,
             /// Maximum wait for a published diskless WAL index record to be projected.

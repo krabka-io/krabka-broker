@@ -216,9 +216,12 @@ impl DisklessRuntime {
     fn new(
         node_id: krabka_raft::NodeId,
         principal_node_ids: std::collections::HashMap<String, krabka_raft::NodeId>,
+        hot_tail_max_bytes: usize,
     ) -> Self {
         Self {
-            hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::default()),
+            hot_tail: Arc::new(crate::diskless::hot_tail::HotTailCache::new(
+                hot_tail_max_bytes,
+            )),
             wal_shards: Arc::new(
                 crate::wal::quorum::registry::WalShardRegistry::new(node_id)
                     .with_principal_node_ids(principal_node_ids),

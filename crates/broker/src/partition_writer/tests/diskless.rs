@@ -4,6 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use assert2::{assert, check};
+use bytes::BytesMut;
 use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
 use tokio::sync::oneshot;
@@ -207,6 +208,70 @@ async fn diskless_writer_delegates_trim_to_the_wal() {
     check!(ack_rx.await.expect("trim ack").expect("trim succeeds") == Offset(3));
     check!(gated_wal.trimmed_to.load(Ordering::SeqCst) == 3);
     check!(log.lock().expect("lock").log_start_offset() == Offset(0));
+
+    drop(tx);
+    writer.await.expect("writer join");
+}
+
+#[tokio::test]
+async fn diskless_writer_invalidates_hot_tail_after_truncate() {
+    let dir = tempdir().expect("tempdir");
+    let log = Arc::new(Mutex::new(
+        Log::open(dir.path(), LogConfig::default()).expect("open log"),
+    ));
+    log.lock()
+        .expect("lock")
+        .append(&mut sample_batch(2))
+        .expect("append");
+
+    let (sync_started_tx, _sync_started_rx) = oneshot::channel();
+    let (_release_sync_tx, release_sync_rx) = oneshot::channel();
+    let topic_id = uuid::Uuid::from_u128(13);
+    let partition = PartitionIndex(0);
+    let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
+    let mut encoded = BytesMut::new();
+    sample_batch(2).encode(&mut encoded).expect("encode batch");
+    cache.insert_run(topic_id, partition, &encoded.freeze());
+    let gated_wal = Arc::new(
+        GatedWal::new(sync_started_tx, release_sync_rx).with_hot_tail(
+            cache.clone(),
+            topic_id,
+            partition,
+        ),
+    );
+    let wal: crate::wal::SharedWal = gated_wal.clone();
+    let (tx, rx) = mpsc::channel(1);
+    let writer = tokio::spawn(run_writer!(
+        "t".to_string(),
+        partition,
+        log,
+        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
+        rx,
+        Arc::new(Notify::new()),
+        Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
+        Arc::new(Notify::new()),
+        crate::log_dir_status::LogDirRegistry::default(),
+        Arc::new(ProducerState::new()),
+        Some(wal),
+    ));
+
+    let (ack, ack_rx) = oneshot::channel();
+    tx.send(WriterMessage::Truncate {
+        offset: Offset(0),
+        ack,
+    })
+    .await
+    .expect("send truncate");
+
+    ack_rx
+        .await
+        .expect("truncate ack")
+        .expect("truncate succeeds");
+    check!(
+        cache
+            .get(topic_id, partition, 0, i64::MAX, usize::MAX)
+            .is_none()
+    );
 
     drop(tx);
     writer.await.expect("writer join");

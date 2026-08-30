@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use krabka_units::convert::TimeExt as _;
+use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
 use crate::{
     broker::{
@@ -113,6 +113,11 @@ impl Broker {
         let diskless_runtime = DisklessRuntime::new(
             config.node_id,
             config.inter_broker_principal_node_ids.clone(),
+            config
+                .diskless_wal_hot_tail_max_size
+                .bytes_u64()
+                .try_into()
+                .unwrap_or(usize::MAX),
         );
 
         // 1. Bring up the metadata quorum BEFORE the client listener so
