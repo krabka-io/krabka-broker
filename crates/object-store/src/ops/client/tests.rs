@@ -254,6 +254,9 @@ struct CountingStore {
     inner: object_store::memory::InMemory,
     puts: std::sync::atomic::AtomicUsize,
     multiparts: std::sync::atomic::AtomicUsize,
+    failure_pending: Option<bool>,
+    parts: Arc<std::sync::atomic::AtomicUsize>,
+    aborts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CountingStore {
@@ -262,6 +265,16 @@ impl CountingStore {
             inner: object_store::memory::InMemory::new(),
             puts: std::sync::atomic::AtomicUsize::new(0),
             multiparts: std::sync::atomic::AtomicUsize::new(0),
+            failure_pending: None,
+            parts: Arc::default(),
+            aborts: Arc::default(),
+        }
+    }
+
+    fn failing(pending: bool) -> Self {
+        Self {
+            failure_pending: Some(pending),
+            ..Self::new()
         }
     }
 }
@@ -291,6 +304,14 @@ impl object_store::ObjectStore for CountingStore {
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
         self.multiparts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(pending) = self.failure_pending {
+            return Ok(Box::new(FailingUpload {
+                pending,
+                parts: self.parts.clone(),
+                aborts: self.aborts.clone(),
+                abort_release: None,
+            }));
+        }
         self.inner.put_multipart_opts(location, opts).await
     }
 
@@ -415,4 +436,134 @@ async fn put_from_path_create_mode_only_binds_below_the_threshold() {
             "{case}"
         );
     }
+}
+
+#[derive(Debug)]
+struct FailingUpload {
+    pending: bool,
+    parts: Arc<std::sync::atomic::AtomicUsize>,
+    aborts: Arc<std::sync::atomic::AtomicUsize>,
+    abort_release: Option<Arc<tokio::sync::Notify>>,
+}
+
+#[async_trait::async_trait]
+impl object_store::MultipartUpload for FailingUpload {
+    fn put_part(&mut self, _data: object_store::PutPayload) -> object_store::UploadPart {
+        self.parts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.pending {
+            Box::pin(std::future::pending())
+        } else {
+            Box::pin(std::future::ready(Err(object_store::Error::Generic {
+                store: "test",
+                source: "part failed".into(),
+            })))
+        }
+    }
+
+    async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
+        unreachable!("a failed part cannot complete")
+    }
+
+    async fn abort(&mut self) -> object_store::Result<()> {
+        self.aborts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(release) = &self.abort_release {
+            release.notified().await;
+        }
+        self.parts.store(0, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn failing_client(pending: bool) -> (ObjectStoreClient, Arc<CountingStore>) {
+    let store = Arc::new(CountingStore::failing(pending));
+    (ObjectStoreClient::new(store.clone()), store)
+}
+
+async fn wait_for_abort(store: &CountingStore) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while store.aborts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("multipart upload was not aborted");
+}
+
+#[tokio::test]
+async fn put_from_path_aborts_after_a_part_failure() {
+    let (client, store) = failing_client(false);
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&[1; 12]).unwrap();
+
+    client
+        .put_from_path(
+            &Path::from("seg/fails"),
+            file.path(),
+            8,
+            4,
+            PutRequest::default(),
+        )
+        .await
+        .unwrap_err();
+
+    wait_for_abort(&store).await;
+    assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}
+
+#[tokio::test]
+async fn put_from_path_aborts_when_cancelled() {
+    let (client, store) = failing_client(true);
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&[1; 12]).unwrap();
+    let task = tokio::spawn(async move {
+        client
+            .put_from_path(
+                &Path::from("seg/cancelled"),
+                file.path(),
+                8,
+                4,
+                PutRequest::default(),
+            )
+            .await
+    });
+    while store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    task.abort();
+    task.await.unwrap_err();
+    wait_for_abort(&store).await;
+    assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}
+
+#[tokio::test]
+async fn explicit_abort_survives_caller_cancellation() {
+    let parts = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+    let aborts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut guard = AbortOnDrop::new(
+        Box::new(FailingUpload {
+            pending: false,
+            parts: parts.clone(),
+            aborts: aborts.clone(),
+            abort_release: Some(release.clone()),
+        }),
+        &Path::from("seg/abort-cancelled"),
+    );
+    let task = tokio::spawn(async move { guard.abort().await });
+    while aborts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    task.abort();
+    task.await.unwrap_err();
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while parts.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("independent abort task did not finish");
 }
