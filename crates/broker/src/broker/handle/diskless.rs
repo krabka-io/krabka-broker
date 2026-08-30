@@ -31,6 +31,9 @@ impl BrokerHandle {
     }
 
     /// Test-only: await this broker's own diskless index/flusher bootstrap.
+    /// This resolves once the index projection has replayed the index topic
+    /// and the flusher's first tick may fire, not merely once the index log
+    /// opened.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_diskless_flusher_ready(&self) {

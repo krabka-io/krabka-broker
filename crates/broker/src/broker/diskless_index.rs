@@ -3,10 +3,7 @@
 //! it but targets a different topic and hands off to the flusher, so it is a
 //! module of its own.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use tokio_util::sync::CancellationToken;
 
@@ -43,16 +40,27 @@ pub(super) async fn bootstrap_diskless_index_log(
             () = shutdown.cancelled() => return,
             result = krabka_remote_storage_topic::KafkaMetadataEventLog::start(log_config.clone()) => result,
         };
-        match started {
+        let index_log = match started {
             Ok(log) => {
                 let log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> = log;
-                let index_log =
-                    crate::diskless::index_log::DisklessIndexLog::start_with_cache(log, cache);
+                crate::diskless::index_log::DisklessIndexLog::start_with_cache(
+                    log,
+                    Arc::clone(&cache),
+                )
+                .await
+            }
+            Err(error) => Err(crate::error::BrokerError::Txn(format!(
+                "diskless WAL index log start: {error}"
+            ))),
+        };
+        match index_log {
+            Ok(index_log) => {
                 tracing::info!(
                     topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
-                    "diskless WAL index projection and object flusher started"
+                    "diskless WAL index projection started; flusher waits for its replay"
                 );
-                flusher.ready.store(true, Ordering::Release);
+                // `flusher.ready` flips inside `run`, once the projection has
+                // replayed the index topic and the first tick may fire.
                 crate::diskless::flusher::run(
                     crate::diskless::flusher::FlusherContext {
                         partitions: flusher.partitions,
@@ -61,6 +69,7 @@ pub(super) async fn bootstrap_diskless_index_log(
                         index_log,
                         node_id: flusher.node_id,
                         broker_id: flusher.broker_id,
+                        ready: flusher.ready,
                     },
                     flusher.flush_config,
                     shutdown,
