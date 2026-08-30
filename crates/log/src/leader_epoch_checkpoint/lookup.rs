@@ -8,7 +8,7 @@ use krabka_ids::{LeaderEpoch, Offset};
 
 #[cfg(test)]
 use super::UNDEFINED_EPOCH;
-use super::{EpochEntry, LeaderEpochCheckpoint, UNDEFINED_OFFSET};
+use super::{LeaderEpochCheckpoint, UNDEFINED_OFFSET, epoch_and_offset_for_entries};
 
 impl LeaderEpochCheckpoint {
     /// End offset of `epoch`. It is the `start_offset` of the next-larger
@@ -77,28 +77,6 @@ impl LeaderEpochCheckpoint {
     ) -> (LeaderEpoch, Offset) {
         epoch_and_offset_for_entries(&self.entries, requested_epoch, log_end_offset)
     }
-}
-
-/// Pure core of [`LeaderEpochCheckpoint::epoch_and_offset_for`] over a raw
-/// slice, so that tests can check it exhaustively and by property without a
-/// file. The method delegates to this function. See `leader_epoch_model.rs` for
-/// the divergence-safety model.
-#[must_use]
-pub fn epoch_and_offset_for_entries(
-    entries: &[EpochEntry],
-    requested_epoch: LeaderEpoch,
-    log_end_offset: Offset,
-) -> (LeaderEpoch, Offset) {
-    let entries = entries
-        .iter()
-        .map(|entry| (entry.epoch.0, entry.start_offset.0))
-        .collect::<Vec<_>>();
-    let (epoch, offset) = krabka_verified::epoch_and_offset_for_entries(
-        &entries,
-        requested_epoch.0,
-        log_end_offset.0,
-    );
-    (LeaderEpoch(epoch), Offset(offset))
 }
 
 #[cfg(test)]

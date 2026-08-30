@@ -8,7 +8,7 @@ use std::{fmt::Write as _, fs, io::Write, path::PathBuf};
 use krabka_ids::{LeaderEpoch, Offset};
 use tracing::instrument;
 
-use super::{EpochEntry, LeaderEpochCheckpoint};
+use super::{EpochEntry, LeaderEpochCheckpoint, is_strict_successor};
 use crate::error::LogError;
 
 impl LeaderEpochCheckpoint {
@@ -45,7 +45,7 @@ impl LeaderEpochCheckpoint {
         // bounded `lines.take(count)` loop ever runs. `count` is used only to
         // bound the number of rows read; the Vec grows as entries are parsed.
         // Matches Kafka's CheckpointFile, which reads entries line-by-line.
-        let mut out = Vec::new();
+        let mut out: Vec<EpochEntry> = Vec::new();
         for line in lines.take(count) {
             let mut parts = line.split_whitespace();
             let epoch: i32 = parts
@@ -56,10 +56,19 @@ impl LeaderEpochCheckpoint {
                 .next()
                 .and_then(|t| t.parse().ok())
                 .ok_or_else(|| LogError::Corrupt(format!("bad checkpoint row: {line:?}")))?;
-            out.push(EpochEntry {
+            let entry = EpochEntry {
                 epoch: LeaderEpoch(epoch),
                 start_offset: Offset(start_offset),
-            });
+            };
+            if out
+                .last()
+                .is_some_and(|previous| !is_strict_successor(previous, &entry))
+            {
+                return Err(LogError::Corrupt(format!(
+                    "leader epoch checkpoint rows are not strictly increasing: {line:?}"
+                )));
+            }
+            out.push(entry);
         }
         Ok(out)
     }
@@ -107,6 +116,15 @@ mod tests {
         let c = LeaderEpochCheckpoint::open(path).unwrap();
         assert2::assert!(c.entries() == &[][..]);
         assert2::assert!(c.latest_epoch() == None);
+    }
+
+    #[test]
+    fn open_rejects_out_of_order_checkpoint_rows() {
+        let (_d, path) = fresh();
+        std::fs::write(&path, "0\n4\n0 0\n5 100\n2 50\n4 80\n").unwrap();
+
+        let error = LeaderEpochCheckpoint::open(path).unwrap_err();
+        assert2::assert!(matches!(error, LogError::Corrupt(_)));
     }
 
     #[test]

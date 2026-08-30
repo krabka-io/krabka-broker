@@ -3368,6 +3368,7 @@ dependencies = [
  "assert2",
  "creusot-std",
  "derive_more",
+ "krabka-ids",
  "proptest",
 ]
 

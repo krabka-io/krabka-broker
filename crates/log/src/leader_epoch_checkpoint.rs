@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 
 use krabka_ids::{LeaderEpoch, Offset};
+pub use krabka_verified::{EpochEntry, epoch_and_offset_for_entries};
 
 mod file;
 mod lookup;
@@ -23,14 +24,6 @@ mod mutation;
 mod fuzz;
 #[cfg(test)]
 mod test_support;
-
-pub use self::lookup::epoch_and_offset_for_entries;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EpochEntry {
-    pub epoch: LeaderEpoch,
-    pub start_offset: Offset,
-}
 
 #[derive(Debug)]
 pub struct LeaderEpochCheckpoint {
@@ -54,6 +47,10 @@ impl LeaderEpochCheckpoint {
     pub fn entries(&self) -> &[EpochEntry] {
         &self.entries
     }
+}
+
+pub(crate) fn is_strict_successor(previous: &EpochEntry, next: &EpochEntry) -> bool {
+    previous.epoch < next.epoch && previous.start_offset < next.start_offset
 }
 
 /// Pure core of [`LeaderEpochCheckpoint::append`]: an idempotent

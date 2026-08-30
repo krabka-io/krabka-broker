@@ -6,7 +6,7 @@
 use krabka_ids::{LeaderEpoch, Offset};
 use tracing::instrument;
 
-use super::{LeaderEpochCheckpoint, append_to, truncate_to};
+use super::{EpochEntry, LeaderEpochCheckpoint, append_to, is_strict_successor, truncate_to};
 use crate::error::LogError;
 
 impl LeaderEpochCheckpoint {
@@ -18,6 +18,23 @@ impl LeaderEpochCheckpoint {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append(&mut self, epoch: LeaderEpoch, start_offset: Offset) -> Result<(), LogError> {
+        if self.entries.iter().any(|entry| entry.epoch == epoch) {
+            return Ok(());
+        }
+        let entry = EpochEntry {
+            epoch,
+            start_offset,
+        };
+        if self
+            .entries
+            .last()
+            .is_some_and(|previous| !is_strict_successor(previous, &entry))
+        {
+            return Err(LogError::InvalidArgument(format!(
+                "leader epoch checkpoint entry ({}, {}) is not strictly after the previous entry",
+                epoch.0, start_offset.0
+            )));
+        }
         if append_to(&mut self.entries, epoch, start_offset) {
             self.flush()?;
         }
@@ -61,7 +78,7 @@ impl LeaderEpochCheckpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::leader_epoch_checkpoint::{EpochEntry, test_support::fresh};
+    use crate::leader_epoch_checkpoint::test_support::fresh;
 
     #[test]
     fn append_preserves_existing_rows() {
@@ -99,6 +116,50 @@ mod tests {
                     epoch: LeaderEpoch(0),
                     start_offset: Offset(0)
                 }]
+        );
+    }
+
+    #[test]
+    fn append_rejects_novel_out_of_order_entries_without_mutating() {
+        let (_d, path) = fresh();
+        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
+        c.append(LeaderEpoch(0), Offset(0)).unwrap();
+        c.append(LeaderEpoch(5), Offset(100)).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        for (epoch, offset) in [(2, 150), (6, 100)] {
+            let error = c.append(LeaderEpoch(epoch), Offset(offset)).unwrap_err();
+            assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
+        }
+
+        assert2::assert!(std::fs::read(&path).unwrap() == before);
+        assert2::assert!(
+            c.entries()
+                == &[
+                    EpochEntry {
+                        epoch: LeaderEpoch(0),
+                        start_offset: Offset(0),
+                    },
+                    EpochEntry {
+                        epoch: LeaderEpoch(5),
+                        start_offset: Offset(100),
+                    },
+                ]
+        );
+    }
+
+    #[test]
+    fn append_after_truncation_restores_a_strict_history() {
+        let (_d, path) = fresh();
+        let mut c = LeaderEpochCheckpoint::open(path).unwrap();
+        c.append(LeaderEpoch(0), Offset(0)).unwrap();
+        c.append(LeaderEpoch(5), Offset(100)).unwrap();
+        c.truncate_from_end(Offset(100)).unwrap();
+        c.append(LeaderEpoch(2), Offset(50)).unwrap();
+        c.append(LeaderEpoch(4), Offset(80)).unwrap();
+
+        assert2::assert!(
+            c.epoch_and_offset_for(LeaderEpoch(3), Offset(120)) == (LeaderEpoch(2), Offset(80))
         );
     }
 
