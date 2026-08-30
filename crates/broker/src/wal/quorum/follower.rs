@@ -296,7 +296,10 @@ mod tests {
             0,
             krabka_units::mebibytes(1),
         );
-        let response = registry.route_fetch_request(&request).unwrap().unwrap();
+        let response = registry
+            .route_fetch_request(&request, NodeId(2))
+            .unwrap()
+            .unwrap();
         let partition = response_partition(response, shard).unwrap();
         let follower_end = follower
             .append(
@@ -316,7 +319,7 @@ mod tests {
             krabka_units::mebibytes(1),
         );
         registry
-            .route_fetch_request(&acknowledgement)
+            .route_fetch_request(&acknowledgement, NodeId(2))
             .unwrap()
             .unwrap();
 

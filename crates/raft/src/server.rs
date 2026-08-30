@@ -250,7 +250,13 @@ where
                     .await?;
                     continue;
                 }
-                let resp = dispatch_with_router(api_key_n, body, &engine, shard_router.as_deref()).await?;
+                let resp = dispatch_with_router(
+                    api_key_n,
+                    body,
+                    &engine,
+                    shard_router.as_deref(),
+                    context.principal.as_ref(),
+                ).await?;
                 write_response_frame(&mut stream, correlation_id, resp, response_flexible).await?;
             }
         }

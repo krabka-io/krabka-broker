@@ -174,7 +174,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         krabka_units::mebibytes(1),
     );
     registry
-        .route_fetch_request(&acknowledgement)
+        .route_fetch_request(&acknowledgement, krabka_raft::NodeId(2))
         .expect("WAL route")
         .expect("WAL response");
 

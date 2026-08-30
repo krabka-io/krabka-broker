@@ -110,7 +110,10 @@ impl Broker {
             ktls_enabled,
             inter_broker_client,
         } = prepare_startup_transport(&config).await?;
-        let diskless_runtime = DisklessRuntime::new(config.node_id);
+        let diskless_runtime = DisklessRuntime::new(
+            config.node_id,
+            config.inter_broker_principal_node_ids.clone(),
+        );
 
         // 1. Bring up the metadata quorum BEFORE the client listener so
         //    handlers can read from it the moment they accept their first

@@ -185,6 +185,7 @@ impl BrokerConfig {
             controller_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
             inter_broker_listener_name: "PLAINTEXT".to_string(),
             inter_broker_credentials: None,
+            inter_broker_principal_node_ids: HashMap::new(),
             plain_credentials: HashMap::new(),
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
