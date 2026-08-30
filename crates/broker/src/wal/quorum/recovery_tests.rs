@@ -111,7 +111,7 @@ async fn partition_quorum_recovers_watermark_and_repairs_one_lost_replica() {
     assert!(reopened.engine.replica_end_offsets() == vec![Offset(1), Offset(1), Offset(1)]);
     let fetch = reopened
         .engine
-        .serve_fetch(Offset(0), ByteSize::from_bytes(u64::MAX))
+        .serve_fetch(Offset(0), -1, ByteSize::from_bytes(u64::MAX))
         .unwrap();
     assert!(fetch.high_watermark == Offset(1));
     assert!(!fetch.records.is_empty());

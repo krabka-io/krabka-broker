@@ -44,7 +44,7 @@ pub(crate) fn desired_local_set(node_id: NodeId, image: &MetadataImage) -> HashS
 pub(crate) fn desired_wal_placements(
     image: &MetadataImage,
     voter_count: usize,
-) -> HashMap<crate::wal::quorum::registry::ShardId, Vec<NodeId>> {
+) -> HashMap<crate::wal::quorum::registry::ShardId, crate::wal::quorum::registry::WalPlacement> {
     let brokers = image.brokers().cloned().collect::<Vec<_>>();
     image
         .all_partitions()
@@ -59,11 +59,14 @@ pub(crate) fn desired_wal_placements(
                     topic_id,
                     partition: PartitionIndex(partition.partition),
                 },
-                crate::wal::quorum::placement::select_voters(
-                    brokers.iter().cloned(),
-                    partition.leader,
-                    voter_count,
-                ),
+                crate::wal::quorum::registry::WalPlacement {
+                    voters: crate::wal::quorum::placement::select_voters(
+                        brokers.iter().cloned(),
+                        partition.leader,
+                        voter_count,
+                    ),
+                    leader_epoch: partition.leader_epoch.0,
+                },
             ))
         })
         .collect()
@@ -210,7 +213,10 @@ mod tests {
             placements.get(&crate::wal::quorum::registry::ShardId {
                 topic_id,
                 partition: PartitionIndex(0),
-            }) == Some(&vec![NodeId(2), NodeId(1), NodeId(3)])
+            }) == Some(&crate::wal::quorum::registry::WalPlacement {
+                voters: vec![NodeId(2), NodeId(1), NodeId(3)],
+                leader_epoch: 0,
+            })
         );
     }
 

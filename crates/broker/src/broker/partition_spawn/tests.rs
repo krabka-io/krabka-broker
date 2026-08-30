@@ -111,11 +111,16 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
     let registry = Arc::new(crate::wal::quorum::registry::WalShardRegistry::new(
         krabka_raft::NodeId(1),
     ));
-    registry.replace_placements(&maplit::hashmap! {shard => vec![
-        krabka_raft::NodeId(1),
-        krabka_raft::NodeId(2),
-        krabka_raft::NodeId(3),
-    ]});
+    registry.replace_placements(
+        &maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
+            voters: vec![
+                krabka_raft::NodeId(1),
+                krabka_raft::NodeId(2),
+                krabka_raft::NodeId(3),
+            ],
+            leader_epoch: 0,
+        }},
+    );
     let partition_dir = crate::log_dir::partition_dir(dir.path(), "recovered", 0);
     std::fs::create_dir_all(&partition_dir).expect("partition directory");
     let mut log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default()).unwrap();
@@ -154,6 +159,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
     let acknowledgement = crate::wal::quorum::wire::fetch_request(
         crate::wal::quorum::wire::QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
         krabka_raft::NodeId(2),
+        0,
         0,
         2,
         krabka_units::mebibytes(1),

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataImage;
+#[cfg(test)]
 use krabka_raft::NodeId;
 use tracing::warn;
 
@@ -15,7 +16,10 @@ impl ReplicatorSupervisor {
     pub(super) fn desired_wal_followers(
         &self,
         image: &MetadataImage,
-        placements: &HashMap<crate::wal::quorum::registry::ShardId, Vec<NodeId>>,
+        placements: &HashMap<
+            crate::wal::quorum::registry::ShardId,
+            crate::wal::quorum::registry::WalPlacement,
+        >,
     ) -> HashMap<crate::wal::quorum::registry::ShardId, WalFollowerSpec> {
         image
             .all_partitions()
@@ -28,11 +32,11 @@ impl ReplicatorSupervisor {
                     topic_id: topic.topic_id,
                     partition: PartitionIndex(partition.partition),
                 };
-                let voters = placements.get(&shard)?;
-                (voters.len() == self.diskless_wal_local_replica_count
-                    && voters.first() == Some(&partition.leader)
+                let placement = placements.get(&shard)?;
+                (placement.voters.len() == self.diskless_wal_local_replica_count
+                    && placement.voters.first() == Some(&partition.leader)
                     && partition.leader != self.node_id
-                    && voters.contains(&self.node_id))
+                    && placement.voters.contains(&self.node_id))
                 .then(|| {
                     (
                         shard,
@@ -195,7 +199,10 @@ mod tests {
             topic_id,
             partition: PartitionIndex(0),
         };
-        let complete = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]};
+        let complete = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: 7,
+        }};
 
         let desired = supervisor.desired_wal_followers(&image, &complete);
 
@@ -207,7 +214,10 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(7),
                 })
         );
-        let short = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2)]};
+        let short = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
+            voters: vec![NodeId(1), NodeId(2)],
+            leader_epoch: 7,
+        }};
         assert!(supervisor.desired_wal_followers(&image, &short).is_empty());
     }
 
@@ -239,7 +249,10 @@ mod tests {
             topic_id,
             partition: PartitionIndex(0),
         };
-        let placements = maplit::hashmap! {shard => vec![NodeId(1), NodeId(2), NodeId(3)]};
+        let placements = maplit::hashmap! {shard => crate::wal::quorum::registry::WalPlacement {
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: 7,
+        }};
         let target = WalFollowerSpec {
             topic: "diskless".into(),
             leader: NodeId(1),

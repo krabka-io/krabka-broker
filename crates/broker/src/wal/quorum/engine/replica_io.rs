@@ -7,7 +7,7 @@
 
 use krabka_ids::Offset;
 
-use super::BatchBytes;
+use super::{BatchBytes, read_log_batches_exact};
 use crate::{error::BrokerError, wal::quorum::log_view::ShardLog};
 
 pub(in crate::wal::quorum) async fn sync_replica(
@@ -57,8 +57,75 @@ pub(super) fn sync_replica_blocking(
                 batch.base_offset.0,
                 batch.last_offset.0 + 1
             )));
+        } else {
+            let existing = read_log_batches_exact(&log, batch.base_offset, batch.last_offset + 1)?;
+            if existing.len() != 1 || existing[0].verbatim.bytes != batch.verbatim.bytes {
+                return Err(BrokerError::Replication(format!(
+                    "wal replica diverges in batch {}..{}",
+                    batch.base_offset.0,
+                    batch.last_offset.0 + 1
+                )));
+            }
         }
     }
     log.sync()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::records::{Record, RecordBatch};
+
+    use super::*;
+
+    #[test]
+    fn sync_replica_verifies_an_existing_batch() {
+        let root = tempfile::tempdir().unwrap();
+        let source = Arc::new(Mutex::new(
+            Log::open(root.path().join("source"), LogConfig::default()).unwrap(),
+        ));
+        source
+            .lock()
+            .unwrap()
+            .append(&mut batch(b"leader"))
+            .unwrap();
+        let source = ShardLog::new(source);
+        let batches = read_log_batches_exact(&source.lock(), Offset(0), Offset(1)).unwrap();
+
+        let matching = Arc::new(Mutex::new(
+            Log::open(root.path().join("matching"), LogConfig::default()).unwrap(),
+        ));
+        matching
+            .lock()
+            .unwrap()
+            .append(&mut batch(b"leader"))
+            .unwrap();
+        sync_replica_blocking(&ShardLog::new(matching), &batches).unwrap();
+
+        let divergent = Arc::new(Mutex::new(
+            Log::open(root.path().join("divergent"), LogConfig::default()).unwrap(),
+        ));
+        divergent
+            .lock()
+            .unwrap()
+            .append(&mut batch(b"follower"))
+            .unwrap();
+        let error = sync_replica_blocking(&ShardLog::new(divergent), &batches).unwrap_err();
+
+        assert2::assert!(error.to_string().contains("diverges"));
+    }
+
+    fn batch(value: &'static [u8]) -> RecordBatch {
+        RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from_static(value)),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        }
+    }
 }
