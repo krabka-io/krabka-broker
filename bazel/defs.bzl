@@ -239,7 +239,7 @@ def crate_tests(
             # off as a clean run -- so the flakiness stays visible instead of
             # being hidden by a `#[ignore]`.
             flaky = stem in cpu_heavy,
-            tags = (["manual"] if stem in manual else []) +
+            tags = (["manual"] if stem in manual or stem in docker else []) +
                    (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
             use_libtest_harness = stem not in no_harness,
             # One call, not two concatenated: an integration test links the

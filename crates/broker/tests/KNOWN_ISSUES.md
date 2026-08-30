@@ -13,10 +13,9 @@ cannot reconnect.
 
 The network pattern depends on the Docker host:
 
-- Linux CI runners, for example GitHub Actions ubuntu-latest: set
+- Linux hosts, including GitHub Actions ubuntu-latest: set
   `KRABKA_HOST_BOOTSTRAP=<docker_bridge_gateway>:<port>`. The value is
-  usually `172.17.0.1:9092`. The CI workflow job
-  `broker-jvm-acceptance` exports the bridge IP with:
+  usually `172.17.0.1:9092`. Find the bridge IP with:
 
   ```sh
   BRIDGE_IP=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
@@ -31,12 +30,22 @@ The test binds the broker on `0.0.0.0:<port>`. It takes the port from
 the last colon-separated segment of `KRABKA_HOST_BOOTSTRAP`. If that
 environment variable is not set, the port is `9092`.
 
-## Both tests are `#[ignore = "requires Docker"]`
+## Automated Bazel lane
 
-Run them with `cargo test -p krabka-broker --test jvm_acceptance_cli --
---ignored`, substituting the `jvm_acceptance_*` suite you want.
-The CI job `broker-jvm-acceptance` is the only place that runs them by
-default. On a contributor's machine, `cargo test` skips them.
+The tests remain `#[ignore = "requires Docker"]` under Cargo, but the
+digest-pinned Bazel Docker lane runs them through
+`//crates/broker:jvm_acceptance_cli_docker_test`. Run that lane with:
+
+```sh
+bazel test --config=docker //crates/broker:jvm_acceptance_cli_docker_test
+```
+
+## Manual GSSAPI validation
+
+`gssapi_e2e` remains manual. Its locally built KDC fixture writes
+`kafka.keytab` and `alice.keytab` into the fixture directory, so it cannot use
+the digest-pinned Bazel lane and must be managed with Docker Compose. Follow
+the command sequence in `gssapi_e2e.rs`.
 
 ## Windows validation
 

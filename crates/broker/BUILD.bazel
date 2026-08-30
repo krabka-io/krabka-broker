@@ -99,7 +99,13 @@ crate_tests(
     # rather than reading one, so it is a recording tool and not a test: a Bazel
     # test cannot write to the source tree, and should not want to. It still
     # runs under Cargo, which is where fixtures get regenerated.
-    manual = ["describe_groups_jvm"],
+    # `gssapi_e2e` cannot use the digest-pinned lane: its locally built KDC
+    # fixture writes keytabs into the fixture directory and must be
+    # Docker-Compose-managed.
+    manual = [
+        "describe_groups_jvm",
+        "gssapi_e2e",
+    ],
     # 212k lines: a full sweep is nightly-sized even sharded this far.
     mutants_shards = 32,
     # Every mutant rebuilds 212k lines, so a shard is dominated by rustc, not by
