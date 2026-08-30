@@ -21,7 +21,7 @@ pub(crate) fn diskless_topic_config(
     config: Option<&std::collections::BTreeMap<String, String>>,
 ) -> bool {
     config
-        .and_then(|config| config.get("krabka.diskless"))
+        .and_then(|config| config.get(crate::config_keys::DISKLESS))
         .is_some_and(|value| value == "true")
 }
 

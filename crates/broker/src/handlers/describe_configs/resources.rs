@@ -51,7 +51,13 @@ pub(super) fn describe_one(
             .into_iter()
             .flatten()
             .filter(|(key, _)| wanted(key.as_str()))
-            .map(|(key, value)| make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC))
+            .map(|(key, value)| {
+                let mut entry = make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC);
+                // A create-only key cannot be altered, so `kafka-configs` must
+                // show it the way it shows every other read-only config.
+                entry.read_only = config_keys::is_create_only_topic_config(key);
+                entry
+            })
             .collect();
         if wanted(config_keys::WRITE_FREEZE) {
             configs.push(write_freeze_entry(image, &r.resource_name));

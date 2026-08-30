@@ -1,6 +1,6 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes twenty-one topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes twenty-two topic keys. Six propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
 //! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
@@ -39,6 +39,12 @@
 //! [`validate_topic_config`] sees one pair at a time and cannot see that, so
 //! [`validate_config_combination`] checks the rule over a whole override map.
 //!
+//! One key is krabka's diskless opt-in, [`DISKLESS`]. It takes `true` or
+//! `false`, it excludes `remote.storage.enable=true`, and it is *create-only*:
+//! a partition reads it once when it opens its runtime, so both alter paths
+//! refuse it by name rather than store a value the running partitions would
+//! ignore. See [`CREATE_ONLY_TOPIC_CONFIGS`][diskless::CREATE_ONLY_TOPIC_CONFIGS].
+//!
 //! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
 //! synthesised for `DescribeConfigs` and is never stored, so
 //! [`validate_topic_config`] does not accept it and both alter paths refuse
@@ -48,6 +54,7 @@
 
 mod broker_scope;
 mod delivery;
+mod diskless;
 mod docs;
 mod log_config;
 mod qos;
@@ -63,6 +70,7 @@ pub use self::docs::{TopicConfigDoc, topic_config_docs};
 pub(crate) use self::{
     broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
+    diskless::CREATE_ONLY_TOPIC_CONFIGS,
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
     topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
 };
@@ -77,6 +85,7 @@ pub(crate) use self::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
         resolve_delivery_schedule_monotonic,
     },
+    diskless::{DISKLESS, create_only_topic_config_message, is_create_only_topic_config},
     log_config::apply_to_log_config,
     qos::resolve_qos_tier,
     recovery::{

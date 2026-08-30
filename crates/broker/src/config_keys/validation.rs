@@ -11,6 +11,7 @@ use super::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
         DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
     },
+    diskless::DISKLESS,
     qos::{QOS_TIER, validate_qos_tier},
     recovery::{RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
@@ -55,6 +56,12 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
             "true" | "false" => Ok(()),
             _ => Err(format!(
                 "remote.storage.enable={value} not supported; expected `true` or `false`"
+            )),
+        },
+        DISKLESS => match value {
+            "true" | "false" => Ok(()),
+            _ => Err(format!(
+                "{DISKLESS}={value} not supported; expected `true` or `false`"
             )),
         },
         QOS_TIER => validate_qos_tier(value),
@@ -117,12 +124,18 @@ pub(crate) fn validate_topic_config_map(
 /// Validate the rules that span two keys, over a topic's complete override
 /// map. [`validate_topic_config`] takes one pair and cannot see them.
 ///
-/// KFC-1 states the one such rule: `cleanup.policy=compact` and
+/// KFC-1 states the first such rule: `cleanup.policy=compact` and
 /// `delivery.mode=scheduled` exclude each other. Compaction deletes a record
 /// once a later record carries the same key, and on a scheduled topic that
 /// later record can arrive long before the earlier one comes due. The earlier
 /// record would then be deleted without a single delivery, which is the
 /// failure scheduled delivery exists to prevent.
+///
+/// The second rule is that `krabka.diskless=true` and
+/// `remote.storage.enable=true` exclude each other. Both claim the same
+/// partition's cold tier, and the diskless cold-read path stands down whenever
+/// `remote.storage.enable` is set on the log, so the pair would leave the
+/// trimmed prefix of a diskless partition unreadable through either tier.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -132,6 +145,18 @@ pub(crate) fn validate_config_combination(
     let scheduled = overrides
         .get(DELIVERY_MODE)
         .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED);
+    let diskless = overrides.get(DISKLESS).is_some_and(|value| value == "true");
+    let tiered = overrides
+        .get(REMOTE_STORAGE_ENABLE)
+        .is_some_and(|value| value == "true");
+    if diskless && tiered {
+        return Err(format!(
+            "{DISKLESS}=true cannot be combined with {REMOTE_STORAGE_ENABLE}=true: both claim \
+             the partition's cold tier, and the diskless cold-read path stands down when \
+             {REMOTE_STORAGE_ENABLE} is set, so the trimmed prefix would be readable through \
+             neither tier"
+        ));
+    }
     if compacting && scheduled {
         return Err(format!(
             "{CLEANUP_POLICY}=compact cannot be combined with \
@@ -202,6 +227,7 @@ pub(crate) fn is_recognized(key: &str) -> bool {
             | UNCLEAN_LEADER_ELECTION_ENABLE
             | UNCLEAN_RECOVERY_STRATEGY
             | REMOTE_STORAGE_ENABLE
+            | DISKLESS
             | LOCAL_RETENTION_MS
             | LOCAL_RETENTION_BYTES
             | DELETE_RETENTION_MS

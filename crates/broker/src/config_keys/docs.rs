@@ -8,6 +8,7 @@ use super::{
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC,
     },
+    diskless::DISKLESS,
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
     recovery::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
@@ -89,6 +90,13 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         default: Some("false"),
         kip: Some("KIP-405"),
         description: "Opt this topic into tiered (remote) storage.",
+    },
+    TopicConfigDoc {
+        key: DISKLESS,
+        value_type: "boolean",
+        default: Some("false"),
+        kip: None,
+        description: "Krabka diskless mode: writes commit through the WAL quorum and flush to the object store. Fixed at topic creation, and mutually exclusive with remote.storage.enable=true.",
     },
     TopicConfigDoc {
         key: LOCAL_RETENTION_MS,
@@ -216,6 +224,7 @@ mod tests {
             UNCLEAN_LEADER_ELECTION_ENABLE,
             UNCLEAN_RECOVERY_STRATEGY,
             REMOTE_STORAGE_ENABLE,
+            DISKLESS,
             LOCAL_RETENTION_MS,
             LOCAL_RETENTION_BYTES,
             DELETE_RETENTION_MS,

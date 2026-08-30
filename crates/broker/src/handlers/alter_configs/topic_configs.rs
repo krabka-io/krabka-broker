@@ -35,6 +35,15 @@ pub(super) fn topic_config_record(
                 config_keys::controller_managed_topic_config_message(&cfg.name),
             ));
         }
+        // A create-only key is fixed for the life of the topic. `AlterConfigs`
+        // replaces the whole override map, so naming the key at all is a
+        // request to change it, whatever value it carries.
+        if config_keys::is_create_only_topic_config(&cfg.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                config_keys::create_only_topic_config_message(&cfg.name),
+            ));
+        }
         let value = cfg.value.clone().unwrap_or_default();
         config_keys::validate_topic_config(&cfg.name, &value)
             .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
@@ -105,6 +114,30 @@ mod tests {
             crate::config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string()},
         });
         assert!(record == expected);
+    }
+
+    #[test]
+    fn topic_replacement_rejects_create_only_configs() {
+        let image = image_with_topic("orders");
+
+        for key in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
+            // A full replacement carries a value for every key it names, so
+            // re-stating the value the topic was created with is still a write
+            // of a key the partition would never re-read.
+            for value in ["true", "false", ""] {
+                let error = topic_config_record(&topic_resource("orders", &[(key, value)]), &image)
+                    .expect_err("create-only key must be rejected");
+
+                check!(
+                    error.0 == codes::INVALID_CONFIG,
+                    "key {key} value {value:?}"
+                );
+                check!(
+                    error.1 == config_keys::create_only_topic_config_message(key),
+                    "key {key} value {value:?}"
+                );
+            }
+        }
     }
 
     #[test]

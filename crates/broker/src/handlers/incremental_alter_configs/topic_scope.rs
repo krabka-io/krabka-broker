@@ -33,6 +33,15 @@ pub(super) fn topic_config_record(
                 config_keys::controller_managed_topic_config_message(&config.name),
             ));
         }
+        // A create-only key is fixed for the life of the topic. A DELETE of it
+        // is as much a change as a SET, so every operation gets the same
+        // refusal, before the operation is read.
+        if config_keys::is_create_only_topic_config(&config.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                config_keys::create_only_topic_config_message(&config.name),
+            ));
+        }
         match config.config_operation {
             OP_SET => {
                 let value = config.value.clone().unwrap_or_default();
@@ -128,6 +137,31 @@ mod tests {
                     "{label}, key {key}"
                 );
                 check!(!error.1.is_empty(), "{label}, key {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn create_only_topic_configs_are_rejected_whatever_the_operation() {
+        let img = image_with_topic_config("orders", &[(config_keys::DISKLESS, "true")]);
+
+        for key in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
+            for (label, config) in [
+                ("a SET that turns the key on", make_set_cfg(key, "true")),
+                ("a SET that turns the key off", make_set_cfg(key, "false")),
+                (
+                    "a DELETE, which asks to fall back to the default",
+                    make_del_cfg(key),
+                ),
+            ] {
+                let error = topic_config_record(&make_topic_resource("orders", vec![config]), &img)
+                    .expect_err("create-only key must be rejected");
+
+                check!(error.0 == codes::INVALID_CONFIG, "{label}, key {key}");
+                check!(
+                    error.1 == config_keys::create_only_topic_config_message(key),
+                    "{label}, key {key}"
+                );
             }
         }
     }
