@@ -89,14 +89,7 @@ impl TimeIndex {
     /// `timestamp <= target`, or 0 when there are no entries.
     #[must_use]
     pub fn lookup(&self, target_timestamp: i64) -> u32 {
-        match self
-            .entries
-            .binary_search_by_key(&target_timestamp, |&(ts, _)| ts)
-        {
-            Ok(i) => self.entries[i].1,
-            Err(0) => 0,
-            Err(i) => self.entries[i - 1].1,
-        }
+        krabka_verified::time_index_lookup(&self.entries, target_timestamp)
     }
 
     #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]

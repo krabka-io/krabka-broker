@@ -24,7 +24,7 @@ pub use compaction::{
 pub use consensus::{
     election_jitter_ms, handoff_high_watermark, log_is_up_to_date, recompute_high_watermark,
 };
-pub use log_index::offset_index_lookup;
+pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
