@@ -85,7 +85,10 @@ pub(crate) use self::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
         resolve_delivery_schedule_monotonic,
     },
-    diskless::{DISKLESS, create_only_topic_config_message, is_create_only_topic_config},
+    diskless::{
+        DISKLESS, create_only_topic_config_change, create_only_topic_config_message,
+        is_create_only_topic_config, preserve_create_only_topic_configs,
+    },
     log_config::apply_to_log_config,
     qos::resolve_qos_tier,
     recovery::{

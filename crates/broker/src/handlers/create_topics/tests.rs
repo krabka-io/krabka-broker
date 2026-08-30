@@ -257,7 +257,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     let p = principal("admin");
     let peer = peer();
 
-    let cases: [RejectedConfig<'_>; 4] = [
+    let cases: [RejectedConfig<'_>; 5] = [
         ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
         (
             "bad-delivery-mode",
@@ -276,6 +276,15 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
                 ("delivery.mode", "scheduled"),
             ],
             &["cleanup.policy", "delivery.mode"],
+        ),
+        // `BrokerConfig::for_tests` configures no object store, and a diskless
+        // topic without one could never flush or trim: the broker starts no
+        // WAL index projection and no object flusher, so the local logs would
+        // grow without bound behind a flag that advertises the opposite.
+        (
+            "diskless-without-an-object-tier",
+            &[(crate::config_keys::DISKLESS, "true")],
+            &[crate::config_keys::DISKLESS, "remote_storage_backend"],
         ),
     ];
 

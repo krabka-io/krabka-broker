@@ -11,9 +11,15 @@
 //! The invariant that has to hold across all of them is the only one that
 //! matters to a producer: an offset that was acknowledged is still readable.
 //! The case acknowledges a known prefix, then keeps a second producer writing
-//! so the flusher is genuinely mid-cycle when the crash lands, kills the
-//! broker without a controlled shutdown, brings it back on the same
-//! addresses, and requires the whole acknowledged prefix back.
+//! and waits until a whole flush cycle has run against that load, so the
+//! crash lands on a cycling pipeline rather than on an idle broker between two
+//! ticks. It then kills the broker without a controlled shutdown, brings it
+//! back on the same addresses, and requires the whole acknowledged prefix
+//! back.
+//!
+//! It does not pin the crash to a chosen step of the cycle -- see the comment
+//! on the gate below for why that needs a fault hook the suite does not add.
+//! The invariant is asserted because it must hold at every step.
 //!
 //! Only that prefix is asserted on. How many of the churn records were
 //! acknowledged is decided by exactly when the crash landed, so asserting on
@@ -80,10 +86,39 @@ async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
     )
     .await;
 
-    // Keep the write path busy so the crash below lands inside a flush cycle
-    // and not in the gap between two of them.
+    // Keep the write path busy, then wait until a flush cycle has demonstrably
+    // run against that load before crashing anything.
+    //
+    // Spawning the producer and crashing immediately would prove little: the
+    // wait above ends when the *known prefix's* flush has already completed,
+    // so the broker would most likely be killed idle between two ticks, with
+    // no churn appended and no further cycle begun. Waiting for the frontier
+    // to pass the prefix means at least one whole flush cycle -- build, PUT,
+    // publish, project, trim -- has run end to end against live churn, and
+    // with a 50 ms interval and a producer that never stops, the next cycle is
+    // never more than a tick away when the crash lands.
+    //
+    // This does not pin the crash to a chosen step of that cycle. Nothing
+    // observable from outside the broker can: doing it deterministically needs
+    // a fault hook inside the flusher, which is a change to production code
+    // that this suite does not justify. What the case asserts is the
+    // invariant that has to hold at every step, so it holds wherever the crash
+    // actually fell.
     let stop = CancellationToken::new();
     let churn = tokio::spawn(produce_until_stopped(producer, topic_id, stop.clone()));
+    wait_for(
+        "a flush cycle to complete against live churn",
+        Duration::from_secs(90),
+        || async {
+            leader_broker
+                .diskless_flush_state_for_test(TOPIC, 0)
+                .await
+                .is_some_and(|(_, _, _, _, _, frontier)| {
+                    frontier.is_some_and(|frontier| frontier > committed)
+                })
+        },
+    )
+    .await;
 
     // No controlled shutdown: no leadership handover and no final flush.
     cluster.crash(leader).await;

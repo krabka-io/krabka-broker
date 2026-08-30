@@ -219,6 +219,10 @@ pub(crate) async fn fetch_log(
 /// while it crashes the broker underneath it. Which of these records were
 /// acknowledged is decided by exactly when the crash landed, so nothing is
 /// asserted about them -- they exist to make the crash land mid-flush.
+///
+/// Each request is a full `acks=all` quorum round trip, so the loop already
+/// self-throttles on the network; the short sleep only keeps it from
+/// monopolising a worker thread on a small runtime.
 pub(crate) async fn produce_until_stopped(
     client: Client,
     topic_id: WireUuid,
@@ -251,7 +255,7 @@ pub(crate) async fn produce_until_stopped(
             })
             .await;
         index += 1;
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 

@@ -85,6 +85,25 @@ pub(super) fn image_with_topic(name: &str) -> krabka_metadata::MetadataImage {
     image
 }
 
+/// [`image_with_topic`] plus a stored `V1TopicConfig` override map, for the
+/// tests that need the topic's *current* configs and not only its existence.
+pub(super) fn image_with_topic_config(
+    name: &str,
+    overrides: &[(&str, &str)],
+) -> krabka_metadata::MetadataImage {
+    let mut image = image_with_topic(name);
+    image.apply(&MetadataRecord::V1TopicConfig(
+        krabka_metadata::TopicConfigRecord {
+            topic: name.into(),
+            overrides: overrides
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        },
+    ));
+    image
+}
+
 pub(super) fn broker_resource(
     resource_name: &str,
     configs: &[(&str, &str)],

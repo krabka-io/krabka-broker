@@ -14,7 +14,10 @@
 //!    serves. A local fsync on the leader would satisfy the produce path and
 //!    fail here.
 //! 3. **The promoted broker serves the same offsets byte for byte.** Not "the
-//!    same number of records" and not "the same values": the same batches.
+//!    same number of records" and not "the same values": the same batches --
+//!    and served from the WAL replica, because both survivors' ordinary
+//!    partition logs are emptied first. See the comment on that truncation for
+//!    why it is needed and what it does not fully close.
 
 use std::time::Duration;
 
@@ -117,6 +120,40 @@ async fn diskless_acks_all_append_survives_the_acking_broker() {
         assert!(
             bytes == from_leader.bytes,
             "broker {}'s WAL replica does not hold the leader's bytes",
+            node.0
+        );
+    }
+
+    // Empty both survivors' *canonical* partition logs before killing the
+    // leader.
+    //
+    // Without this the case proves less than it looks like it does. The topic
+    // is rf=3, and `desired_follower_set` does not exclude diskless topics, so
+    // every non-leader replica also runs an ordinary follower replicator and
+    // already holds these batches in its normal partition log. The promoted
+    // broker could then serve the post-crash fetch out of that copy even if
+    // WAL hydration adopted nothing, and the WAL directory assertions above
+    // would not notice. Truncating both candidates away leaves the WAL replica
+    // as the only place the prefix can come from.
+    //
+    // The ordinary replicator could in principle refill a truncated log in the
+    // moment before its leader dies, which would put the case back where it
+    // was -- it can never turn a real failure into a pass. In practice it does
+    // not: both logs are still empty when `crash` returns.
+    for node in &followers {
+        cluster
+            .handle_for_node(*node)
+            .expect("a survivor is up")
+            .test_truncate_local_log(TOPIC, 0, 0)
+            .await
+            .expect("truncate the survivor's canonical partition log");
+        assert!(
+            cluster
+                .handle_for_node(*node)
+                .expect("a survivor is up")
+                .local_log_end_offset(TOPIC, 0)
+                == Some(0),
+            "broker {}'s canonical log still holds the prefix",
             node.0
         );
     }

@@ -33,15 +33,6 @@ pub(super) fn topic_config_record(
                 config_keys::controller_managed_topic_config_message(&config.name),
             ));
         }
-        // A create-only key is fixed for the life of the topic. A DELETE of it
-        // is as much a change as a SET, so every operation gets the same
-        // refusal, before the operation is read.
-        if config_keys::is_create_only_topic_config(&config.name) {
-            return Err((
-                codes::INVALID_CONFIG,
-                config_keys::create_only_topic_config_message(&config.name),
-            ));
-        }
         match config.config_operation {
             OP_SET => {
                 let value = config.value.clone().unwrap_or_default();
@@ -69,6 +60,20 @@ pub(super) fn topic_config_record(
                 ));
             }
         }
+    }
+    // Same reasoning as the cross-key rules below: the ops alone do not say
+    // whether a create-only key changed, because a SET to the value the topic
+    // already carries is a no-op and a DELETE of an absent key is too. Only
+    // the merged map does. A DELETE that drops a live `krabka.diskless=true`
+    // is as much a change as a SET that flips it, and gets the same refusal.
+    if let Some(key) = config_keys::create_only_topic_config_change(
+        &merged,
+        image.topic_config(&resource.resource_name),
+    ) {
+        return Err((
+            codes::INVALID_CONFIG,
+            config_keys::create_only_topic_config_message(key),
+        ));
     }
     // The ops alone cannot show a conflict: `merged` is what the topic ends up
     // with, so the cross-key rules are checked against that.
@@ -142,20 +147,19 @@ mod tests {
     }
 
     #[test]
-    fn create_only_topic_configs_are_rejected_whatever_the_operation() {
-        let img = image_with_topic_config("orders", &[(config_keys::DISKLESS, "true")]);
+    fn an_op_that_changes_a_create_only_topic_config_is_rejected() {
+        for (key, default) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
+            let img = image_with_topic_config("orders", &[(key, "true")]);
 
-        for key in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
             for (label, config) in [
-                ("a SET that turns the key on", make_set_cfg(key, "true")),
-                ("a SET that turns the key off", make_set_cfg(key, "false")),
+                ("a SET that turns the key off", make_set_cfg(key, default)),
                 (
-                    "a DELETE, which asks to fall back to the default",
+                    "a DELETE, which drops the override and falls back to the default",
                     make_del_cfg(key),
                 ),
             ] {
                 let error = topic_config_record(&make_topic_resource("orders", vec![config]), &img)
-                    .expect_err("create-only key must be rejected");
+                    .expect_err("changing a create-only key must be rejected");
 
                 check!(error.0 == codes::INVALID_CONFIG, "{label}, key {key}");
                 check!(
@@ -163,6 +167,45 @@ mod tests {
                     "{label}, key {key}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn an_op_that_leaves_a_create_only_topic_config_alone_is_accepted() {
+        // A SET to the value the topic already carries, and a DELETE of a key
+        // the topic never had, are both no-ops. The rule is that the effective
+        // value cannot change, not that the key cannot be named.
+        for (key, _) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
+            let on = image_with_topic_config("orders", &[(key, "true")]);
+            let record = topic_config_record(
+                &make_topic_resource("orders", vec![make_set_cfg(key, "true")]),
+                &on,
+            )
+            .expect("restating the current value is not a change");
+            assert!(
+                record
+                    == MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                        topic: "orders".into(),
+                        overrides: maplit::btreemap! {key.to_string() => "true".to_string()},
+                    }),
+                "key {key}"
+            );
+
+            let off = image_with_topic_config("orders", &[(config_keys::RETENTION_MS, "60000")]);
+            let record = topic_config_record(
+                &make_topic_resource("orders", vec![make_del_cfg(key)]),
+                &off,
+            )
+            .expect("deleting an override the topic never had is not a change");
+            assert!(
+                record
+                    == MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                        topic: "orders".into(),
+                        overrides: maplit::btreemap! {
+                        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
+                    }),
+                "key {key}"
+            );
         }
     }
 
