@@ -121,7 +121,7 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           reference="${IMAGE}@${DIGEST}"
-          docker buildx imagetools create \
+          docker buildx imagetools create --prefer-index=false \
             --tag "${IMAGE}:${GITHUB_REF_NAME}" \
             --tag "${IMAGE}:latest" \
             "${reference}"
