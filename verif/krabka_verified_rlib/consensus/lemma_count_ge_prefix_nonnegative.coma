@@ -1,14 +1,14 @@
-(* #"/home/user/krabka-broker/crates/verified/src/consensus.rs" 57 0 57 87 *)
+(* #"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 66 0 72 1 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconsensus = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 56 10 56 15
-let%span sconsensus'0 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 54 11 54 45
-let%span sconsensus'1 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 55 10 55 52
-let%span sconsensus'2 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 21 10 21 15
-let%span sconsensus'3 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 24 8 29 9
-let%span sconsensus'4 = "/home/user/krabka-broker/crates/verified/src/consensus.rs" 15 8 15 48
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconsensus = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 65 10 65 15
+let%span sconsensus'0 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 63 11 63 45
+let%span sconsensus'1 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 64 10 64 67
+let%span sconsensus'2 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 21 10 21 15
+let%span sconsensus'3 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 24 8 30 9
+let%span sconsensus'4 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 15 8 15 48
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 
 use creusot.int.Int64
 use seq.Seq
@@ -18,22 +18,23 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function hwm_member_at [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 13 0 13 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
- = [%#sconsensus'4] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
-
-function count_ge_prefix [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 22 0 22 76] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) : int
-
-axiom count_ge_prefix_def:
-  forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int [count_ge_prefix log_end s v limit]. count_ge_prefix log_end s v limit
-    = ([%#sconsensus'3] if limit <= 0 then
-      0
-    else
-      count_ge_prefix log_end s v (limit - 1) + (if ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
-    )
-
 predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
 
 meta "rewrite_def" predicate gt_log_Int
+
+function hwm_member_at [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 13 0 13 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+ = [%#sconsensus'4] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
+
+function count_ge_prefix [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 22 0 22 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+
+axiom count_ge_prefix_def:
+  forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
+    = ([%#sconsensus'3] if limit <= 0 then
+      0
+    else
+      count_ge_prefix log_end s v (limit - 1) leader_counts
+      + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
+    )
 
 predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
   [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
@@ -52,7 +53,9 @@ constant v : int
 
 constant limit : int
 
-function lemma_count_ge_prefix_nonnegative [#"/home/user/krabka-broker/crates/verified/src/consensus.rs" 57 0 57 87] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) : ()
+constant leader_counts : bool
+
+function lemma_count_ge_prefix_nonnegative [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 66 0 72 1] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : ()
 
 goal vc_lemma_count_ge_prefix_nonnegative: ([%#sconsensus'0] 0 <= limit /\ limit <= Seq.length s + 1)
   -> (if gt_log_Int limit 0 then
@@ -60,9 +63,9 @@ goal vc_lemma_count_ge_prefix_nonnegative: ([%#sconsensus'0] 0 <= limit /\ limit
         /\ limit - 1 <= Seq.length s + 1)
       /\ ([@expl:variant decreases] well_founded_relation_Int ([%#sconsensus] limit) ([%#sconsensus] limit - 1)))
     /\ (([@stop_split] [@expl:lemma_count_ge_prefix_nonnegative ensures] [%#sconsensus'1] ge_log_Int (count_ge_prefix log_end s v (limit
-      - 1)) 0)
+      - 1) leader_counts) 0)
     -> (let _ = lemma_count_ge_prefix_nonnegative log_end s v (limit
-    - 1) in [@stop_split] [@expl:lemma_count_ge_prefix_nonnegative ensures] [%#sconsensus'1] ge_log_Int (count_ge_prefix log_end s v limit) 0))
+    - 1) leader_counts in [@stop_split] [@expl:lemma_count_ge_prefix_nonnegative ensures] [%#sconsensus'1] ge_log_Int (count_ge_prefix log_end s v limit leader_counts) 0))
   else
-    [@stop_split] [@expl:lemma_count_ge_prefix_nonnegative ensures] [%#sconsensus'1] ge_log_Int (count_ge_prefix log_end s v limit) 0
+    [@stop_split] [@expl:lemma_count_ge_prefix_nonnegative ensures] [%#sconsensus'1] ge_log_Int (count_ge_prefix log_end s v limit leader_counts) 0
   )

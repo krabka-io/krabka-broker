@@ -36,6 +36,7 @@ pub(super) fn recover_durable_prefix(
         majority,
         -1,
         0,
+        true,
     ));
 
     normalize_durable_prefix(replicas, &ends, donor_index, durable)?;
