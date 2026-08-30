@@ -6,10 +6,9 @@ use std::collections::HashMap;
 
 use krabka_ids::PartitionIndex;
 use krabka_metadata::MetadataImage;
-use tracing::warn;
-
 #[cfg(test)]
 use krabka_raft::NodeId;
+use tracing::warn;
 
 use super::{ReplicatorSupervisor, WalFollowerSpec, WalFollowerTask, resolve_leader_endpoint};
 
