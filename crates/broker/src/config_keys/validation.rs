@@ -131,8 +131,9 @@ pub(crate) fn validate_topic_config_map(
 /// record would then be deleted without a single delivery, which is the
 /// failure scheduled delivery exists to prevent.
 ///
-/// The second is the data-path rule in [`validate_diskless_combination`]:
-/// `krabka.diskless=true` and `remote.storage.enable=true` exclude each other.
+/// The other two are the data-path rules in [`validate_diskless_combination`]:
+/// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
+/// `delivery.mode=scheduled`.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {

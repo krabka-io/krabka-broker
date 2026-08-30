@@ -1,10 +1,13 @@
 //! Krabka's `krabka.diskless` topic key: the per-topic opt-in to the diskless
-//! WAL data path, its value check, the exclusivity rule it carries against
-//! tiered storage, and the immutability rule both alter paths enforce.
+//! WAL data path, its value check, the two exclusivity rules it carries, and
+//! the immutability rule both alter paths enforce.
 
 use std::collections::BTreeMap;
 
-use super::REMOTE_STORAGE_ENABLE;
+use super::{
+    REMOTE_STORAGE_ENABLE,
+    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
+};
 
 /// Krabka extension: per-topic opt-in to the diskless data path.
 ///
@@ -61,28 +64,54 @@ pub(crate) fn validate_diskless_unchanged(
     ))
 }
 
-/// The exclusivity rule between the diskless data path and KIP-405 tiered
-/// storage, checked over a topic's whole override map.
+/// The two exclusivity rules the diskless data path carries, checked over a
+/// topic's whole override map.
 ///
-/// A diskless partition already keeps its records in the object store: the WAL
-/// flusher writes them there and the cold-read path serves them back, and the
-/// local log is a trimmed projection of that. Tiered storage is a second,
-/// independent uploader over the same local log, with its own local-retention
-/// deletion. Turning both on would give one partition two object-store copies
-/// and let tiered local retention delete segments the diskless trim frontier
-/// still accounts for.
+/// The first is KIP-405 tiered storage. A diskless partition already keeps its
+/// records in the object store: the WAL flusher writes them there and the
+/// cold-read path serves them back, and the local log is a trimmed projection
+/// of that. Tiered storage is a second, independent uploader over the same
+/// local log, with its own local-retention deletion. Turning both on would give
+/// one partition two object-store copies and let tiered local retention delete
+/// segments the diskless trim frontier still accounts for.
+///
+/// The second is KFC-1 scheduled delivery. The flusher copies through the
+/// partition's durability high watermark rather than its delivery watermark, so
+/// a batch that is not yet due can reach an object-store run and be trimmed
+/// locally. The cold-read path
+/// ([`crate::diskless::read::try_diskless_read`]) then serves that run's raw
+/// bytes back with neither the local path's delivery-watermark cap nor the
+/// tiered path's per-batch activation check, so a scheduled record would be
+/// delivered before its own time. Until the cold path carries a delivery gate,
+/// the pair is refused rather than silently breaking the one guarantee
+/// scheduled delivery exists to give.
 pub(super) fn validate_diskless_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let tiered = overrides
+    if !resolve_diskless(Some(overrides)) {
+        return Ok(());
+    }
+    if overrides
         .get(REMOTE_STORAGE_ENABLE)
-        .is_some_and(|value| value == "true");
-    if resolve_diskless(Some(overrides)) && tiered {
+        .is_some_and(|value| value == "true")
+    {
         return Err(format!(
             "{DISKLESS}=true cannot be combined with {REMOTE_STORAGE_ENABLE}=true: a diskless \
              partition already keeps its records in the object store through the WAL flusher, and \
              tiered storage is a second uploader over the same local log whose local retention \
              would delete segments the diskless trim frontier still accounts for"
+        ));
+    }
+    if overrides
+        .get(DELIVERY_MODE)
+        .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED)
+    {
+        return Err(format!(
+            "{DISKLESS}=true cannot be combined with {DELIVERY_MODE}={DELIVERY_MODE_SCHEDULED}: \
+             the diskless flusher copies through the durability high watermark rather than the \
+             delivery watermark, so a batch that is not yet due reaches an object-store run and is \
+             trimmed locally, and the cold-read path serves that run back with no delivery gate, \
+             which would deliver a scheduled record before its own time"
         ));
     }
     Ok(())
@@ -184,6 +213,43 @@ mod tests {
                 .unwrap_err();
         check!(error.contains(DISKLESS), "got: {error}");
         check!(error.contains(REMOTE_STORAGE_ENABLE), "got: {error}");
+    }
+
+    #[test]
+    fn diskless_and_scheduled_delivery_exclude_each_other() {
+        for (label, overrides, want_ok) in [
+            (
+                "a scheduled diskless topic",
+                map(&[(DISKLESS, "true"), (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED)]),
+                false,
+            ),
+            (
+                "an immediate diskless topic",
+                map(&[(DISKLESS, "true"), (DELIVERY_MODE, "immediate")]),
+                true,
+            ),
+            (
+                "a scheduled local-log topic",
+                map(&[
+                    (DISKLESS, "false"),
+                    (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+                ]),
+                true,
+            ),
+        ] {
+            check!(
+                validate_topic_config_map(&overrides).is_ok() == want_ok,
+                "{label}"
+            );
+        }
+
+        let error = validate_topic_config_map(&map(&[
+            (DISKLESS, "true"),
+            (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED),
+        ]))
+        .unwrap_err();
+        check!(error.contains(DISKLESS), "got: {error}");
+        check!(error.contains(DELIVERY_MODE), "got: {error}");
     }
 
     #[test]

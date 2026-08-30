@@ -124,7 +124,7 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         value_type: "boolean",
         default: Some("false"),
         kip: None,
-        description: "Route this topic through the diskless WAL data path instead of the local log. Fixed when the topic is created, and exclusive with remote.storage.enable.",
+        description: "Route this topic through the diskless WAL data path instead of the local log. Fixed when the topic is created, and exclusive with both remote.storage.enable and delivery.mode=scheduled.",
     },
     TopicConfigDoc {
         key: DELIVERY_MODE,

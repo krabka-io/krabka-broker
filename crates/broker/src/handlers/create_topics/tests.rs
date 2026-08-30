@@ -257,7 +257,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     let p = principal("admin");
     let peer = peer();
 
-    let cases: [RejectedConfig<'_>; 6] = [
+    let cases: [RejectedConfig<'_>; 7] = [
         ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
         (
             "bad-delivery-mode",
@@ -289,6 +289,11 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
                 ("remote.storage.enable", "true"),
             ],
             &["krabka.diskless", "remote.storage.enable"],
+        ),
+        (
+            "diskless-and-scheduled",
+            &[("krabka.diskless", "true"), ("delivery.mode", "scheduled")],
+            &["krabka.diskless", "delivery.mode"],
         ),
     ];
 

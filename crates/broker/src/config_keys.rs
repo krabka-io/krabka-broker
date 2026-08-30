@@ -40,11 +40,12 @@
 //! turn the check on for record keys and for record values. The mode selects
 //! how much of each record the check reads.
 //!
-//! Two pairs of keys exclude each other: `cleanup.policy=compact` with
-//! `delivery.mode=scheduled`, and `krabka.diskless=true` with
-//! `remote.storage.enable=true`. [`validate_topic_config`] sees one pair at a
-//! time and cannot see either, so [`validate_config_combination`] checks both
-//! rules over a whole override map.
+//! Three pairs of keys exclude each other: `cleanup.policy=compact` with
+//! `delivery.mode=scheduled`, and `krabka.diskless=true` with each of
+//! `remote.storage.enable=true` and `delivery.mode=scheduled`.
+//! [`validate_topic_config`] sees one pair at a time and cannot see any of
+//! them, so [`validate_config_combination`] checks all three rules over a whole
+//! override map.
 //!
 //! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
 //! synthesised for `DescribeConfigs` and is never stored, so
