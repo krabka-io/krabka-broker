@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::{sync::Arc, time::Duration};
 
 use krabka_log::Offset;
+use krabka_protocol::records::RecordBatch;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 use tokio::sync::Mutex as AsyncMutex;
@@ -105,18 +106,7 @@ pub(crate) async fn flush_once(
         )));
     }
 
-    let entries = crate::diskless::wal_object::parse_wal_object(&object)
-        .map_err(|error| crate::error::BrokerError::Txn(error.to_string()))?
-        .into_iter()
-        .map(|entry| WalIndexEntry {
-            topic_id: entry.topic_id,
-            partition: entry.partition,
-            first_offset: entry.first_offset,
-            last_offset: entry.last_offset,
-            byte_start: entry.byte_start,
-            byte_len: entry.byte_len,
-        })
-        .collect();
+    let entries = batch_index_entries(&object)?;
     let record = WalFlushRecord {
         object_key,
         format_version: 1,
@@ -151,6 +141,50 @@ pub(crate) async fn flush_once(
     Ok(Some(record))
 }
 
+fn batch_index_entries(
+    object: &bytes::Bytes,
+) -> Result<Vec<WalIndexEntry>, crate::error::BrokerError> {
+    let mut entries = Vec::new();
+    for run in crate::diskless::wal_object::parse_wal_object(object)
+        .map_err(|error| crate::error::BrokerError::Txn(error.to_string()))?
+    {
+        let mut byte_start = usize::try_from(run.byte_start).map_err(|_| {
+            crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+        })?;
+        let run_end = byte_start
+            .checked_add(usize::try_from(run.byte_len).unwrap_or(usize::MAX))
+            .ok_or_else(|| {
+                crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+            })?;
+        while byte_start < run_end {
+            let mut cursor = &object[byte_start..run_end];
+            let batch = RecordBatch::decode(&mut cursor).map_err(|error| {
+                crate::error::BrokerError::Txn(format!("diskless WAL batch: {error}"))
+            })?;
+            let byte_len = run_end - byte_start - cursor.len();
+            entries.push(WalIndexEntry {
+                topic_id: run.topic_id,
+                partition: run.partition,
+                first_offset: batch.base_offset,
+                last_offset: batch
+                    .base_offset
+                    .checked_add(i64::from(batch.last_offset_delta))
+                    .ok_or_else(|| {
+                        crate::error::BrokerError::Txn("diskless WAL batch offset overflow".into())
+                    })?,
+                byte_start: u64::try_from(byte_start).unwrap_or(u64::MAX),
+                byte_len: u32::try_from(byte_len).map_err(|_| {
+                    crate::error::BrokerError::Txn("diskless WAL batch exceeds 4 GiB".into())
+                })?,
+            });
+            byte_start = byte_start.checked_add(byte_len).ok_or_else(|| {
+                crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+            })?;
+        }
+    }
+    Ok(entries)
+}
+
 async fn wait_for_committed_projection(
     index_log: &DisklessIndexLog,
     record: &WalFlushRecord,
@@ -168,12 +202,40 @@ async fn wait_for_committed_projection(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use bytes::{Bytes, BytesMut};
     use krabka_metadata::NodeId;
+    use krabka_protocol::records::{Record, RecordBatch};
     use object_store::memory::InMemory;
     use tempfile::tempdir;
 
     use super::*;
     use crate::diskless::flusher::test_support::test_partition;
+
+    #[test]
+    fn flush_index_has_one_range_per_batch() {
+        let topic_id = Uuid::from_u128(10);
+        let batches = [4, 5].map(|base_offset| RecordBatch {
+            base_offset,
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"v")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut run = BytesMut::new();
+        for batch in &batches {
+            batch.encode(&mut run).unwrap();
+        }
+        let object = crate::diskless::wal_object::WalObjectBuilder::new()
+            .finish_with_run(topic_id, 0, 4, 5, &run);
+
+        let entries = batch_index_entries(&object).unwrap();
+
+        assert!(entries.len() == 2);
+        assert!(entries[0].first_offset == 4 && entries[0].last_offset == 4);
+        assert!(entries[1].first_offset == 5 && entries[1].last_offset == 5);
+        assert!(entries[0].byte_start + u64::from(entries[0].byte_len) == entries[1].byte_start);
+    }
 
     #[tokio::test]
     async fn flusher_writes_object_and_publishes_index() {

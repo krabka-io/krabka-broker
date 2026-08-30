@@ -82,9 +82,8 @@ impl WalIndexCache {
         })
     }
 
-    /// Return the object and byte range covering `offset`, if one exists.
-    #[must_use]
-    pub fn lookup(
+    #[cfg(test)]
+    pub(crate) fn lookup(
         &self,
         topic_id: Uuid,
         partition: i32,
@@ -94,6 +93,39 @@ impl WalIndexCache {
         let (_, (object_key, entry)) = entries.range(..=offset).next_back()?;
         (offset <= entry.last_offset)
             .then(|| (object_key.clone(), entry.byte_start, entry.byte_len))
+    }
+
+    /// Return the contiguous whole-batch range covering `offset`, capped by
+    /// `max_bytes` after the first batch.
+    #[must_use]
+    pub fn lookup_fetch_range(
+        &self,
+        topic_id: Uuid,
+        partition: i32,
+        offset: i64,
+        max_bytes: usize,
+    ) -> Option<(String, u64, u64)> {
+        let entries = self.by_topic_partition.get(&(topic_id, partition))?;
+        let (&first_offset, (object_key, first)) = entries.range(..=offset).next_back()?;
+        if offset > first.last_offset {
+            return None;
+        }
+
+        let mut byte_len = u64::from(first.byte_len);
+        let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+        for (_, (next_key, next)) in entries.range((
+            std::ops::Bound::Excluded(first_offset),
+            std::ops::Bound::Unbounded,
+        )) {
+            if next_key != object_key
+                || first.byte_start.checked_add(byte_len) != Some(next.byte_start)
+                || byte_len.saturating_add(u64::from(next.byte_len)) > max_bytes
+            {
+                break;
+            }
+            byte_len += u64::from(next.byte_len);
+        }
+        Some((object_key.clone(), first.byte_start, byte_len))
     }
 
     /// Return the highest flushed offset plus one for the partition.
@@ -153,6 +185,25 @@ mod tests {
         assert!(c.lookup(t, 0, 7).unwrap().0 == "o2");
         assert!(c.lookup(t, 0, 20).is_none());
         assert!(c.flushed_frontier(t, 0) == Some(10));
+    }
+
+    #[test]
+    fn fetch_range_stops_on_a_batch_boundary_after_the_first_batch() {
+        let mut c = WalIndexCache::default();
+        let mut entries = vec![entry(0, 0, 0), entry(0, 1, 1), entry(0, 2, 2)];
+        for (index, entry) in entries.iter_mut().enumerate() {
+            entry.byte_start = u64::try_from(index * 10).unwrap();
+            entry.byte_len = 10;
+        }
+        c.apply(&WalFlushRecord {
+            object_key: "o".into(),
+            format_version: 1,
+            entries,
+        });
+        let t = Uuid::from_u128(1);
+
+        assert!(c.lookup_fetch_range(t, 0, 0, 5) == Some(("o".into(), 0, 10)));
+        assert!(c.lookup_fetch_range(t, 0, 0, 20) == Some(("o".into(), 0, 20)));
     }
 
     #[test]

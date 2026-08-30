@@ -30,13 +30,24 @@ impl DisklessReadHandle {
         Arc::clone(&self.store)
     }
 
-    async fn read_run(&self, topic_id: Uuid, partition: i32, offset: i64) -> Option<Bytes> {
-        let (object_key, byte_start, byte_len) = self
+    async fn read_run(
+        &self,
+        topic_id: Uuid,
+        partition: i32,
+        offset: i64,
+        max_bytes: usize,
+    ) -> Result<Option<Bytes>, crate::error::BrokerError> {
+        let Some((object_key, byte_start, byte_len)) = self
             .index
             .lock()
             .await
-            .lookup(topic_id, partition, offset)?;
-        let range_end = byte_start.checked_add(u64::from(byte_len))?;
+            .lookup_fetch_range(topic_id, partition, offset, max_bytes)
+        else {
+            return Ok(None);
+        };
+        let range_end = byte_start.checked_add(byte_len).ok_or_else(|| {
+            crate::error::BrokerError::Txn("diskless WAL byte range overflow".into())
+        })?;
         self.store
             .get_opts(
                 &Path::from(object_key),
@@ -46,15 +57,27 @@ impl DisklessReadHandle {
                 },
             )
             .await
-            .ok()?
+            .map_err(|error| crate::error::BrokerError::Txn(format!("diskless WAL get: {error}")))?
             .bytes()
             .await
-            .ok()
+            .map_err(|error| crate::error::BrokerError::Txn(format!("diskless WAL body: {error}")))
+            .map(Some)
     }
 
-    async fn read_records(&self, topic_id: Uuid, partition: i32, offset: i64) -> Option<Bytes> {
-        let run = self.read_run(topic_id, partition, offset).await?;
-        first_batch_bytes_at_or_after(&run, offset)
+    async fn read_records(
+        &self,
+        topic_id: Uuid,
+        partition: i32,
+        offset: i64,
+        max_bytes: usize,
+    ) -> Result<Option<Bytes>, crate::error::BrokerError> {
+        let Some(run) = self
+            .read_run(topic_id, partition, offset, max_bytes)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(first_batch_bytes_at_or_after(&run, offset, max_bytes))
     }
 }
 
@@ -78,9 +101,26 @@ pub(crate) async fn try_diskless_read(
 
     let handle = broker.diskless_read.clone()?;
     let topic_id = Uuid::from_bytes(p.topic_id.0);
-    let records = handle
-        .read_records(topic_id, p.partition_index, p.fetch_offset)
-        .await?;
+    let max_bytes = usize::try_from(p.max_bytes.max(0)).unwrap_or(0);
+    let records = match handle
+        .read_records(topic_id, p.partition_index, p.fetch_offset, max_bytes)
+        .await
+    {
+        Ok(Some(records)) => records,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(
+                topic = %p.topic_name,
+                partition = p.partition_index,
+                offset = p.fetch_offset,
+                %error,
+                "diskless WAL cold read failed"
+            );
+            p.out.error_code = codes::KAFKA_STORAGE_ERROR;
+            p.out.records = None;
+            return Some(0);
+        }
+    };
     let bytes_est = records.len();
     p.out.error_code = codes::NONE;
     if p.read_committed && !p.is_follower_fetch {
@@ -90,8 +130,9 @@ pub(crate) async fn try_diskless_read(
     Some(bytes_est)
 }
 
-fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64) -> Option<Bytes> {
+fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64, max_bytes: usize) -> Option<Bytes> {
     let mut offset = 0;
+    let mut selected = None;
     while offset < run.len() {
         let slice = run.slice(offset..);
         let mut cur: &[u8] = &slice;
@@ -100,19 +141,30 @@ fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64) -> Option<Bytes> {
         };
         let encoded_len = batch.encoded_len();
         let last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
-        if last_offset >= floor {
-            return Some(run.slice(offset..));
+        if selected.is_none() && last_offset >= floor {
+            selected = Some(offset);
+        } else if let Some(start) = selected
+            && offset + encoded_len - start > max_bytes
+        {
+            return Some(run.slice(start..offset));
         }
         offset = offset.checked_add(encoded_len)?;
     }
-    None
+    selected.map(|start| run.slice(start..offset))
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig};
+    use krabka_protocol::{
+        Decode, Encode,
+        owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        primitives::uuid::Uuid as WireUuid,
+        records::{Attributes, Record, RecordBatch},
+    };
     use object_store::{ObjectStoreExt, PutPayload, path::Path};
 
     use super::*;
@@ -147,6 +199,25 @@ mod tests {
         bytes.freeze()
     }
 
+    fn round_trip_partition(topic_id: WireUuid, partition: PartitionData) -> PartitionData {
+        let response = FetchResponse {
+            responses: vec![FetchableTopicResponse {
+                topic: "orders".into(),
+                topic_id,
+                partitions: vec![partition],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut encoded = BytesMut::new();
+        response.encode(&mut encoded, 13).unwrap();
+        FetchResponse::decode(&mut &encoded[..], 13)
+            .unwrap()
+            .responses[0]
+            .partitions[0]
+            .clone()
+    }
+
     #[test]
     fn cold_read_returns_byte_exact_covering_batch() {
         let first = batch(0, b"a");
@@ -155,7 +226,7 @@ mod tests {
         let mut expected = BytesMut::new();
         second.encode(&mut expected).unwrap();
 
-        let got = first_batch_bytes_at_or_after(&run, 1).unwrap();
+        let got = first_batch_bytes_at_or_after(&run, 1, usize::MAX).unwrap();
 
         assert!(got == expected.freeze());
     }
@@ -164,7 +235,7 @@ mod tests {
     fn cold_read_miss_leaves_out_of_range() {
         let run = encode_batches(&[batch(0, b"a")]);
 
-        assert!(first_batch_bytes_at_or_after(&run, 5).is_none());
+        assert!(first_batch_bytes_at_or_after(&run, 5, usize::MAX).is_none());
     }
 
     #[test]
@@ -182,9 +253,19 @@ mod tests {
             ..Default::default()
         }]);
 
-        let got = first_batch_bytes_at_or_after(&run, 11).unwrap();
+        let got = first_batch_bytes_at_or_after(&run, 11, usize::MAX).unwrap();
 
         assert!(got == run);
+    }
+
+    #[test]
+    fn max_bytes_keeps_whole_batches_and_always_returns_the_first() {
+        let first = encode_batches(&[batch(0, b"a")]);
+        let second = encode_batches(&[batch(1, b"b")]);
+        let run = encode_batches(&[batch(0, b"a"), batch(1, b"b")]);
+
+        assert!(first_batch_bytes_at_or_after(&run, 0, 1).unwrap() == first);
+        assert!(first_batch_bytes_at_or_after(&run, 0, first.len() + second.len()).unwrap() == run);
     }
 
     #[tokio::test]
@@ -221,8 +302,144 @@ mod tests {
         });
         let handle = DisklessReadHandle::new(Arc::new(AsyncMutex::new(cache)), store);
 
-        let got = handle.read_records(topic_id, 0, 1).await.unwrap();
+        let got = handle
+            .read_records(topic_id, 0, 1, usize::MAX)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(got == second);
+    }
+
+    #[tokio::test]
+    async fn max_bytes_and_store_failure_map_the_whole_fetch_partition() {
+        let dir = tempfile::tempdir().unwrap();
+        let object_dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_dir.path().to_path_buf(),
+        });
+        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        let broker_handle = Broker::start(config).await.unwrap();
+        let broker = broker_handle.broker_arc_for_test();
+        let topic_id = Uuid::from_u128(9);
+        let wire_topic_id = WireUuid(topic_id.into_bytes());
+        let first_batch = batch(0, b"a");
+        let first = encode_batches(std::slice::from_ref(&first_batch));
+        let second = encode_batches(&[batch(1, b"b")]);
+        let mut run = BytesMut::new();
+        run.extend_from_slice(&first);
+        run.extend_from_slice(&second);
+        let read_handle = broker.diskless_read.as_ref().unwrap();
+        read_handle
+            .object_store()
+            .put(
+                &Path::from("diskless-wal/present"),
+                PutPayload::from(run.freeze()),
+            )
+            .await
+            .unwrap();
+        read_handle
+            .index
+            .lock()
+            .await
+            .apply(&super::super::wal_index::WalFlushRecord {
+                object_key: "diskless-wal/present".into(),
+                format_version: 1,
+                entries: vec![
+                    super::super::wal_index::WalIndexEntry {
+                        topic_id,
+                        partition: 0,
+                        first_offset: 0,
+                        last_offset: 0,
+                        byte_start: 0,
+                        byte_len: u32::try_from(first.len()).unwrap(),
+                    },
+                    super::super::wal_index::WalIndexEntry {
+                        topic_id,
+                        partition: 0,
+                        first_offset: 1,
+                        last_offset: 1,
+                        byte_start: u64::try_from(first.len()).unwrap(),
+                        byte_len: u32::try_from(second.len()).unwrap(),
+                    },
+                ],
+            });
+        let part_dir = dir.path().join("orders-0");
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let part = crate::broker::spawn_partition(
+            "orders".into(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).unwrap(),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            true,
+        );
+        let mut pending = PendingRead {
+            topic_name: "orders".into(),
+            topic_id: wire_topic_id,
+            partition_index: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            max_bytes: 1,
+            read_committed: false,
+            is_follower_fetch: false,
+            partition: Some(part.clone()),
+            out: PartitionData {
+                error_code: codes::OFFSET_OUT_OF_RANGE,
+                high_watermark: 7,
+                log_start_offset: 3,
+                ..Default::default()
+            },
+            cpu_micros: 0,
+        };
+
+        assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(first.len()));
+        assert!(
+            round_trip_partition(wire_topic_id, pending.out.clone())
+                == PartitionData {
+                    error_code: codes::NONE,
+                    high_watermark: 7,
+                    log_start_offset: 3,
+                    records: Some(first_batch.into()),
+                    ..Default::default()
+                }
+        );
+
+        read_handle
+            .index
+            .lock()
+            .await
+            .apply(&super::super::wal_index::WalFlushRecord {
+                object_key: "diskless-wal/missing".into(),
+                format_version: 1,
+                entries: vec![super::super::wal_index::WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: 1,
+                }],
+            });
+        pending.out = PartitionData {
+            error_code: codes::OFFSET_OUT_OF_RANGE,
+            high_watermark: 7,
+            log_start_offset: 3,
+            ..Default::default()
+        };
+        assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(0));
+        assert!(
+            round_trip_partition(wire_topic_id, pending.out)
+                == PartitionData {
+                    error_code: codes::KAFKA_STORAGE_ERROR,
+                    high_watermark: 7,
+                    log_start_offset: 3,
+                    ..Default::default()
+                }
+        );
+        broker_handle.shutdown().await;
     }
 }
