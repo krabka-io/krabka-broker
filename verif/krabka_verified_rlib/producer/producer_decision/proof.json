@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_increment_sequence": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_matches_last_batch": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_producer_decision": { "prover": "alt-ergo", "time": 0.046 }
+    }
+  }
+}

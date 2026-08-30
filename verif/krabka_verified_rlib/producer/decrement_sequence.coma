@@ -1,0 +1,37 @@
+(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 51 0 51 63 *)
+
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sproducer = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 52 4 52 36
+let%span sproducer'0 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 52 39 52 47
+let%span sproducer'1 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 49 28 49 83
+let%span sproducer'2 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 45 16 45 49
+
+use creusot.int.Int32
+use creusot.prelude.Any
+
+let wrapping_sub (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_sub ensures] [%#snum] result = Int32.sub self_ rhs}
+    (! return {result}) ]
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+function decrement_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 44 0 44 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
+ = [%#sproducer'2] Int32.bw_and (Int32.sub sequence decrement) const_MAX
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let decrement_sequence [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 51 0 51 63]
+  (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = wrapping_sub [%#sproducer] {sequence} {decrement} (fun (_x: Int32.t) -> [ &_6 <- _x ] s1)
+    | s1 = [ &_ret <- Int32.bw_and _6 ([%#sproducer'0] const_MAX) ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: Int32.t = Any.any_l ()
+  | & sequence: Int32.t = sequence
+  | & decrement: Int32.t = decrement
+  | & _6: Int32.t = Any.any_l () ])
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:decrement_sequence ensures] [%#sproducer'1] result
+    = decrement_sequence_model sequence decrement}
+    (! return {result}) ]
