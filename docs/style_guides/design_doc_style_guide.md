@@ -6,7 +6,7 @@ This guide defines the style and content expectations for design documents in Kr
 
 Design documents capture **architectural decisions and rationale**, the "why" behind the code. They are for engineers who need to understand a subsystem conceptually before they read the implementation details.
 
-Krabka's design specs live under [`docs/superpowers/specs/`](../superpowers/specs/), named `YYYY-MM-DD-<topic>-design.md`. A subsystem may also carry a `docs/design.md` inside its crate when it needs a durable, per-crate design reference. Link that file from the crate README.
+A subsystem can carry a `docs/design.md` inside its crate when it needs a durable design reference. Link that file from the crate README.
 
 ## What Belongs in Design Docs
 
@@ -73,7 +73,7 @@ Link to the coverage report and any relevant differential-test suites
 
 When you write or update a design document:
 
-- **Consult the KIP and the Kafka wire schemas** to make sure the terminology is accurate and the compatibility descriptions are correct. Use the precise language of the KIP and the schema field names when you describe message formats or protocol behaviour. Cross-check against the [KIP matrix](../KIP_MATRIX.md).
+- **Consult the KIP and the Kafka wire schemas** to make sure the terminology is accurate and the compatibility descriptions are correct. Use the precise language of the KIP and the schema field names when you describe message formats or protocol behaviour. Cross-check the claim against the implementation and its tests.
 - **Where Kafka's behaviour is undocumented or version-dependent, verify it empirically** against the latest released `cp-kafka` or `apache/kafka` image. Do not rely on the wiki. See [`CLAUDE.md`](../../CLAUDE.md). Document what you observed and the version you observed it against.
 - **Ask clarifying questions** if the code does not make the design intent clear. It is better to ask the maintainer than to guess or to document assumptions that may be wrong.
 
@@ -101,4 +101,4 @@ When a Rust concept is integral to the design, briefly explain what the concept 
 2. Does this explain a decision, or does it only describe what the code does?
 3. Could a reader find this information in the rustdoc or the source?
 4. Would a new team member understand *why* things are this way?
-5. Is every Kafka-compatibility claim consistent with the KIP matrix and the differential tests?
+5. Is every Kafka-compatibility claim consistent with the KIP and the differential tests?

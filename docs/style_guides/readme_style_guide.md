@@ -16,7 +16,7 @@ Each crate README is the **entry point for someone who sees the crate for the fi
 - **Key features and capabilities**, including which Kafka KIPs or wire APIs it covers.
 - **Quick start or usage example** (for binaries and public API crates).
 - **Configuration reference** (for server binaries).
-- **Links** to design docs, the [KIP matrix](../KIP_MATRIX.md), test coverage reports, and API documentation.
+- **Links** to design docs, test coverage reports, and API documentation.
 
 ## What Does NOT Belong in READMEs
 
@@ -61,7 +61,6 @@ standard(s) / KIP(s) it implements, and its relationship to other Krabka crates.
 - [Design](docs/design.md)
 - [Test Coverage](docs/test_coverage_report.md)
 - [API Documentation](https://docs.rs/krabka-<name>)
-- [KIP Matrix](../../docs/KIP_MATRIX.md)
 
 ## License
 
@@ -102,7 +101,6 @@ docker pull ghcr.io/robot-head/crabka-<name>:latest
 
 - [Design](docs/design.md)
 - [Test Coverage](docs/test_coverage_report.md)
-- [KIP Matrix](../../docs/KIP_MATRIX.md)
 
 ## License
 
@@ -131,8 +129,8 @@ Apache-2.0. Derivative work of [Apache Kafka](https://kafka.apache.org); see [NO
 - **Be concise** — READMEs should be scannable. If a section exceeds a screenful, it probably belongs in a separate doc.
 - **Lead with the most useful information** — what it does, not how it is built.
 - **Use concrete examples** — a 5-line code snippet is worth a paragraph of description.
-- **Link, do not duplicate** — point to docs.rs for API details, design docs for rationale, the KIP matrix for compatibility scope, and the coverage report for what is tested.
-- **State Kafka-compatibility scope honestly** — if the crate implements a KIP partially, say so and link the KIP matrix rather than imply full support.
+- **Link, do not duplicate** — point to docs.rs for API details, design docs for rationale, and the coverage report for what is tested.
+- **State Kafka-compatibility scope honestly** — if the crate implements a KIP partially, say so rather than imply full support.
 
 ## Badges
 
@@ -141,13 +139,13 @@ The standard badge set is the one form of image Krabka READMEs use, because the 
 ## Naming Conventions
 
 - **Title**: use the crate name as-is (for example, `# krabka-protocol`, not `# Kafka Protocol Library`).
-- **Links**: use relative paths within the repo (for example, `../../NOTICE`, `../../docs/KIP_MATRIX.md`), not absolute URLs, except for external sites (crates.io, docs.rs, kafka.apache.org, KIP pages).
+- **Links**: use relative paths within the repo (for example, `../../NOTICE`), not absolute URLs, except for external sites (crates.io, docs.rs, kafka.apache.org, KIP pages).
 - **License**: American spelling (`## License`), Apache-2.0, and the Kafka derivative-work line that points at `NOTICE`. Every crate is a derivative work of Apache Kafka.
 
 ## Questions to Ask When Writing
 
 1. Could someone understand what this crate does from the first two sentences?
 2. Is there enough information to use the crate without the source code?
-3. Do I duplicate content that lives in another document, such as rustdoc, a design doc, a coverage report, or the KIP matrix?
+3. Do I duplicate content that lives in another document, such as rustdoc, a design doc, or a coverage report?
 4. Would this be useful on crates.io and docs.rs?
-5. Is the Kafka-compatibility scope stated accurately, and does it match the KIP matrix?
+5. Is the Kafka-compatibility scope stated accurately?

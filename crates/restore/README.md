@@ -53,10 +53,6 @@ A batch that a predicate filters is re-encoded from the records that survive. It
 
 Without `--rlmm-snapshot` the restore has only the object keys to work from. A segment that the old cluster had marked for deletion is then indistinguishable from a live one, and the restore includes it. Supply the snapshot from a broker's `<log.dir>/remote-log-metadata/snapshot` when the archive holds segments that retention had already released.
 
-## Documentation
-
-- [Kafka compatibility matrix](https://github.com/robot-head/crabka/blob/main/docs/KIP_MATRIX.md)
-
 ## License
 
 Apache-2.0. Derivative work of [Apache Kafka](https://kafka.apache.org); see [NOTICE](../../NOTICE).

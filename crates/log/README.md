@@ -79,7 +79,6 @@ println!("wrote at {base_offset:?}; read {} batches", output.batches.len());
 
 - [API documentation](https://docs.rs/krabka-log)
 - [Krabka repository](https://github.com/robot-head/crabka)
-- [Kafka compatibility matrix](https://github.com/robot-head/crabka/blob/main/docs/KIP_MATRIX.md)
 
 ## License
 

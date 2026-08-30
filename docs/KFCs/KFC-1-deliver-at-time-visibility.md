@@ -230,7 +230,7 @@ The design makes claims about a state space, so the strongest tests enumerate th
 
 **Formal verification.** The visibility decision is a pure kernel in `krabka-verified`, called by the fetch handler. The kernel gains a Creusot contract for the new cap. The proof covers every input, and not only the inputs a test picks.
 
-The checked-in proof under `verif/` is stale as of this KFC, and this note is here because nothing in the repository will report it. Creusot is not wired into CI or into Bazel, so no gate fails while the recorded verification conditions describe the contract the kernel had before the cap. A maintainer with the pinned Creusot toolchain named in `.creusot-version` must re-run it and commit the result. Until then the contract is enforced by the exhaustive decision table in the kernel's own tests, which walks the new parameter past both ends of its proved domain against an independent oracle.
+The checked-in proof under `verif/` is gated. The [`proofs` CI job](../../.github/workflows/ci.yml) installs the Creusot release in `.creusot-version` and re-runs the `krabka-verified` and `krabka-throttle` proof sessions. The job fails on an unproved goal. The [proof ledger](../verification.md) records the contract, caller preconditions, and proof-session path.
 
 **Integration.** In-process broker tests drive a mock clock. They produce a scheduled batch, move the clock across the activation boundary, and assert what a fetch returns on each side of it. A mock clock is what turns the lateness bound into a deterministic assertion, and not a race against real time.
 

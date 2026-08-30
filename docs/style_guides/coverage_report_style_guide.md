@@ -10,10 +10,7 @@ Coverage reports are **living documents**. Update a report when you add tests. A
 
 ## Krabka's Verification Model
 
-Krabka has no formal requirements database. Its "requirements" are the **Kafka compatibility contract**: wire-protocol byte exactness and KIP semantics. Verification traces to two authoritative artifacts:
-
-- The **feature-compatibility matrix** in the root [`README.md`](../../README.md#feature-compatibility) — differential-tested and authoritative.
-- The [**KIP matrix**](../KIP_MATRIX.md) — per-KIP implementation status.
+Krabka has no formal requirements database. Its "requirements" are the **Kafka compatibility contract**: wire-protocol byte exactness and KIP semantics.
 
 A coverage report shows how the tests verify that contract for the surface a crate owns. The methods are unit tests, property tests (round-trip and invariants), byte-exact codec checks against `kafka-clients`, JVM **differential** tests against a live oracle, mutation testing, and line coverage.
 
@@ -30,7 +27,7 @@ A coverage report shows how the tests verify that contract for the surface a cra
 - **Design rationale** — how or why the code works; the design doc does that.
 - **Bug reports or change history** — coverage reports track the current state, not the past changes.
 - **Aspirational targets** — report what IS covered, not what coverage SHOULD be.
-- **Duplicated KIP descriptions** — link the KIP matrix. Do not restate a KIP's semantics.
+- **Duplicated KIP descriptions** — link the KIP. Do not restate its semantics.
 
 ## Document Structure
 
@@ -53,16 +50,16 @@ Lead with a one-line summary: "All owned KIPs verified (N differential, M unit)"
 Include a table that maps each KIP or wire behaviour the crate owns to its verification status and to the test that establishes it.
 
 ```markdown
-| KIP / Behaviour | Feature | Result | Test | Matrix Ref |
+| KIP / Behaviour | Feature | Result | Test | Contract Ref |
 | :--- | :--- | :--- | :--- | :--- |
-| **KIP-848** | Consumer group heartbeat assignment | Pass | `assignment.rs::uniform_sticky` + differential `group_protocol` | [matrix](../../docs/KIP_MATRIX.md) |
+| **KIP-848** | Consumer group heartbeat assignment | Pass | `assignment.rs::uniform_sticky` + differential `group_protocol` | KIP-848 |
 | **Wire** | ApiVersions v3 byte exactness | Pass | `codec.rs::api_versions_roundtrip` + `kafka-clients` diff | README compat |
 ```
 
 - **Every KIP or behaviour the crate owns must appear** — even if the result is `N/A` or `Not tested`.
 - **Result values**: `Pass` (test exists and passes), `Fail` (test exists and fails), `N/A` (not applicable to this crate), `Not tested` (no test exists).
 - **Test column**: cite specific test function names (`file::function`), not just file paths. For differential coverage, name the differential suite or scenario.
-- **Matrix Ref column**: link to the row in the [KIP matrix](../KIP_MATRIX.md) or the README compatibility matrix that this row traces to.
+- **Contract Ref column**: name the KIP or the README compatibility claim that this row traces to.
 - **Cross-crate or differential coverage**: when tests elsewhere verify the behaviour, say `Pass (differential)` or `Pass (krabka-broker)` and cite the specific test.
 
 ### Section 2: Test Inventory
