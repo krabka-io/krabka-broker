@@ -7,7 +7,7 @@
 //! the sink and leaves spool mode only when the spool is empty.
 
 use super::writer::AuditWriter;
-use crate::sink::AuditRecord;
+use crate::sink::{AuditError, AuditRecord};
 
 impl AuditWriter {
     /// Write to the sink, or to the spool.
@@ -19,36 +19,48 @@ impl AuditWriter {
         skip_all,
         fields(class = ?record.class, spooling = self.spooling)
     )]
-    pub(super) async fn write_or_spool(&mut self, record: AuditRecord) {
+    pub(super) async fn write_or_spool(
+        &mut self,
+        record: &AuditRecord,
+        durable: bool,
+    ) -> Result<(), AuditError> {
         if self.spooling {
-            self.spool_record(&record);
-            return;
+            return self.spool_record(record, durable);
         }
-        if let Err(e) = self.sink.write(record.clone()).await {
-            tracing::warn!(error = %e, "audit sink write failed; entering spool mode");
-            self.spooling = true;
-            self.spool_record(&record);
+        match self.sink.write(record.clone(), durable).await {
+            Ok(()) => Ok(()),
+            Err(error @ AuditError::Indeterminate(_)) => Err(error),
+            Err(error) => {
+                tracing::warn!(%error, "audit sink write failed; entering spool mode");
+                self.spooling = true;
+                self.spool_record(record, durable)
+            }
         }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(class = ?record.class))]
-    fn spool_record(&mut self, record: &AuditRecord) {
+    fn spool_record(&mut self, record: &AuditRecord, durable: bool) -> Result<(), AuditError> {
         let Some(spool) = &mut self.spool else {
-            self.stats.inc_dropped();
-            return;
+            return Err(AuditError::Unavailable(
+                "audit sink failed and spool is disabled".into(),
+            ));
         };
         match spool.append(record) {
             Ok(true) => {
+                if durable {
+                    spool.sync()?;
+                }
                 self.stats.inc_spooled();
                 self.stats.set_depth(spool.count(), spool.size());
+                Ok(())
             }
             Ok(false) => {
-                self.stats.inc_dropped();
                 tracing::warn!("audit spool full; record dropped");
+                Err(AuditError::Unavailable("audit spool is full".into()))
             }
             Err(e) => {
-                self.stats.inc_dropped();
                 tracing::error!(error = %e, "audit spool write failed; record dropped");
+                Err(e)
             }
         }
     }
@@ -61,46 +73,59 @@ impl AuditWriter {
         skip_all,
         fields(replayed = tracing::field::Empty, total = tracing::field::Empty)
     )]
-    pub(super) async fn try_replay(&mut self) {
+    pub(super) async fn try_replay(&mut self) -> Result<(), AuditError> {
         let Some(spool) = &mut self.spool else {
             self.spooling = false;
-            return;
+            return Ok(());
         };
         if spool.is_empty() {
             self.spooling = false;
-            return;
+            return Ok(());
         }
         let records = match spool.read_all() {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(error = %e, "audit spool read failed during replay");
-                return;
+                return Ok(());
             }
         };
         let mut replayed = 0usize;
-        for rec in &records {
-            if self.sink.write(rec.clone()).await.is_err() {
-                break; // topic still unhealthy
+        // ponytail: rewrite per record keeps replay crash-safe; batch only with
+        // a transactional sink/spool commit protocol.
+        while replayed < records.len() {
+            let record = &records[replayed];
+            spool.begin_replay(record)?;
+            match self.sink.write(record.clone(), true).await {
+                Ok(()) => {
+                    if let Err(error) = spool.rewrite(&records[replayed + 1..]) {
+                        return Err(AuditError::Indeterminate(format!(
+                            "replay append succeeded but spool rewrite failed: {error}"
+                        )));
+                    }
+                    if let Err(error) = spool.finish_replay() {
+                        return Err(AuditError::Indeterminate(format!(
+                            "replay committed but poison latch could not be cleared: {error}"
+                        )));
+                    }
+                    replayed += 1;
+                    self.stats.inc_replayed_by(1);
+                    self.stats.set_depth(spool.count(), spool.size());
+                }
+                Err(error @ AuditError::Indeterminate(_)) => return Err(error),
+                Err(_) => {
+                    spool.finish_replay()?;
+                    break;
+                }
             }
-            replayed += 1;
         }
         let span = tracing::Span::current();
         span.record("replayed", replayed);
         span.record("total", records.len());
         if replayed == records.len() {
-            if let Err(e) = spool.truncate() {
-                tracing::error!(error = %e, "audit spool truncate failed");
-                return;
-            }
             self.spooling = false;
             tracing::info!(replayed, "audit spool drained; resumed direct topic writes");
-        } else if let Err(e) = spool.rewrite(&records[replayed..]) {
-            tracing::error!(error = %e, "audit spool rewrite failed during replay");
-            return;
         }
-        self.stats
-            .inc_replayed_by(u64::try_from(replayed).unwrap_or(u64::MAX));
-        self.stats.set_depth(spool.count(), spool.size());
+        Ok(())
     }
 }
 
@@ -115,7 +140,7 @@ mod tests {
     use crate::{
         event::AuditEventClass,
         log::{
-            AuditLog,
+            AuditLog, AuditMode,
             test_support::{
                 FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, header, life, params,
                 params_with_timeline, product, test_signer,
@@ -184,6 +209,81 @@ mod tests {
         drop(log);
         h.await.unwrap();
         check!((sink.inner.records().len(), stats.spooled(), stats.depth()) == (2, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn fail_closed_write_requests_durable_sink_acknowledgement() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = Arc::new(FailableSink::default());
+        let stats = Arc::new(AuditStats::new());
+        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let writer = AuditWriter::new(receiver, params(sink.clone(), spool, Arc::clone(&stats)));
+        let handle = tokio::spawn(writer.run());
+
+        log.emit_required(life(1)).await.unwrap();
+        drop(log);
+        handle.await.unwrap();
+
+        check!(
+            (
+                sink.durable_requests(),
+                sink.inner.records().len(),
+                stats.depth()
+            ) == (1, 1, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn indeterminate_durable_write_fails_stopped_without_spool_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = Arc::new(FailableSink::default());
+        sink.set_indeterminate(true);
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
+        let writer = AuditWriter::new(receiver, params(sink, spool, Arc::new(AuditStats::new())));
+        let handle = tokio::spawn(writer.run());
+
+        let error = log.emit_required(life(1)).await.unwrap_err();
+        check!(error.to_string().contains("indeterminate"));
+        handle.await.unwrap();
+        check!(
+            log.emit_required(life(2))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("not running")
+        );
+        check!(Spool::open(dir.path(), ROOMY_CAP).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn indeterminate_replay_poison_survives_after_a_successful_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let mut chain = crate::chain::ChainState::new();
+        for event in [life(1), life(2)] {
+            let mut record = AuditRecord::from_event(&event, &product());
+            let (seq, previous) = chain.extend(&record.value);
+            record.push_chain_headers(seq, &previous);
+            check!(spool.append(&record).unwrap());
+        }
+        let sink = Arc::new(FailableSink::default());
+        sink.set_indeterminate_after(1);
+        let (log, receiver) = AuditLog::new(8);
+        let (params, timeline) =
+            params_with_timeline(sink.clone(), spool, Arc::new(AuditStats::new()));
+        let handle = tokio::spawn(AuditWriter::new(receiver, params).run());
+
+        tokio::task::yield_now().await;
+        timeline.advance(REPLAY_EVERY.to_std());
+        handle.await.unwrap();
+        check!(sink.inner.records().len() == 1);
+        check!(matches!(
+            Spool::open(dir.path(), ROOMY_CAP),
+            Err(AuditError::Poisoned(_))
+        ));
+        drop(log);
     }
 
     #[tokio::test]
@@ -262,6 +362,83 @@ mod tests {
         // Strict bounds chosen to also kill the "return constant 1" mutants.
         assert2::check!(stats.dropped() >= 2); // many overflowed (kills inc_dropped/() , dropped->0/1)
         assert2::check!(stats.spool_bytes() > bytes(1)); // ~one record is buffered (kills spool_bytes->0/1)
+    }
+
+    #[tokio::test]
+    async fn full_spool_refuses_a_fail_closed_record() {
+        let probe = tempfile::tempdir().unwrap();
+        let mut existing = AuditRecord::from_event(&life(0), &product());
+        existing.push_chain_headers(0, &crate::chain::GENESIS_HEAD);
+        let one = {
+            let mut spool = Spool::open(probe.path(), ROOMY_CAP).unwrap();
+            check!(spool.append(&existing).unwrap());
+            spool.size()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), one).unwrap();
+        check!(spool.append(&existing).unwrap());
+        let sink = Arc::new(FailableSink::default());
+        sink.set_fail(true);
+        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
+        let writer = AuditWriter::new(receiver, params(sink, spool, Arc::new(AuditStats::new())));
+        let handle = tokio::spawn(writer.run());
+
+        let error = log.emit_required(life(1)).await.unwrap_err();
+        check!(error.to_string().contains("spool is full"));
+
+        drop(log);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fail_open_spool_loss_is_followed_by_a_chain_marker() {
+        let probe = tempfile::tempdir().unwrap();
+        let mut first = AuditRecord::from_event(&life(0), &product());
+        first.push_chain_headers(0, &crate::chain::GENESIS_HEAD);
+        let one = {
+            let mut spool = Spool::open(probe.path(), ROOMY_CAP).unwrap();
+            check!(spool.append(&first).unwrap());
+            spool.size()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let sink = Arc::new(FailableSink::default());
+        sink.set_fail(true);
+        let stats = Arc::new(AuditStats::new());
+        let spool = Spool::open(dir.path(), one).unwrap();
+        let (log, receiver) = AuditLog::new_with_mode_and_spool(8, AuditMode::FailOpen, &spool);
+        let (params, timeline) = params_with_timeline(sink.clone(), spool, stats.clone());
+        let writer = AuditWriter::new(receiver, params);
+        let handle = tokio::spawn(writer.run());
+
+        log.emit(life(0));
+        log.emit(life(1));
+        log.emit(life(2));
+        await_until("one spooled and two lost", || stats.dropped() == 2).await;
+
+        sink.set_fail(false);
+        timeline.advance(REPLAY_EVERY.to_std());
+        await_until("loss marker persisted", || sink.inner.records().len() == 2).await;
+        timeline.advance(REPLAY_EVERY.to_std());
+        await_until("all loss markers persisted", || {
+            sink.inner.records().len() == 3
+        })
+        .await;
+        let records = sink.inner.records();
+        let lost: u64 = records
+            .iter()
+            .filter(|record| record.class == AuditEventClass::RecordsLost)
+            .map(|record| {
+                serde_json::from_slice::<serde_json::Value>(&record.value).unwrap()["records_lost"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .sum();
+        check!(lost == 2);
+
+        drop(log);
+        handle.await.unwrap();
     }
 
     #[tokio::test]

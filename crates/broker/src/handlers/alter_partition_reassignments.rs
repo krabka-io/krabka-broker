@@ -51,7 +51,7 @@ use self::{
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
-    codes::CLUSTER_AUTHORIZATION_FAILED,
+    codes::{CLUSTER_AUTHORIZATION_FAILED, POLICY_VIOLATION},
     handlers::RequestContext,
 };
 
@@ -106,15 +106,31 @@ pub(crate) async fn handle(
     }
 
     let mut submit_failure = None;
-    if !batch.records.is_empty()
-        && let Err(e) = broker
-            .controller
-            .submit_change(std::mem::take(&mut batch.records))
-            .await
-    {
-        tracing::warn!(error = %e, "alter-reassignment submit failed");
-        submit_failure = Some(format!("submit failed: {e}"));
-        mark_submit_failed(&mut by_topic, &format!("submit failed: {e}"));
+    if !batch.records.is_empty() {
+        match batch.require_audit(broker, ctx).await {
+            Ok(()) => {
+                if let Err(error) = broker
+                    .controller
+                    .submit_change(std::mem::take(&mut batch.records))
+                    .await
+                {
+                    let message = format!("submit failed: {error}");
+                    tracing::warn!(%error, "alter-reassignment submit failed");
+                    mark_submit_failed(&mut by_topic, &message);
+                    submit_failure = Some(message);
+                }
+            }
+            Err(error) => {
+                let message = format!("privileged action refused: {error}");
+                for rows in by_topic.values_mut() {
+                    for row in rows.iter_mut().filter(|row| row.error_code == 0) {
+                        row.error_code = POLICY_VIOLATION;
+                        row.error_message = Some(message.clone());
+                    }
+                }
+                submit_failure = Some(message);
+            }
+        }
     }
     // KFC-9: audit the approvals this append spent, now that its outcome is
     // known.

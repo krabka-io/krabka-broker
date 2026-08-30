@@ -54,7 +54,7 @@ impl KafkaTopicAuditSink {
 
 #[async_trait]
 impl AuditSink for KafkaTopicAuditSink {
-    async fn write(&self, record: AuditRecord) -> Result<(), AuditError> {
+    async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError> {
         let Some(partition) = self.partitions.get(&self.topic, self.partition_index) else {
             self.metrics.audit_write_failures_total.inc();
             return Err(AuditError::Sink(format!(
@@ -82,16 +82,44 @@ impl AuditSink for KafkaTopicAuditSink {
         });
         batch.last_offset_delta = 0;
 
-        match partition.produce_batch(batch).await {
-            Ok(_) => {
-                self.metrics.audit_events_total.inc();
-                Ok(())
-            }
-            Err(e) => {
+        if let Err(error) = partition.produce_batch_outcome(batch).await {
+            self.metrics.audit_write_failures_total.inc();
+            return Err(match error {
+                crate::partition::ProduceBatchError::Rejected(error) => {
+                    AuditError::Sink(error.to_string())
+                }
+                crate::partition::ProduceBatchError::Indeterminate(error) => {
+                    AuditError::Indeterminate(error)
+                }
+            });
+        }
+        if durable {
+            let log = Arc::clone(&partition.log);
+            let synced = tokio::task::spawn_blocking(move || {
+                log.lock()
+                    .map_err(|_| AuditError::Sink("audit partition log lock poisoned".into()))?
+                    .sync()
+                    .map_err(|error| {
+                        AuditError::Sink(format!("durable audit sync failed: {error}"))
+                    })
+            })
+            .await;
+            let synced = match synced {
+                Ok(result) => result,
+                Err(error) => {
+                    self.metrics.audit_write_failures_total.inc();
+                    return Err(AuditError::Indeterminate(format!(
+                        "audit sync task failed: {error}"
+                    )));
+                }
+            };
+            if let Err(error) = synced {
                 self.metrics.audit_write_failures_total.inc();
-                Err(AuditError::Sink(e.to_string()))
+                return Err(AuditError::Indeterminate(error.to_string()));
             }
         }
+        self.metrics.audit_events_total.inc();
+        Ok(())
     }
 }
 
@@ -141,11 +169,14 @@ mod tests {
             BrokerMetrics::new(),
         );
 
-        sink.write(AuditRecord {
-            class: krabka_audit::AuditEventClass::ApiActivity,
-            value: b"{\"ok\":true}".to_vec(),
-            headers: vec![("event_class".to_string(), b"admin".to_vec())],
-        })
+        sink.write(
+            AuditRecord {
+                class: krabka_audit::AuditEventClass::ApiActivity,
+                value: b"{\"ok\":true}".to_vec(),
+                headers: vec![("event_class".to_string(), b"admin".to_vec())],
+            },
+            true,
+        )
         .await
         .expect("write audit record");
 

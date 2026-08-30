@@ -43,12 +43,13 @@ pub enum LifecycleKind {
 
 /// Stage of a privileged action that the audit record captures.
 ///
-/// A freeze reaches `Applied` directly. A two-person action walks
-/// `Proposed` -> `Approved` -> `Consumed` -> `Applied`. `Refused` records a
-/// gate that fell closed, and `Bypassed` records a gated action that ran
-/// without an approval.
+/// `Attempted` is the durable write-ahead admission record. A freeze then
+/// reaches `Applied` directly. A two-person action walks `Proposed` ->
+/// `Approved` -> `Consumed` -> `Applied`. `Refused` records a gate that fell
+/// closed, and `Bypassed` records a gated action that ran without an approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PrivilegedPhase {
+    Attempted,
     Proposed,
     Approved,
     Consumed,
@@ -62,6 +63,7 @@ impl PrivilegedPhase {
     #[must_use]
     pub fn as_name(self) -> &'static str {
         match self {
+            PrivilegedPhase::Attempted => "attempted",
             PrivilegedPhase::Proposed => "proposed",
             PrivilegedPhase::Approved => "approved",
             PrivilegedPhase::Consumed => "consumed",
@@ -75,6 +77,7 @@ impl PrivilegedPhase {
     #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
+            "attempted" => Some(PrivilegedPhase::Attempted),
             "proposed" => Some(PrivilegedPhase::Proposed),
             "approved" => Some(PrivilegedPhase::Approved),
             "consumed" => Some(PrivilegedPhase::Consumed),
@@ -95,6 +98,8 @@ pub enum AuditEventClass {
     ApplicationLifecycle,
     /// Internal meta-record for a signed chain checkpoint. It is not an OCSF event.
     Checkpoint,
+    /// Internal meta-record that declares audit records were lost. It is not an OCSF event.
+    RecordsLost,
 }
 
 impl AuditEventClass {
@@ -107,6 +112,7 @@ impl AuditEventClass {
             AuditEventClass::ApiActivity => "api_activity",
             AuditEventClass::ApplicationLifecycle => "application_lifecycle",
             AuditEventClass::Checkpoint => "checkpoint",
+            AuditEventClass::RecordsLost => "records_lost",
         }
     }
 
@@ -119,6 +125,7 @@ impl AuditEventClass {
             AuditEventClass::ApiActivity => 2,
             AuditEventClass::ApplicationLifecycle => 3,
             AuditEventClass::Checkpoint => 4,
+            AuditEventClass::RecordsLost => 5,
         }
     }
 
@@ -131,6 +138,7 @@ impl AuditEventClass {
             2 => Some(AuditEventClass::ApiActivity),
             3 => Some(AuditEventClass::ApplicationLifecycle),
             4 => Some(AuditEventClass::Checkpoint),
+            5 => Some(AuditEventClass::RecordsLost),
             _ => None,
         }
     }
@@ -144,6 +152,7 @@ impl AuditEventClass {
             "api_activity" => Some(AuditEventClass::ApiActivity),
             "application_lifecycle" => Some(AuditEventClass::ApplicationLifecycle),
             "checkpoint" => Some(AuditEventClass::Checkpoint),
+            "records_lost" => Some(AuditEventClass::RecordsLost),
             _ => None,
         }
     }
@@ -264,6 +273,7 @@ mod tests {
             AuditEventClass::ApiActivity,
             AuditEventClass::ApplicationLifecycle,
             AuditEventClass::Checkpoint,
+            AuditEventClass::RecordsLost,
         ] {
             check!(AuditEventClass::from_tag(c.tag()) == Some(c));
             check!(AuditEventClass::from_header(c.as_header()) == Some(c));
@@ -367,6 +377,7 @@ mod tests {
     #[test]
     fn privileged_phase_name_round_trips() {
         for (label, phase, name) in [
+            ("attempted", PrivilegedPhase::Attempted, "attempted"),
             ("proposed", PrivilegedPhase::Proposed, "proposed"),
             ("approved", PrivilegedPhase::Approved, "approved"),
             ("consumed", PrivilegedPhase::Consumed, "consumed"),

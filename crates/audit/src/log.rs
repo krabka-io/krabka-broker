@@ -11,6 +11,6 @@ mod writer;
 mod test_support;
 
 pub use self::{
-    handle::AuditLog,
+    handle::{AuditLog, AuditMode, AuditReceiver},
     writer::{AuditWriter, AuditWriterParams},
 };

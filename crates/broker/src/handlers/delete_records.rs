@@ -65,13 +65,13 @@ mod tests;
 
 use self::{
     authz::denied_topic_names,
-    gate::{authorize_trim, refuse_trim, spend_approval, trim_target},
+    gate::{authorize_trim, consumed_proposal_id, refuse_trim, spend_approval, trim_target},
     offsets::{delivery_capped, offset_out_of_range, target_offset},
     response::{delete_records_response, error_partition_result, partition_result, topic_result},
 };
 use crate::{
     authorizer::authorize_topics,
-    break_glass::handlers::audit::{GatedTransition, audit_transition},
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -242,6 +242,25 @@ async fn trim_one(
             .map(|delivery| delivery.watermark),
     );
 
+    let audit_target = trim_target(topic, index);
+    if let Err(error) = require_transition(
+        &env.broker.audit_log,
+        &env.broker.config.break_glass,
+        env.ctx,
+        &GatedTransition {
+            action: BreakGlassAction::DeleteRecords,
+            target: &audit_target,
+            phase: PrivilegedPhase::Applied,
+            proposal_id: consumed.as_ref().and_then(consumed_proposal_id),
+            reason: "record trim admitted",
+        },
+    )
+    .await
+    {
+        tracing::warn!(%topic, partition = index, %error, "DeleteRecords refused by audit policy");
+        return error_partition_result(index, codes::POLICY_VIOLATION);
+    }
+
     // KFC-9: spend the approval before the trim removes anything.
     let proposal_id = match spend_approval(env.broker, spent, consumed).await {
         Ok(proposal_id) => proposal_id,
@@ -262,7 +281,7 @@ async fn trim_one(
                 env.ctx,
                 &GatedTransition {
                     action: BreakGlassAction::DeleteRecords,
-                    target: &trim_target(topic, index),
+                    target: &audit_target,
                     phase: PrivilegedPhase::Applied,
                     proposal_id,
                     reason: "records deleted below the trim point",

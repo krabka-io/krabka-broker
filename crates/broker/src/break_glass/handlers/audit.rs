@@ -6,14 +6,14 @@
 //! helper is what keeps a new phase, a new field, or a corrected guard from
 //! reaching four of the five.
 
-use krabka_audit::{AuditLog, AuditOutcome, PrivilegedPhase};
+use krabka_audit::{AuditError, AuditLog, AuditOutcome, PrivilegedPhase};
 use krabka_metadata::BreakGlassAction;
 use uuid::Uuid;
 
 use crate::{
     break_glass::{
         action_name, gate,
-        handlers::{PrivilegedAudit, audit_privileged},
+        handlers::{PrivilegedAudit, audit_privileged, require_privileged},
     },
     config::BreakGlassConfig,
     handlers::RequestContext,
@@ -35,6 +35,36 @@ pub(crate) struct GatedTransition<'a> {
     pub proposal_id: Option<Uuid>,
     /// Free text that says what happened, or why it did not.
     pub reason: &'a str,
+}
+
+/// Durably admit a gated transition before it mutates cluster state.
+pub(crate) async fn require_transition(
+    audit_log: &AuditLog,
+    config: &BreakGlassConfig,
+    ctx: &RequestContext<'_>,
+    transition: &GatedTransition<'_>,
+) -> Result<(), AuditError> {
+    if !gate::is_gated(config) {
+        return Ok(());
+    }
+    require_privileged(
+        audit_log,
+        ctx,
+        approver_set_fingerprint(&config.approvers),
+        &PrivilegedAudit {
+            outcome: AuditOutcome::Success,
+            phase: transition.phase,
+            action: action_name(transition.action),
+            target: transition.target,
+            proposal_id: transition.proposal_id,
+            counterparties: &[],
+            key_id: "",
+            signature: &[],
+            signature_verified: false,
+            reason: transition.reason,
+        },
+    )
+    .await
 }
 
 /// Emit one `PrivilegedAction` event for a gated transition.

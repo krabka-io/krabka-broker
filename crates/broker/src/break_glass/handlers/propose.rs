@@ -27,7 +27,7 @@ use crate::{
         config::BreakGlassPolicy,
         handlers::{
             PrivilegedAudit, Refusal, UNKNOWN_ACTION, audit_privileged, principal_name,
-            submit_error, to_wire_uuid,
+            require_privileged, submit_error, to_wire_uuid,
         },
     },
     broker::Broker,
@@ -150,6 +150,30 @@ async fn propose(
             now_ms: crate::time_util::now_ms(),
         },
     )?;
+    require_privileged(
+        broker.audit_log.as_ref(),
+        ctx,
+        policy.fingerprint(),
+        &PrivilegedAudit {
+            outcome: AuditOutcome::Success,
+            phase: PrivilegedPhase::Proposed,
+            action: action_name(proposal.action),
+            target: &proposal.target,
+            proposal_id: Some(proposal.proposal_id),
+            counterparties: &[],
+            key_id: "",
+            signature: &[],
+            signature_verified: false,
+            reason: &proposal.reason,
+        },
+    )
+    .await
+    .map_err(|error| {
+        Refusal::new(
+            codes::POLICY_VIOLATION,
+            format!("privileged action refused: {error}"),
+        )
+    })?;
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())])

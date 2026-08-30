@@ -44,7 +44,7 @@ use self::{
 };
 use crate::{
     break_glass::{
-        handlers::audit::{GatedTransition, audit_transition},
+        handlers::audit::{GatedTransition, audit_transition, require_transition},
         metrics as break_glass_metrics,
     },
     broker::Broker,
@@ -139,6 +139,26 @@ pub(crate) async fn handle(
         }
     };
     let proposal_id = records.first().and_then(consumed_proposal_id);
+    if let Err(error) = require_transition(
+        &broker.audit_log,
+        &broker.config.break_glass,
+        ctx,
+        &GatedTransition {
+            action: BreakGlassAction::UnregisterBroker,
+            target: &target,
+            phase: PrivilegedPhase::Applied,
+            proposal_id,
+            reason: "broker unregistration admitted",
+        },
+    )
+    .await
+    {
+        let resp = response(
+            codes::POLICY_VIOLATION,
+            Some(format!("privileged action refused: {error}")),
+        );
+        return encode_resp(version, &resp);
+    }
 
     // Submit the unregister record through Raft. The image apply is
     // idempotent (the `apply` arm calls `brokers.remove`).

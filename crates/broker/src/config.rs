@@ -142,6 +142,9 @@ pub const DEFAULT_AUDIT_SPOOL_DIR: &str = "audit-spool";
 /// Default cap on the durable audit spool: 1 GiB.
 pub const DEFAULT_AUDIT_SPOOL_MAX: ByteSize = gibibytes(1);
 
+/// Default audit-spool sync cadence: every appended record.
+pub const DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N: std::num::NonZeroU64 = std::num::NonZeroU64::MIN;
+
 /// KIP-48: default hard upper bound on delegation-token lifetime.
 /// 7 days, matches Kafka's `delegation.token.max.lifetime.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME: Time = days(7);

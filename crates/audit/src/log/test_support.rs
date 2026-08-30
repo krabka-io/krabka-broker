@@ -7,7 +7,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicI64, Ordering::SeqCst},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::SeqCst},
 };
 
 use krabka_units::prelude::{ByteSize, Time, hours, mebibytes, millis};
@@ -59,8 +59,11 @@ pub fn test_signer() -> (std::sync::Arc<FileEd25519Signer>, Vec<u8>) {
 #[derive(Debug)]
 pub struct FailableSink {
     fail: AtomicBool,
+    indeterminate: AtomicBool,
+    indeterminate_after: AtomicI64,
     /// -1 = unlimited; >= 0 = writes remaining before budget error.
     allow: AtomicI64,
+    durable_requests: AtomicU64,
     pub inner: MemorySink,
 }
 
@@ -68,7 +71,10 @@ impl Default for FailableSink {
     fn default() -> Self {
         Self {
             fail: AtomicBool::new(false),
+            indeterminate: AtomicBool::new(false),
+            indeterminate_after: AtomicI64::new(-1),
             allow: AtomicI64::new(-1),
+            durable_requests: AtomicU64::new(0),
             inner: MemorySink::default(),
         }
     }
@@ -77,6 +83,14 @@ impl Default for FailableSink {
 impl FailableSink {
     pub fn set_fail(&self, v: bool) {
         self.fail.store(v, SeqCst);
+    }
+
+    pub fn set_indeterminate(&self, value: bool) {
+        self.indeterminate.store(value, SeqCst);
+    }
+
+    pub fn set_indeterminate_after(&self, successful_writes: i64) {
+        self.indeterminate_after.store(successful_writes, SeqCst);
     }
 
     pub fn allow_n(&self, n: i64) {
@@ -88,11 +102,29 @@ impl FailableSink {
         self.allow.store(-1, SeqCst);
         self.fail.store(false, SeqCst);
     }
+
+    pub fn durable_requests(&self) -> u64 {
+        self.durable_requests.load(SeqCst)
+    }
 }
 
 #[async_trait::async_trait]
 impl AuditSink for FailableSink {
-    async fn write(&self, record: AuditRecord) -> Result<(), crate::sink::AuditError> {
+    async fn write(
+        &self,
+        record: AuditRecord,
+        durable: bool,
+    ) -> Result<(), crate::sink::AuditError> {
+        if durable {
+            self.durable_requests.fetch_add(1, SeqCst);
+        }
+        let indeterminate_after = self.indeterminate_after.load(SeqCst);
+        if self.indeterminate.load(SeqCst) || indeterminate_after == 0 {
+            return Err(crate::sink::AuditError::Indeterminate("forced".into()));
+        }
+        if indeterminate_after > 0 {
+            self.indeterminate_after.fetch_sub(1, SeqCst);
+        }
         if self.fail.load(SeqCst) {
             return Err(crate::sink::AuditError::Sink("forced".into()));
         }
@@ -103,7 +135,7 @@ impl AuditSink for FailableSink {
             }
             self.allow.fetch_sub(1, SeqCst);
         }
-        self.inner.write(record).await
+        self.inner.write(record, durable).await
     }
 }
 

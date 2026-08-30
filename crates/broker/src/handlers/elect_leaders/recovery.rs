@@ -19,7 +19,7 @@ use super::{
     unclean_gate::{consumed_proposal_id, unclean_target},
 };
 use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition},
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
     broker::Broker,
     codes,
     config_keys::RecoveryStrategy,
@@ -49,6 +49,29 @@ pub(super) async fn run_offset_aware_recovery(
     consumed: Option<MetadataRecord>,
 ) -> PartitionResult {
     let broker = env.broker;
+    let target = unclean_target(topic, partition);
+    if let Some(proposal_id) = consumed.as_ref().and_then(consumed_proposal_id)
+        && let Err(error) = require_transition(
+            &broker.audit_log,
+            &broker.config.break_glass,
+            env.ctx,
+            &GatedTransition {
+                action: BreakGlassAction::UncleanElectLeaders,
+                target: &target,
+                phase: PrivilegedPhase::Consumed,
+                proposal_id: Some(proposal_id),
+                reason: "offset-aware unclean recovery admitted",
+            },
+        )
+        .await
+    {
+        return PartitionResult {
+            partition_id: partition,
+            error_code: codes::POLICY_VIOLATION,
+            error_message: Some(format!("privileged action refused: {error}")),
+            ..Default::default()
+        };
+    }
     let proposal = match spend_before_recovery(broker, batch, consumed).await {
         Ok(proposal) => proposal,
         Err(message) => {
@@ -67,7 +90,7 @@ pub(super) async fn run_offset_aware_recovery(
             env.ctx,
             &GatedTransition {
                 action: BreakGlassAction::UncleanElectLeaders,
-                target: &unclean_target(topic, partition),
+                target: &target,
                 phase: PrivilegedPhase::Consumed,
                 proposal_id: Some(proposal_id),
                 reason: "approval spent on an offset-aware unclean recovery",
@@ -99,6 +122,10 @@ pub(super) async fn run_offset_aware_recovery(
             Ok(Ok(RecoveryOutcome::BreakGlassRequired)) => (
                 codes::POLICY_VIOLATION,
                 Some("break_glass.background_unclean_recovery is require".into()),
+            ),
+            Ok(Ok(RecoveryOutcome::AuditUnavailable)) => (
+                codes::POLICY_VIOLATION,
+                Some("privileged action refused: audit storage unavailable".into()),
             ),
             _ => (
                 codes::ELIGIBLE_LEADERS_NOT_AVAILABLE,

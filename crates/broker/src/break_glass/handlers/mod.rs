@@ -37,7 +37,8 @@ pub(crate) mod describe;
 pub(crate) mod propose;
 
 use krabka_audit::{
-    AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal, PrivilegedPhase,
+    AuditEndpoint, AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, AuditPrincipal,
+    PrivilegedPhase,
 };
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use krabka_raft::RaftError;
@@ -149,7 +150,45 @@ pub(crate) fn audit_privileged(
     approver_set_fingerprint: String,
     event: &PrivilegedAudit<'_>,
 ) {
-    audit_log.emit(AuditEvent::PrivilegedAction {
+    audit_log.emit(privileged_event(ctx, approver_set_fingerprint, event));
+}
+
+/// Write the action's intent before a fail-closed caller mutates state.
+///
+/// Fail-open keeps the existing single outcome record. Fail-closed records an
+/// `Attempted` event durably; only then may the caller commit the action.
+pub(crate) async fn require_privileged(
+    audit_log: &AuditLog,
+    ctx: &RequestContext<'_>,
+    approver_set_fingerprint: String,
+    event: &PrivilegedAudit<'_>,
+) -> Result<(), AuditError> {
+    if audit_log.mode() != AuditMode::FailClosed {
+        return Ok(());
+    }
+    let attempted = PrivilegedAudit {
+        outcome: AuditOutcome::Success,
+        phase: PrivilegedPhase::Attempted,
+        action: event.action,
+        target: event.target,
+        proposal_id: event.proposal_id,
+        counterparties: event.counterparties,
+        key_id: event.key_id,
+        signature: event.signature,
+        signature_verified: event.signature_verified,
+        reason: event.reason,
+    };
+    audit_log
+        .emit_required(privileged_event(ctx, approver_set_fingerprint, &attempted))
+        .await
+}
+
+fn privileged_event(
+    ctx: &RequestContext<'_>,
+    approver_set_fingerprint: String,
+    event: &PrivilegedAudit<'_>,
+) -> AuditEvent {
+    AuditEvent::PrivilegedAction {
         outcome: event.outcome,
         phase: event.phase,
         action: event.action.to_owned(),
@@ -183,14 +222,13 @@ pub(crate) fn audit_privileged(
         },
         reason: event.reason.to_owned(),
         time_ms: crate::time_util::now_ms(),
-    });
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use assert2::{assert, check};
     use krabka_security::{AuthMethod, Principal};
-    use tokio::sync::mpsc;
 
     use super::*;
 
@@ -220,7 +258,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn audit_channel() -> (std::sync::Arc<AuditLog>, mpsc::Receiver<AuditEvent>) {
+    pub(crate) fn audit_channel() -> (std::sync::Arc<AuditLog>, krabka_audit::AuditReceiver) {
         AuditLog::new(8)
     }
 

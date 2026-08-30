@@ -39,11 +39,14 @@ mod watermark;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::leadership::{ReplicationTarget, initial_replication_target};
 pub use self::messages::{ProduceData, ProduceJob, SwapOutcome, WriterMessage};
 // Only watermark's own tests name crate::partition::HwTimeout.
 #[cfg(test)]
 pub use self::watermark::HwTimeout;
+pub(crate) use self::{
+    commands::ProduceBatchError,
+    leadership::{ReplicationTarget, initial_replication_target},
+};
 
 /// Absolute record offset within a partition's log (base offset, log end
 /// offset, high watermark, truncation points, …). This is an alias only. It

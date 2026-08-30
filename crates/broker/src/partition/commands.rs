@@ -11,6 +11,15 @@ use crate::{
     partition::{Partition, ProduceData, ProduceJob, WriterMessage},
 };
 
+/// Whether an internal produce definitely failed or may already be appended.
+#[derive(Debug)]
+pub(crate) enum ProduceBatchError {
+    /// The partition writer reported failure or never accepted the command.
+    Rejected(BrokerError),
+    /// The command was accepted, but its acknowledgement channel closed.
+    Indeterminate(String),
+}
+
 impl Partition {
     /// Push `overrides` through the writer actor so the partition's `Log`
     /// picks up the new `retention.ms`, `retention.bytes`, and
@@ -143,6 +152,18 @@ impl Partition {
     /// Returns [`BrokerError::Txn`] if the writer task is dead or the ack
     /// channel closes before the writer replies.
     pub(crate) async fn produce_batch(&self, batch: RecordBatch) -> Result<Offset, BrokerError> {
+        self.produce_batch_outcome(batch)
+            .await
+            .map_err(|error| match error {
+                ProduceBatchError::Rejected(error) => error,
+                ProduceBatchError::Indeterminate(error) => BrokerError::Txn(error),
+            })
+    }
+
+    pub(crate) async fn produce_batch_outcome(
+        &self,
+        batch: RecordBatch,
+    ) -> Result<Offset, ProduceBatchError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.writer_tx
             .send(WriterMessage::Produce(ProduceJob {
@@ -150,10 +171,15 @@ impl Partition {
                 ack: ack_tx,
             }))
             .await
-            .map_err(|_| BrokerError::Txn("partition writer dead".into()))?;
+            .map_err(|_| {
+                ProduceBatchError::Rejected(BrokerError::Txn("partition writer dead".into()))
+            })?;
         ack_rx
             .await
-            .map_err(|_| BrokerError::Txn("ack dropped".into()))?
+            .map_err(|_| {
+                ProduceBatchError::Indeterminate("produce acknowledgement dropped".into())
+            })?
+            .map_err(ProduceBatchError::Rejected)
     }
 
     /// Append an internally built COMMIT marker with a coordinator-supplied

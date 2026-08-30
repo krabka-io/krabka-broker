@@ -130,7 +130,7 @@ pub(super) fn trim_target(topic: &str, partition: i32) -> String {
 ///
 /// [`gate::authorize`] only ever answers with a proposal record, so the `None`
 /// arm costs one match rather than a panic.
-fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
+pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
     match record {
         MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
         _ => None,

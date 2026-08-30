@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use krabka_units::prelude::{Time, TimeExt as _};
 use qubit_clock::sleep::AsyncSleeper;
-use tokio::sync::mpsc;
 
+use super::handle::AuditReceiver;
 use crate::{
     chain::ChainState,
     checkpoint::Checkpoint,
@@ -20,8 +20,8 @@ use crate::{
     ids::{EpochMs, Seq},
     ocsf::ProductInfo,
     signing::FileEd25519Signer,
-    sink::{AuditRecord, AuditSink},
-    spool::Spool,
+    sink::{AuditError, AuditRecord, AuditSink},
+    spool::{PendingLosses, Spool},
     stats::AuditStats,
 };
 
@@ -54,7 +54,7 @@ pub struct AuditWriterParams {
 /// The writer spools records when the sink fails, and it replays them when the
 /// sink recovers. It also emits signed checkpoints on a cadence.
 pub struct AuditWriter {
-    rx: mpsc::Receiver<AuditEvent>,
+    rx: AuditReceiver,
     pub(super) sink: Arc<dyn AuditSink>,
     product: ProductInfo,
     chain: ChainState,
@@ -67,12 +67,14 @@ pub struct AuditWriter {
     pub(super) stats: Arc<AuditStats>,
     replay_every: Time,
     sleeper: Arc<dyn AsyncSleeper>,
+    pending_losses: Arc<PendingLosses>,
 }
 
 impl AuditWriter {
     #[must_use]
-    pub fn new(rx: mpsc::Receiver<AuditEvent>, params: AuditWriterParams) -> Self {
+    pub fn new(rx: AuditReceiver, params: AuditWriterParams) -> Self {
         let spooling = params.spool.as_ref().is_some_and(|s| !s.is_empty());
+        let pending_losses = rx.pending_losses();
         if let Some(spool) = &params.spool {
             params.stats.set_depth(spool.count(), spool.size());
         }
@@ -90,6 +92,7 @@ impl AuditWriter {
             stats: params.stats,
             replay_every: params.replay_every,
             sleeper: params.sleeper,
+            pending_losses,
         }
     }
 
@@ -115,10 +118,25 @@ impl AuditWriter {
 
         loop {
             tokio::select! {
-                maybe = self.rx.recv() => {
+                maybe = self.rx.recv_message() => {
                     match maybe {
-                        Some(event) => {
-                            self.write_chained(&event).await;
+                        Some(message) => {
+                            let durable = message.acknowledgement.is_some();
+                            let result = self.write_chained(&message.event, durable).await;
+                            let fatal = matches!(&result, Err(AuditError::Indeterminate(_)));
+                            if result.is_err() {
+                                self.stats.inc_dropped();
+                                if !durable {
+                                    self.pending_losses.add(1);
+                                }
+                            }
+                            if let Some(acknowledgement) = message.acknowledgement {
+                                let _ = acknowledgement.send(result);
+                            }
+                            if fatal {
+                                tracing::error!("audit writer stopped after indeterminate durable write");
+                                return;
+                            }
                             if self.checkpoint_every_n > 0
                                 && self.since_checkpoint >= self.checkpoint_every_n
                             {
@@ -135,13 +153,20 @@ impl AuditWriter {
                     ckpt = sleeper.sleep_for_async(self.checkpoint_every.to_std());
                 }
                 () = &mut replay => {
-                    if self.spooling {
-                        self.try_replay().await;
+                    if self.spooling
+                        && let Err(error) = self.try_replay().await
+                    {
+                        tracing::error!(%error, "audit writer stopped after indeterminate replay");
+                        return;
+                    }
+                    if !self.spooling {
+                        let _ = self.write_pending_loss_marker(false).await;
                     }
                     replay = sleeper.sleep_for_async(self.replay_every.to_std());
                 }
             }
         }
+        let _ = self.write_pending_loss_marker(true).await;
         if self.since_checkpoint > 0 {
             self.emit_checkpoint().await;
         }
@@ -152,13 +177,52 @@ impl AuditWriter {
         skip_all,
         fields(class = ?event.class(), seq = tracing::field::Empty)
     )]
-    async fn write_chained(&mut self, event: &AuditEvent) {
+    async fn write_chained(&mut self, event: &AuditEvent, durable: bool) -> Result<(), AuditError> {
+        self.write_pending_loss_marker(durable).await?;
         let mut record = AuditRecord::from_event(event, &self.product);
-        let (seq, prev) = self.chain.extend(&record.value);
+        let seq = self.chain.next_seq();
+        let prev = self.chain.head();
         tracing::Span::current().record("seq", seq);
         record.push_chain_headers(seq, &prev);
-        self.write_or_spool(record).await;
+        self.write_or_spool(&record, durable).await?;
+        let _ = self.chain.extend(&record.value);
         self.since_checkpoint += 1;
+        Ok(())
+    }
+
+    /// Persist one explicit marker for all fail-open records lost so far.
+    async fn write_pending_loss_marker(&mut self, durable: bool) -> Result<(), AuditError> {
+        if let Some(spool) = &mut self.spool {
+            let pending_losses = Arc::clone(&self.pending_losses);
+            let marker = pending_losses.persist_with(|batch| {
+                let mut marker =
+                    AuditRecord::records_lost_with_generation(batch.count, batch.generation);
+                marker.push_chain_headers(self.chain.next_seq(), &self.chain.head());
+                spool.append_loss_marker(&marker)?;
+                Ok(marker)
+            })?;
+            if let Some(marker) = marker {
+                self.stats.inc_spooled();
+                self.stats.set_depth(spool.count(), spool.size());
+                let _ = self.chain.extend(&marker.value);
+                self.since_checkpoint += 1;
+                self.spooling = true;
+            }
+            return Ok(());
+        }
+
+        let Some(batch) = self.pending_losses.snapshot() else {
+            return Ok(());
+        };
+        let mut marker = AuditRecord::records_lost_with_generation(batch.count, batch.generation);
+        let seq = self.chain.next_seq();
+        let prev = self.chain.head();
+        marker.push_chain_headers(seq, &prev);
+        self.write_or_spool(&marker, durable).await?;
+        let _ = self.chain.extend(&marker.value);
+        self.since_checkpoint += 1;
+        self.pending_losses.commit(batch);
+        Ok(())
     }
 
     #[tracing::instrument(
@@ -175,8 +239,10 @@ impl AuditWriter {
         tracing::Span::current().record("seq_high", seq_high.0);
         let head = self.chain.head();
         let cp = Checkpoint::signed(signer.as_ref(), seq_high, &head, EpochMs(now_ms()));
-        self.write_or_spool(cp.to_record()).await;
-        self.since_checkpoint = 0;
+        let record = cp.to_record();
+        if self.write_or_spool(&record, false).await.is_ok() {
+            self.since_checkpoint = 0;
+        }
     }
 }
 

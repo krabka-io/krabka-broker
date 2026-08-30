@@ -233,6 +233,15 @@ impl UncleanRecoveryManager {
             directories: pr.directories.clone(),
             partition_epoch: pr.partition_epoch + 1,
         };
+        if let Err(error) = self
+            .policy
+            .background
+            .require_audit(job, self.node_id, winner)
+            .await
+        {
+            warn!(%error, "unclean recovery refused by fail-closed audit policy");
+            return RecoveryOutcome::AuditUnavailable;
+        }
         warn!(
             topic = %job.topic,
             partition = job.partition,

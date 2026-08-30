@@ -27,7 +27,10 @@
 pub(crate) mod describe_freezes;
 pub(crate) mod set_freeze;
 
-use krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditOutcome, AuditPrincipal};
+use krabka_audit::{
+    AuditEndpoint, AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, AuditPrincipal,
+    PrivilegedPhase,
+};
 use krabka_metadata::PatternType;
 use krabka_protocol::krabka::freeze::{
     PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
@@ -151,7 +154,38 @@ pub(crate) fn audit_freeze(
     audit: &FreezeAudit<'_>,
     approvers: &[String],
 ) {
-    audit_log.emit(AuditEvent::PrivilegedAction {
+    audit_log.emit(freeze_event(ctx, outcome, phase, audit, approvers));
+}
+
+/// Durably record a fail-closed freeze or thaw before its raft append.
+pub(crate) async fn require_freeze(
+    audit_log: &AuditLog,
+    ctx: &RequestContext<'_>,
+    audit: &FreezeAudit<'_>,
+    approvers: &[String],
+) -> Result<(), AuditError> {
+    if audit_log.mode() != AuditMode::FailClosed {
+        return Ok(());
+    }
+    audit_log
+        .emit_required(freeze_event(
+            ctx,
+            AuditOutcome::Success,
+            PrivilegedPhase::Attempted,
+            audit,
+            approvers,
+        ))
+        .await
+}
+
+fn freeze_event(
+    ctx: &RequestContext<'_>,
+    outcome: AuditOutcome,
+    phase: PrivilegedPhase,
+    audit: &FreezeAudit<'_>,
+    approvers: &[String],
+) -> AuditEvent {
+    AuditEvent::PrivilegedAction {
         outcome,
         phase,
         action: audit.action.to_owned(),
@@ -176,7 +210,7 @@ pub(crate) fn audit_freeze(
         },
         reason: audit.reason.clone(),
         time_ms: now_ms(),
-    });
+    }
 }
 
 #[cfg(test)]

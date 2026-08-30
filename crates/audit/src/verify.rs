@@ -10,9 +10,13 @@ use std::{collections::HashMap, path::Path};
 
 use krabka_protocol::records::RecordBatch;
 
-use self::walk::{WalkState, check_chained, check_checkpoint, header};
+use self::walk::{
+    WalkState, check_chained, check_checkpoint, check_records_lost, header,
+    records_lost_count_from_body,
+};
 use crate::{
     checkpoint::EVENT_CLASS_CHECKPOINT,
+    event::AuditEventClass,
     ids::{CheckpointCount, RecordCount, Seq},
     sink::AuditError,
 };
@@ -50,6 +54,14 @@ pub struct VerifyBreak {
     pub reason: String,
 }
 
+/// A valid chain marker that declares fail-open audit loss.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyLoss {
+    pub offset: i64,
+    pub seq: Seq,
+    pub records: RecordCount,
+}
+
 /// Result of a partition verification.
 ///
 /// `unanchored_records` is only meaningful when `ok` is `true`. It counts the
@@ -62,6 +74,8 @@ pub struct VerifyReport {
     pub checkpoints: CheckpointCount,
     pub ok: bool,
     pub first_break: Option<VerifyBreak>,
+    /// Valid, hash-chained declarations of fail-open record loss.
+    pub losses: Vec<VerifyLoss>,
     /// Number of records that a signed checkpoint does NOT cover, that is, the
     /// unsigned tail. Zero means the chain is fully attested. This field is
     /// only meaningful when `ok` is `true`.
@@ -108,8 +122,13 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
             for rec in &batch.records {
                 let offset = batch.base_offset + i64::from(rec.offset_delta);
                 let class = header(rec, "event_class").unwrap_or_default();
+                let records_lost_header =
+                    class == AuditEventClass::RecordsLost.as_header().as_bytes();
+                let records_lost_body = records_lost_count_from_body(rec).is_some();
                 let result = if class == EVENT_CLASS_CHECKPOINT.as_bytes() {
                     check_checkpoint(rec, offset, &mut state, trusted)
+                } else if records_lost_header || records_lost_body {
+                    check_records_lost(rec, offset, &mut state)
                 } else {
                     check_chained(rec, offset, &mut state)
                 };
@@ -138,6 +157,7 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
         checkpoints: state.checkpoints,
         ok: true,
         first_break: None,
+        losses: state.losses,
         unanchored_records,
     })
 }

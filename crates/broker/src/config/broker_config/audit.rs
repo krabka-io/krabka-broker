@@ -11,6 +11,9 @@ macro_rules! audit_fields {
             $($collected)*
             /// Whether the audit subsystem is active (`FedRAMP` MLA).
             pub audit_enabled: bool,
+            /// Whether privileged operations continue when their audit record
+            /// cannot be durably written.
+            pub audit_failure_mode: krabka_audit::AuditMode,
             /// Internal topic name for audit records.
             pub audit_topic: String,
             /// Path to the PKCS#8 Ed25519 audit checkpoint signing key. `None` means
@@ -27,6 +30,8 @@ macro_rules! audit_fields {
             pub audit_spool_dir: std::path::PathBuf,
             /// Cap on the audit spool size.
             pub audit_spool_max: ByteSize,
+            /// Number of spool appends between durable file syncs.
+            pub audit_spool_sync_every_n: std::num::NonZeroU64,
         }
     };
 }

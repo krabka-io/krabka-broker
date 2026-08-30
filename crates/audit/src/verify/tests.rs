@@ -128,9 +128,139 @@ fn valid_partition_verifies_ok() {
             report.records.0,
             report.checkpoints.0,
             report.first_break.is_none(),
+            report.losses.is_empty(),
             report.unanchored_records.0,
-        ) == (true, 3, 1, true, 0)
+        ) == (true, 3, 1, true, true, 0)
     );
+}
+
+#[test]
+fn records_lost_marker_is_reported_without_breaking_the_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (signer, public_key) = signer();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut chain = ChainState::new();
+    let mut marker = AuditRecord::records_lost(3);
+    let (seq, prev) = chain.extend(&marker.value);
+    marker.push_chain_headers(seq, &prev);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+    let checkpoint = Checkpoint::signed(
+        signer.as_ref(),
+        Seq(chain.next_seq() - 1),
+        &chain.head(),
+        EpochMs(123),
+    );
+    log.append(&mut audit_record_to_batch(&checkpoint.to_record(), 1))
+        .unwrap();
+
+    let report =
+        verify_partition_dir(tmp.path(), &TrustedKeys::single("k1".into(), public_key)).unwrap();
+    check!(
+        (
+            report.ok,
+            report.records,
+            report.checkpoints,
+            report.losses,
+            report.unanchored_records,
+        ) == (
+            true,
+            RecordCount(1),
+            CheckpointCount(1),
+            vec![VerifyLoss {
+                offset: 0,
+                seq: Seq(0),
+                records: RecordCount(3),
+            }],
+            RecordCount(0),
+        )
+    );
+}
+
+#[test]
+fn records_lost_body_cannot_be_hidden_by_changing_its_header() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut marker = AuditRecord::records_lost(3);
+    marker.headers[0].1 = b"application_lifecycle".to_vec();
+    marker.push_chain_headers(0, &GENESIS_HEAD);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(!report.ok);
+    check!(
+        report
+            .first_break
+            .expect("body/header mismatch")
+            .reason
+            .contains("body/event_class header mismatch")
+    );
+    check!(report.losses.is_empty());
+}
+
+#[test]
+fn persisted_records_lost_marker_shape_is_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut chain = ChainState::new();
+    let mut marker = AuditRecord::records_lost(4);
+    marker.value = br#"{"records_lost":4,"loss_generation":2}"#.to_vec();
+    let (seq, prev) = chain.extend(&marker.value);
+    marker.push_chain_headers(seq, &prev);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(report.ok);
+    check!(
+        report.losses
+            == vec![VerifyLoss {
+                offset: 0,
+                seq: Seq(0),
+                records: RecordCount(4),
+            }]
+    );
+}
+
+#[test]
+fn records_lost_marker_does_not_excuse_a_sequence_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut chain = ChainState::new();
+    let _ = chain.extend(b"missing");
+    let mut marker = AuditRecord::records_lost(1);
+    let (seq, prev) = chain.extend(&marker.value);
+    marker.push_chain_headers(seq, &prev);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(!report.ok);
+    check!(
+        report
+            .first_break
+            .expect("sequence gap")
+            .reason
+            .contains("seq gap")
+    );
+    check!(report.losses.is_empty());
+}
+
+#[test]
+fn records_lost_marker_requires_a_positive_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut log = Log::open(tmp.path(), LogConfig::default()).unwrap();
+    let mut marker = AuditRecord::records_lost(0);
+    marker.push_chain_headers(0, &GENESIS_HEAD);
+    log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
+
+    let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
+    check!(!report.ok);
+    check!(
+        report
+            .first_break
+            .expect("malformed marker")
+            .reason
+            .contains("records-lost")
+    );
+    check!(report.records == RecordCount(0));
 }
 
 #[test]

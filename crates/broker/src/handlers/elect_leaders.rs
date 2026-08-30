@@ -131,21 +131,35 @@ pub(crate) async fn handle(
     // Submit accumulated records. On failure, mark every queued OK row
     // with COORDINATOR_NOT_AVAILABLE.
     let mut submit_failure = None;
-    if !batch.records.is_empty()
-        && let Err(e) = broker
-            .controller
-            .submit_change(std::mem::take(&mut batch.records))
-            .await
-    {
-        tracing::warn!(error = %e, "elect-leaders submit failed");
-        submit_failure = Some(format!("submit failed: {e}"));
-        for rows in by_topic.values_mut() {
-            for r in rows.iter_mut() {
-                if r.error_code == 0 {
-                    r.error_code = codes::COORDINATOR_NOT_AVAILABLE;
-                    r.error_message.clone_from(&submit_failure);
+    if !batch.records.is_empty() {
+        let failure = match batch.require_audit(broker, ctx).await {
+            Ok(()) => broker
+                .controller
+                .submit_change(std::mem::take(&mut batch.records))
+                .await
+                .err()
+                .map(|error| {
+                    (
+                        codes::COORDINATOR_NOT_AVAILABLE,
+                        format!("submit failed: {error}"),
+                    )
+                }),
+            Err(error) => Some((
+                codes::POLICY_VIOLATION,
+                format!("privileged action refused: {error}"),
+            )),
+        };
+        if let Some((code, failure)) = failure {
+            tracing::warn!(error = %failure, "elect-leaders submit refused or failed");
+            for rows in by_topic.values_mut() {
+                for r in rows.iter_mut() {
+                    if r.error_code == 0 {
+                        r.error_code = code;
+                        r.error_message = Some(failure.clone());
+                    }
                 }
             }
+            submit_failure = Some(failure);
         }
     }
     // KFC-9: audit the approvals this append spent, now that its outcome is
