@@ -62,6 +62,7 @@ fn push_optional(out: &mut Vec<u8>, value: Option<&str>) {
 ///     len+suffix  len+key  size_bytes:u64  sha256:32
 ///     e_tag:      0u8 | (1u8 len+value)
 ///     version_id: 0u8 | (1u8 len+value)
+///     create_precondition:u8 (format version >= 2 only)
 /// epoch_id:16  seq:u64  prev_head:32
 /// ```
 #[must_use]
@@ -96,6 +97,9 @@ pub fn canonical_manifest_bytes(body: &ManifestBody) -> Vec<u8> {
         out.extend_from_slice(&object.sha256.0);
         push_optional(&mut out, object.e_tag.as_deref());
         push_optional(&mut out, object.version_id.as_deref());
+        if body.format_version >= 2 {
+            out.push(u8::from(object.create_precondition));
+        }
     }
 
     out.extend_from_slice(body.chain.epoch_id.0.as_bytes());
@@ -245,6 +249,10 @@ mod tests {
             (
                 "objects[1].version_id set",
                 Box::new(|b| b.objects[1].version_id = Some("new".to_string())),
+            ),
+            (
+                "objects[0].create_precondition",
+                Box::new(|b| b.objects[0].create_precondition = true),
             ),
             ("objects order", Box::new(|b| b.objects.swap(0, 1))),
             (

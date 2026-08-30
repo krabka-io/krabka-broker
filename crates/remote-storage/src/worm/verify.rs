@@ -55,7 +55,10 @@ mod tests;
 use self::{listing::list_archive, partition::verify_partition};
 pub use self::{
     manifest_read::MAX_MANIFEST_BYTES,
-    report::{ArchiveVerifyReport, EpochSpan, OffsetGap, PartitionVerifyReport, VerifyBreak},
+    report::{
+        ArchiveVerifyReport, EpochSpan, ObjectProtectionReport, OffsetGap, PartitionVerifyReport,
+        VerifyBreak,
+    },
 };
 use crate::worm::{error::WormError, manifest::ChainHead};
 

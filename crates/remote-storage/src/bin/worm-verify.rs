@@ -438,43 +438,65 @@ fn total(report: &ArchiveVerifyReport, count: impl Fn(&PartitionVerifyReport) ->
 
 /// One line per partition, naming the tip an operator feeds to `--expect-head`.
 fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
-    report
-        .partitions
-        .iter()
-        .map(|partition| {
-            let tip = partition
-                .head
-                .map_or_else(|| "none".to_string(), |head| head.to_string());
-            let start = partition
-                .epochs
-                .iter()
-                .map(|epoch| epoch.start_offset)
-                .min();
-            let end = partition.epochs.iter().map(|epoch| epoch.end_offset).max();
-            let offsets = match (start, end) {
-                (Some(start), Some(end)) => format!("offsets {start}..{end}"),
-                _ => "no offsets".to_string(),
-            };
-            let mut line = format!(
-                "  {}: tip {tip}, {} manifest(s), {} object(s), {offsets}, {} epoch(s)",
-                partition.partition_dir,
-                partition.manifests,
-                partition.objects_checked,
-                partition.epochs.len()
+    let mut lines = Vec::new();
+    for partition in &report.partitions {
+        let tip = partition
+            .head
+            .map_or_else(|| "none".to_string(), |head| head.to_string());
+        let start = partition
+            .epochs
+            .iter()
+            .map(|epoch| epoch.start_offset)
+            .min();
+        let end = partition.epochs.iter().map(|epoch| epoch.end_offset).max();
+        let offsets = match (start, end) {
+            (Some(start), Some(end)) => format!("offsets {start}..{end}"),
+            _ => "no offsets".to_string(),
+        };
+        let mut line = format!(
+            "  {}: tip {tip}, {} manifest(s), {} object(s), {offsets}, {} epoch(s)",
+            partition.partition_dir,
+            partition.manifests,
+            partition.objects_checked,
+            partition.epochs.len()
+        );
+        if !partition.offset_gaps.is_empty() {
+            let _ = write!(line, ", {} offset gap(s)", partition.offset_gaps.len());
+        }
+        if !partition.orphan_objects.is_empty() {
+            let _ = write!(
+                line,
+                ", {} orphan object(s)",
+                partition.orphan_objects.len()
             );
-            if !partition.offset_gaps.is_empty() {
-                let _ = write!(line, ", {} offset gap(s)", partition.offset_gaps.len());
-            }
-            if !partition.orphan_objects.is_empty() {
-                let _ = write!(
-                    line,
-                    ", {} orphan object(s)",
-                    partition.orphan_objects.len()
-                );
-            }
-            line
-        })
-        .collect()
+        }
+        lines.push(line);
+        lines.push(format!(
+            "    create precondition: {}",
+            protection(&partition.create_precondition_objects)
+        ));
+        lines.push(format!(
+            "    bucket retention: {}",
+            protection(&partition.bucket_retention_objects)
+        ));
+        lines.push(format!(
+            "    unknown (legacy manifest): {}",
+            protection(&partition.unknown_protection_objects)
+        ));
+    }
+    lines
+}
+
+fn protection(report: &krabka_remote_storage::ObjectProtectionReport) -> String {
+    if report.count == 0 {
+        "none".to_string()
+    } else {
+        format!(
+            "{} object(s), sample: {}",
+            report.count,
+            report.sample.join(", ")
+        )
+    }
 }
 
 #[cfg(test)]
@@ -513,6 +535,11 @@ mod tests {
                 partition_dir: "archive/orders-0-id".into(),
                 manifests: 0,
                 objects_checked: 0,
+                create_precondition_objects: krabka_remote_storage::ObjectProtectionReport::default(
+                ),
+                bucket_retention_objects: krabka_remote_storage::ObjectProtectionReport::default(),
+                unknown_protection_objects: krabka_remote_storage::ObjectProtectionReport::default(
+                ),
                 epochs: Vec::new(),
                 unsigned_manifests: 0,
                 untrusted_manifests: 0,
@@ -530,6 +557,20 @@ mod tests {
             key: key.into(),
             upload_id: "upload-id".into(),
         }
+    }
+
+    #[test]
+    fn protection_summary_prints_only_the_bounded_sample() {
+        let report = krabka_remote_storage::ObjectProtectionReport {
+            count: 1_000_000,
+            sample: (0..10).map(|index| format!("key-{index}")).collect(),
+        };
+
+        let rendered = protection(&report);
+
+        assert!(rendered.contains("1000000 object(s)"));
+        assert!(rendered.contains("key-0"));
+        assert!(rendered.contains("key-9"));
     }
 
     #[test]

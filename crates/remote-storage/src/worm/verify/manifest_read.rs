@@ -62,9 +62,9 @@ pub(super) async fn read_manifest(
             )));
         }
     };
-    if manifest.body.format_version != MANIFEST_FORMAT_VERSION {
+    if !(1..=MANIFEST_FORMAT_VERSION).contains(&manifest.body.format_version) {
         return Ok(ManifestRead::Rejected(format!(
-            "manifest format version {} is not the supported version {MANIFEST_FORMAT_VERSION}",
+            "manifest format version {} is outside the supported range 1..={MANIFEST_FORMAT_VERSION}",
             manifest.body.format_version
         )));
     }

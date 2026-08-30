@@ -100,6 +100,7 @@ async fn put_outcome_reports_size_and_backend_identifiers() {
             sha256: None,
             e_tag: Some("0".to_owned()),
             version_id: None,
+            create_precondition: false,
         }
     );
 }
@@ -129,6 +130,7 @@ async fn put_with_digest_returns_payload_sha256() {
             sha256: Some(sha256_of(&payload)),
             e_tag: Some("0".to_owned()),
             version_id: None,
+            create_precondition: false,
         }
     );
 }
@@ -214,6 +216,7 @@ async fn put_from_path_digests_the_whole_file_on_both_paths() {
                 sha256: Some(sha256_of(&payload)),
                 e_tag: Some("0".to_owned()),
                 version_id: None,
+                create_precondition: false,
             },
             "{case}"
         );
@@ -240,6 +243,7 @@ async fn put_from_path_omits_digest_when_not_requested() {
                 sha256: None,
                 e_tag: Some("0".to_owned()),
                 version_id: None,
+                create_precondition: false,
             },
             "{case}"
         );
@@ -392,6 +396,30 @@ async fn put_from_path_at_exact_threshold_takes_multipart() {
 }
 
 #[tokio::test]
+async fn multipart_create_atomically_reserves_the_key() {
+    let store = Arc::new(CountingStore::new());
+    let c = ObjectStoreClient::new(store.clone());
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(&[3u8; 8]).unwrap();
+
+    c.put_from_path(
+        &Path::from("worm/segment"),
+        f.path(),
+        8,
+        4,
+        PutRequest {
+            mode: PutMode::Create,
+            digest: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 1);
+    assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == 1);
+}
+
+#[tokio::test]
 async fn put_from_path_rejects_zero_chunk_size() {
     let c = client();
     let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -409,14 +437,11 @@ async fn put_from_path_rejects_zero_chunk_size() {
     ));
 }
 
-/// The single-PUT path honours `PutMode::Create`; the multipart path
-/// cannot, because `object_store` 0.13's `PutMultipartOptions` has no mode.
-/// A `Create` write of a file at or above the threshold therefore
-/// overwrites, and this test pins that documented limitation.
+/// A multipart `Create` cannot attach the precondition to completion, but its
+/// atomic reservation still refuses a replay before starting the upload.
 #[tokio::test]
-async fn put_from_path_create_mode_only_binds_below_the_threshold() {
-    for (case, len, expect_conflict) in [("single put", 7usize, true), ("multipart", 8usize, false)]
-    {
+async fn put_from_path_create_mode_refuses_replay_on_both_paths() {
+    for (case, len) in [("single put", 7usize), ("multipart", 8usize)] {
         let c = client();
         let key = Path::from("seg/once");
         let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -432,7 +457,7 @@ async fn put_from_path_create_mode_only_binds_below_the_threshold() {
         let second = c.put_from_path(&key, f.path(), 8, 4, req).await;
 
         check!(
-            matches!(second, Err(ObjectStoreError::AlreadyExists(_))) == expect_conflict,
+            matches!(second, Err(ObjectStoreError::AlreadyExists(_))),
             "{case}"
         );
     }

@@ -352,6 +352,7 @@ pub(super) async fn put_entry(
         sha256: Sha256Digest(outcome.sha256.expect("the put was asked for a digest")),
         e_tag: outcome.e_tag,
         version_id: outcome.version_id,
+        create_precondition: outcome.create_precondition,
     }
 }
 

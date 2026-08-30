@@ -216,6 +216,7 @@ mod tests {
             sha256: Sha256Digest::of(b"0123456789"),
             e_tag: Some("0".to_string()),
             version_id: None,
+            create_precondition: true,
         }]
     }
 

@@ -45,10 +45,16 @@ fn object_entry(
     suffix: &str,
     key: &ObjectPath,
     outcome: PutOutcome,
+    require_version_id: bool,
 ) -> Result<ObjectEntry, WormError> {
     let sha256 = outcome.sha256.ok_or_else(|| WormError::MissingDigest {
         key: key.to_string(),
     })?;
+    if require_version_id && !outcome.create_precondition && outcome.version_id.is_none() {
+        return Err(WormError::MissingVersionId {
+            key: key.to_string(),
+        });
+    }
     Ok(ObjectEntry {
         suffix: suffix.to_string(),
         key: key.to_string(),
@@ -56,6 +62,7 @@ fn object_entry(
         sha256: Sha256Digest(sha256),
         e_tag: outcome.e_tag,
         version_id: outcome.version_id,
+        create_precondition: outcome.create_precondition,
     })
 }
 
@@ -77,9 +84,10 @@ impl S3RemoteStorage {
         // `PutMode::Create` binds only below `multipart_threshold`:
         // object_store 0.13's `PutMultipartOptions` carries no mode and
         // `MultipartUpload::complete` takes no precondition, so a large `.log`
-        // body degrades to an unconditional multipart put and depends on the
-        // bucket's Object Lock policy for its write-once guarantee. The
-        // manifest is always small, so its create is always conditional.
+        // body uses an atomic empty-object reservation plus version-pinned
+        // digest readback, and depends on bucket retention to protect the
+        // completed version. The manifest is always small, so its create is
+        // always conditional.
         let put = if worm.is_some() {
             PutRequest {
                 mode: PutMode::Create,
@@ -143,7 +151,12 @@ impl S3RemoteStorage {
                 }
             };
             if worm.is_some() {
-                objects.push(object_entry(suffix, &key, outcome)?);
+                objects.push(object_entry(
+                    suffix,
+                    &key,
+                    outcome,
+                    worm.is_some_and(|worm| worm.require_version_id),
+                )?);
             }
         }
 

@@ -37,7 +37,7 @@
 //! and `delete` hold one storage operation each, and `manager` binds those
 //! three to the trait.
 
-use krabka_object_store::ObjectStoreClient;
+use krabka_object_store::{GcsConfig, ObjectStoreClient, S3Config};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
 mod client;
@@ -70,6 +70,13 @@ pub struct S3RemoteStorage {
     multipart_chunk_size: ByteSize,
     /// `Some` when this backend is a write-once archive.
     worm: Option<WormMode>,
+    pub(crate) worm_bucket: WormBucket,
+}
+
+pub(crate) enum WormBucket {
+    S3(S3Config),
+    Gcs(GcsConfig),
+    Unverified,
 }
 
 /// Resolved WORM state: the archiver (which owns the loaded key) plus the
@@ -77,6 +84,7 @@ pub struct S3RemoteStorage {
 struct WormMode {
     archiver: WormArchiver,
     write_only: bool,
+    require_version_id: bool,
 }
 
 /// Lifts a raw byte count from [`krabka_object_store`]'s config layer into
@@ -139,7 +147,7 @@ mod tests {
         let cfg = worm_config(keys.path(), true);
         let key_path = cfg.signing_key_path.clone().unwrap();
         let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), None)
-            .with_worm(&cfg)
+            .with_worm_unchecked(&cfg)
             .unwrap();
 
         let rendered = format!("{store:?}");

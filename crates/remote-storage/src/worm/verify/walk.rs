@@ -15,7 +15,10 @@ use super::{
     listing::DirListing,
     manifest_read::KeyedManifest,
     objects::check_objects,
-    report::{EpochSpan, PartitionVerifyReport, VerifyBreak, extend_span, offset_gaps},
+    report::{
+        EpochSpan, ObjectProtectionReport, PartitionVerifyReport, VerifyBreak, extend_span,
+        offset_gaps,
+    },
     signature::{SignatureState, signature_state},
 };
 use crate::worm::{
@@ -28,6 +31,9 @@ use crate::worm::{
 pub(super) struct Walk {
     manifests: u64,
     objects_checked: u64,
+    create_precondition_objects: ObjectProtectionReport,
+    bucket_retention_objects: ObjectProtectionReport,
+    unknown_protection_objects: ObjectProtectionReport,
     unsigned: u64,
     untrusted: u64,
     epochs: Vec<EpochSpan>,
@@ -45,6 +51,15 @@ impl Walk {
         self.objects_checked = self
             .objects_checked
             .saturating_add(u64::try_from(body.objects.len()).unwrap_or(u64::MAX));
+        for object in &body.objects {
+            if body.format_version == 1 {
+                self.unknown_protection_objects.record(&object.key);
+            } else if object.create_precondition {
+                self.create_precondition_objects.record(&object.key);
+            } else {
+                self.bucket_retention_objects.record(&object.key);
+            }
+        }
         self.segments
             .push((body.segment.start_offset, body.segment.end_offset));
         self.head = Some(head);
@@ -66,6 +81,9 @@ impl Walk {
             partition_dir: dir.to_string(),
             manifests: self.manifests,
             objects_checked: self.objects_checked,
+            create_precondition_objects: self.create_precondition_objects,
+            bucket_retention_objects: self.bucket_retention_objects,
+            unknown_protection_objects: self.unknown_protection_objects,
             epochs: self.epochs,
             unsigned_manifests: self.unsigned,
             untrusted_manifests: self.untrusted,
@@ -226,6 +244,21 @@ mod tests {
         test_support::{Archive, Tamper},
         verify_archive,
     };
+
+    #[tokio::test]
+    async fn legacy_manifest_protection_is_unknown() {
+        let archive = Archive::build(&[1]).await;
+        let mut manifest = archive.segments[0].manifest.clone();
+        manifest.body.format_version = 1;
+        let mut walk = Walk::default();
+        walk.accept("legacy.manifest", &manifest, manifest_head(&manifest.body));
+
+        let report = walk.into_report("archive/topic-0-id", Vec::new(), &VerifyRequest::default());
+
+        check!(report.unknown_protection_objects.count == 2);
+        check!(report.create_precondition_objects.count == 0);
+        check!(report.bucket_retention_objects.count == 0);
+    }
 
     #[tokio::test]
     async fn verify_report_is_deterministic() {

@@ -31,7 +31,7 @@ pub use self::{
 
 /// Version of the manifest encoding, both the JSON shape and the canonical
 /// byte layout. A change to either is a change to this number.
-pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANIFEST_FORMAT_VERSION: u32 = 2;
 
 /// Object-store key suffix of a segment manifest.
 pub const MANIFEST_SUFFIX: &str = ".manifest";

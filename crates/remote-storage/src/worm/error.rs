@@ -33,6 +33,12 @@ pub enum WormError {
         /// Object-store key of the object with no digest.
         key: String,
     },
+    /// A multipart WORM write completed without a version id to pin.
+    #[error("no version id recorded for multipart object `{key}`")]
+    MissingVersionId {
+        /// Object-store key whose completed version could not be identified.
+        key: String,
+    },
     /// A delete was attempted against a write-once archive.
     #[error("delete refused: `{key}` is in a write-once archive")]
     DeleteRefused {

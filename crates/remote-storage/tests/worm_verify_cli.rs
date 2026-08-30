@@ -195,6 +195,7 @@ fn write_object(root: &Path, key: &str, suffix: &str) -> ObjectEntry {
         sha256: Sha256Digest::of(&body),
         e_tag: None,
         version_id: None,
+        create_precondition: true,
     }
 }
 
@@ -237,6 +238,10 @@ fn a_clean_archive_verifies_and_prints_its_tip() {
     // The tip is printed so an operator can feed it to `--expect-head`.
     check!(result.stdout.contains(&fixture.tip.to_string()));
     check!(result.stdout.contains(&fixture.partition_dir));
+    check!(result.stdout.contains("create precondition:"));
+    check!(result.stdout.contains(&fixture.log_keys[0]));
+    check!(result.stdout.contains("bucket retention: none"));
+    check!(result.stdout.contains("unknown (legacy manifest): none"));
 }
 
 #[test]
