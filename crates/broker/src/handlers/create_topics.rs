@@ -177,7 +177,7 @@ pub(crate) async fn handle(
 
         // Build the batch: one TopicRecord + N PartitionRecords.
         let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
-        let diskless = crate::broker::diskless_topic_config(Some(&config_overrides));
+        let diskless = crate::config_keys::resolve_diskless(Some(&config_overrides));
 
         let result = controller.submit_change(records).await;
 

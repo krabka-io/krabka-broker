@@ -461,9 +461,9 @@ mod tests {
         let distributed = engine.distributed.lock().unwrap();
         let quorum = distributed.as_ref().unwrap();
         assert!(quorum.voters == [NodeId(1), NodeId(3), NodeId(4)]);
-        assert!(quorum.durable_offsets.get(&NodeId(2)).is_none());
+        assert!(!quorum.durable_offsets.contains_key(&NodeId(2)));
         assert!(quorum.durable_offsets.get(&NodeId(3)) == Some(&Offset(7)));
-        assert!(quorum.durable_offsets.get(&NodeId(4)).is_none());
+        assert!(!quorum.durable_offsets.contains_key(&NodeId(4)));
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(id, end)| {
-                    WalReplica::new(
+                    WalReplica::for_test(
                         NodeId(u64::try_from(id).unwrap()),
                         log_with_records(&dir.path().join(format!("replica-{id}")), end),
                     )

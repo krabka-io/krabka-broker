@@ -91,6 +91,68 @@ fn topic_describe_one_preserves_result_and_filtered_config_fields() {
 }
 
 #[test]
+fn topic_describe_reports_the_fixed_data_path_key_as_read_only() {
+    use krabka_metadata::TopicConfigRecord;
+
+    let mut img = MetadataImage::new(Uuid::nil());
+    let mut overrides = BTreeMap::new();
+    overrides.insert(config_keys::DISKLESS.to_string(), "true".to_string());
+    overrides.insert("retention.ms".to_string(), "60000".to_string());
+    img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "events".into(),
+        overrides,
+    }));
+
+    let result = super::describe_one(
+        &img,
+        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type: super::RESOURCE_TYPE_TOPIC,
+            resource_name: "events".into(),
+            configuration_keys: Some(vec![
+                config_keys::DISKLESS.to_string(),
+                "retention.ms".to_string(),
+            ]),
+            ..Default::default()
+        },
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    );
+
+    let expected = DescribeConfigsResult {
+        error_code: crate::codes::NONE,
+        error_message: None,
+        resource_type: super::RESOURCE_TYPE_TOPIC,
+        resource_name: "events".to_string(),
+        configs: vec![
+            DescribeConfigsResourceResult {
+                name: config_keys::DISKLESS.to_string(),
+                value: Some("true".to_string()),
+                read_only: true,
+                config_source: super::CONFIG_SOURCE_DYNAMIC_TOPIC,
+                is_sensitive: false,
+                synonyms: Vec::new(),
+                config_type: 0,
+                documentation: None,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            DescribeConfigsResourceResult {
+                name: "retention.ms".to_string(),
+                value: Some("60000".to_string()),
+                read_only: false,
+                config_source: super::CONFIG_SOURCE_DYNAMIC_TOPIC,
+                is_sensitive: false,
+                synonyms: Vec::new(),
+                config_type: 0,
+                documentation: None,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+        ],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(result == expected);
+}
+
+#[test]
 fn broker_describe_one_rejects_non_numeric_resource_name_with_fields() {
     let img = MetadataImage::new(Uuid::nil());
     let result = super::describe_one(

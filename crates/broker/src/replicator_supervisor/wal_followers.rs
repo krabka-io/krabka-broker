@@ -20,7 +20,7 @@ impl ReplicatorSupervisor {
         image
             .all_partitions()
             .filter(|partition| {
-                crate::broker::diskless_topic_config(image.topic_config(&partition.topic))
+                crate::config_keys::resolve_diskless(image.topic_config(&partition.topic))
             })
             .filter_map(|partition| {
                 let topic = image.topic(&partition.topic)?;

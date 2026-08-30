@@ -11,10 +11,7 @@ use krabka_units::convert::TimeExt as _;
 use crate::{
     broker::{
         DisklessRuntime,
-        partition_spawn::{
-            PartitionSpawnConfig, diskless_topic_config,
-            try_spawn_partition_with_replication_target,
-        },
+        partition_spawn::{PartitionSpawnConfig, try_spawn_partition_with_replication_target},
     },
     config::BrokerConfig,
     error::BrokerError,
@@ -52,7 +49,7 @@ pub(super) async fn recover_storage_and_groups(
         );
         for (topic, partition_id, owning_dir) in log_dir::scan_all(&scan_dirs)? {
             let directory = log_dir::partition_dir(&owning_dir, &topic, partition_id);
-            let diskless = diskless_topic_config(startup_image.topic_config(&topic));
+            let diskless = crate::config_keys::resolve_diskless(startup_image.topic_config(&topic));
             let open_config = crate::diskless::recovery::open_config(&config.log_config, diskless);
             let mut log = krabka_log::Log::open(&directory, open_config)?;
             if let Some(stamp_source) = partitions.stamp_source() {
