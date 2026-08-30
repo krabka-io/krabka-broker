@@ -375,3 +375,158 @@ pub(super) struct BatchBytes {
     pub(super) last_offset: Offset,
     pub(super) verbatim: VerbatimBatch,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use assert2::assert;
+    use bytes::{Bytes, BytesMut};
+    use krabka_log::LogConfig;
+    use krabka_protocol::records::RecordBatch;
+
+    use super::*;
+    use crate::wal::quorum::test_support::batch;
+
+    fn configured_engine(path: &Path) -> WalShardEngine {
+        let log = Log::open(path, LogConfig::default()).unwrap();
+        let engine = WalShardEngine::new_distributed(Arc::new(Mutex::new(log)), 3).unwrap();
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        engine
+    }
+
+    fn log_with_records(path: &Path, records: usize) -> Arc<Mutex<Log>> {
+        let mut log = Log::open(path, LogConfig::default()).unwrap();
+        for _ in 0..records {
+            log.append(&mut batch(1)).unwrap();
+        }
+        log.sync().unwrap();
+        Arc::new(Mutex::new(log))
+    }
+
+    #[test]
+    fn distributed_watermark_honors_membership_and_log_start_floor() {
+        for (name, from, offset, expected, remembered) in [
+            ("non-voter", NodeId(9), 10, 0, None),
+            ("below log start", NodeId(2), 4, 5, None),
+            ("at log start", NodeId(2), 5, 5, None),
+            ("past log start", NodeId(2), 6, 6, Some(6)),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let engine = configured_engine(dir.path());
+
+            let advanced =
+                engine.record_durable_offset(from, Offset(offset), Offset(5), Offset(10));
+            let stored = engine
+                .distributed
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .durable_offsets
+                .get(&from)
+                .copied();
+
+            assert!(advanced == (expected > 0), "case {name}");
+            assert!(
+                engine.durable_watermark() == Offset(expected),
+                "case {name}"
+            );
+            assert!(stored == remembered.map(Offset), "case {name}");
+        }
+    }
+
+    #[test]
+    fn distributed_reconfiguration_keeps_only_current_voter_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = configured_engine(dir.path());
+        engine.record_durable_offset(NodeId(2), Offset(8), Offset(0), Offset(10));
+        engine.record_durable_offset(NodeId(3), Offset(7), Offset(0), Offset(10));
+
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(3), NodeId(4)]);
+
+        let distributed = engine.distributed.lock().unwrap();
+        let quorum = distributed.as_ref().unwrap();
+        assert!(quorum.voters == [NodeId(1), NodeId(3), NodeId(4)]);
+        assert!(quorum.durable_offsets.get(&NodeId(2)).is_none());
+        assert!(quorum.durable_offsets.get(&NodeId(3)) == Some(&Offset(7)));
+        assert!(quorum.durable_offsets.get(&NodeId(4)).is_none());
+    }
+
+    #[test]
+    fn adopted_prefix_must_be_inside_its_log_bounds() {
+        for (name, durable, expected) in [
+            ("below start", 4, 0),
+            ("at start", 5, 5),
+            ("at end", 10, 10),
+            ("past end", 11, 0),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let engine = configured_engine(dir.path());
+
+            engine.adopt_local_durable_prefix(Offset(durable), Offset(5), Offset(10));
+
+            assert!(
+                engine.local_durable.load(Ordering::Acquire) == expected,
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_uses_the_majority_prefix_and_repairs_every_replica() {
+        for (ends, expected) in [([5, 3, 1], 3), ([5, 5, 1], 5)] {
+            let dir = tempfile::tempdir().unwrap();
+            let replicas = ends
+                .into_iter()
+                .enumerate()
+                .map(|(id, end)| {
+                    WalReplica::new(
+                        NodeId(u64::try_from(id).unwrap()),
+                        log_with_records(&dir.path().join(format!("replica-{id}")), end),
+                    )
+                })
+                .collect();
+
+            let engine = WalShardEngine::new(replicas, OpenMode::Recover).unwrap();
+
+            assert!(engine.durable_watermark() == Offset(expected));
+            assert!(engine.replica_end_offsets() == vec![Offset(expected); 3]);
+        }
+    }
+
+    #[test]
+    fn batch_parsing_rejects_invalid_offsets_and_inexact_ranges() {
+        let negative_delta = RecordBatch {
+            last_offset_delta: -1,
+            ..RecordBatch::default()
+        };
+        let mut overflowing_offset = batch(2);
+        overflowing_offset.base_offset = i64::MAX;
+        let mut negative_wire = BytesMut::new();
+        negative_delta.encode(&mut negative_wire).unwrap();
+        let mut overflowing_wire = BytesMut::new();
+        overflowing_offset.encode(&mut overflowing_wire).unwrap();
+
+        for (name, wire) in [
+            ("truncated batch", Bytes::from_static(&[0])),
+            ("negative offset delta", negative_wire.freeze()),
+            ("offset overflow", overflowing_wire.freeze()),
+        ] {
+            assert!(split_batches(&wire).is_err(), "case {name}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut batch(3)).unwrap();
+        for (name, start, target) in [
+            ("starts inside a batch", 1, 3),
+            ("ends inside a batch", 0, 2),
+        ] {
+            assert!(
+                read_log_batches_exact(&log, Offset(start), Offset(target)).is_err(),
+                "case {name}"
+            );
+        }
+    }
+}
