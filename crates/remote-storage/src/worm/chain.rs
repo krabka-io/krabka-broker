@@ -164,8 +164,6 @@ pub fn next_chain_stamp(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::check;
     use krabka_ids::LeaderEpoch;
     use proptest::{collection::vec as prop_vec, num::u8::ANY as ANY_U8, proptest};

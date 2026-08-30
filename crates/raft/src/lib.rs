@@ -33,7 +33,7 @@
 //!     })])
 //!     .await?;
 //!
-//! assert!(controller.current_image().topic("my-topic").is_some());
+//! assert2::assert!(controller.current_image().topic("my-topic").is_some());
 //! controller.shutdown().await;
 //! # Ok(())
 //! # }

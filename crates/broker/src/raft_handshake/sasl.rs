@@ -150,7 +150,7 @@ pub(super) async fn run_inbound_sasl(
                 }
                 // Multi-round mechanisms and the RFC 7628 rejection exchange
                 // loop for the next `SaslAuthenticate` frame.
-                debug_assert!(
+                assert2::assert!(
                     matches!(
                         auth,
                         ConnectionAuth::Negotiating {

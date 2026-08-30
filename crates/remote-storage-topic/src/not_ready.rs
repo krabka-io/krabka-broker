@@ -114,8 +114,6 @@ impl RemoteLogMetadataManager for NotReadyRlmm {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::assert;
     use krabka_remote_storage::{
         RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState,

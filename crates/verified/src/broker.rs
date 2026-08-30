@@ -176,6 +176,8 @@ pub fn effective_share_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
+
     use super::*;
 
     #[test]
@@ -352,14 +354,11 @@ mod tests {
 
     #[test]
     fn broker_arithmetic_edges_are_explicit() {
-        assert_eq!(delete_records_target(-1, 7), 7);
+        assert!(delete_records_target(-1, 7) == 7);
         assert!(delete_records_offset_out_of_range(-1, 7));
-        assert_eq!(effective_share_backlog(12, -1, 4), 8);
-        assert_eq!(effective_share_backlog(5, 9, 4), 0);
-        assert_eq!(
-            effective_share_backlog(i64::MAX, i64::MIN, i64::MIN),
-            i64::MAX
-        );
+        assert!(effective_share_backlog(12, -1, 4) == 8);
+        assert!(effective_share_backlog(5, 9, 4) == 0);
+        assert!(effective_share_backlog(i64::MAX, i64::MIN, i64::MIN) == i64::MAX);
     }
 
     #[test]
@@ -440,17 +439,17 @@ mod tests {
         let values = [i64::MIN, -2, -1, 0, 1, 2, i64::MAX];
         for requested in values {
             for high_watermark in values {
-                assert_eq!(
-                    delete_records_target(requested, high_watermark),
-                    if requested == -1 {
-                        high_watermark
-                    } else {
-                        requested
-                    }
+                assert!(
+                    delete_records_target(requested, high_watermark)
+                        == if requested == -1 {
+                            high_watermark
+                        } else {
+                            requested
+                        }
                 );
-                assert_eq!(
-                    delete_records_offset_out_of_range(requested, high_watermark),
-                    requested < 0 || requested > high_watermark
+                assert!(
+                    delete_records_offset_out_of_range(requested, high_watermark)
+                        == (requested < 0 || requested > high_watermark)
                 );
             }
         }
@@ -467,7 +466,7 @@ mod tests {
                         (i128::from(hwm) - i128::from(base)).clamp(0, i128::from(i64::MAX)),
                     )
                     .expect("oracle is clamped to the i64 range");
-                    assert_eq!(effective_share_backlog(hwm, spso, log_start), expected);
+                    assert!(effective_share_backlog(hwm, spso, log_start) == expected);
                 }
             }
         }

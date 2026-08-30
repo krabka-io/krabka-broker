@@ -244,13 +244,13 @@ mod tests {
         // hinted voter and drop the fallbacks, leaving no peer to retry when the
         // hint is stale.
         let order = build_forward_order(&voters(), Some(krabka_audit::NodeId(2)));
-        assert_eq!(
-            order,
-            vec![
-                (krabka_raft::NodeId(2), "h2:9093".to_string()),
-                (krabka_raft::NodeId(1), "h1:9093".to_string()),
-                (krabka_raft::NodeId(3), "h3:9093".to_string()),
-            ]
+        assert2::assert!(
+            (order)
+                == (vec![
+                    (krabka_raft::NodeId(2), "h2:9093".to_string()),
+                    (krabka_raft::NodeId(1), "h1:9093".to_string()),
+                    (krabka_raft::NodeId(3), "h3:9093".to_string()),
+                ])
         );
     }
 
@@ -259,7 +259,7 @@ mod tests {
         // No leader hint → fall back to trying every voter. A flipped predicate
         // (`== None`) would push nothing, so the forward could reach no peer.
         let order = build_forward_order(&voters(), None);
-        assert_eq!(order, voters());
+        assert2::assert!((order) == (voters()));
     }
 
     #[test]
@@ -267,7 +267,7 @@ mod tests {
         // Hint names a voter not in the set → no leader-first entry, but every
         // voter is still tried (hint 9 != each id).
         let order = build_forward_order(&voters(), Some(krabka_audit::NodeId(9)));
-        assert_eq!(order, voters());
+        assert2::assert!((order) == (voters()));
     }
 
     #[tokio::test]
@@ -294,8 +294,8 @@ mod tests {
             .await
             .expect("applied");
 
-        assert_eq!(submit_requests.load(Ordering::SeqCst), 1);
-        assert!(
+        assert2::assert!((submit_requests.load(Ordering::SeqCst)) == (1));
+        assert2::assert!(
             client_ids
                 .lock()
                 .unwrap()
@@ -325,7 +325,7 @@ mod tests {
             .await
             .expect_err("metadata error");
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             err,
             RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
         ));
@@ -352,7 +352,7 @@ mod tests {
             .await
             .expect_err("not leader");
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             err,
             RaftError::NotLeader {
                 current_leader: Some(NodeId(7))
@@ -381,7 +381,7 @@ mod tests {
             .await
             .expect_err("not leader");
 
-        assert!(matches!(
+        assert2::assert!(matches!(
             err,
             RaftError::NotLeader {
                 current_leader: None

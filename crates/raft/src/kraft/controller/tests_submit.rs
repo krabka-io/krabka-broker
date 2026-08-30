@@ -58,11 +58,11 @@ fn offset_advance_submit_returns_actor_ordered_base() {
     engine.on_submit_change(&advance(5), reply);
     let second = rx.try_recv().expect("second reply").expect("second ok");
 
-    assert_eq!(first.offset_reservations[0].base_offset, 0);
-    assert_eq!(first.offset_reservations[0].count, 3);
-    assert_eq!(second.offset_reservations[0].base_offset, 3);
-    assert_eq!(second.offset_reservations[0].count, 5);
-    assert_eq!(engine.image.partition_next_offset("topic", 0), Some(8));
+    assert!(first.offset_reservations[0].base_offset == 0);
+    assert!(first.offset_reservations[0].count == 3);
+    assert!(second.offset_reservations[0].base_offset == 3);
+    assert!(second.offset_reservations[0].count == 5);
+    assert!(engine.image.partition_next_offset("topic", 0) == Some(8));
 }
 
 #[test]

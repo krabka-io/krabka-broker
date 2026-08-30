@@ -2,7 +2,7 @@
 //! [`S3RemoteStorage`], the segment metadata and on-disk segment files a copy
 //! needs, and the throwaway signing key and chain stamp a WORM archive needs.
 
-use std::{collections::BTreeMap, io::Write, path::PathBuf, sync::Arc};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;

@@ -163,21 +163,20 @@ pub async fn spawn_admin_from_env_with_config(
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
+
     use super::*;
 
     #[tokio::test]
     async fn supervised_admin_exit_classifies_clean_error_and_join_outcomes() {
         let clean = tokio::spawn(async { Ok(()) });
-        assert_eq!(
-            await_admin_exit(clean).await.unwrap_err().to_string(),
-            "admin server stopped unexpectedly"
+        assert!(
+            await_admin_exit(clean).await.unwrap_err().to_string()
+                == "admin server stopped unexpectedly"
         );
 
         let io_error = tokio::spawn(async { Err(std::io::Error::other("socket failed")) });
-        assert_eq!(
-            await_admin_exit(io_error).await.unwrap_err().to_string(),
-            "socket failed"
-        );
+        assert!(await_admin_exit(io_error).await.unwrap_err().to_string() == "socket failed");
 
         let panic = tokio::spawn(async {
             panic!("admin panic");

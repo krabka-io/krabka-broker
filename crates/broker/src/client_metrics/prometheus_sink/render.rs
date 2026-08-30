@@ -125,19 +125,19 @@ mod tests {
         reg.register_collector(Box::new(sink));
         let mut buf = String::new();
         prometheus_client::encoding::text::encode(&mut buf, &reg).unwrap();
-        assert!(
+        assert2::assert!(
             buf.contains("client_instance_id=\"11111111-1111-1111-1111-111111111111\""),
             "got:\n{buf}"
         );
-        assert!(
+        assert2::assert!(
             buf.contains("rack=\"a\""),
             "attribute label missing:\n{buf}"
         );
-        assert!(
+        assert2::assert!(
             buf.contains("# TYPE krabka_client_org_apache_kafka_consumer_fetch_size gauge"),
             "gauge type missing:\n{buf}"
         );
-        assert!(buf.contains("42"), "value missing:\n{buf}");
+        assert2::assert!(buf.contains("42"), "value missing:\n{buf}");
     }
 
     #[test]
@@ -171,17 +171,17 @@ mod tests {
         let mut output = String::new();
         prometheus_client::encoding::text::encode(&mut output, &registry).unwrap();
 
-        assert!(
+        assert2::assert!(
             output.contains("# TYPE krabka_client_requests counter"),
             "{output}"
         );
-        assert!(
+        assert2::assert!(
             output.contains("# TYPE krabka_client_latency histogram"),
             "{output}"
         );
-        assert!(output.contains("krabka_client_latency_count"), "{output}");
-        assert!(output.contains("krabka_client_latency_sum"), "{output}");
-        assert!(output.contains("le=\"5.0\""), "{output}");
+        assert2::assert!(output.contains("krabka_client_latency_count"), "{output}");
+        assert2::assert!(output.contains("krabka_client_latency_sum"), "{output}");
+        assert2::assert!(output.contains("le=\"5.0\""), "{output}");
     }
 
     #[test]
@@ -215,12 +215,12 @@ mod tests {
         let help_count = buf
             .matches("# HELP krabka_client_org_apache_kafka_consumer_fetch_size")
             .count();
-        assert!(
+        assert2::assert!(
             help_count == 1,
             "expected exactly one HELP line, got {help_count}:\n{buf}"
         );
         // Both series present.
-        assert!(
+        assert2::assert!(
             buf.contains("c1") && buf.contains("c2"),
             "both series must render:\n{buf}"
         );
@@ -249,7 +249,7 @@ mod tests {
         ]);
 
         let output = encode_collector(sink);
-        assert!(
+        assert2::assert!(
             output.contains("client_instance_id=\"gauge\"")
                 ^ output.contains("client_instance_id=\"counter\""),
             "{output}"
@@ -269,7 +269,7 @@ mod tests {
         }]);
 
         let output = encode_collector(SharedClientMetricsCollector(sink));
-        assert!(
+        assert2::assert!(
             output.contains("krabka_client_valid_name:total_bad"),
             "{output}"
         );

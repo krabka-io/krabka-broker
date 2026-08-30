@@ -15,7 +15,7 @@
 //! descendant, can reach them.
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
@@ -49,6 +49,9 @@ pub struct TokenBucket {
     /// again. A stale `available` CAS thus never clobbers a straddled reset.
     /// See the stateright model in `tests/bucket_model.rs`.
     generation: AtomicU64,
+    /// Seqlock writers must be serialized; overlapping writers can publish an
+    /// even generation while a reset is still in flight.
+    writer: Mutex<()>,
     /// Monotonic nanosecond time source. The caller injects it, so tests can
     /// drive refills deterministically with a [`qubit_clock::MockClock`]
     /// instead of sleeping.
@@ -88,6 +91,7 @@ impl TokenBucket {
             available: AtomicU64::new(0),
             last_refill_nanos,
             generation: AtomicU64::new(0),
+            writer: Mutex::new(()),
             clock,
         }
     }

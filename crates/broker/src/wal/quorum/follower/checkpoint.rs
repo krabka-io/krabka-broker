@@ -166,14 +166,14 @@ mod tests {
             ..RecordBatch::default()
         };
         log.append(&mut uncertain).unwrap();
-        assert_eq!(log.log_end_offset(), Offset(2));
+        assert2::assert!((log.log_end_offset()) == (Offset(2)));
         drop(log);
 
         let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
         recover_durable_offset(&mut reopened, &checkpoint).unwrap();
 
-        assert_eq!(reopened.log_end_offset(), Offset(1));
-        assert_eq!(std::fs::read_to_string(checkpoint).unwrap().trim(), "0 1");
+        assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
+        assert2::assert!((std::fs::read_to_string(checkpoint).unwrap().trim()) == ("0 1"));
     }
 
     #[test]

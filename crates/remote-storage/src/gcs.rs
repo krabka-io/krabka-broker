@@ -67,7 +67,6 @@ impl S3RemoteStorage {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         io::Write,
         path::{Path, PathBuf},
         sync::Arc,

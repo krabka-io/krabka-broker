@@ -2,7 +2,7 @@
 //! against the owned path, the offset each variant assigns, and the
 //! transaction state it tracks.
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::{kibibytes, mebibytes};
 use tempfile::tempdir;
@@ -65,20 +65,20 @@ fn append_verbatim_at_stamps_base_byte_exact() {
 
     let appended = log.append_verbatim_at(&vb, Offset(1)).unwrap();
 
-    assert_eq!(appended, Offset(1));
-    assert_eq!(log.log_end_offset(), Offset(2));
-    assert_eq!(
-        log.epoch_checkpoint().entries(),
-        &[
-            EpochEntry {
-                epoch: LeaderEpoch(2),
-                start_offset: Offset(0),
-            },
-            EpochEntry {
-                epoch: LeaderEpoch(4),
-                start_offset: Offset(1),
-            },
-        ]
+    assert!(appended == Offset(1));
+    assert!(log.log_end_offset() == Offset(2));
+    assert!(
+        log.epoch_checkpoint().entries()
+            == &[
+                EpochEntry {
+                    epoch: LeaderEpoch(2),
+                    start_offset: Offset(0),
+                },
+                EpochEntry {
+                    epoch: LeaderEpoch(4),
+                    start_offset: Offset(1),
+                },
+            ]
     );
 
     let mut expected_wire = bytes::BytesMut::new();
@@ -91,9 +91,8 @@ fn append_verbatim_at_stamps_base_byte_exact() {
     let r = log
         .read_raw(Offset(0), log.log_end_offset(), mebibytes(10))
         .unwrap();
-    assert_eq!(
-        r.bytes[..],
-        expected_wire[..],
+    assert!(
+        r.bytes[..] == expected_wire[..],
         "verbatim append_at must be byte-exact after supplied base+epoch stamping"
     );
     drop(dir);
@@ -118,7 +117,7 @@ fn append_verbatim_at_rejects_non_leo_base() {
         ),
         "non-LEO append_verbatim_at must report OffsetMismatch"
     );
-    assert_eq!(log.log_end_offset(), Offset(0));
+    assert!(log.log_end_offset() == Offset(0));
     assert!(
         log.read_raw(Offset(0), Offset(0), kibibytes(1))
             .unwrap()
@@ -138,8 +137,8 @@ fn append_verbatim_at_uses_reconciled_frontier_floor() {
 
     let appended = log.append_verbatim_at(&vb, Offset(5)).unwrap();
 
-    assert_eq!(appended, Offset(5));
-    assert_eq!(log.log_end_offset(), Offset(6));
+    assert!(appended == Offset(5));
+    assert!(log.log_end_offset() == Offset(6));
     drop(dir);
 }
 

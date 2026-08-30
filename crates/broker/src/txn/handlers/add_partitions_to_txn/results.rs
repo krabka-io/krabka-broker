@@ -133,8 +133,6 @@ pub(super) fn topic_error(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use assert2::assert;
 
     use super::*;

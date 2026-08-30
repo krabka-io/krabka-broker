@@ -125,7 +125,7 @@ mod tests {
             }],
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
-        assert_eq!(req, expected);
+        assert2::assert!((req) == (expected));
     }
 
     #[test]
@@ -140,6 +140,6 @@ mod tests {
 
         let req = build_alter_partition_request(&image, 5, "orders", 0, &[NodeId(5)], 3);
 
-        assert_eq!(req.broker_epoch, 5);
+        assert2::assert!((req.broker_epoch) == (5));
     }
 }

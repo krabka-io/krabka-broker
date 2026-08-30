@@ -350,7 +350,7 @@ fn client_metrics_describe_emits_defaults() {
         12_345,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
     );
-    assert_eq!(res.error_code, crate::codes::NONE);
+    assert2::assert!((res.error_code) == (crate::codes::NONE));
     let by_name: std::collections::HashMap<_, _> =
         res.configs.iter().map(|c| (c.name.as_str(), c)).collect();
     let cases = [

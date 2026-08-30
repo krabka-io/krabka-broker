@@ -3,8 +3,6 @@
 //! segment should produce, and the `--rlmm-snapshot` file the reconciliation
 //! tests hand back to the scan.
 
-use std::collections::BTreeMap;
-
 use clap::Parser as _;
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_remote_storage::{

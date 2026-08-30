@@ -40,7 +40,7 @@ pub(super) fn fetch_response_write_plan(
     response: &FetchResponse,
     version: i16,
 ) -> Result<Vec<FetchWriteOp>, ProtocolError> {
-    debug_assert!(
+    assert2::assert!(
         version >= 4,
         "write plan is only valid for the canonical Fetch codec (v4+)"
     );

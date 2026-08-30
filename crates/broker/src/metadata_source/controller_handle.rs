@@ -116,13 +116,13 @@ mod tests {
         let expected_offset = i64::try_from(source.quorum_state().last_applied_index)
             .unwrap_or(i64::MAX)
             .saturating_sub(1);
-        assert_ne!(
-            expected_offset, 1,
+        assert2::assert!(
+            (expected_offset) != (1),
             "test must distinguish a constant offset"
         );
-        assert_eq!(source.current_metadata_offset(), expected_offset);
+        assert2::assert!((source.current_metadata_offset()) == (expected_offset));
         source.trigger_snapshot().await.expect("snapshot");
-        assert!(matches!(
+        assert2::assert!(matches!(
             source.read_snapshot_range(0, 1),
             SnapshotRange::Slice(_)
         ));

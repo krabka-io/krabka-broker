@@ -1,7 +1,5 @@
 //! Unit tests for the remote-retention eviction set and its delete pass.
 
-use std::collections::BTreeMap;
-
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{

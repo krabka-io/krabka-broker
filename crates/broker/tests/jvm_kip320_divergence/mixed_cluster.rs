@@ -245,7 +245,7 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
         ])
         .status()
         .expect("docker run JVM broker");
-    assert!(status.success(), "docker run JVM broker failed");
+    assert2::assert!(status.success(), "docker run JVM broker failed");
 
     // Wait for the Krabka voters to elect a shared leader (event-driven: each
     // awaiter resolves once that voter observes a non-zero controller leader).

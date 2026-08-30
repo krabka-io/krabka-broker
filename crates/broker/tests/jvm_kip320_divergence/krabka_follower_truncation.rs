@@ -37,7 +37,7 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
 
     // 0. Gate on the JVM broker registering (see scenario 2); RF=3 needs all
     //    three brokers in the cluster view. Linux-bound.
-    assert!(
+    assert2::assert!(
         cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
         "JVM broker never joined the mixed cluster; cross-impl KRaft join is Linux-bound"
     );
@@ -64,7 +64,7 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
         if isr.contains(&1) && isr.contains(&3) {
             break;
         }
-        assert!(Instant::now() <= deadline, "replicas never converged: {s}");
+        assert2::assert!(Instant::now() <= deadline, "replicas never converged: {s}");
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 

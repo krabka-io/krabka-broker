@@ -1,7 +1,5 @@
 //! Manifest fixtures that the unit tests of several submodules share.
 
-use std::collections::BTreeMap;
-
 use uuid::Uuid;
 
 use super::{

@@ -58,7 +58,7 @@ macro_rules! plain_dispatches {
     ($register_fn:ident; $(($api:ident, $request:ident, $handler:path)),+ $(,)?) => {
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             $(
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::plain(
                         ApiKey::$api as i16,
                         krabka_protocol::owned::$request::FLEXIBLE_MIN,
@@ -92,7 +92,7 @@ macro_rules! context_dispatches {
 
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             $(
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         krabka_protocol::owned::$request::FLEXIBLE_MIN,
@@ -126,11 +126,11 @@ macro_rules! krabka_private_context_dispatches {
                 $(($api_key, $flexible_min, $adapter as ContextHandler),)*
             ];
             for &(api_key, flexible_min, handler) in entries {
-                assert!(
+                assert2::assert!(
                     api_key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
                     "api_key {api_key} is below the krabka-private floor"
                 );
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::context(api_key, flexible_min, handler)),
                     "duplicate dispatch registration for api_key {api_key}"
                 );
@@ -157,7 +157,7 @@ macro_rules! sync_context_dispatches {
 
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             $(
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         krabka_protocol::owned::$request::FLEXIBLE_MIN,
@@ -195,7 +195,7 @@ macro_rules! decoded_context_dispatches {
 
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             $(
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,
@@ -232,7 +232,7 @@ macro_rules! decoded_sync_context_dispatches {
 
         pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
             $(
-                assert!(
+                assert2::assert!(
                     registry.register(DispatchEntry::context(
                         ApiKey::$api as i16,
                         krabka_protocol::owned::$request_mod::FLEXIBLE_MIN,

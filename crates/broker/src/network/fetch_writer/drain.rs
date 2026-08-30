@@ -65,7 +65,7 @@ crate::sendfile_cfg! {
         dst: &mut [u8],
     ) -> Result<(), BrokerError> {
         use std::os::unix::fs::FileExt;
-        debug_assert_eq!(dst.len(), region.len);
+        assert2::assert!((dst.len()) == (region.len));
         let mut filled = 0usize;
         let mut offset = region.offset;
         while filled < dst.len() {
@@ -132,7 +132,7 @@ mod tests {
             .await
             .expect_err("empty plans cannot form a Kafka response frame");
 
-        assert!(error.to_string().contains("empty write plan"));
+        assert2::assert!(error.to_string().contains("empty write plan"));
         drop(client);
     }
 
@@ -183,7 +183,7 @@ mod tests {
                 let mut stream = TcpStream::connect(addr).await.unwrap();
                 let mut got = vec![0u8; expected.len()];
                 stream.read_exact(&mut got).await.unwrap();
-                assert_eq!(got, &expected[..], "sendfile'd bytes must match file");
+                assert2::assert!((got) == (&expected[..]), "sendfile'd bytes must match file");
             });
 
             let (mut server, _) = listener.accept().await.unwrap();
@@ -194,7 +194,7 @@ mod tests {
                 let _ = sr.set_send_buffer_size(8 * 1024);
             }
             let ops = resolve_records_sendfile(&payload).unwrap();
-            assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
+            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
             write_fetch_plan(&mut server, ops).await.unwrap();
             drop(server); // EOF for the client's read_exact tail
             client.await.unwrap();
@@ -304,13 +304,16 @@ mod tests {
             // reads the Fetch request before writing the response.
             let mut req = vec![0u8; REQ.len()];
             ktls_stream.read_exact(&mut req).await.unwrap();
-            assert_eq!(req, REQ, "kTLS RX must deliver the request bytes intact");
+            assert2::assert!(
+                (req) == (REQ),
+                "kTLS RX must deliver the request bytes intact"
+            );
 
             // The KtlsStream must report itself sendfile-capable, and the
             // resolver must emit a File op (true zero-copy over TLS).
-            assert!(SendfileSink::is_sendfile_capable(&ktls_stream));
+            assert2::assert!(SendfileSink::is_sendfile_capable(&ktls_stream));
             let ops = resolve_records_sendfile(&payload).unwrap();
-            assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
+            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
 
             // sendfile the file region onto the kTLS socket — the kernel
             // encrypts it into TLS records on the way out.
@@ -319,9 +322,8 @@ mod tests {
             drop(ktls_stream); // sends close_notify; EOF for the client tail
 
             let got = client.await.unwrap();
-            assert_eq!(
-                got,
-                &records[..],
+            assert2::assert!(
+                (got) == (&records[..]),
                 "client-decrypted kTLS bytes must equal the file region (wire byte-exact)"
             );
         }

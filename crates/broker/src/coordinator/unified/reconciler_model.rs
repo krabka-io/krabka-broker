@@ -17,7 +17,7 @@
 //!
 //! Memory safety: stateright BFS keeps every visited unique state in memory.
 //! Each run is therefore fenced with `within_boundary`, `target_state_count`,
-//! and `timeout`. Run it under the host memory watchdog while you tune the
+//! Run it under the host memory watchdog while you tune the
 //! bounds.
 //!
 //! # Module layout

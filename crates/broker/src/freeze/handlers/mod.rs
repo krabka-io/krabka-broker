@@ -46,14 +46,10 @@ use crate::{
 // reads the broker's constant and the framing reads the codec's, so a drift
 // between the two would register a handler under a key that no message
 // decodes.
-const _: () = assert!(
-    crate::handlers::SET_TOPIC_FREEZE_API_KEY
-        == krabka_protocol::krabka::freeze::set_topic_freeze::API_KEY
-);
-const _: () = assert!(
-    crate::handlers::DESCRIBE_TOPIC_FREEZES_API_KEY
-        == krabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY
-);
+const _: [(); crate::handlers::SET_TOPIC_FREEZE_API_KEY as usize] =
+    [(); krabka_protocol::krabka::freeze::set_topic_freeze::API_KEY as usize];
+const _: [(); crate::handlers::DESCRIBE_TOPIC_FREEZES_API_KEY as usize] =
+    [(); krabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY as usize];
 
 /// The pattern type that a request's `pattern_type` byte names, or `None` when
 /// the byte is not one this build knows.

@@ -95,7 +95,7 @@ mod tests {
             new_isr: vec![NodeId(1), NodeId(2)],
             leader_epoch: LeaderEpoch(7),
         };
-        assert_eq!(proposal, expected);
+        assert2::assert!((proposal) == (expected));
     }
 
     #[tokio::test]
@@ -124,7 +124,7 @@ mod tests {
             new_isr: vec![NodeId(1), NodeId(2), NodeId(3)],
             leader_epoch: LeaderEpoch(8),
         };
-        assert_eq!(proposal, expected);
+        assert2::assert!((proposal) == (expected));
     }
 
     #[tokio::test]
@@ -144,7 +144,7 @@ mod tests {
         )
         .await;
 
-        assert!(
+        assert2::assert!(
             compute_proposal(&part, Duration::from_secs(5))
                 .await
                 .is_none()

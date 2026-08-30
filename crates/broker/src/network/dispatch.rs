@@ -92,7 +92,7 @@ fn parse_connection_request<'a>(
             return None;
         }
     };
-    debug_assert_eq!(parsed.api_key, peeked_api_key);
+    assert2::assert!((parsed.api_key) == (peeked_api_key));
     let span = if tracing::enabled!(
         target: crate::telemetry::REQUEST_TARGET,
         tracing::Level::DEBUG

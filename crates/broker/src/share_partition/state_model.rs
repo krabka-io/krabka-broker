@@ -17,7 +17,7 @@
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! each run is fenced with `within_boundary`, `target_state_count`, and
-//! `timeout`. While bounds are tuned, every run MUST execute under the host
+//! `target_state_count`. While bounds are tuned, every run MUST execute under the host
 //! memory watchdog. Never run one unguarded, because a runaway space exhausts
 //! host RAM.
 //!

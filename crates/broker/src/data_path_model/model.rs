@@ -192,13 +192,13 @@ impl Model for DpModel {
                     },
                     Offset(fetch_offset),
                 );
-                assert!(
+                assert2::assert!(
                     vw.limit_offset <= s.hwm,
                     "consumer limit {} exceeds HWM {}",
                     vw.limit_offset,
                     s.hwm
                 );
-                assert!(vw.response_hw == s.hwm, "response_hw drift");
+                assert2::assert!(vw.response_hw == s.hwm, "response_hw drift");
             }
             Act::Die(b) => {
                 s.live &= !(1 << b);

@@ -117,7 +117,7 @@ impl QuorumStateMachine {
                 .unwrap_or(*high_watermark)
                 .max(*high_watermark)
         };
-        debug_assert!(
+        assert2::assert!(
             new_hwm <= log_end,
             "HWM {new_hwm} must not exceed leader log end {log_end}"
         );

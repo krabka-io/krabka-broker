@@ -26,7 +26,7 @@ pub struct OffsetIndexEntry {
 /// Byte length of one serialized offset-index entry.
 const OFFSET_INDEX_ENTRY_LEN: usize = std::mem::size_of::<OffsetIndexEntry>();
 
-const _: () = assert!(OFFSET_INDEX_ENTRY_LEN == 8);
+const _: [(); 8] = [(); OFFSET_INDEX_ENTRY_LEN];
 
 /// Computes the inclusive `end_position` for a remote byte-range fetch.
 ///

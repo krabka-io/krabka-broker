@@ -196,7 +196,7 @@ mod tests {
         .await
         .expect_err("missing controller leader should reject the send");
 
-        assert_eq!(err, "no controller leader");
+        assert2::assert!((err) == ("no controller leader"));
     }
 
     #[tokio::test]
@@ -215,7 +215,7 @@ mod tests {
         .await
         .expect_err("closed local port should fail as transport");
 
-        assert!(matches!(err, AlterPartitionSendError::Transport(_)));
+        assert2::assert!(matches!(err, AlterPartitionSendError::Transport(_)));
     }
 
     #[test]
@@ -227,13 +227,13 @@ mod tests {
 
         let targets = alter_partition_targets(&image, Some(NodeId(2)));
 
-        assert_eq!(
-            targets,
-            vec![
-                (NodeId(2), "b2:9092".to_string()),
-                (NodeId(0), "b0:9092".to_string()),
-                (NodeId(1), "b1:9092".to_string()),
-            ]
+        assert2::assert!(
+            (targets)
+                == (vec![
+                    (NodeId(2), "b2:9092".to_string()),
+                    (NodeId(0), "b0:9092".to_string()),
+                    (NodeId(1), "b1:9092".to_string()),
+                ])
         );
     }
 
@@ -245,12 +245,12 @@ mod tests {
 
         let targets = alter_partition_targets(&image, Some(NodeId(9)));
 
-        assert_eq!(
-            targets,
-            vec![
-                (NodeId(0), "b0:9092".to_string()),
-                (NodeId(1), "b1:9092".to_string())
-            ]
+        assert2::assert!(
+            (targets)
+                == (vec![
+                    (NodeId(0), "b0:9092".to_string()),
+                    (NodeId(1), "b1:9092".to_string())
+                ])
         );
     }
 
@@ -263,9 +263,8 @@ mod tests {
             (crate::codes::UNKNOWN_SERVER_ERROR, 0, false),
         ];
         for (global_err, part_err, want) in cases {
-            assert_eq!(
-                is_not_controller_response(global_err, part_err),
-                want,
+            assert2::assert!(
+                (is_not_controller_response(global_err, part_err)) == (want),
                 "global_err={global_err} part_err={part_err}"
             );
         }
@@ -311,9 +310,8 @@ mod tests {
             ),
         ];
         for (global_err, part_err, want) in cases {
-            assert_eq!(
-                classify_alter_partition_response(global_err, part_err),
-                want,
+            assert2::assert!(
+                (classify_alter_partition_response(global_err, part_err)) == (want),
                 "global_err={global_err} part_err={part_err}"
             );
         }

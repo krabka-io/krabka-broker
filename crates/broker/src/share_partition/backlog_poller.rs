@@ -355,11 +355,11 @@ mod tests {
 
     #[test]
     fn backlog_uses_spso_or_log_start_and_never_goes_negative() {
-        assert_eq!(effective_backlog(100, 40, 0), 60);
-        assert_eq!(effective_backlog(100, -1, 10), 90);
-        assert_eq!(effective_backlog(100, 100, 0), 0);
-        assert_eq!(effective_backlog(100, 120, 0), 0);
-        assert_eq!(effective_backlog(110, 0, 100), 10);
+        assert2::assert!((effective_backlog(100, 40, 0)) == (60));
+        assert2::assert!((effective_backlog(100, -1, 10)) == (90));
+        assert2::assert!((effective_backlog(100, 100, 0)) == (0));
+        assert2::assert!((effective_backlog(100, 120, 0)) == (0));
+        assert2::assert!((effective_backlog(110, 0, 100)) == (10));
     }
 
     #[test]
@@ -368,10 +368,10 @@ mod tests {
         let on_zero = group_for_partition(0);
         let on_one = group_for_partition(1);
 
-        assert!(owns_group(&image, NodeId(1), &on_zero));
-        assert!(!owns_group(&image, NodeId(1), &on_one));
-        assert!(owns_group(&image, NodeId(2), &on_one));
-        assert!(!owns_group(&image, NodeId(2), &on_zero));
+        assert2::assert!(owns_group(&image, NodeId(1), &on_zero));
+        assert2::assert!(!owns_group(&image, NodeId(1), &on_one));
+        assert2::assert!(owns_group(&image, NodeId(2), &on_one));
+        assert2::assert!(!owns_group(&image, NodeId(2), &on_zero));
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(fetch_offsets(&response, "work", topic_id, 3), Ok((7, 2)));
+        assert2::assert!((fetch_offsets(&response, "work", topic_id, 3)) == (Ok((7, 2))));
     }
 
     #[test]
@@ -405,17 +405,17 @@ mod tests {
         let mut last = HashMap::new();
 
         replace(&metrics, &mut last, maplit::hashmap! {label.clone() => 0});
-        assert_eq!(
-            metrics
+        assert2::assert!(
+            (metrics
                 .share_group_backlog
                 .get(&label)
-                .map(|gauge| gauge.get()),
-            Some(0)
+                .map(|gauge| gauge.get()))
+                == (Some(0))
         );
 
         replace(&metrics, &mut last, HashMap::new());
-        assert!(metrics.share_group_backlog.get(&label).is_none());
-        assert!(last.is_empty());
+        assert2::assert!(metrics.share_group_backlog.get(&label).is_none());
+        assert2::assert!(last.is_empty());
     }
 
     #[test]
@@ -433,7 +433,7 @@ mod tests {
 
         prune_stale(&metrics, &mut last, &image, NodeId(1), &[group_id]);
 
-        assert!(last.is_empty());
-        assert!(metrics.share_group_backlog.get(&label).is_none());
+        assert2::assert!(last.is_empty());
+        assert2::assert!(metrics.share_group_backlog.get(&label).is_none());
     }
 }

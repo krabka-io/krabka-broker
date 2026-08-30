@@ -185,8 +185,6 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::{assert, check};
     use uuid::Uuid;
 

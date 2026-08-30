@@ -124,8 +124,6 @@ impl RemoteLogMetadataManager for SwappableRlmm {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::assert;
     use krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentState,

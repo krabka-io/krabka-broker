@@ -1,7 +1,7 @@
 //! Tests for the assignment reconciler and the read gate, which cover the
 //! add, remove, and re-add transitions and the fail-closed HWM sentinel.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;

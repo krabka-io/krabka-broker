@@ -5,7 +5,7 @@
 //! parts several of them need. One module for the harness keeps a change to a
 //! fixture in one place.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use bytes::Bytes;

@@ -60,9 +60,8 @@ pub fn encode_compressed_message_set<B: BufMut>(
     codec: CompressionType,
     buf: &mut B,
 ) -> Result<(), LegacyRecordsError> {
-    debug_assert_ne!(
-        codec,
-        CompressionType::None,
+    assert2::assert!(
+        codec != CompressionType::None,
         "use encode_flat_message_set for uncompressed"
     );
     if matches!(codec, CompressionType::Zstd) {

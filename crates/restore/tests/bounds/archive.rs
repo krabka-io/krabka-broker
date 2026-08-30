@@ -6,8 +6,6 @@
 //! with any one bound flag, which is why it sits apart from the flags under
 //! test.
 
-use std::collections::BTreeMap;
-
 use assert2::assert;
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;

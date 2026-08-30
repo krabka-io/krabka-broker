@@ -159,8 +159,6 @@ impl WormArchiver {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::{assert, check};
     use krabka_ids::LeaderEpoch;
     use ring::{rand::SystemRandom, signature::Ed25519KeyPair};

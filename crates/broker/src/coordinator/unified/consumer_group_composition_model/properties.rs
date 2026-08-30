@@ -204,7 +204,7 @@ impl Model for CgcModel {
                 },
             ),
             // The real OffsetCommit epoch fence agrees with the independent oracle
-            // is enforced as a per-transition `assert_eq!` in the Commit arm (a
+            // is enforced as a per-transition equality assertion in the Commit arm (a
             // divergence is a real `validate_commit_decision` regression). The
             // value here is the COMPOSITION: the epochs that fence drives are set
             // by the real reconciliation, so a zombie from before a rebalance is

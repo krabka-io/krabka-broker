@@ -2,7 +2,7 @@
 //! caller-supplied `append_at` offset, the leader-epoch transitions all
 //! four append paths record, and the size-driven segment roll.
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_units::prelude::bytes;
 use tempfile::tempdir;
 
@@ -120,7 +120,7 @@ fn append_at_uses_reconciled_frontier_floor() {
     ));
 
     log.append_at(&mut gap_batch, Offset(3)).unwrap();
-    assert_eq!(log.log_end_offset(), Offset(4));
+    assert!(log.log_end_offset() == Offset(4));
     drop(dir);
 }
 

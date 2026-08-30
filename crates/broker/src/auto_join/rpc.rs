@@ -154,7 +154,7 @@ mod tests {
     fn auto_join_connection_options_uses_joiner_client_id() {
         let opts = auto_join_connection_options();
 
-        assert_eq!(opts.client_id, "krabka-auto-join");
+        assert2::assert!((opts.client_id) == ("krabka-auto-join"));
     }
 
     #[tokio::test]

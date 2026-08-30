@@ -34,10 +34,7 @@
 //!     operation: AclOperation::Read,
 //! };
 //!
-//! assert_eq!(
-//!     AllowAllAuthorizer.authorize(&image, &req),
-//!     AuthorizationResult::Allow,
-//! );
+//! assert2::assert!(AllowAllAuthorizer.authorize(&image, &req) == AuthorizationResult::Allow);
 //! ```
 #![forbid(unsafe_code)]
 

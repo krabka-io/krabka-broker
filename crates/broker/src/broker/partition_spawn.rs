@@ -183,7 +183,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
     config: PartitionSpawnConfig,
     initial_target: crate::partition::ReplicationTarget,
 ) -> Result<Arc<Partition>, BrokerError> {
-    debug_assert_eq!(config.topic_id, initial_target.topic_id);
+    assert2::assert!((config.topic_id) == (initial_target.topic_id));
     let PartitionSpawnConfig {
         topic,
         topic_id,

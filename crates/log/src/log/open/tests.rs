@@ -2,7 +2,7 @@
 //! transaction, and snapshot state that recovery rebuilds from a
 //! partially written tail.
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_units::prelude::bytes;
 use tempfile::tempdir;
@@ -64,7 +64,7 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
         let first_batch_len = log.read_raw(Offset(0), Offset(1), NO_LIMIT).unwrap().total;
         let mut torn = sample_batch_with_epoch(1, 7);
         log.append(&mut torn).unwrap();
-        assert_eq!(log.epoch_checkpoint().latest_epoch(), Some(LeaderEpoch(7)));
+        assert!(log.epoch_checkpoint().latest_epoch() == Some(LeaderEpoch(7)));
         first_batch_len
     };
 
@@ -81,7 +81,7 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
     };
     let reopened = Log::open(dir.path(), cfg).unwrap();
 
-    assert_eq!(reopened.log_end_offset(), Offset(1));
+    assert!(reopened.log_end_offset() == Offset(1));
     assert!(
         reopened
             .epoch_checkpoint()
@@ -89,10 +89,7 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
             .iter()
             .all(|entry| entry.start_offset < reopened.log_end_offset())
     );
-    assert_eq!(
-        reopened.epoch_checkpoint().latest_epoch(),
-        Some(LeaderEpoch(1))
-    );
+    assert!(reopened.epoch_checkpoint().latest_epoch() == Some(LeaderEpoch(1)));
 }
 
 #[test]

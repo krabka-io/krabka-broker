@@ -264,7 +264,7 @@ impl RemoteStorageManager for LocalTieredStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, io::Write, path::Path};
+    use std::{io::Write, path::Path};
 
     use assert2::{assert, check};
     use bytes::Bytes;

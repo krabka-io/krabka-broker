@@ -23,11 +23,11 @@ pub fn run_model() {
         checker.state_count(),
         checker.max_depth()
     );
-    assert!(
+    assert2::assert!(
         checker.max_depth() < MAX_DEPTH,
         "client_server_failover depth cap hit"
     );
-    assert!(
+    assert2::assert!(
         checker.state_count() < MAX_STATES,
         "client_server_failover truncated"
     );

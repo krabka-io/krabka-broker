@@ -118,7 +118,7 @@ pub(super) fn project(
 pub(super) fn assert_epoch_monotonic(pre: &ReconState, post: &GroupState) {
     for pm in &pre.members {
         if let Some(m) = post.members.get(&pm.id) {
-            assert!(
+            assert2::assert!(
                 m.member_epoch >= pm.member_epoch,
                 "member_epoch regressed for {}: {} -> {}",
                 pm.id,

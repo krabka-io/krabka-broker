@@ -125,15 +125,15 @@ impl Model for ClassicModel {
                 s.clock += 1;
                 let dropped = s.g.expire_dead_members(at(s.clock), Duration::from_secs(3));
                 for id in &dropped {
-                    assert!(
+                    assert2::assert!(
                         !last.g.members.get(id).is_some_and(Member::is_static),
                         "static member {id} was expired"
                     );
                 }
             }
         }
-        assert!(index_coherent(&s.g), "index coherence violated: {:?}", s.g);
-        assert!(single_owner(&s.g), "single-owner violated: {:?}", s.g);
+        assert2::assert!(index_coherent(&s.g), "index coherence violated: {:?}", s.g);
+        assert2::assert!(single_owner(&s.g), "single-owner violated: {:?}", s.g);
         Some(s)
     }
 

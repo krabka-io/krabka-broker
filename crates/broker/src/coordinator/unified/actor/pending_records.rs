@@ -177,10 +177,7 @@ impl PendingRecords {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        time::{Duration, Instant},
-    };
+    use std::time::{Duration, Instant};
 
     use assert2::assert;
     use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;

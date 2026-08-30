@@ -60,6 +60,10 @@ impl TokenBucket {
     /// `try_consume` that straddles the reset must thus try again, and it
     /// cannot clobber the new `available` with a stale CAS.
     pub fn set_token_rate_with_burst(&self, new_rate: u64, burst: u64) {
+        let _writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Enter the write section (generation becomes odd).
         let gen_start = self.generation.fetch_add(1, Relaxed);
         // Release fence so the group stores below cannot be reordered before the

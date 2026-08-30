@@ -203,31 +203,32 @@ fn requested_duration(seconds: Option<u64>, default: Time, maximum: Time) -> Tim
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
     use krabka_units::{millis, minutes};
 
     use super::*;
 
     #[test]
     fn requested_profile_duration_uses_configured_default_floor_and_cap() {
-        assert_eq!(requested_duration(None, secs(2), secs(5)), secs(2));
-        assert_eq!(requested_duration(Some(0), secs(2), secs(5)), secs(1));
-        assert_eq!(requested_duration(Some(3), secs(2), secs(5)), secs(3));
-        assert_eq!(requested_duration(Some(9), secs(2), secs(5)), secs(5));
+        assert!(requested_duration(None, secs(2), secs(5)) == secs(2));
+        assert!(requested_duration(Some(0), secs(2), secs(5)) == secs(1));
+        assert!(requested_duration(Some(3), secs(2), secs(5)) == secs(3));
+        assert!(requested_duration(Some(9), secs(2), secs(5)) == secs(5));
         assert!(
-            ProfilingConfig {
+            (ProfilingConfig {
                 profiling_cpu_max_duration: millis(500),
                 ..ProfilingConfig::default()
             }
             .validate()
-            .is_err()
+            .is_err())
         );
         assert!(
-            ProfilingConfig {
+            (ProfilingConfig {
                 profiling_heap_default_duration: minutes(1),
                 ..ProfilingConfig::default()
             }
             .validate()
-            .is_err()
+            .is_err())
         );
     }
 }

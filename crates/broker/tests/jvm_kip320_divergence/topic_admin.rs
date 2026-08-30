@@ -46,7 +46,7 @@ pub async fn wait_for_described_leader(
         if output.status.success() && description.contains(&marker) {
             return;
         }
-        assert!(
+        assert2::assert!(
             Instant::now() <= deadline,
             "external metadata never observed {topic} leader {expected}: {description}"
         );

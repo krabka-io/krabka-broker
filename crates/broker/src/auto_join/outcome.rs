@@ -96,25 +96,25 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            log_join_outcome(NodeId(1), target, &response(codes::NONE)),
-            JoinOutcome::Accepted
+        assert2::assert!(
+            (log_join_outcome(NodeId(1), target, &response(codes::NONE)))
+                == (JoinOutcome::Accepted)
         );
-        assert_eq!(
-            log_join_outcome(NodeId(1), target, &response(codes::NOT_LEADER_OR_FOLLOWER)),
-            JoinOutcome::NotLeader
+        assert2::assert!(
+            (log_join_outcome(NodeId(1), target, &response(codes::NOT_LEADER_OR_FOLLOWER)))
+                == (JoinOutcome::NotLeader)
         );
-        assert_eq!(
-            log_join_outcome(NodeId(1), target, &response(codes::REQUEST_TIMED_OUT)),
-            JoinOutcome::TimedOut
+        assert2::assert!(
+            (log_join_outcome(NodeId(1), target, &response(codes::REQUEST_TIMED_OUT)))
+                == (JoinOutcome::TimedOut)
         );
-        assert_eq!(
-            log_join_outcome(NodeId(1), target, &response(codes::INVALID_REQUEST)),
-            JoinOutcome::NotCaughtUp
+        assert2::assert!(
+            (log_join_outcome(NodeId(1), target, &response(codes::INVALID_REQUEST)))
+                == (JoinOutcome::NotCaughtUp)
         );
-        assert_eq!(
-            log_join_outcome(NodeId(1), target, &response(1234)),
-            JoinOutcome::Unexpected(1234)
+        assert2::assert!(
+            (log_join_outcome(NodeId(1), target, &response(1234)))
+                == (JoinOutcome::Unexpected(1234))
         );
     }
 }

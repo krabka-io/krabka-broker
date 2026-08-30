@@ -86,7 +86,7 @@ impl InProcessMetadataEventLog {
     /// Panics when `partition_count <= 0`.
     #[must_use]
     pub fn new(partition_count: i32) -> Arc<Self> {
-        assert!(partition_count > 0, "partition_count must be positive");
+        assert2::assert!(partition_count > 0, "partition_count must be positive");
         let cap = usize::try_from(partition_count).expect("partition_count fits in usize");
         let (tx, _rx) = broadcast::channel(1024);
         Arc::new(Self {

@@ -174,8 +174,6 @@ mod tests {
 
     #[test]
     fn invalid_topic_recovery_setting_does_not_expose_cluster_default() {
-        use std::collections::BTreeMap;
-
         use krabka_metadata::{
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
             TopicConfigRecord,

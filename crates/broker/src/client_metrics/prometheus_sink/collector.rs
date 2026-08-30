@@ -148,16 +148,16 @@ mod tests {
             let point = guard
                 .get(&(metric.into(), "i".into(), "c".into(), vec![]))
                 .unwrap();
-            assert!(
+            assert2::assert!(
                 matches!(point.value, PointValue::Counter(value) if (value - expected).abs() < f64::EPSILON)
             );
         }
 
         let guard = sink.points.lock().unwrap();
-        assert!(guard.values().any(
+        assert2::assert!(guard.values().any(
             |point| matches!(point.value, PointValue::Counter(value) if (value - 8.0).abs() < f64::EPSILON)
         ));
-        assert!(guard.values().any(|point| matches!(
+        assert2::assert!(guard.values().any(|point| matches!(
             &point.value,
             PointValue::Histogram { count: 5, sum, buckets }
                 if (*sum - 10.0).abs() < f64::EPSILON
@@ -169,7 +169,7 @@ mod tests {
             sum: 4.0,
             buckets: vec![(1.0, 1), (f64::MAX, 1)],
         };
-        assert!(!total.accumulate(&PointValue::Histogram {
+        assert2::assert!(!total.accumulate(&PointValue::Histogram {
             count: 3,
             sum: 6.0,
             buckets: vec![(2.0, 2), (f64::MAX, 1)],
@@ -187,12 +187,12 @@ mod tests {
             value: PointValue::Gauge(1.0),
             delta_start: None,
         }]);
-        assert_eq!(sink.live_point_count(), 0);
-        assert!(ClientMetricsCollector::is_live(
+        assert2::assert!((sink.live_point_count()) == (0));
+        assert2::assert!(ClientMetricsCollector::is_live(
             Duration::from_nanos(9),
             Duration::from_nanos(10)
         ));
-        assert!(!ClientMetricsCollector::is_live(
+        assert2::assert!(!ClientMetricsCollector::is_live(
             Duration::from_nanos(10),
             Duration::from_nanos(10)
         ));

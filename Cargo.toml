@@ -16,6 +16,7 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+disallowed_macros = "deny"
 # These three opt-outs are intentional while the public API is still pre-1.0;
 # re-evaluate once API surfaces stabilise.
 clone_on_copy = "warn"

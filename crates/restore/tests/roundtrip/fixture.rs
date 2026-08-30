@@ -6,8 +6,6 @@
 //! is the half of every test that has nothing to do with what the restore
 //! then makes of it.
 
-use std::collections::BTreeMap;
-
 use assert2::assert;
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;

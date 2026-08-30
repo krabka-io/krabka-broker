@@ -82,7 +82,7 @@ async fn handle_fetch_frame_from_parsed(
 ) -> Result<Vec<crate::network::fetch_writer::WriteOp>, BrokerError> {
     use crate::network::fetch_writer::{WriteOp, build_fetch_plan};
 
-    debug_assert_eq!(parsed.api_key, 1);
+    assert2::assert!((parsed.api_key) == (1));
 
     let principal = principal_or_anonymous(auth);
     let ctx = crate::handlers::RequestContext::new(
