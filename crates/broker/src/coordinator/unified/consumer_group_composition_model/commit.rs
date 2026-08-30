@@ -51,8 +51,8 @@ pub(super) fn do_commit(last: &CgcState, id: &str, part: i32, kind: EpochKind) -
     };
     let real = g.validate_commit_decision(id, epoch);
     let oracle = oracle_commit(&g, id, epoch);
-    assert_eq!(
-        real, oracle,
+    assert2::assert!(
+        (real) == (oracle),
         "OffsetCommit fence diverges from oracle: member={id} epoch={epoch}"
     );
     if real.is_err() {

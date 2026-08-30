@@ -300,8 +300,6 @@ mod tests {
 
     #[tokio::test]
     async fn tiered_sentinels_return_finished_remote_frontier_and_pending_epoch() {
-        use std::collections::BTreeMap;
-
         use krabka_ids::LeaderEpoch;
         use krabka_remote_storage::{
             RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,

@@ -7,8 +7,6 @@
 //! inputs each parser must reject, and the two round-trip properties run to
 //! nearly as many lines as the module they check.
 
-use std::collections::BTreeMap;
-
 use assert2::check;
 use krabka_ids::LeaderEpoch;
 use proptest::prelude::*;

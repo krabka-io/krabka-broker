@@ -143,7 +143,7 @@ impl Model for ConsensusModel {
                     // while retaining the target concurrent-appender path.
                     let appender = AppenderId::try_from(state.appends_issued)
                         .expect("append bound fits the appender domain");
-                    debug_assert!(appender < APPENDER_COUNT);
+                    assert2::assert!(appender < APPENDER_COUNT);
                     actions.push(ModelAction::AppendVia(appender, client, value));
                 }
             } else if leaders.len() == 1 {

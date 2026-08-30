@@ -121,7 +121,7 @@ async fn static_mixed_jvm_krabka_quorum() {
         ])
         .status()
         .expect("docker run JVM controller");
-    assert!(status.success(), "docker run failed");
+    assert2::assert!(status.success(), "docker run failed");
     eprintln!("JVM controller (id 3) container started");
 
     // ── observe for ~40s ────────────────────────────────────────────────────

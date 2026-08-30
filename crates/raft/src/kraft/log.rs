@@ -143,7 +143,7 @@ impl KraftLog {
             self.hwm = next;
             self.persist_hwm();
         }
-        debug_assert!(self.hwm <= self.log.log_end_offset());
+        assert2::assert!(self.hwm <= self.log.log_end_offset());
     }
 
     /// Truncates the log so that no record at offset `>= offset` remains, and
@@ -152,7 +152,7 @@ impl KraftLog {
     /// # Errors
     /// Returns [`RaftError`] if the underlying truncation fails.
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), RaftError> {
-        debug_assert!(offset >= self.log.log_start_offset());
+        assert2::assert!(offset >= self.log.log_start_offset());
         self.log.truncate_to(offset)?;
         self.hwm = self.hwm.min(offset);
         self.persist_hwm();

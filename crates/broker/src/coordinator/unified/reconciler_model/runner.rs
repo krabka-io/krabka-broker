@@ -23,11 +23,11 @@ pub(super) fn run(model: ReconModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
-    assert!(
+    assert2::assert!(
         checker.max_depth() < MAX_DEPTH,
         "[{label}] hit depth cap {MAX_DEPTH}: depth-truncated, not exhaustive"
     );
-    assert!(
+    assert2::assert!(
         checker.state_count() < MAX_STATES,
         "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
     );

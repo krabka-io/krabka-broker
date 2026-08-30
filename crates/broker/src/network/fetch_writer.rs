@@ -137,7 +137,7 @@ pub fn build_fetch_plan<F>(
 where
     F: FnMut(&RecordsPayload) -> Result<Vec<WriteOp>, BrokerError>,
 {
-    debug_assert!(
+    assert2::assert!(
         version >= 4,
         "build_fetch_plan requires the canonical v4+ codec"
     );

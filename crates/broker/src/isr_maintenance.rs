@@ -155,7 +155,7 @@ mod tests {
 
         shutdown.cancel();
         task.await.unwrap();
-        assert_eq!(metrics.isr_shrinks_total.get(), 1);
-        assert_eq!(metrics.isr_expands_total.get(), 0);
+        assert2::assert!((metrics.isr_shrinks_total.get()) == (1));
+        assert2::assert!((metrics.isr_expands_total.get()) == (0));
     }
 }

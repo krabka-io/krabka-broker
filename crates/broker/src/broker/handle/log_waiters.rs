@@ -44,7 +44,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             result.is_ok(),
             "local partition {topic}-{partition} did not become produce-ready with leader {leader} within 30s"
         );
@@ -82,7 +82,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             result.is_ok(),
             "local partition {topic}-{partition} did not install leader {leader} at epoch {leader_epoch:?} within 30s"
         );
@@ -113,7 +113,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "local log_end_offset({topic}-{partition}) did not reach {min} within 30s"
         );
@@ -142,7 +142,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "high_watermark({topic}-{partition}) did not reach {min} within 30s"
         );
@@ -188,7 +188,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "local log_end_offset({topic}-{partition}) did not settle at {target} within 30s"
         );
@@ -224,7 +224,7 @@ impl BrokerHandle {
 mod tests {
     use std::sync::Arc;
 
-    use assert2::{assert, check};
+    use assert2::check;
     use krabka_units::{kibibytes, mebibytes, secs};
 
     use super::*;
@@ -262,16 +262,16 @@ mod tests {
             .test_advance_log_start(helper_topic, 0, 2)
             .await
             .expect("advance helper partition log start");
-        assert!(handle.partition_log_start_for_test(helper_topic, 0) == Some(2));
-        assert!(
+        assert2::assert!(handle.partition_log_start_for_test(helper_topic, 0) == Some(2));
+        assert2::assert!(
             handle.partition_retention_ms_for_test(helper_topic, 0)
                 == Some(Some(std::time::Duration::from_secs(123)))
         );
         let observed_config = handle
             .partition_log_config_for_test(helper_topic, 0)
             .expect("helper partition log config");
-        assert!(observed_config.retention == helper_config.retention);
-        assert!(observed_config.segment_size == helper_config.segment_size);
+        assert2::assert!(observed_config.retention == helper_config.retention);
+        assert2::assert!(observed_config.segment_size == helper_config.segment_size);
         let last_offset = handle
             .produce_records_for_test(helper_topic, 0, 3)
             .await
@@ -279,16 +279,16 @@ mod tests {
         let log_end = handle
             .local_log_end_offset(helper_topic, 0)
             .expect("helper partition log end offset");
-        assert!(last_offset >= 2);
-        assert!(last_offset + 1 == log_end);
+        assert2::assert!(last_offset >= 2);
+        assert2::assert!(last_offset + 1 == log_end);
         let read = helper_part
             .log
             .lock()
             .expect("helper partition log lock")
             .read(krabka_log::Offset(2), mebibytes(1))
             .expect("read helper partition records");
-        assert!(read.start_offset == krabka_log::Offset(2));
-        assert!(!read.batches.is_empty());
+        assert2::assert!(read.start_offset == krabka_log::Offset(2));
+        assert2::assert!(!read.batches.is_empty());
         let records: Vec<_> = read
             .batches
             .iter()

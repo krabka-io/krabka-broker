@@ -62,9 +62,8 @@ fn build_fetch_plan_matches_legacy_encode_path() {
         }
         old_bytes.extend_from_slice(&body);
 
-        assert_eq!(
-            &new_bytes[..],
-            &old_bytes[..],
+        assert2::assert!(
+            (&new_bytes[..]) == (&old_bytes[..]),
             "plan != legacy encode at version {version}"
         );
     }
@@ -91,7 +90,7 @@ fn plan_total_len_matches_frame_prefix() {
         let declared = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
         let header_after_len = head.len() - 4;
         let tail_len: usize = ops[1..].iter().map(WriteOp::len).sum();
-        assert_eq!(declared, header_after_len + tail_len);
+        assert2::assert!((declared) == (header_after_len + tail_len));
     }
 }
 
@@ -104,7 +103,7 @@ fn build_fetch_plan_honors_nondefault_max_frame_length() {
     let head = inline_bytes(&unconstrained[0]);
     let frame_body_len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
 
-    assert!(
+    assert2::assert!(
         build_fetch_plan(
             &response,
             12,
@@ -116,7 +115,7 @@ fn build_fetch_plan_honors_nondefault_max_frame_length() {
         .is_ok(),
         "a frame equal to the configured maximum must be accepted"
     );
-    assert!(
+    assert2::assert!(
         build_fetch_plan(
             &response,
             12,

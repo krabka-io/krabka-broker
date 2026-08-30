@@ -40,12 +40,13 @@ oci_load(
     repo_tags = ["krabka-io/krabka-broker:dev"],
 )
 
-# `remote_tags` takes a file rather than a list; CI adds the commit SHA on the
-# command line, which `oci_push` accepts in addition to these.
+# `remote_tags` takes a file rather than a list. CI supplies every tag on the
+# command line so main can push an immutable SHA without moving `latest`;
+# tagged releases supply both the release tag and `latest`.
 write_file(
     name = "remote_tags",
     out = "remote_tags.txt",
-    content = ["latest"],
+    content = [],
 )
 
 oci_push(

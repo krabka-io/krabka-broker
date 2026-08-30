@@ -157,7 +157,7 @@ mod tests {
             .unwrap();
 
             // The file plan must actually contain a File op (zero-copy).
-            assert!(
+            assert2::assert!(
                 file_ops.iter().any(|o| matches!(o, WriteOp::File(_))),
                 "sendfile resolver must emit a File op at v{version}"
             );
@@ -165,8 +165,8 @@ mod tests {
             // Resolve both plans to bytes (pread the file ops) and compare.
             let raw_bytes = resolve_ops_to_bytes(&raw_ops);
             let file_bytes = resolve_ops_to_bytes(&file_ops);
-            assert_eq!(
-                raw_bytes, file_bytes,
+            assert2::assert!(
+                (raw_bytes) == (file_bytes),
                 "sendfile plan wire bytes must equal raw plan at v{version}"
             );
         }
@@ -187,7 +187,7 @@ mod tests {
                     let mut off = region.offset;
                     while filled < buf.len() {
                         let n = region.file.read_at(&mut buf[filled..], off).unwrap();
-                        assert!(n > 0);
+                        assert2::assert!(n > 0);
                         filled += n;
                         off += n as u64;
                     }
@@ -211,10 +211,10 @@ mod tests {
         };
         let (_tf, payload) = file_payload(&records);
         let ops = resolve_records_inline(&payload).unwrap();
-        assert_eq!(ops.len(), 1);
+        assert2::assert!((ops.len()) == (1));
         let WriteOp::Inline(ref b) = ops[0] else {
             panic!("fallback must produce an inline op");
         };
-        assert_eq!(&b[..], &records[..]);
+        assert2::assert!((&b[..]) == (&records[..]));
     }
 }

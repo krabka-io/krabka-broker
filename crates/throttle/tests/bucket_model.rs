@@ -38,8 +38,6 @@ use stateright::{Checker, Model, Property};
 
 const TARGET_STATE_COUNT: usize = 4_000_000;
 const MAX_DEPTH: usize = 60;
-// ponytail: two reset cycles cover overlap; raise for reset-count properties.
-const MAX_GENERATION: i64 = 4;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Pc {
@@ -48,7 +46,7 @@ enum Pc {
     Claimed {
         refill: i64,
         req: i64,
-        gen_before: i64,
+        reset_seen: bool,
     }, // claimed refill + sampled generation; next: Load (buggy) / CommitCas (fixed)
     Loaded {
         refill: i64,
@@ -75,8 +73,9 @@ struct BucketState {
     rate: i64,
     available: i64,
     pending: i64,
-    /// Seqlock generation: odd while a `set_rate` critical section is open.
-    generation: i64,
+    /// Active seqlock writers. Claims separately remember whether a reset
+    /// straddled them, avoiding an unbounded generation counter in the model.
+    writers: usize,
     pcs: Vec<Pc>,
 }
 
@@ -105,7 +104,7 @@ impl Model for BucketModel {
             rate: self.max_rate,
             available: self.max_rate,
             pending: 0,
-            generation: 0,
+            writers: 0,
             pcs: vec![Pc::Idle; self.threads],
         }]
     }
@@ -136,7 +135,7 @@ impl Model for BucketModel {
             }
             Act::StartConsume(t, req) => {
                 // rate==0 fast path grants instantly without touching `available`.
-                if s.rate == 0 {
+                if s.rate == 0 || s.writers != 0 {
                     return None; // irrelevant to the race; no state change
                 }
                 let refill = s.pending; // claim the elapsed gap (the atomic swap)
@@ -144,12 +143,16 @@ impl Model for BucketModel {
                 s.pcs[t] = Pc::Claimed {
                     refill,
                     req,
-                    gen_before: s.generation,
+                    reset_seen: false,
                 };
             }
             Act::StartSetRate(t, new_rate) => {
-                // Enter the seqlock critical section (generation becomes odd).
-                s.generation += 1;
+                s.writers += 1;
+                for pc in &mut s.pcs {
+                    if let Pc::Claimed { reset_seen, .. } = pc {
+                        *reset_seen = true;
+                    }
+                }
                 s.pcs[t] = Pc::SetRate0 { new_rate };
             }
             Act::Step(t) => match s.pcs[t].clone() {
@@ -157,13 +160,13 @@ impl Model for BucketModel {
                 Pc::Claimed {
                     refill,
                     req,
-                    gen_before,
+                    reset_seen,
                 } => {
                     if self.cas {
-                        // Fixed: commit only if no reset straddled the claim. A
-                        // changed (or currently-odd) generation forces a re-base
+                        // Fixed: commit only if no reset straddled the claim. An
+                        // observed (or active) reset forces a re-base
                         // against the post-reset state instead of a stale CAS.
-                        if s.generation == gen_before {
+                        if !reset_seen && s.writers == 0 {
                             // Atomic read-compute-write (net effect of the CAS loop),
                             // driving the real production arithmetic.
                             let (_grant, new) = plan_consume(
@@ -174,7 +177,7 @@ impl Model for BucketModel {
                             );
                             s.available = new.0.cast_signed();
                             s.pcs[t] = Pc::Idle;
-                        } else {
+                        } else if s.writers == 0 {
                             // Re-claim refill from the current pending and resample
                             // the generation — the production retry path.
                             let new_refill = s.pending;
@@ -182,7 +185,7 @@ impl Model for BucketModel {
                             s.pcs[t] = Pc::Claimed {
                                 refill: new_refill,
                                 req,
-                                gen_before: s.generation,
+                                reset_seen: false,
                             };
                         }
                     } else {
@@ -221,9 +224,7 @@ impl Model for BucketModel {
                     s.pcs[t] = Pc::SetRate3;
                 }
                 Pc::SetRate3 => {
-                    // Leave the critical section (generation becomes even again,
-                    // advanced by 2 total so any straddling reader observes a change).
-                    s.generation += 1;
+                    s.writers -= 1;
                     s.pcs[t] = Pc::Idle;
                 }
             },
@@ -269,7 +270,6 @@ impl Model for BucketModel {
         s.available >= -(self.max_rate + self.max_req + 1)
             && s.available <= self.max_rate
             && s.pending <= self.max_pending
-            && s.generation <= MAX_GENERATION
     }
 }
 

@@ -54,8 +54,6 @@ pub(crate) fn resolve_schema_validation(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::{assert, check};
     use krabka_log::LogConfig;
 

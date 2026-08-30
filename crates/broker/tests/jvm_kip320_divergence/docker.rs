@@ -48,7 +48,7 @@ pub fn set_container_paused(name: &str, paused: bool) {
         .args([action, name])
         .status()
         .unwrap_or_else(|error| panic!("{action} JVM broker: {error}"));
-    assert!(status.success(), "{action} JVM broker failed");
+    assert2::assert!(status.success(), "{action} JVM broker failed");
 }
 
 /// Address of the default Docker bridge as seen by both host processes and
@@ -66,7 +66,7 @@ pub fn docker_bridge_gateway() -> String {
         ])
         .output()
         .expect("docker network inspect bridge");
-    assert!(output.status.success(), "inspect Docker bridge gateway");
+    assert2::assert!(output.status.success(), "inspect Docker bridge gateway");
     let gateway = String::from_utf8(output.stdout)
         .expect("Docker bridge gateway is UTF-8")
         .trim()
@@ -131,7 +131,7 @@ pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
     }
     drop(child.stdin.take());
     let out = child.wait_with_output().expect("wait producer");
-    assert!(
+    assert2::assert!(
         out.status.success(),
         "JVM producer failed: stdout={} stderr={}",
         String::from_utf8_lossy(&out.stdout),

@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn negative_start_offset_is_uninitialized_state() {
-        assert!(initialized_start_offset(-1).is_none());
-        assert_eq!(initialized_start_offset(0), Some(Offset(0)));
+        assert2::assert!(initialized_start_offset(-1).is_none());
+        assert2::assert!((initialized_start_offset(0)) == (Some(Offset(0))));
     }
 }

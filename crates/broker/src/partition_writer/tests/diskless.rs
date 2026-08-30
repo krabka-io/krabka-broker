@@ -152,18 +152,18 @@ async fn diskless_acked_record_survives_reopen() {
         .expect("send job");
 
         let assigned = ack_rx.await.expect("ack recv").expect("append ok");
-        assert_eq!(assigned, 0);
+        assert2::assert!((assigned) == (0));
 
         drop(tx);
         tokio::time::timeout(std::time::Duration::from_secs(10), writer)
             .await
             .expect("writer did not drain after local fsync")
             .expect("writer join");
-        assert_eq!(replica_state.lock().await.hw, 1);
+        assert2::assert!((replica_state.lock().await.hw) == (1));
     }
 
     let log = Log::open(dir.path(), LogConfig::default()).expect("reopen log");
-    assert_eq!(log.log_end_offset(), Offset(1));
+    assert2::assert!((log.log_end_offset()) == (Offset(1)));
 }
 
 #[tokio::test]

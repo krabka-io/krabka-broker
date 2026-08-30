@@ -3,10 +3,7 @@
 //! versions, and the edits an attacker with write access to the bucket could
 //! make to what the fixture wrote.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use krabka_audit::signing::FileEd25519Signer;

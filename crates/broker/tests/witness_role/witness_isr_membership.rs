@@ -8,7 +8,7 @@
 //! same-rack in-ISR replica is exactly the candidate the rack-aware selector
 //! reaches for, which makes this the case where the redirect ban has to hold.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use assert2::check;
 use krabka_broker::codes;

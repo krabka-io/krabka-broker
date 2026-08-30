@@ -12,13 +12,9 @@ yanked = "deny"
 ignore = [
     # quick-xml DoS advisories (quadratic duplicate-attribute check and
     # unbounded namespace-declaration allocation). Patched in quick-xml
-    # >= 0.41, which is the version `crabka-pgtypes` pins for the `xml`
-    # type — the one place attacker-controlled XML enters, since any client
-    # that can run `SELECT '…'::xml` chooses the document. These ignores
-    # cover only the transitive 0.39 copy under polars-io and the S3 XML
-    # paths, whose input is a response from a configured endpoint. Drop them
-    # once those upstreams take 0.41 too; do NOT extend the reasoning to a
-    # SQL-reachable parser.
+    # >= 0.41. The sole 0.39 copy enters through object_store 0.13.2 and parses
+    # S3-compatible endpoint responses on the tiered-storage path, not
+    # client-supplied XML. Drop these when object_store takes quick-xml 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
     # RSA "Marvin" timing side-channel. Pulled in transitively by `picky`
@@ -27,14 +23,9 @@ ignore = [
     # operations (no PKINIT), so the network-observable timing leak does not
     # apply. The advisory has no fixed release available.
     "RUSTSEC-2023-0071",
-    # bincode is unmaintained (the team ceased development; v2.0.1 is considered
-    # feature-complete and "no safe upgrade is available"). This is an
-    # unmaintained notice, not a vulnerability. Pulled in transitively via
-    # `polars-utils` (the `polars` columnar-streams feature).
-    "RUSTSEC-2025-0141",
-    # paste is unmaintained. Pulled in transitively by the pinned DataFusion
-    # dependency used by the new internal profiles crates; no fixed release is
-    # available through that DataFusion revision.
+    # paste is unmaintained. It enters through refined_type and through
+    # pprof_util on the optional jemalloc profiling path; neither upstream has
+    # removed it yet and no fixed paste release exists.
     "RUSTSEC-2024-0436",
 ]
 
@@ -47,31 +38,18 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
-    "MPL-2.0",
     "Zlib",
     "CC0-1.0",
-    "bzip2-1.0.6",
     # webpki-roots ships the Mozilla NSS CA bundle (data, not code) under
     # CDLA-Permissive-2.0. Pulled in transitively via reqwest + rustls.
     "CDLA-Permissive-2.0",
 ]
 exceptions = [
-    # pglz is a direct, safe Rust port of PostgreSQL's PGLZ codec. Keep the
-    # permissive PostgreSQL License allowance scoped to that crate.
-    { allow = ["PostgreSQL"], crate = "pglz" },
     # portpicker is public-domain-equivalent (The Unlicense, OSI-approved and
     # FSF Free/Libre). Pulled in transitively via the vendored `sspi` crate's
     # `network_client` feature, which we need for KDC communication.
     { allow = ["Unlicense"], crate = "portpicker" },
-    # xxhash-rust is BSL-1.0 (Boost, OSI-approved and FSF Free/Libre — a
-    # permissive, non-copyleft license). Pulled in transitively via polars
-    # (the `polars` columnar-streams feature).
-    { allow = ["BSL-1.0"], crate = "xxhash-rust" },
-    # varint-rs uses the OSI-approved zero-clause BSD license. It enters
-    # transitively through fjall/lsm-tree, so keep the allowance crate-scoped.
-    { allow = ["0BSD"], crate = "varint-rs" },
     # Creusot's specification attributes/proc macros are LGPL-2.1-or-later.
     # They enter the graph only through the newly added verified kernels
     # (`krabka-verified`) and throttle arithmetic contracts; ordinary cargo
@@ -94,8 +72,11 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
-    # Temporary DataFusion pin for profile query support.
-    "https://github.com/apache/datafusion",
+    # First-party crates are revision-pinned in Cargo.toml until they are
+    # published from their sibling repositories.
+    "https://github.com/krabka-io/krabka-client-rs",
+    "https://github.com/krabka-io/krabka-protocol",
+    "https://github.com/krabka-io/krabka-schema-registry",
     # Temporary compatibility pin until testcontainers-modules publishes a
     # release that depends on testcontainers 0.28.
     "https://github.com/testcontainers/testcontainers-rs-modules-community",

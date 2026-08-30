@@ -48,7 +48,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "group {group_id} did not settle at {n} members within 30s"
         );
@@ -109,7 +109,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "classic group {group_id} did not settle at {n} members within 30s"
         );
@@ -162,7 +162,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "streams group {group_id} did not settle at {n} members within 30s"
         );
@@ -226,7 +226,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "group {group_id} did not settle at type {expected:?} within {TEST_AWAITER_TIMEOUT:?}; \
              last={:?}",

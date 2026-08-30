@@ -216,7 +216,7 @@ mod tests {
     fn classify_fetch_distinguishes_metadata_quorum() {
         let body = encode_fetch_for_group(QuorumGroup::Metadata, NodeId(2), 7, 11);
 
-        assert_eq!(classify_fetch(&body), Some(QuorumGroup::Metadata));
+        assert2::assert!((classify_fetch(&body)) == (Some(QuorumGroup::Metadata)));
     }
 
     #[test]
@@ -229,12 +229,12 @@ mod tests {
             11,
         );
 
-        assert_eq!(
-            classify_fetch(&body),
-            Some(QuorumGroup::DisklessWal {
-                topic_id,
-                partition: PartitionIndex(3),
-            })
+        assert2::assert!(
+            (classify_fetch(&body))
+                == (Some(QuorumGroup::DisklessWal {
+                    topic_id,
+                    partition: PartitionIndex(3),
+                }))
         );
     }
 
@@ -252,7 +252,7 @@ mod tests {
         let mut body = bytes::BytesMut::new();
         request.encode(&mut body, KIP_595_FETCH_VERSION).unwrap();
 
-        assert_eq!(classify_fetch(&body), None);
+        assert2::assert!((classify_fetch(&body)) == (None));
     }
 
     #[test]

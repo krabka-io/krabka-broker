@@ -115,7 +115,7 @@ mod tests {
             &self,
             records: Vec<MetadataRecord>,
         ) -> Result<SubmitChangeResult, RaftError> {
-            assert!(matches!(
+            assert2::assert!(matches!(
                 records.as_slice(),
                 [MetadataRecord::V1PartitionOffsetAdvance(record)]
                     if record.topic == "topic" && record.partition == 0 && record.count == 3
@@ -176,6 +176,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(base, Offset(11));
+        assert2::assert!((base) == (Offset(11)));
     }
 }

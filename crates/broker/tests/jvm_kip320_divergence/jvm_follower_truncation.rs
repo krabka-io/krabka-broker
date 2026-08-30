@@ -40,7 +40,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     //    — the dominant Mac-vs-Linux difference here) we cannot build an RF=3
     //    topic, so we surface that explicitly rather than fail opaquely inside
     //    CreateTopics.
-    assert!(
+    assert2::assert!(
         cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
         "JVM broker never joined the mixed cluster (only the 2 Krabka brokers \
          registered); the cross-impl KRaft data-plane join is Linux-bound"
@@ -73,7 +73,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
         if described_isr(&s).contains(&3) {
             break;
         }
-        assert!(
+        assert2::assert!(
             Instant::now() <= deadline,
             "JVM follower never joined ISR: {s}"
         );
@@ -104,7 +104,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     let prefix_leo = c1
         .local_log_end_offset(TOPIC, 0)
         .expect("Krabka prefix log exists");
-    assert!(
+    assert2::assert!(
         prefix_leo == 10,
         "expected ten-record prefix, got LEO {prefix_leo}"
     );
@@ -140,7 +140,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     c1.wait_until_local_log_end_offset(TOPIC, 0, prefix_leo + 4)
         .await;
     let jvm_before = dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));
-    assert!(
+    assert2::assert!(
         jvm_before.contains("jvm-divergent-3"),
         "JVM dump did not contain the suffix that must later be truncated:\n{jvm_before}"
     );
@@ -177,7 +177,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
         }) {
             break;
         }
-        assert!(
+        assert2::assert!(
             Instant::now() <= parked_deadline,
             "dead-leader metadata did not apply before divergent rewrite"
         );
@@ -199,7 +199,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
         "KRABKA[kip320] Krabka leader LEO {krabka_leo_before} -> {krabka_leo_after} (divergent suffix)"
     );
 
-    assert!(
+    assert2::assert!(
         krabka_leo_before == prefix_leo && krabka_leo_after == prefix_leo + 4,
         "Krabka divergent rewrite should replace four offsets in place"
     );
@@ -236,7 +236,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
         if dump.contains("test-record-3") && !dump.contains("jvm-divergent-") {
             break dump;
         }
-        assert!(
+        assert2::assert!(
             Instant::now() <= convergence_deadline,
             "JVM follower retained its divergent suffix after KIP-320 recovery:\n{dump}"
         );
@@ -256,7 +256,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // is the authoritative next offset; kafka-dump-log supplies the follower's
     // independently parsed, on-disk last offset.
     let jvm_max = max_offset_in_dump(&jvm_dump);
-    assert!(
+    assert2::assert!(
         jvm_max == Some(krabka_leo_after - 1),
         "JVM follower did not converge to Krabka leader after truncation: \
          jvm_max={jvm_max:?} krabka_leo={krabka_leo_after}"
@@ -285,12 +285,12 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     let cstdout = String::from_utf8_lossy(&consume.stdout);
     let cstderr = String::from_utf8_lossy(&consume.stderr);
     eprintln!("KRABKA[kip320] consumer recover stdout={cstdout} stderr={cstderr}");
-    assert!(
+    assert2::assert!(
         !cstderr.contains("LogTruncationException")
             && !cstderr.contains("RecordDeserializationException"),
         "consumer hit a fatal truncation/deserialization error: {cstderr}"
     );
-    assert!(
+    assert2::assert!(
         cstdout.lines().filter(|l| !l.trim().is_empty()).count() >= 1,
         "consumer read no records after truncation recovery: stdout={cstdout} stderr={cstderr}"
     );

@@ -289,7 +289,7 @@ impl Engine {
             | Action::SendEndQuorumEpoch { .. }
             | Action::SendFetch { .. }
             | Action::ReplyVote { .. } => {
-                debug_assert!(false, "network/reply action routed to local executor");
+                assert2::assert!(false, "network/reply action routed to local executor");
             }
         }
     }

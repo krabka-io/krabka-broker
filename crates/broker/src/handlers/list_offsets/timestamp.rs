@@ -66,8 +66,6 @@ mod tests {
 
     #[tokio::test]
     async fn positive_timestamp_wire_response_returns_exact_remote_record() {
-        use std::collections::BTreeMap;
-
         use bytes::Bytes;
         use krabka_ids::LeaderEpoch;
         use krabka_protocol::records::{Record, RecordBatch};

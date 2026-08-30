@@ -30,12 +30,12 @@ pub(super) fn run(model: ClassicModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
-    assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert!(
+    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
+    assert2::assert!(
         checker.state_count() < TARGET_STATE_COUNT,
         "[{label}] truncated at the state-count target — not exhaustive"
     );
-    assert!(
+    assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded ({})",
         checker.unique_state_count()

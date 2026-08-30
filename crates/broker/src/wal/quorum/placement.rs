@@ -86,7 +86,7 @@ mod tests {
             3,
         );
 
-        assert_eq!(selected, vec![NodeId(1), NodeId(2), NodeId(3)]);
+        assert2::assert!((selected) == (vec![NodeId(1), NodeId(2), NodeId(3)]));
     }
 
     #[test]
@@ -97,14 +97,14 @@ mod tests {
             3,
         );
 
-        assert_eq!(selected, vec![NodeId(1)]);
+        assert2::assert!((selected) == (vec![NodeId(1)]));
     }
 
     #[test]
     fn placement_does_not_invent_an_unregistered_local_voter() {
         let selected = select_voters([broker(2, Some("a")), broker(3, Some("b"))], NodeId(1), 2);
 
-        assert!(selected.is_empty());
+        assert2::assert!(selected.is_empty());
     }
 
     #[test]
@@ -115,7 +115,7 @@ mod tests {
             3,
         );
 
-        assert!(selected.is_empty());
+        assert2::assert!(selected.is_empty());
     }
 
     fn broker(id: u64, rack: Option<&str>) -> BrokerRegistrationRecord {

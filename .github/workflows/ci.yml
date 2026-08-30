@@ -84,7 +84,18 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: bazel-out/_coverage/_coverage_report.dat
           disable_search: true
-          fail_ci_if_error: false
+          fail_ci_if_error: true
+
+  supply-chain:
+    name: cargo deny
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories bans licenses sources
 
   # rustdoc for every crate, kept as an artifact. The `ci` job already builds
   # these -- a `rust_doc` per crate is an ordinary target -- so this exists to
@@ -331,20 +342,9 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
-  # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
-  # so it is far too slow to gate a pull request.
-  #
-  # One job per crate. As a single job over all fifteen targets there was no
-  # bound that meant anything: one `broker_mutants` shard sat at 3557s against
-  # Bazel's 3600s ceiling while the other fourteen crates waited behind it, and
-  # a sweep that overran said nothing about which crate was responsible. Per
-  # crate each is bounded on its own, reports its own result, and the wall clock
-  # is the slowest crate rather than the sum.
-  #
-  # `continue-on-error`: survivors are the expected state, not an exception --
-  # `cargo_mutants_test` runs only `#[cfg(test)]` unit tests, so every mutant the
-  # `tests/*.rs` suites would have killed is reported as one. The job exists to
-  # produce a list to read. Make it blocking once the score is worth defending.
+  # The mutation rule runs unit tests only. Scope the blocking sweep to the
+  # consensus engine, whose decision logic is pure and unit-tested; the checked
+  # in `.cargo/mutants-baseline.txt` makes any survivor-set change blocking.
   mutants-select:
     name: select mutants targets
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -363,22 +363,13 @@ jobs:
       - id: select
         run: |
           set -euo pipefail
-          # `crates/broker` is the outlier: every mutant rebuilds 212k lines, so
-          # its sweep is hours where the rest are minutes. It gets the long
-          # budget; nothing else is allowed to want one.
-          crates="$(
-            bazel query 'kind("cargo_mutants_test rule", //crates/...)' |
-              jq -R -s -c 'split("\n") | map(select(length > 0)) |
-                map({target: ., name: (. | split("/")[3] | split(":")[0])}) |
-                map(. + {minutes: (if .name == "broker" then 300 else 60 end)})'
-          )"
+          crates='[{"target":"//crates/raft:raft_mutants","name":"raft","minutes":60}]'
           echo "crates=${crates}" >>"${GITHUB_OUTPUT}"
           echo "Selected: ${crates}"
 
   mutants:
     name: mutants · ${{ matrix.crate.name }}
     needs: mutants-select
-    continue-on-error: true
     runs-on: ubuntu-latest
     # A bound, not an estimate. A crate that cannot finish inside it is saying
     # its shard count is too low, and that is worth being told.
@@ -395,7 +386,7 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-mutants
           repository-cache: true
-      - run: bazel test ${{ matrix.crate.target }}
+      - run: bash tools/check-mutants.sh ${{ matrix.crate.target }}
 
   # Push the broker image.
   #
@@ -432,4 +423,4 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: push
-        run: bazel run //packaging:push -- --tag "${GITHUB_SHA}" --tag latest
+        run: bazel run //packaging:push -- --tag "${GITHUB_SHA}"

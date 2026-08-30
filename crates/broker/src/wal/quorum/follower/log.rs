@@ -240,10 +240,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(end, Offset(1));
+        assert2::assert!((end) == (Offset(1)));
         drop(follower);
         let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-        assert_eq!(reopened.log_end_offset(), Offset(1));
+        assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
     }
 
     #[tokio::test]
@@ -262,7 +262,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("not contiguous"));
-        assert_eq!(follower.end_offset(), Offset(0));
+        assert2::assert!((follower.end_offset()) == (Offset(0)));
     }
 
     #[tokio::test]
@@ -305,11 +305,11 @@ mod tests {
 
         follower.reset_to(Offset(7)).await.unwrap();
 
-        assert_eq!(follower.end_offset(), Offset(7));
+        assert2::assert!((follower.end_offset()) == (Offset(7)));
         drop(follower);
         let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-        assert_eq!(reopened.log_start_offset(), Offset(7));
-        assert_eq!(reopened.log_end_offset(), Offset(7));
+        assert2::assert!((reopened.log_start_offset()) == (Offset(7)));
+        assert2::assert!((reopened.log_end_offset()) == (Offset(7)));
     }
 
     #[tokio::test]
@@ -330,12 +330,12 @@ mod tests {
 
         follower.trim_to(Offset(1)).await.unwrap();
 
-        assert_eq!(follower.start_offset(), Offset(1));
-        assert_eq!(follower.end_offset(), Offset(2));
+        assert2::assert!((follower.start_offset()) == (Offset(1)));
+        assert2::assert!((follower.end_offset()) == (Offset(2)));
         drop(follower);
         let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
         recover_durable_offset(&mut reopened, &dir.path().join(DURABLE_OFFSET_FILE)).unwrap();
-        assert_eq!(reopened.log_start_offset(), Offset(1));
-        assert_eq!(reopened.log_end_offset(), Offset(2));
+        assert2::assert!((reopened.log_start_offset()) == (Offset(1)));
+        assert2::assert!((reopened.log_end_offset()) == (Offset(2)));
     }
 }

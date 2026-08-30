@@ -29,7 +29,7 @@ pub struct TimeIndexEntry {
 /// Byte length of one serialized time-index entry.
 const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
 
-const _: () = assert!(TIME_INDEX_ENTRY_LEN == 12);
+const _: [(); 12] = [(); TIME_INDEX_ENTRY_LEN];
 
 /// Borrows Kafka's `TimeIndex` on-disk format as a zero-copy
 /// `&[TimeIndexEntry]`, at 12 bytes per entry: ts i64 BE, then rel u32 BE. It

@@ -23,7 +23,7 @@ pub(crate) fn java_string_hash(value: &str) -> i32 {
 /// `Utils.abs(groupId.hashCode()) % partitionCount` rule.
 #[must_use]
 pub(crate) fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> i32 {
-    debug_assert!(partition_count > 0);
+    assert2::assert!(partition_count > 0);
     let hash = java_string_hash(group_id);
     let positive = if hash == i32::MIN { 0 } else { hash.abs() };
     positive % partition_count.max(1)

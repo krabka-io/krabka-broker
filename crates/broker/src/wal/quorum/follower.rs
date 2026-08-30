@@ -182,7 +182,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::Path, sync::Mutex};
+    use std::{path::Path, sync::Mutex};
 
     use assert2::assert;
     use krabka_ids::{Offset, PartitionIndex};
@@ -306,7 +306,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(follower_end, leo);
+        assert2::assert!((follower_end) == (leo));
 
         let acknowledgement = fetch_request(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
@@ -320,7 +320,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(sync.await.unwrap().unwrap(), leo);
-        assert_eq!(store.engine().durable_watermark(), leo);
+        assert2::assert!((sync.await.unwrap().unwrap()) == (leo));
+        assert2::assert!((store.engine().durable_watermark()) == (leo));
     }
 }

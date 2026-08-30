@@ -112,7 +112,7 @@ pub fn count_partitions(dir: &Path) -> usize {
 /// `log_dir`.
 #[must_use]
 pub fn place_partition_dir(log_dirs: &[PathBuf], topic: &str, partition: i32) -> PathBuf {
-    debug_assert!(!log_dirs.is_empty(), "log_dirs must be non-empty");
+    assert2::assert!(!log_dirs.is_empty(), "log_dirs must be non-empty");
     let leaf = format!("{topic}-{partition}");
 
     // Existing location wins.

@@ -246,7 +246,7 @@ async fn follower_forwards_create_topic() {
 // module level: the hosted macos-latest runner's task scheduler
 // reorders openraft's internal callbacks under the short raft timings,
 // tripping a
-// `debug_assert!(Some(log_id) <= self.committed())` in
+// `assert2::assert!(Some(log_id) <= self.committed())` in
 // `openraft::raft_state::log_state_reader`. Linux never hits it; the
 // other 4 tests in this file also never hit it on macOS. Gating only
 // this test keeps macOS coverage on leader election, follower

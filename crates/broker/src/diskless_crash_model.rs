@@ -303,8 +303,8 @@ fn run() {
         checker.state_count(),
         checker.max_depth()
     );
-    assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert!(checker.state_count() < TARGET_STATE_COUNT, "truncated");
+    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
+    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT, "truncated");
     checker.assert_properties();
 }
 

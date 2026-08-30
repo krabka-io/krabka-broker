@@ -15,15 +15,17 @@ pub const fn reserve_offsets(next: i64, count: i64) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
+
     use super::*;
 
     #[test]
     fn reserve_offsets_returns_base_and_advanced_next() {
-        assert_eq!(reserve_offsets(11, 3), (11, 14));
+        assert!(reserve_offsets(11, 3) == (11, 14));
     }
 
     #[test]
     fn reserve_offsets_saturates_on_overflow() {
-        assert_eq!(reserve_offsets(i64::MAX - 1, 3), (i64::MAX - 1, i64::MAX));
+        assert!(reserve_offsets(i64::MAX - 1, 3) == (i64::MAX - 1, i64::MAX));
     }
 }

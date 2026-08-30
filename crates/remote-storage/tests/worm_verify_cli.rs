@@ -6,7 +6,6 @@
 //! verifier that fails for the wrong reason.
 
 use std::{
-    collections::BTreeMap,
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,

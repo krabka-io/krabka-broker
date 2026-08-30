@@ -1,0 +1,121 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/krabka-io/krabka-broker
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: build dependency SBOM
+        run: bash tools/sbom.sh sbom.cdx.json
+
+      - name: push release image
+        run: bazel run //packaging:push -- --tag "${GITHUB_REF_NAME}" --tag latest
+
+      - name: resolve image digest
+        id: image
+        run: |
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}" |
+            awk '$1 == "Digest:" { print $2; exit }')"
+          test "${digest#sha256:}" != "${digest}"
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+
+      - name: create provenance predicate
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          jq -n \
+            --arg commit "${GITHUB_SHA}" \
+            --arg digest "${DIGEST}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" '
+            {
+              buildDefinition: {
+                buildType: "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@v1",
+                externalParameters: {ref: $ref},
+                internalParameters: {bazelTarget: "//packaging:image"},
+                resolvedDependencies: [{
+                  uri: "git+https://github.com/krabka-io/krabka-broker",
+                  digest: {gitCommit: $commit}
+                }]
+              },
+              runDetails: {
+                builder: {id: $run},
+                metadata: {invocationId: $run}
+              },
+              outputDigest: $digest
+            }
+          ' >provenance.json
+
+      - name: sign image and attest SBOM and provenance
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          reference="${IMAGE}@${DIGEST}"
+          cosign sign --yes "${reference}"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "${reference}"
+          cosign attest --yes --type slsaprovenance --predicate provenance.json "${reference}"
+
+      - name: verify release signatures
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          reference="${IMAGE}@${DIGEST}"
+          identity="https://github.com/${GITHUB_WORKFLOW_REF}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "${issuer}" \
+            "${reference}"
+          cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "${issuer}" \
+            "${reference}"
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "${issuer}" \
+            "${reference}"
+
+      - name: publish GitHub release and SBOM
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 ||
+            gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" sbom.cdx.json --clobber

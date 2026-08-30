@@ -33,8 +33,8 @@
 //! .expect("valid OTLP configuration")
 //! .expect("OTLP enabled");
 //!
-//! assert_eq!(cfg.protocol, OtlpProtocol::Grpc);
-//! assert_eq!(cfg.endpoint, "http://localhost:4317");
+//! assert2::assert!((cfg.protocol) == (OtlpProtocol::Grpc));
+//! assert2::assert!((cfg.endpoint) == ("http://localhost:4317"));
 //! ```
 
 #![forbid(unsafe_code)]

@@ -49,8 +49,6 @@ pub(super) fn write_freeze_entry(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::{assert, check};
     use krabka_metadata::{
         MetadataImage, MetadataRecord, PatternType, TopicConfigRecord, TopicFreezeRecord,

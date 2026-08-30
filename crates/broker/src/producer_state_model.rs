@@ -78,13 +78,13 @@ impl Model for ProducerModel {
         match decision {
             Decision::Append => {
                 if last.initialized && epoch == last.epoch {
-                    assert!(
+                    assert2::assert!(
                         base_seq == last.last_sequence + 1,
                         "same-epoch Append not contiguous: base_seq={base_seq} last={}",
                         last.last_sequence
                     );
                 } else if last.initialized {
-                    assert!(
+                    assert2::assert!(
                         epoch > last.epoch,
                         "Append epoch not fresh: {epoch} <= {}",
                         last.epoch
@@ -96,14 +96,14 @@ impl Model for ProducerModel {
                 Some(s)
             }
             Decision::Duplicate { .. } => {
-                assert!(
+                assert2::assert!(
                     last.initialized && epoch == last.epoch && base_seq == last.last_sequence,
                     "Duplicate misclassified: epoch={epoch} base_seq={base_seq} state={last:?}"
                 );
                 None
             }
             Decision::OutOfOrder => {
-                assert!(
+                assert2::assert!(
                     last.initialized
                         && epoch == last.epoch
                         && base_seq != last.last_sequence
@@ -113,7 +113,7 @@ impl Model for ProducerModel {
                 None
             }
             Decision::Fenced => {
-                assert!(
+                assert2::assert!(
                     last.initialized && epoch < last.epoch,
                     "Fenced misclassified: epoch={epoch} state={last:?}"
                 );
@@ -158,8 +158,8 @@ fn run(model: ProducerModel, label: &str) {
         checker.state_count(),
         checker.max_depth()
     );
-    assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert!(
+    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
+    assert2::assert!(
         checker.state_count() < MAX_STATES,
         "[{label}] state cap hit"
     );

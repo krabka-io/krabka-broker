@@ -171,26 +171,26 @@ mod tests {
             resource_metrics: vec![ResourceMetrics::default()],
         };
         let req = build_export_request(md, "abc-123");
-        assert_eq!(req.resource_metrics.len(), 1);
+        assert2::assert!((req.resource_metrics.len()) == (1));
         let res = req.resource_metrics[0].resource.as_ref().expect("resource");
         let attribute = res
             .attributes
             .iter()
             .find(|kv| kv.key == "client_instance_id")
             .expect("client instance attribute");
-        assert_eq!(
-            attribute
+        assert2::assert!(
+            (attribute
                 .value
                 .as_ref()
-                .and_then(|value| value.value.as_ref()),
-            Some(&Value::StringValue("abc-123".to_string()))
+                .and_then(|value| value.value.as_ref()))
+                == (Some(&Value::StringValue("abc-123".to_string())))
         );
     }
 
     #[test]
     fn disabled_forwarder_is_noop() {
         let f = OtlpForwarder::disabled();
-        assert!(!f.is_enabled());
+        assert2::assert!(!f.is_enabled());
         f.forward(MetricsData::default(), "x");
     }
 
@@ -215,8 +215,8 @@ mod tests {
         forwarder.forward(MetricsData::default(), "client-a");
         forwarder.shutdown().await;
 
-        assert_eq!(dropped.get(), 0);
-        assert_eq!(failed.get(), 1);
+        assert2::assert!((dropped.get()) == (0));
+        assert2::assert!((failed.get()) == (1));
     }
 
     #[tokio::test]

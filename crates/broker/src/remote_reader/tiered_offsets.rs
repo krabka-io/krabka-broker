@@ -62,7 +62,7 @@ impl RemoteReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_ids::LeaderEpoch;

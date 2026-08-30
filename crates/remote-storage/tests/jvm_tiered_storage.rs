@@ -7,7 +7,6 @@
 //! ```
 
 use std::{
-    collections::BTreeMap,
     fmt::Write as _,
     path::Path,
     process::{Command, Output},

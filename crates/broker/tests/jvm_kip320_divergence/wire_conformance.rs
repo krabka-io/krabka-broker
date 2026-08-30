@@ -176,7 +176,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
             bootstrap.as_str(),
         ],
     );
-    assert!(out.status.success(), "create topic failed");
+    assert2::assert!(out.status.success(), "create topic failed");
 
     // 2. Produce a first batch at the current (epoch 0) leadership.
     produce_lines_via_jvm(
@@ -209,7 +209,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
         .partition_record_for_test(TOPIC, 0)
         .is_none_or(|partition| partition.leader_epoch != epoch1)
     {
-        assert!(
+        assert2::assert!(
             Instant::now() <= epoch_deadline,
             "wire-probe leader epoch did not reach metadata"
         );
@@ -237,12 +237,12 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
             .await
             .expect("offset_for_leader_epoch");
         eprintln!("KRABKA[kip320] OffsetForLeaderEpoch(epoch=0) => {answer:?}");
-        assert!(
+        assert2::assert!(
             answer.error_code == 0,
             "OffsetForLeaderEpoch returned error {}",
             answer.error_code
         );
-        assert!(
+        assert2::assert!(
             answer.end_offset == epoch0_end,
             "OffsetForLeaderEpoch(epoch=0).end_offset {} != epoch-0 boundary {}",
             answer.end_offset,
@@ -301,12 +301,12 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
 
     // The JVM consumer must NOT have hit a deserialization / truncation fault
     // decoding Krabka's OffsetForLeaderEpoch + diverging_epoch bytes.
-    assert!(
+    assert2::assert!(
         !stderr.contains("RecordDeserializationException")
             && !stdout.contains("RecordDeserializationException"),
         "JVM consumer hit a deserialization error decoding Krabka Fetch v12+: {stderr}"
     );
-    assert!(
+    assert2::assert!(
         stdout.contains("KIP320PROBE OK"),
         "JVM OffsetForLeaderEpoch / Fetch v12 conformance probe did not pass: stdout={stdout} stderr={stderr}"
     );

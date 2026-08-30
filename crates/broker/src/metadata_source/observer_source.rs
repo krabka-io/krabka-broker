@@ -136,7 +136,7 @@ mod tests {
     }
 
     fn not_leader_none<T>(result: &Result<T, RaftError>) {
-        assert!(matches!(
+        assert2::assert!(matches!(
             result,
             Err(RaftError::NotLeader {
                 current_leader: None
@@ -166,16 +166,16 @@ mod tests {
         });
         let source = ObserverSource::new(observer.clone(), writer.clone());
 
-        assert_eq!(source.current_image().cluster_id(), cluster_id);
-        assert_eq!(source.current_metadata_offset(), -1);
+        assert2::assert!((source.current_image().cluster_id()) == (cluster_id));
+        assert2::assert!((source.current_metadata_offset()) == (-1));
         source
             .submit_change(vec![topic_record("forwarded-topic")])
             .await
             .expect("submit via writer");
         {
             let calls = writer.calls.lock().unwrap();
-            assert_eq!(calls.len(), 1);
-            assert!(
+            assert2::assert!((calls.len()) == (1));
+            assert2::assert!(
                 matches!(&calls[0][0], MetadataRecord::V1Topic(t) if t.name == "forwarded-topic")
             );
         }
@@ -184,7 +184,7 @@ mod tests {
         not_leader_none(&source.add_learner(NodeId(2), Node::default()).await);
         not_leader_none(&source.trigger_snapshot().await);
         source.cancel().await;
-        assert!(observer.task_drained_for_test().await);
+        assert2::assert!(observer.task_drained_for_test().await);
     }
 
     #[tokio::test]
@@ -208,7 +208,7 @@ mod tests {
         let expected_offset = i64::try_from(ctrl.quorum_state().last_applied_index)
             .unwrap_or(i64::MAX)
             .saturating_sub(1);
-        assert!(
+        assert2::assert!(
             ![-1, 0, 1].contains(&expected_offset),
             "test must distinguish every constant-offset mutant"
         );
@@ -243,7 +243,7 @@ mod tests {
         .await
         .expect("observer source catches up");
 
-        assert_eq!(source.current_metadata_offset(), expected_offset);
+        assert2::assert!((source.current_metadata_offset()) == (expected_offset));
         source.cancel().await;
         ctrl.shutdown().await;
     }

@@ -123,12 +123,12 @@ mod tests {
     fn mark_classic_after_streams_downgrade_forces_classic_over_streams() {
         let c = make_coord();
         c.mark_streams("g");
-        assert_eq!(c.group_type("g"), Some(GroupType::Streams));
+        assert2::assert!((c.group_type("g")) == (Some(GroupType::Streams)));
         // mark_classic is first-mark-wins, so it must NOT override an existing lock:
         c.mark_classic("g");
-        assert_eq!(c.group_type("g"), Some(GroupType::Streams));
+        assert2::assert!((c.group_type("g")) == (Some(GroupType::Streams)));
         // The forced downgrade variant MUST override it:
         c.mark_classic_after_streams_downgrade("g");
-        assert_eq!(c.group_type("g"), Some(GroupType::Classic));
+        assert2::assert!((c.group_type("g")) == (Some(GroupType::Classic)));
     }
 }

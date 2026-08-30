@@ -182,7 +182,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(res.is_ok(), "wait_for_image timed out after 30s");
+        assert2::assert!(res.is_ok(), "wait_for_image timed out after 30s");
     }
 
     /// Test-only: borrow this broker's live [`crate::metrics::BrokerMetrics`]
@@ -226,7 +226,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "wait_for_metrics({what}) timed out after {TEST_AWAITER_TIMEOUT:?}"
         );
@@ -251,7 +251,7 @@ impl BrokerHandle {
         })
         .await;
         let id = res.expect("wait_until_controller_leader timed out after 30s");
-        assert!(
+        assert2::assert!(
             id != krabka_raft::NodeId(0),
             "leader channel closed before a leader was elected"
         );

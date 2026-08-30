@@ -54,7 +54,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "share-state summary for {group}:{topic_id}:{partition} not present within 30s"
         );
@@ -83,7 +83,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "share SPSO for {group}:{topic_id}:{partition} did not reach {min} within 30s"
         );
@@ -112,7 +112,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "share dcc for {group}:{topic_id}:{partition} did not reach {min} within 30s"
         );
@@ -146,7 +146,7 @@ impl BrokerHandle {
             }
         })
         .await;
-        assert!(
+        assert2::assert!(
             res.is_ok(),
             "share acquired-batch count for {group}:{topic_id}:{partition} did not reach {n} within 30s"
         );
@@ -155,7 +155,7 @@ impl BrokerHandle {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
 
     use crate::{
         broker::{Broker, test_support::local_partition_with_records},
@@ -173,7 +173,7 @@ mod tests {
         let share_group = "handle-share-summary-mutant-group";
         let share_topic_id = uuid::Uuid::from_u128(0xBEE5);
         let share_partition = 3;
-        assert!(
+        assert2::assert!(
             handle
                 .share_state_summary_for_test(share_group, share_topic_id, share_partition)
                 .await
@@ -257,7 +257,7 @@ mod tests {
             .share_partition_leaders
             .get_or_load(acquired_group, acquired_topic_id, 0)
             .await;
-        assert!(
+        assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(75),
                 handle.wait_until_share_acquired_count(acquired_group, acquired_topic_id, 0, 1),
@@ -276,9 +276,9 @@ mod tests {
                 std::time::Duration::from_secs(30),
                 i16::MAX,
             );
-            assert!(!acquired.is_empty());
+            assert2::assert!(!acquired.is_empty());
         }
-        assert!(
+        assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 handle.wait_until_share_acquired_count(acquired_group, acquired_topic_id, 0, 1),
@@ -298,7 +298,7 @@ mod tests {
         )
         .await
         .expect("add_learner returned before timeout");
-        assert!(add_learner.is_ok());
+        assert2::assert!(add_learner.is_ok());
 
         let own_directory = handle
             .voter_directory_id_for_test(krabka_raft::NodeId(handle.node_id()))

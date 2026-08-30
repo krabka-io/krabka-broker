@@ -256,22 +256,22 @@ mod tests {
     fn v0_returns_client_metrics_subscriptions() {
         let img = image_with_subs(&["sub-b", "sub-a"]);
         let out = collect_resources(&img, 0, &[]);
-        assert_eq!(out.len(), 2);
+        assert2::assert!((out.len()) == (2));
         assert!(
             out.iter()
                 .all(|r| r.resource_type == RESOURCE_TYPE_CLIENT_METRICS)
         );
-        assert_eq!(out[0].resource_name, "sub-a"); // sorted
-        assert_eq!(out[1].resource_name, "sub-b");
+        assert2::assert!((out[0].resource_name) == ("sub-a")); // sorted
+        assert2::assert!((out[1].resource_name) == ("sub-b"));
     }
 
     #[test]
     fn v1_client_metrics_filter_returns_subscriptions() {
         let img = image_with_subs(&["sub-a"]);
         let out = collect_resources(&img, 1, &[RESOURCE_TYPE_CLIENT_METRICS]);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].resource_type, RESOURCE_TYPE_CLIENT_METRICS);
-        assert_eq!(out[0].resource_name, "sub-a");
+        assert2::assert!((out.len()) == (1));
+        assert2::assert!((out[0].resource_type) == (RESOURCE_TYPE_CLIENT_METRICS));
+        assert2::assert!((out[0].resource_name) == ("sub-a"));
     }
 
     #[test]

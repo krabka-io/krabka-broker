@@ -28,7 +28,7 @@ pub struct AbortedTxnIndexEntry {
 /// Byte length of one serialized aborted-transaction index entry.
 const TXN_INDEX_ENTRY_LEN: usize = std::mem::size_of::<AbortedTxnIndexEntry>();
 
-const _: () = assert!(TXN_INDEX_ENTRY_LEN == 24);
+const _: [(); 24] = [(); TXN_INDEX_ENTRY_LEN];
 
 /// Borrows Kafka's transaction-index format as a zero-copy
 /// `&[AbortedTxnIndexEntry]`, at 24 bytes per entry: `start_offset` i64 BE,

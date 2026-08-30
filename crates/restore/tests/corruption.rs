@@ -15,7 +15,7 @@
 //! -- under `--continue-on-corrupt` -- the right segment skipped while
 //! everything else restores intact.
 
-use std::{collections::BTreeMap, path::Path as StdPath};
+use std::path::Path as StdPath;
 
 use assert2::{assert, check};
 use bytes::Bytes;

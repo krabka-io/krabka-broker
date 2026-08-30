@@ -144,7 +144,7 @@ mod tests {
             ("thirty seconds", 30_000, Some(krabka_units::millis(30_000))),
         ];
         for (case, requested, expected) in cases {
-            assert!(requested_timeout(requested) == expected, "{case}");
+            assert2::assert!(requested_timeout(requested) == expected, "{case}");
         }
     }
 

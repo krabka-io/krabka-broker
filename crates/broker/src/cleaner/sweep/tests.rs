@@ -43,7 +43,7 @@ async fn tick_all_compacts_only_local_leader_compact_topics() {
     // A single `tick_all` is exactly one cleaner sweep, so the run counter
     // must advance by one. This pins `record_cleaner_run` against a no-op
     // mutation (nothing else asserts on `log_cleaner_runs_total`).
-    assert_eq!(metrics.log_cleaner_runs_total.get(), 1);
+    assert2::assert!((metrics.log_cleaner_runs_total.get()) == (1));
 
     for (topic, partition, before, expect_compacted) in cases {
         let after = record_count(&partition);

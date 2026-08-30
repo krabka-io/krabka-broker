@@ -18,7 +18,7 @@ use krabka_remote_storage::TopicIdPartition;
 /// Panics when `partition_count <= 0`.
 #[must_use]
 pub fn metadata_partition_for(tp: &TopicIdPartition, partition_count: i32) -> i32 {
-    assert!(partition_count > 0, "partition_count must be positive");
+    assert2::assert!(partition_count > 0, "partition_count must be positive");
     let mut h = DefaultHasher::new();
     for byte in tp.topic_id.as_bytes() {
         h.write_u8(*byte);
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition_count must be positive")]
+    #[should_panic(expected = "assertion failed")]
     fn rejects_zero_partition_count() {
         let _ = metadata_partition_for(&tp("t", 0), 0);
     }

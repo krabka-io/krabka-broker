@@ -43,7 +43,7 @@
 //! let mut buf = BytesMut::new();
 //! encode_flat_message_set(records, Magic::V1, &mut buf);
 //! let decoded = decode_message_set(&mut &buf[..], buf.len())?;
-//! assert_eq!(decoded[0].offset, Offset(42));
+//! assert2::assert!((decoded[0].offset) == (Offset(42)));
 //! # Ok(())
 //! # }
 //! ```

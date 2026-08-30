@@ -266,8 +266,6 @@ fn read_u16(r: &mut Reader<'_>) -> Result<u16, CodecError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use assert2::assert;
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{

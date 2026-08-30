@@ -132,7 +132,7 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
     let container = support::unique_container_name("krabka-mv-capability-jvm-broker");
 
     let cluster = start_mixed_cluster(&container, false).await;
-    assert!(
+    assert2::assert!(
         cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
         "JVM broker never joined the mixed cluster"
     );
@@ -160,7 +160,7 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
         .map(|(broker, _)| state(broker))
         .collect::<Vec<_>>();
     let image = cluster.krabka[0].0.controller_image_for_test();
-    assert!(
+    assert2::assert!(
         !image
             .broker(krabka_broker::NodeId(3))
             .expect("Kafka 4.0 registration")
@@ -195,7 +195,7 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
         .iter()
         .map(|(broker, _)| state(broker))
         .collect::<Vec<_>>();
-    assert!(
+    assert2::assert!(
         after == before,
         "rejected mixed-version downgrade changed finalized or directory metadata"
     );

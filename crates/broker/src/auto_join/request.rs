@@ -55,9 +55,9 @@ mod tests {
     #[test]
     fn controller_listener_uses_bound_controller_endpoint() {
         let listener = controller_listener("192.0.2.10:19093".parse().unwrap());
-        assert_eq!(listener.name, "CONTROLLER");
-        assert_eq!(listener.host, "192.0.2.10");
-        assert_eq!(listener.port, 19093);
+        assert2::assert!((listener.name) == ("CONTROLLER"));
+        assert2::assert!((listener.host) == ("192.0.2.10"));
+        assert2::assert!((listener.port) == (19093));
     }
 
     #[test]
@@ -67,10 +67,10 @@ mod tests {
             .map(str::to_owned)
             .collect();
 
-        assert_eq!(select_bootstrap_server(&servers, 0), servers[0].as_str());
-        assert_eq!(select_bootstrap_server(&servers, 2), servers[2].as_str());
-        assert_eq!(select_bootstrap_server(&servers, 3), servers[0].as_str());
-        assert_eq!(select_bootstrap_server(&servers, 5), servers[2].as_str());
+        assert2::assert!((select_bootstrap_server(&servers, 0)) == (servers[0].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 2)) == (servers[2].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 3)) == (servers[0].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 5)) == (servers[2].as_str()));
     }
 
     #[test]

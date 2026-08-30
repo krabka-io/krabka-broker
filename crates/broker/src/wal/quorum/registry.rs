@@ -232,7 +232,7 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Mutex};
+    use std::sync::Mutex;
 
     use bytes::Bytes;
     use krabka_ids::Offset;
@@ -305,10 +305,10 @@ mod tests {
             .expect("diskless WAL fetch response");
         let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
         let partition = &decoded.responses[0].partitions[0];
-        assert_eq!(partition.high_watermark, 1);
-        assert_eq!(partition.last_stable_offset, 1);
-        assert_eq!(partition.log_start_offset, 0);
-        assert!(
+        assert2::assert!((partition.high_watermark) == (1));
+        assert2::assert!((partition.last_stable_offset) == (1));
+        assert2::assert!((partition.log_start_offset) == (0));
+        assert2::assert!(
             partition
                 .records
                 .as_ref()
@@ -367,10 +367,10 @@ mod tests {
             .unwrap();
         let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
         let partition = &decoded.responses[0].partitions[0];
-        assert_eq!(partition.error_code, OFFSET_OUT_OF_RANGE);
-        assert_eq!(partition.log_start_offset, 5);
-        assert_eq!(partition.last_stable_offset, 6);
-        assert!(partition.records.is_none());
+        assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
+        assert2::assert!((partition.log_start_offset) == (5));
+        assert2::assert!((partition.last_stable_offset) == (6));
+        assert2::assert!(partition.records.is_none());
 
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
@@ -385,10 +385,10 @@ mod tests {
             .unwrap();
         let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
         let partition = &decoded.responses[0].partitions[0];
-        assert_eq!(partition.error_code, OFFSET_OUT_OF_RANGE);
-        assert_eq!(partition.log_start_offset, 5);
-        assert_eq!(partition.last_stable_offset, 6);
-        assert!(partition.records.is_none());
+        assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
+        assert2::assert!((partition.log_start_offset) == (5));
+        assert2::assert!((partition.last_stable_offset) == (6));
+        assert2::assert!(partition.records.is_none());
     }
 
     #[tokio::test]
@@ -426,8 +426,8 @@ mod tests {
             .expect("diskless WAL fetch response");
         let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
         let partition = &decoded.responses[0].partitions[0];
-        assert_eq!(partition.error_code, 3);
-        assert!(partition.records.is_none());
+        assert2::assert!((partition.error_code) == (3));
+        assert2::assert!(partition.records.is_none());
     }
 
     #[test]
@@ -445,10 +445,7 @@ mod tests {
 
         registry.replace_placements(&maplit::hashmap! {current => vec![krabka_raft::NodeId(2)]});
 
-        assert!(registry.placement(stale).is_none());
-        assert_eq!(
-            registry.placement(current),
-            Some(vec![krabka_raft::NodeId(2)])
-        );
+        assert2::assert!(registry.placement(stale).is_none());
+        assert2::assert!((registry.placement(current)) == (Some(vec![krabka_raft::NodeId(2)])));
     }
 }

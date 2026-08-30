@@ -137,6 +137,7 @@ impl Default for ProfilingConfig {
 
 #[cfg(test)]
 mod tests {
+    use assert2::assert;
     use clap::Parser;
     use krabka_units::convert::FrequencyExt as _;
 
@@ -151,7 +152,7 @@ mod tests {
     #[test]
     fn profiling_config_defaults_and_overrides() {
         let defaults = TestCli::parse_from(["test"]).profiling;
-        assert_eq!(defaults, ProfilingConfig::default());
+        assert!(defaults == ProfilingConfig::default());
 
         let configured = TestCli::try_parse_from([
             "test",
@@ -164,18 +165,14 @@ mod tests {
         ])
         .expect("valid profiling policy")
         .profiling;
-        assert_eq!(configured.profiling_cpu_default_duration, secs(2));
-        assert_eq!(configured.profiling_cpu_max_duration, secs(3));
-        assert_eq!(
-            configured.profiling_cpu_sample_frequency.frequency(),
-            Frequency::from_per_sec(101.0)
+        assert!(configured.profiling_cpu_default_duration == secs(2));
+        assert!(configured.profiling_cpu_max_duration == secs(3));
+        assert!(
+            configured.profiling_cpu_sample_frequency.frequency() == Frequency::from_per_sec(101.0)
         );
-        assert_eq!(configured.profiling_heap_default_duration, secs(4));
-        assert_eq!(configured.profiling_heap_max_duration, secs(5));
-        assert_eq!(
-            configured.profiling_native_frame_blocklist,
-            ["libc", "custom"]
-        );
+        assert!(configured.profiling_heap_default_duration == secs(4));
+        assert!(configured.profiling_heap_max_duration == secs(5));
+        assert!(configured.profiling_native_frame_blocklist == ["libc", "custom"]);
         assert!(configured.validate().is_ok());
     }
 

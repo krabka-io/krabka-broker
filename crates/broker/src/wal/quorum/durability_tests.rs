@@ -3,10 +3,7 @@
 //! minority of replicas, the hot-tail run it mirrors, and the trim that follows
 //! a committed prefix.
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use assert2::assert;
 use krabka_compression::CompressionType;

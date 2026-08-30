@@ -2,3 +2,9 @@
 # accommodates linear end-to-end integration scenarios without blanket lint
 # allows; scenarios above 200 lines must still be decomposed.
 too-many-lines-threshold = 200
+
+disallowed-macros = [
+    { path = "std::assert", reason = "use assert2::assert!; see CLAUDE.md" },
+    { path = "std::assert_eq", reason = "use assert2::assert!; see CLAUDE.md" },
+    { path = "std::assert_ne", reason = "use assert2::assert!; see CLAUDE.md" },
+]

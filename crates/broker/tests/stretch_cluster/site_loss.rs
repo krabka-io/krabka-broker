@@ -6,7 +6,7 @@
 //! unreachable-site half, where every broker stays up, is in
 //! `unreachable_site`.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
 use assert2::{assert, check};
 use krabka_broker::codes;

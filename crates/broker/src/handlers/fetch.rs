@@ -266,7 +266,7 @@ pub(crate) fn encode_fetch_response(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, net::SocketAddr, sync::Mutex};
+    use std::{net::SocketAddr, sync::Mutex};
 
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
