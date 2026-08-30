@@ -1,0 +1,94 @@
+"""Generate and validate the release SBOM from the configured Bazel graph."""
+
+def _capture(ctx, program, argv):
+    result = ctx.std.process.command(program) \
+        .args(argv) \
+        .current_dir(ctx.std.env.bazel_root_dir()) \
+        .stdout("piped") \
+        .stderr("piped") \
+        .spawn() \
+        .wait_with_output()
+    if not result.status.success:
+        fail("{} failed (exit {}):\n{}".format(program, result.status.code, result.stderr.strip()))
+    return result.stdout
+
+def _coordinate(purl):
+    package = purl.removeprefix("pkg:").split("/", 1)[1]
+    parts = package.split("@", 1)
+    return parts[0] + "@" + parts[1].split("?", 1)[0]
+
+def _impl(ctx):
+    query = _capture(ctx, "bazel", [
+        "cquery",
+        'kind("_package_metadata rule", deps(//packaging:image))',
+        "--output=build",
+    ])
+    purls = []
+    for raw in query.split("\n"):
+        line = raw.strip()
+        if line.startswith('purl = "') and line.endswith('",'):
+            purl = line.removeprefix('purl = "').removesuffix('",')
+            if purl.startswith("pkg:cargo/") or purl.startswith("pkg:docker/"):
+                purls.append(purl)
+    purls = sorted(set(purls))
+
+    cargo = sorted([_coordinate(purl) for purl in purls if purl.startswith("pkg:cargo/")])
+    if not cargo:
+        fail("the Bazel image graph contains no Cargo packages")
+
+    deny_output = _capture(ctx, "cargo", [
+        "deny",
+        "--manifest-path",
+        "crates/broker/Cargo.toml",
+        "--exclude-dev",
+        "list",
+        "--format",
+        "tsv",
+    ])
+    deny = set([line.split("\t")[0] for line in deny_output.split("\n")[1:] if line])
+    missing = [package for package in cargo if package not in deny]
+    if missing:
+        fail("Cargo packages in the Bazel image graph are missing from cargo deny:\n{}".format("\n".join(missing)))
+
+    components = []
+    for purl in purls:
+        kind = purl.removeprefix("pkg:").split("/", 1)[0]
+        coordinate = _coordinate(purl).rsplit("@", 1)
+        components.append({
+            "type": "container" if kind == "docker" else "library",
+            "name": coordinate[0],
+            "version": coordinate[1],
+            "bom-ref": purl,
+            "purl": purl,
+        })
+
+    version = ctx.std.env.var("GITHUB_REF_NAME") or ctx.std.env.var("GITHUB_SHA") or "local"
+    document = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": "urn:uuid:" + ctx.task.id,
+        "version": 1,
+        "metadata": {
+            "component": {
+                "type": "container",
+                "name": "ghcr.io/krabka-io/krabka-broker",
+                "version": version,
+            },
+        },
+        "components": components,
+    }
+
+    output = ctx.args.output
+    if not output.startswith("/"):
+        output = ctx.std.env.bazel_root_dir() + "/" + output
+    ctx.std.fs.write(output, json.encode(document) + "\n")
+    ctx.std.io.stdout.write("wrote {} components to {}\n".format(len(components), ctx.args.output))
+    return 0
+
+sbom = task(
+    summary = "Generate and validate the release SBOM",
+    implementation = _impl,
+    args = {
+        "output": args.string(default = "sbom.cdx.json", description = "CycloneDX output path"),
+    },
+)

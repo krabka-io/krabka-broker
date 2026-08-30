@@ -60,7 +60,7 @@ def crate_library(name, srcs = None, **kwargs):
     metadata = name + "_package_metadata"
     package_metadata(
         name = metadata,
-        # tools/sbom.sh checks this against Cargo's resolved version.
+        # The SBOM task checks this against Cargo's resolved version.
         purl = "pkg:cargo/%s@%s" % (crate_name().replace("_", "-"), WORKSPACE_VERSION),
     )
     rust_library(
