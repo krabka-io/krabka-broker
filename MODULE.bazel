@@ -13,6 +13,10 @@ module(
 bazel_dep(name = "rules_rs", version = "0.0.106")
 bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
 
+# Expose the metadata rules already used by rules_rs so workspace crates appear
+# in the same Bazel dependency graph as third-party crates.
+bazel_dep(name = "package_metadata", version = "0.0.7")
+
 # rules_rs_mutants is not published to the Bazel Central Registry, so the
 # `bazel_dep` above has nothing to resolve against without this override.
 git_override(

@@ -9,6 +9,7 @@ away from the manifests Cargo still resolves.
 
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps", "crate_name", "edition")
+load("@package_metadata//rules:package_metadata.bzl", "package_metadata")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_library.bzl", "rust_library")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
@@ -23,6 +24,7 @@ load("//tools/lint:linters.bzl", "clippy_test")
 # The clippy tables stay a Cargo-side gate: clippy runs as an aspect here, not
 # as part of a normal build.
 WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
+WORKSPACE_VERSION = "0.4.0"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
@@ -55,6 +57,12 @@ def _aliases(kinds):
 
 def crate_library(name, srcs = None, **kwargs):
     """`rust_library` for a workspace member, configured from Cargo metadata."""
+    metadata = name + "_package_metadata"
+    package_metadata(
+        name = metadata,
+        # tools/sbom.sh checks this against Cargo's resolved version.
+        purl = "pkg:cargo/%s@%s" % (crate_name().replace("_", "-"), WORKSPACE_VERSION),
+    )
     rust_library(
         name = name,
         srcs = srcs if srcs != None else native.glob(
@@ -65,6 +73,7 @@ def crate_library(name, srcs = None, **kwargs):
         crate_features = _features(),
         crate_name = crate_name(),
         edition = edition(),
+        package_metadata = [metadata],
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
         deps = all_crate_deps(normal = True),
