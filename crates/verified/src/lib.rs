@@ -23,7 +23,7 @@ pub use compaction::{
 pub use consensus::{
     election_jitter_ms, handoff_high_watermark, log_is_up_to_date, recompute_high_watermark,
 };
-pub use log_index::offset_index_lookup;
+pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,

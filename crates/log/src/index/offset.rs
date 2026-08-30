@@ -120,10 +120,7 @@ impl OffsetIndex {
     /// bounds a scan from the start that must stop at `target`.
     #[must_use]
     pub fn position_at_or_after(&self, target: u32) -> Option<u32> {
-        match self.entries.binary_search_by_key(&target, |&(rel, _)| rel) {
-            Ok(i) => Some(self.entries[i].1),
-            Err(i) => self.entries.get(i).map(|&(_, pos)| pos),
-        }
+        krabka_verified::offset_index_position_at_or_after(&self.entries, target)
     }
 
     #[must_use]
