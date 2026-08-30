@@ -6,7 +6,9 @@
 
 use krabka_ids::{LeaderEpoch, Offset};
 
-use super::{EpochEntry, LeaderEpochCheckpoint, UNDEFINED_EPOCH, UNDEFINED_OFFSET};
+#[cfg(test)]
+use super::UNDEFINED_EPOCH;
+use super::{EpochEntry, LeaderEpochCheckpoint, UNDEFINED_OFFSET};
 
 impl LeaderEpochCheckpoint {
     /// End offset of `epoch`. It is the `start_offset` of the next-larger
@@ -87,34 +89,16 @@ pub fn epoch_and_offset_for_entries(
     requested_epoch: LeaderEpoch,
     log_end_offset: Offset,
 ) -> (LeaderEpoch, Offset) {
-    if requested_epoch == UNDEFINED_EPOCH {
-        return (UNDEFINED_EPOCH, log_end_offset);
-    }
-    if entries.iter().map(|e| e.epoch).max() == Some(requested_epoch) {
-        return (requested_epoch, log_end_offset);
-    }
-    // Smallest recorded epoch strictly greater than `requested`.
-    let higher = entries
+    let entries = entries
         .iter()
-        .filter(|e| e.epoch > requested_epoch)
-        .min_by_key(|e| e.epoch);
-    match higher {
-        // `requested` is in the future relative to this log.
-        None => (UNDEFINED_EPOCH, log_end_offset),
-        Some(next) => {
-            // Largest recorded epoch <= requested (the floor).
-            let floor = entries
-                .iter()
-                .filter(|e| e.epoch <= requested_epoch)
-                .map(|e| e.epoch)
-                .max();
-            match floor {
-                Some(f) => (f, next.start_offset),
-                // `requested` is below the first recorded epoch.
-                None => (requested_epoch, next.start_offset),
-            }
-        }
-    }
+        .map(|entry| (entry.epoch.0, entry.start_offset.0))
+        .collect::<Vec<_>>();
+    let (epoch, offset) = krabka_verified::epoch_and_offset_for_entries(
+        &entries,
+        requested_epoch.0,
+        log_end_offset.0,
+    );
+    (LeaderEpoch(epoch), Offset(offset))
 }
 
 #[cfg(test)]

@@ -39,6 +39,7 @@ pub struct LeaderEpochCheckpoint {
 }
 
 /// Kafka sentinel: "no leader epoch information".
+#[cfg(test)]
 pub const UNDEFINED_EPOCH: LeaderEpoch = LeaderEpoch(-1);
 /// Kafka sentinel: "no offset".
 pub const UNDEFINED_OFFSET: Offset = Offset(-1);
