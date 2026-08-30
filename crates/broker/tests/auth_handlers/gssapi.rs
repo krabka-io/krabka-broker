@@ -103,7 +103,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// A Krabka broker accepts on a `SASL_PLAINTEXT`/GSSAPI listener, with the
 /// service key in `kafka.keytab`. `InterBrokerClient` dials it with
 /// `InterBrokerCredentials::Gssapi` and authenticates *from a keytab* as
-/// `alice@CRABKA.TEST`, with no password. The test proves the full outbound
+/// `CRABKA.TEST\alice`, with no password. The test proves the full outbound
 /// GSSAPI path: AS/TGS from `alice.keytab` → AP-REQ → broker validates →
 /// RFC 4752 auth-only layer negotiation → authenticated stream. A follow-up
 /// `ApiVersions` round-trip confirms the stream.
@@ -153,7 +153,7 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
         None,
         Some(krabka_broker::config::InterBrokerCredentials::Gssapi {
             keytab_path: fixtures.join("alice.keytab"),
-            client_principal: "alice@CRABKA.TEST".to_string(),
+            client_principal: "CRABKA.TEST\\alice".to_string(),
             service_name: "kafka".to_string(),
             kdc_url,
         }),
