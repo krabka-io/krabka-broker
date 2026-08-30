@@ -227,7 +227,6 @@ impl WalShardRegistry {
                 None,
             )));
         }
-        engine.record_follower_ack(request.from, krabka_ids::Offset(request.fetch_offset));
         Some(
             engine
                 .serve_fetch(
@@ -236,6 +235,12 @@ impl WalShardRegistry {
                     request.max_size,
                 )
                 .map(|fetch| {
+                    if !fetch.offset_out_of_range && fetch.diverging_epoch.is_none() {
+                        engine.record_follower_ack(
+                            request.from,
+                            krabka_ids::Offset(request.fetch_offset),
+                        );
+                    }
                     let error_code = if fetch.offset_out_of_range {
                         OFFSET_OUT_OF_RANGE
                     } else {

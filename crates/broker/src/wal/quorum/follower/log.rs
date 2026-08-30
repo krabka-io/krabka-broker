@@ -162,6 +162,39 @@ impl FollowerLog {
         .await
     }
 
+    pub(super) async fn resolve_divergence(
+        &self,
+        mut offset: Offset,
+        leader_start: Offset,
+        requested: Offset,
+    ) -> Result<(), crate::BrokerError> {
+        if offset > requested {
+            return Err(crate::BrokerError::Replication(
+                "leader returned invalid WAL divergence offset".into(),
+            ));
+        }
+        if offset == requested {
+            let previous_epoch_start = self
+                .log
+                .lock()
+                .epoch_checkpoint()
+                .entries()
+                .last()
+                .map(|entry| entry.start_offset);
+            let Some(previous_epoch_start) =
+                previous_epoch_start.filter(|start| *start < requested)
+            else {
+                return self.reset_to(leader_start).await;
+            };
+            offset = previous_epoch_start;
+        }
+        if offset < self.start_offset() {
+            self.reset_to(leader_start).await
+        } else {
+            self.truncate_to(offset).await
+        }
+    }
+
     pub(super) async fn append(
         &self,
         requested: Offset,
@@ -364,5 +397,64 @@ mod tests {
         recover_durable_offset(&mut reopened, &dir.path().join(DURABLE_OFFSET_FILE)).unwrap();
         assert2::assert!((reopened.log_start_offset()) == (Offset(1)));
         assert2::assert!((reopened.log_end_offset()) == (Offset(2)));
+    }
+
+    #[tokio::test]
+    async fn equal_offset_divergence_steps_back_to_the_local_epoch_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let follower = FollowerLog::for_log(Log::open(dir.path(), LogConfig::default()).unwrap());
+        follower
+            .append(
+                Offset(0),
+                Offset(1),
+                Some(RecordsPayload::V2(vec![RecordBatch {
+                    base_offset: 0,
+                    partition_leader_epoch: 7,
+                    records: vec![Record::default()],
+                    ..RecordBatch::default()
+                }])),
+            )
+            .await
+            .unwrap();
+
+        follower
+            .resolve_divergence(Offset(1), Offset(0), Offset(1))
+            .await
+            .unwrap();
+
+        assert2::assert!((follower.end_offset()) == (Offset(0)));
+        assert2::assert!((follower.last_epoch()) == (-1));
+    }
+
+    #[tokio::test]
+    async fn divergence_before_the_retained_range_resets_to_the_leader_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let follower = FollowerLog::for_log(Log::open(dir.path(), LogConfig::default()).unwrap());
+        follower
+            .append(
+                Offset(0),
+                Offset(2),
+                Some(RecordsPayload::V2(
+                    (0..2)
+                        .map(|base_offset| RecordBatch {
+                            base_offset,
+                            records: vec![Record::default()],
+                            ..RecordBatch::default()
+                        })
+                        .collect(),
+                )),
+            )
+            .await
+            .unwrap();
+        follower.trim_to(Offset(1)).await.unwrap();
+
+        follower
+            .resolve_divergence(Offset(0), Offset(0), Offset(2))
+            .await
+            .unwrap();
+
+        assert2::assert!((follower.start_offset()) == (Offset(0)));
+        assert2::assert!((follower.end_offset()) == (Offset(0)));
+        assert2::assert!((follower.last_epoch()) == (-1));
     }
 }

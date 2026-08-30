@@ -130,18 +130,15 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
         };
         match partition.error_code {
             codes::NONE => {
+                let frontiers = validate_fetch_frontiers(&partition)?;
                 if partition.diverging_epoch.end_offset >= 0 {
                     let divergence = krabka_ids::Offset(partition.diverging_epoch.end_offset);
-                    if !(follower.start_offset()..=requested).contains(&divergence) {
-                        return Err("leader returned invalid WAL divergence offset".into());
-                    }
                     follower
-                        .truncate_to(divergence)
+                        .resolve_divergence(divergence, frontiers.start, requested)
                         .await
                         .map_err(|error| error.to_string())?;
                     continue;
                 }
-                let frontiers = validate_fetch_frontiers(&partition)?;
                 follower
                     .trim_to(frontiers.start)
                     .await
@@ -387,14 +384,10 @@ mod tests {
             partition: PartitionIndex(0),
         };
         let registry = WalShardRegistry::new(NodeId(1));
-        registry.insert(
-            shard,
-            Arc::new(WalShardEngine::for_logs(
-                maplit::btreemap! {NodeId(1) => Arc::clone(&leader)},
-            )),
-        );
+        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&leader), 3).unwrap());
+        registry.insert(shard, Arc::clone(&engine));
         registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
-            voters: vec![NodeId(1), NodeId(2)],
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
             leader_epoch: 1,
         }});
 
@@ -411,9 +404,14 @@ mod tests {
             .unwrap();
         let partition = response_partition(response, shard).unwrap();
         assert2::assert!((partition.diverging_epoch.end_offset) == (1));
+        assert2::assert!((engine.durable_watermark()) == (Offset(0)));
 
         follower
-            .truncate_to(Offset(partition.diverging_epoch.end_offset))
+            .resolve_divergence(
+                Offset(partition.diverging_epoch.end_offset),
+                Offset(partition.log_start_offset),
+                Offset(2),
+            )
             .await
             .unwrap();
         let response = registry
