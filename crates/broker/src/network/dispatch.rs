@@ -140,13 +140,24 @@ where
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let mut body = BytesMut::with_capacity(2);
-    body.put_i16(codes::UNSUPPORTED_VERSION);
+    let body = if parsed.api_key == API_VERSIONS_KEY {
+        match crate::handlers::api_versions::unsupported_version_response() {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(%error, "ApiVersions fallback encode error, closing");
+                return false;
+            }
+        }
+    } else {
+        let mut body = BytesMut::with_capacity(2);
+        body.put_i16(codes::UNSUPPORTED_VERSION);
+        body.freeze()
+    };
     let response = match encode_response(
         parsed.api_key,
         parsed.correlation_id,
         parsed.body_flexible,
-        &body.freeze(),
+        &body,
         broker.config.socket_request_max.bytes_usize(),
     ) {
         Ok(response) => response,
@@ -237,6 +248,26 @@ async fn serve_connection_stream<S>(
             let _ = codes::ILLEGAL_SASL_STATE; // referenced for docs/grep
             break;
         }
+        let Some(entry) = broker.handlers().get(parsed.api_key) else {
+            tracing::warn!(
+                api_key = parsed.api_key,
+                api_version = parsed.api_version,
+                "unknown api, closing connection"
+            );
+            break;
+        };
+        if !entry.supports_version(parsed.api_version) {
+            let (started, _in_flight) = begin_request(&broker, &parsed);
+            tracing::warn!(
+                api_key = parsed.api_key,
+                api_version = parsed.api_version,
+                "unsupported api version"
+            );
+            if !send_unsupported_response(&mut framed, &broker, &parsed, &auth, started).await {
+                break;
+            }
+            continue;
+        }
         // SASL frames (api_key 17 / 36) mutate the per-connection auth state,
         // which lives in this loop. They run *before* the regular handler
         // table because handlers receive only `&Broker` and have no way to
@@ -270,18 +301,6 @@ async fn serve_connection_stream<S>(
         capture_client_software(&parsed, &mut client_software.0, &mut client_software.1);
 
         let (started, _in_flight) = begin_request(&broker, &parsed);
-
-        let Some(entry) = broker.handlers().get(parsed.api_key) else {
-            tracing::warn!(
-                api_key = parsed.api_key,
-                api_version = parsed.api_version,
-                "unsupported api, returning error"
-            );
-            if !send_unsupported_response(&mut framed, &broker, &parsed, &auth, started).await {
-                break;
-            }
-            continue;
-        };
 
         if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
             if !dispatch_fetch(

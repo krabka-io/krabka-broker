@@ -199,8 +199,7 @@ pub struct BrokerMetrics {
     pub api_requests: Family<ApiKeyLabel, Counter>,
     /// Per-Kafka-API counter of requests the dispatcher
     /// answered with the synthetic `UNSUPPORTED_VERSION` response
-    /// because no handler matched the `api_key` (or, for unknown
-    /// `api_key`s, the dispatcher didn't recognise the key at all).
+    /// because the request version was outside the registered range.
     /// Operators alert on `rate(unsupported_api_requests_total[5m]) > 0`
     /// to catch clients on `api_key`/version pairs the broker
     /// doesn't speak — frequently the smoking gun for upgrade-skew

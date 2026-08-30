@@ -42,6 +42,17 @@ const CLIENT_INFO_MIN_VERSION: i16 = 3;
 /// First `ApiVersions` version that carries the KIP-1242 routing identity.
 const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 
+pub(crate) fn unsupported_version_response() -> Result<Bytes, BrokerError> {
+    let response = ApiVersionsResponse {
+        error_code: codes::UNSUPPORTED_VERSION,
+        api_keys: crate::api_catalog::supported_apis(),
+        ..Default::default()
+    };
+    let mut body = BytesMut::with_capacity(response.encoded_len(0));
+    response.encode(&mut body, 0)?;
+    Ok(body.freeze())
+}
+
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,
