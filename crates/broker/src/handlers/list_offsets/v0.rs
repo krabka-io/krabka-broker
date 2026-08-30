@@ -179,7 +179,7 @@ pub(super) async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use assert2::assert;
     use krabka_protocol::primitives::{
@@ -215,11 +215,19 @@ mod tests {
         )
         .await;
         broker_handle.wait_until_partition_present(TOPIC, 0).await;
-        assert!(
-            broker_handle
-                .partition_log_config_for_test(TOPIC, 0)
-                .is_some_and(|config| config.segment_size == bytes(1))
-        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if broker_handle
+                    .partition_log_config_for_test(TOPIC, 0)
+                    .is_some_and(|config| config.segment_size == bytes(1))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("topic config propagated");
         broker_handle
             .produce_records_for_test(TOPIC, 0, 4)
             .await
