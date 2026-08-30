@@ -439,3 +439,59 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: push
         run: bazel run //packaging:push -- --tag "${GITHUB_SHA}"
+
+  # The single context `main` requires, and the reason the list of required
+  # checks is one name rather than one name per job.
+  #
+  # Branch protection can only name checks statically, and `docker` is a matrix
+  # built from the impacted-suite query, so its jobs are named at run time and
+  # can never appear in that list. Before this job the protected set was `build
+  # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Creusot
+  # proofs and every container suite could go red without blocking a merge.
+  # This job depends on all of them, so protection needs only this one name and
+  # a job added below is covered by adding it to `needs`.
+  #
+  # `always()` is what makes this a gate rather than a rubber stamp. Without it
+  # a failed dependency leaves this job skipped, GitHub counts a skipped
+  # required check as satisfied, and a red run becomes mergeable -- the exact
+  # failure this job exists to prevent.
+  #
+  # `docker` is allowed to be skipped, and it alone: it is `if`-gated on the
+  # suite selection being non-empty, so a change impacting no container suite
+  # legitimately runs none. That indulgence cannot hide a broken selection,
+  # because a `docker-select` failure is read here on its own account.
+  gate:
+    name: gate
+    # Mergeability: pull requests, and the pushes to `main` that follow them.
+    # The scheduled lanes report through their own jobs and gate nothing.
+    if: always() && github.event_name != 'schedule'
+    needs:
+      - ci
+      - coverage
+      - supply-chain
+      - docs
+      - proofs
+      - docker-select
+      - docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require every dependency to have succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
+          unmet="$(
+            jq -r '
+              to_entries[]
+              | select(.value.result != "success")
+              | select((.key == "docker" and .value.result == "skipped") | not)
+              | "  \(.key): \(.value.result)"
+            ' <<<"${NEEDS}"
+          )"
+          if [ -n "${unmet}" ]; then
+            printf 'Gate failed. These jobs did not succeed:\n%s\n' "${unmet}" >&2
+            exit 1
+          fi
+          echo 'Gate passed: every job that gates a merge succeeded.'
