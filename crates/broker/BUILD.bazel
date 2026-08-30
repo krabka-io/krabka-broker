@@ -19,11 +19,16 @@ crate_tests(
     # material is `include_str!`ed by the suites that serve it and the keytabs
     # are opened at run time, so both lists are needed.
     compile_data = glob(["tests/fixtures/**"]),
-    # Asserts on a committed high-watermark across three brokers, so it is
-    # timing-sensitive the way //crates/raft's engine simulation is: it passes in
-    # the test run and fails under coverage instrumentation, which is a statement
-    # about the instrumentation rather than about the code.
-    cpu_heavy = ["sharegroup_backlog"],
+    # Assert on a committed high-watermark across three brokers, so they are
+    # timing-sensitive the way //crates/raft's engine simulation is: they pass in
+    # the test run and fail under coverage instrumentation, which is a statement
+    # about the instrumentation rather than about the code. `diskless_e2e` boots
+    # three such clusters at once, one per case, and every case gates on a
+    # quorum-committed watermark inside a bounded deadline.
+    cpu_heavy = [
+        "diskless_e2e",
+        "sharegroup_backlog",
+    ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
         "jvm_acceptance_cli": [

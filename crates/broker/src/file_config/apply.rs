@@ -228,10 +228,10 @@ mod tests {
     #[test]
     fn applies_inter_broker_principal_node_ids() {
         let file: FileConfig = toml::from_str(
-            r#"
+            r"
 [inter_broker_principal_node_ids]
 admin = 1
-"#,
+",
         )
         .unwrap();
         let mut cfg = crate::config::BrokerConfig::default();

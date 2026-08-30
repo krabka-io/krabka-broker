@@ -257,7 +257,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     let p = principal("admin");
     let peer = peer();
 
-    let cases: [RejectedConfig<'_>; 7] = [
+    let cases: [RejectedConfig<'_>; 8] = [
         ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
         (
             "bad-delivery-mode",
@@ -294,6 +294,17 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
             "diskless-and-scheduled",
             &[("krabka.diskless", "true"), ("delivery.mode", "scheduled")],
             &["krabka.diskless", "delivery.mode"],
+        ),
+        // `BrokerConfig::for_tests` configures no object store, and a diskless
+        // topic without one could never flush or trim: the broker starts no
+        // WAL index projection and no object flusher, so the local logs would
+        // grow without bound behind a flag that advertises the opposite. This
+        // is the one case here that the pure key/value validator cannot catch,
+        // because it depends on the broker's own configuration.
+        (
+            "diskless-without-an-object-tier",
+            &[(crate::config_keys::DISKLESS, "true")],
+            &[crate::config_keys::DISKLESS, "remote_storage_backend"],
         ),
     ];
 
@@ -369,7 +380,19 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
 
 #[tokio::test]
 async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_path() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    // A diskless topic needs an object-store tier: without one the broker
+    // starts no WAL index projection and no object flusher, and the handler
+    // refuses the opt-in rather than create a topic that could never flush or
+    // trim. Configure the tier this test's topic depends on.
+    let object_store = tempfile::TempDir::new().expect("object store dir");
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_store.path().to_path_buf(),
+        });
+    })
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
     let peer = peer();

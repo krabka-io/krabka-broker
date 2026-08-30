@@ -140,6 +140,39 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // `validate_topic_config_map` sees the key/value pairs alone and
+        // cannot see the broker's own configuration. A diskless topic needs
+        // one thing from it: an object-store backend. Without
+        // `remote_storage_backend` there is no `DisklessReadHandle`, so the
+        // broker starts neither the WAL index projection nor the object
+        // flusher. The topic would still accept writes through its WAL
+        // quorum, but nothing would ever move them to the object tier and
+        // nothing would ever trim the local logs, so the durability model the
+        // flag advertises would not exist and local storage would grow without
+        // bound. Refuse at creation rather than accept a topic that cannot
+        // work.
+        //
+        // This reads *this* broker's configuration, and the topic is
+        // cluster-wide, so it is a guard against the common
+        // one-configuration-fleet mistake rather than a cluster-wide
+        // guarantee: a fleet where only some brokers carry a backend can still
+        // create a topic that some of them cannot serve. Catching the default
+        // configuration is the case worth having.
+        let diskless = config_keys::resolve_diskless(Some(&config_overrides));
+        if diskless && broker.config.remote_storage_backend.is_none() {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_CONFIG,
+                Some(format!(
+                    "{}=true requires an object-store tier, but this broker has no \
+                     `remote_storage_backend` configured; the diskless WAL could never flush \
+                     or trim",
+                    config_keys::DISKLESS
+                )),
+            ));
+            continue;
+        }
+
         // Reject invalid partition counts before attempting automatic placement.
         // Manual assignments use -1 for both count and replication factor.
         if topic_req.assignments.is_empty() && partition_count <= 0 {
@@ -177,7 +210,6 @@ pub(crate) async fn handle(
 
         // Build the batch: one TopicRecord + N PartitionRecords.
         let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
-        let diskless = crate::config_keys::resolve_diskless(Some(&config_overrides));
 
         let result = controller.submit_change(records).await;
 
