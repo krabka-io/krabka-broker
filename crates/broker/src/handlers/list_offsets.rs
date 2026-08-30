@@ -52,6 +52,7 @@ mod resolve;
 mod response;
 mod sentinels;
 mod timestamp;
+mod v0;
 
 #[cfg(test)]
 mod test_support;
@@ -80,10 +81,13 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
+    if version == 0 {
+        return v0::handle(broker, req_bytes, ctx).await;
+    }
+
     let controller = broker.controller.clone();
     {
-        let mut cur: &[u8] = req_bytes;
-        let req = ListOffsetsRequest::decode(&mut cur, version)?;
+        let req = ListOffsetsRequest::decode(&mut &*req_bytes, version)?;
         // `isolation_level` decodes only from v2 up; v1 leaves it at 0, which
         // is `read_uncommitted`, exactly as Kafka treats a v1 request.
         let bound = fetch_bound(req.replica_id, req.isolation_level);

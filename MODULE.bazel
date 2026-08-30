@@ -81,6 +81,8 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
         ("cp_kafka_7_4_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63"),
         ("cp_kafka_7_5_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:fbbb6fa11b258a88b83f54d4f0bddfcffbf2279f99d66a843486e3da7bdfbf41"),
         ("cp_kafka_7_8_8", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:6ed4c074b8169cd0e280350c41cddf1495a2ce4bf144d90f68b3a8856369ccd7"),
+        ("kafkacat_1_5_0", "mirror.gcr.io/edenhill/kafkacat", "sha256:05daf8af237495df2bc726427e421d101072cf2d2306fb2379243acbffe40823"),
+        ("kcat_1_7_1", "mirror.gcr.io/edenhill/kcat", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # The base //packaging ships the broker on: glibc and ca-certificates,
         # a nonroot user, and nothing else. The monorepo builds the equivalent
         # with apko from Wolfi; this pins a prebuilt one by digest instead, so
@@ -104,6 +106,8 @@ use_repo(
     "cp_kafka_7_5_0",
     "cp_kafka_7_8_8",
     "distroless_cc",
+    "kafkacat_1_5_0",
+    "kcat_1_7_1",
     "minio",
     "minio_mc",
 )

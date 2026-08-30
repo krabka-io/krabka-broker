@@ -40,7 +40,7 @@ The feature adds three topic configs, one broker config, and four metrics. It ad
 
 On a topic with `delivery.mode=scheduled`, the record's own timestamp is the time at which the record becomes visible to a consumer. There is no new field, and there is no new header.
 
-This choice is what lets a stock client work unchanged. The JVM producer has carried a timestamp argument since Kafka 0.10. It sits in the `ProducerRecord` constructor that takes a topic, a partition, a timestamp, a key, and a value. librdkafka and the clients built on it carry the same argument. A producer that wants to schedule a record sets the timestamp it already knows how to set, and the broker does the rest.
+This choice is what lets the stock JVM client work unchanged. The JVM producer has carried a timestamp argument since Kafka 0.10. It sits in the `ProducerRecord` constructor that takes a topic, a partition, a timestamp, a key, and a value. A producer that wants to schedule a record sets the timestamp it already knows how to set, and the broker does the rest. librdkafka exposes the same timestamp input, but the librdkafka container suite currently covers ordinary produce and consume, group membership, and version negotiation rather than future-timestamp scheduling. Until that suite schedules a record end to end, this KFC makes the no-client-change claim only for the JVM client.
 
 ### Rejections
 
