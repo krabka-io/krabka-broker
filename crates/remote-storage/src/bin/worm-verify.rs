@@ -479,9 +479,10 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::ExitCode;
+
     use assert2::assert;
     use krabka_remote_storage::VerifyBreak;
-    use std::process::ExitCode;
 
     use super::*;
 
