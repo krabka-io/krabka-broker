@@ -572,12 +572,10 @@ mod tests {
             partition: PartitionIndex(0),
         };
         registry.insert(shard, Arc::clone(&engine));
-        registry.replace_placements(
-            &maplit::hashmap! {shard => placement(
-                vec![krabka_raft::NodeId(1), krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-                0,
-            )},
-        );
+        registry.replace_placements(&maplit::hashmap! {shard => placement(
+            vec![krabka_raft::NodeId(1), krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
+            0,
+        )});
         let request = fetch_request(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             krabka_raft::NodeId(2),

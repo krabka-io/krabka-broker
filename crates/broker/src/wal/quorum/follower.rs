@@ -392,14 +392,17 @@ mod tests {
         }});
 
         let response = registry
-            .route_fetch_request(&fetch_request(
-                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+            .route_fetch_request(
+                &fetch_request(
+                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                    NodeId(2),
+                    1,
+                    follower.last_epoch(),
+                    follower.end_offset().0,
+                    krabka_units::mebibytes(1),
+                ),
                 NodeId(2),
-                1,
-                follower.last_epoch(),
-                follower.end_offset().0,
-                krabka_units::mebibytes(1),
-            ))
+            )
             .unwrap()
             .unwrap();
         let partition = response_partition(response, shard).unwrap();
@@ -415,14 +418,17 @@ mod tests {
             .await
             .unwrap();
         let response = registry
-            .route_fetch_request(&fetch_request(
-                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+            .route_fetch_request(
+                &fetch_request(
+                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                    NodeId(2),
+                    1,
+                    follower.last_epoch(),
+                    follower.end_offset().0,
+                    krabka_units::mebibytes(1),
+                ),
                 NodeId(2),
-                1,
-                follower.last_epoch(),
-                follower.end_offset().0,
-                krabka_units::mebibytes(1),
-            ))
+            )
             .unwrap()
             .unwrap();
         let partition = response_partition(response, shard).unwrap();

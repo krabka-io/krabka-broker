@@ -428,6 +428,7 @@ mod tests {
             krabka_raft::NodeId(2),
             0,
             0,
+            0,
             krabka_units::mebibytes(1),
         );
         let mut encoded = BytesMut::new();

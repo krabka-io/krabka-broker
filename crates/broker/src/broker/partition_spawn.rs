@@ -130,7 +130,10 @@ pub(crate) fn spawn_partition_with_replication_target(
                 topic_id,
                 partition: partition_id,
             },
-            vec![krabka_raft::NodeId(0)],
+            crate::wal::quorum::registry::WalPlacement {
+                voters: vec![krabka_raft::NodeId(0)],
+                leader_epoch: 0,
+            },
         )]));
         registry
     });
