@@ -95,8 +95,7 @@ impl BrokerMetrics {
 
         registry.register(
             "unsupported_api_requests",
-            "Cumulative count of requests the dispatcher \
-             answered with the synthetic UNSUPPORTED_VERSION response \
+            "Cumulative count of requests the dispatcher rejected \
              because the request version was outside the registered range. \
              Labelled with the ApiKey variant name. Alert on rate(...) > 0 \
              to catch upgrade-skew or \

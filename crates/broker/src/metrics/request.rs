@@ -132,7 +132,7 @@ mod tests {
         // only the `unsupported_api_requests` family — operators
         // expect `api_requests` to count *every* dispatched frame and
         // `unsupported_api_requests` to count just the ones that hit
-        // the synthetic UNSUPPORTED_VERSION arm.
+        // the unsupported-version arm.
         m.record_unsupported_api_request(0); // Produce, unsupported
         m.record_unsupported_api_request(999); // unknown label coverage
 

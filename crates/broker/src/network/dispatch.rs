@@ -15,7 +15,7 @@
 
 use std::net::SocketAddr;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use futures_util::SinkExt;
 use krabka_protocol::{Decode as _, api_key::ApiKey};
 use krabka_units::convert::ByteSizeExt as _;
@@ -127,7 +127,7 @@ fn begin_request(
     (started, InFlightGuard::new(&broker.metrics, parsed.api_key))
 }
 
-async fn send_unsupported_response<S>(
+async fn send_api_versions_fallback<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
@@ -137,21 +137,16 @@ async fn send_unsupported_response<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    assert2::assert!(parsed.api_key == API_VERSIONS_KEY);
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let body = if parsed.api_key == API_VERSIONS_KEY {
-        match crate::handlers::api_versions::unsupported_version_response() {
-            Ok(body) => body,
-            Err(error) => {
-                tracing::warn!(%error, "ApiVersions fallback encode error, closing");
-                return false;
-            }
+    let body = match crate::handlers::api_versions::unsupported_version_response() {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(%error, "ApiVersions fallback encode error, closing");
+            return false;
         }
-    } else {
-        let mut body = BytesMut::with_capacity(2);
-        body.put_i16(codes::UNSUPPORTED_VERSION);
-        body.freeze()
     };
     let response = match encode_response(
         parsed.api_key,
@@ -249,6 +244,7 @@ async fn serve_connection_stream<S>(
             break;
         }
         let Some(entry) = broker.handlers().get(parsed.api_key) else {
+            broker.metrics.record_api_request(parsed.api_key);
             tracing::warn!(
                 api_key = parsed.api_key,
                 api_version = parsed.api_version,
@@ -263,7 +259,13 @@ async fn serve_connection_stream<S>(
                 api_version = parsed.api_version,
                 "unsupported api version"
             );
-            if !send_unsupported_response(&mut framed, &broker, &parsed, &auth, started).await {
+            if parsed.api_key != API_VERSIONS_KEY {
+                broker
+                    .metrics
+                    .record_unsupported_api_request(parsed.api_key);
+                break;
+            }
+            if !send_api_versions_fallback(&mut framed, &broker, &parsed, &auth, started).await {
                 break;
             }
             continue;
