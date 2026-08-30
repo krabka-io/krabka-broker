@@ -29,6 +29,7 @@ pub(crate) struct DisklessIndexLog {
     log: Arc<dyn MetadataEventLog>,
     cache: Arc<Mutex<WalIndexCache>>,
     progress: watch::Receiver<ReplayProgress>,
+    applied: watch::Receiver<u64>,
 }
 
 impl DisklessIndexLog {
@@ -76,6 +77,7 @@ impl DisklessIndexLog {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
         });
+        let (applied_tx, applied_rx) = watch::channel(0u64);
 
         let pump_cache = cache.clone();
         tokio::spawn(async move {
@@ -84,6 +86,9 @@ impl DisklessIndexLog {
             while let Some(event) = stream.next().await {
                 if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
                     pump_cache.lock().await.apply(&record);
+                    applied_tx.send_modify(|generation| {
+                        *generation = generation.wrapping_add(1);
+                    });
                 }
                 // A record that fails to decode still advances the replay:
                 // the gate tracks position in the topic, not content.
@@ -112,6 +117,7 @@ impl DisklessIndexLog {
             log,
             cache,
             progress: progress_rx,
+            applied: applied_rx,
         })
     }
 
@@ -140,6 +146,27 @@ impl DisklessIndexLog {
     #[must_use]
     pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> {
         self.cache.clone()
+    }
+
+    /// Wait until `record` appears in the committed projection.
+    pub(crate) async fn wait_until_applied(
+        &self,
+        record: &WalFlushRecord,
+        timeout: Duration,
+    ) -> bool {
+        let mut applied = self.applied.clone();
+        tokio::time::timeout(timeout, async {
+            loop {
+                if self.cache.lock().await.contains_record(record) {
+                    return true;
+                }
+                if applied.changed().await.is_err() {
+                    return false;
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
     }
 
     pub(crate) async fn publish_flush(
