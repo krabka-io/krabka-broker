@@ -8,6 +8,7 @@ exports_files(["Cargo.toml"])
 crate_library(name = "log")
 
 crate_tests(
+    docker = {"integration": ["cp_kafka_6_1_1"]},
     lib = "log",
     # ~830 mutants, each a rebuild plus a test run against a ~4s baseline. At the
     # default 8 shards every one of them ran out the 900s bound and the sweep
