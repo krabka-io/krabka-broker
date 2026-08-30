@@ -8,28 +8,10 @@
 
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_protocol::records::{decrement_sequence, increment_sequence};
+pub use krabka_verified::ProducerDecision as Decision;
+use krabka_verified::{ProducerBatch, producer_decision};
 
 use super::{ProducerEntry, ProducerState};
-use crate::partition::LogOffset;
-
-/// Outcome of a dedup check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Decision {
-    /// Producer is fresh or the sequence is one past the last commit. Caller
-    /// should append, then call `commit` with the assigned base offset.
-    Append,
-    /// Exact retry of the last committed sequence range. Caller should respond with
-    /// `error_code = NONE` and `base_offset = base_offset`.
-    Duplicate { base_offset: LogOffset },
-    /// `base_sequence` is not the wrapped successor of `last_sequence` and
-    /// does not exactly match the last committed batch. Caller responds with
-    /// `OUT_OF_ORDER_SEQUENCE_NUMBER (45)`.
-    OutOfOrder,
-    /// `epoch < entry.epoch`. Caller responds with
-    /// `INVALID_PRODUCER_EPOCH (47)`.
-    Fenced,
-}
 
 /// Pure idempotent-producer dedup/ordering decision.
 ///
@@ -43,40 +25,20 @@ pub(crate) fn check_pure(
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> Decision {
-    match entry {
-        None => Decision::Append,
-        Some(entry) => {
-            if producer_epoch < entry.epoch {
-                return Decision::Fenced;
-            }
-            if producer_epoch > entry.epoch {
-                // A bumped epoch establishes a fresh sequence baseline (restart
-                // or KIP-890 per-EndTxn bump). Accept the first higher-epoch batch.
-                return Decision::Append;
-            }
-            if base_sequence == increment_sequence(entry.last_sequence, 1) {
-                return Decision::Append;
-            }
-            if matches_last_batch(entry, base_sequence, last_offset_delta) {
-                return Decision::Duplicate {
-                    base_offset: entry.base_offset,
-                };
-            }
-            Decision::OutOfOrder
-        }
-    }
-}
-
-fn matches_last_batch(entry: &ProducerEntry, base_sequence: i32, last_offset_delta: i32) -> bool {
-    let Some(committed_delta) = entry
-        .last_offset
-        .checked_sub(entry.base_offset)
-        .and_then(|delta| i32::try_from(delta).ok())
-    else {
-        return false;
-    };
-    base_sequence == decrement_sequence(entry.last_sequence, committed_delta)
-        && increment_sequence(base_sequence, last_offset_delta) == entry.last_sequence
+    producer_decision(
+        entry.map(|entry| ProducerBatch {
+            epoch: entry.epoch,
+            last_sequence: entry.last_sequence,
+            last_offset_delta: entry
+                .last_offset
+                .checked_sub(entry.base_offset)
+                .and_then(|delta| i32::try_from(delta).ok()),
+            base_offset: entry.base_offset,
+        }),
+        producer_epoch,
+        base_sequence,
+        last_offset_delta,
+    )
 }
 
 impl ProducerState {

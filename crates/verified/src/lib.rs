@@ -11,6 +11,7 @@ pub mod compaction;
 pub mod consensus;
 pub mod log_index;
 pub mod offset_allocator;
+pub mod producer;
 pub mod stretch;
 
 pub use broker::{
@@ -25,6 +26,9 @@ pub use consensus::{
 };
 pub use log_index::offset_index_lookup;
 pub use offset_allocator::reserve_offsets;
+pub use producer::{
+    ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
+};
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
 };

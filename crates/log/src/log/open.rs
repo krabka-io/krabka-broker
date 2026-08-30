@@ -12,7 +12,8 @@ use std::{
 };
 
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::{RecordBatch, increment_sequence};
+use krabka_protocol::records::RecordBatch;
+use krabka_verified::increment_sequence;
 use tracing::instrument;
 
 use super::{

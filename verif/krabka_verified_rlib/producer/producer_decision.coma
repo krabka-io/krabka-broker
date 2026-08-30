@@ -1,0 +1,134 @@
+(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 105 0 110 21 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sproducer = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 120 63 120 64
+let%span sproducer'0 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 120 24 120 65
+let%span sproducer'1 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 123 7 123 65
+let%span sproducer'2 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 83 28 83 79
+let%span sproducer'3 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 84 28 86 46
+let%span sproducer'4 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 87 28 89 46
+let%span sproducer'5 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 90 28 93 46
+let%span sproducer'6 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 94 28 98 87
+let%span sproducer'7 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 99 28 103 50
+let%span sproducer'8 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 36 28 36 83
+let%span sproducer'9 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 72 12 72 86
+let%span sproducer'10 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 32 16 32 49
+let%span sproducer'11 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 63 8 66 95
+let%span sproducer'12 = "/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 45 16 45 49
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+type t_ProducerBatch = { epoch: Int16.t; last_sequence: Int32.t; last_offset_delta: t_Option_i32; base_offset: Int64.t }
+
+type t_Option_ProducerBatch = None'0 | Some'0 t_ProducerBatch
+
+type t_ProducerDecision = Append | Duplicate Int64.t | OutOfOrder | Fenced
+
+let elim_Some (_x: t_Option_ProducerBatch) (return (f0: t_ProducerBatch)) = any
+  [ _k (f0: t_ProducerBatch) -> {Some'0 f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+function increment_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 31 0 31 65] (sequence: Int32.t) (increment: Int32.t) : Int32.t
+ = [%#sproducer'10] Int32.bw_and (Int32.add sequence increment) const_MAX
+
+let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:increment_sequence ensures] [%#sproducer'8] result
+    = increment_sequence_model sequence increment}
+    (! return {result}) ]
+
+function decrement_sequence_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 44 0 44 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
+ = [%#sproducer'12] Int32.bw_and (Int32.sub sequence decrement) const_MAX
+
+predicate matches_last_batch_model [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 57 0 61 9] (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t) =
+  [%#sproducer'11] exists committed_delta: Int32.t. last.last_offset_delta = Some committed_delta
+    /\ base_sequence = decrement_sequence_model last.last_sequence committed_delta
+    /\ increment_sequence_model base_sequence last_offset_delta'0 = last.last_sequence
+
+let matches_last_batch (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:matches_last_batch ensures] [%#sproducer'9] result
+    = matches_last_batch_model last base_sequence last_offset_delta'0}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_decision [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 105 0 110 21]
+  (last: t_Option_ProducerBatch) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t)
+  (return (x: t_ProducerDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {last = None'0} (! bb1) | br1 (x0: t_ProducerBatch) -> {last = Some'0 x0} (! bb3) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = elim_Some {last} (fun (r0: t_ProducerBatch) -> [ &last'0 <- r0 ] s1)
+    | s1 = [ &_31 <- Int16.lt producer_epoch last'0.epoch ] s2
+    | s2 = any [ br0 -> {_31 = false} (! bb5) | br1 -> {_31} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_36 <- Int16.gt producer_epoch last'0.epoch ] s1
+    | s1 = any [ br0 -> {_36 = false} (! bb7) | br1 -> {_36} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = increment_sequence [%#sproducer'0] {last'0.last_sequence} {[%#sproducer] (1: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_43 <- _x ] s1)
+    | s1 = [ &_41 <- base_sequence = _43 ] s2
+    | s2 = any [ br0 -> {_41 = false} (! bb10) | br1 -> {_41} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = matches_last_batch [%#sproducer'1] {last'0} {base_sequence} {last_offset_delta'0}
+        (fun (_x: bool) -> [ &_47 <- _x ] s1)
+    | s1 = any [ br0 -> {_47 = false} (! bb13) | br1 -> {_47} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- Duplicate (last'0.base_offset) ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- OutOfOrder ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerDecision = Any.any_l ()
+  | & last: t_Option_ProducerBatch = last
+  | & producer_epoch: Int16.t = producer_epoch
+  | & base_sequence: Int32.t = base_sequence
+  | & last_offset_delta'0: Int32.t = last_offset_delta'0
+  | & last'0: t_ProducerBatch = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _43: Int32.t = Any.any_l ()
+  | & _47: bool = Any.any_l () ])
+  [ return (result: t_ProducerDecision) ->
+  {[@stop_split] [@expl:producer_decision ensures] ([@stop_split] [@expl:producer_decision ensures #0] [%#sproducer'2] last
+        = None'0 -> result = Append)
+    /\ ([@stop_split] [@expl:producer_decision ensures #1] [%#sproducer'3] forall accepted: t_ProducerBatch. last
+            = Some'0 accepted
+          /\ Int16.to_int producer_epoch < Int16.to_int accepted.epoch -> result = Fenced)
+    /\ ([@stop_split] [@expl:producer_decision ensures #2] [%#sproducer'4] forall accepted: t_ProducerBatch. last
+            = Some'0 accepted
+          /\ gt_log_Int (Int16.to_int producer_epoch) (Int16.to_int accepted.epoch) -> result = Append)
+    /\ ([@stop_split] [@expl:producer_decision ensures #3] [%#sproducer'5] forall accepted: t_ProducerBatch. last
+            = Some'0 accepted
+          /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
+          /\ base_sequence = increment_sequence_model accepted.last_sequence (1: Int32.t) -> result = Append)
+    /\ ([@stop_split] [@expl:producer_decision ensures #4] [%#sproducer'6] forall accepted: t_ProducerBatch. last
+            = Some'0 accepted
+          /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
+          /\ base_sequence <> increment_sequence_model accepted.last_sequence (1: Int32.t)
+          /\ matches_last_batch_model accepted base_sequence last_offset_delta'0
+        -> result = Duplicate (accepted.base_offset))
+    /\ ([@stop_split] [@expl:producer_decision ensures #5] [%#sproducer'7] forall accepted: t_ProducerBatch. last
+          = Some'0 accepted
+        /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
+        /\ base_sequence <> increment_sequence_model accepted.last_sequence (1: Int32.t)
+        /\ not matches_last_batch_model accepted base_sequence last_offset_delta'0 -> result = OutOfOrder)}
+    (! return {result}) ]

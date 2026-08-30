@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_protocol::records::increment_sequence;
+use krabka_verified::increment_sequence;
 use tokio::sync::Mutex;
 
 use crate::partition::LogOffset;

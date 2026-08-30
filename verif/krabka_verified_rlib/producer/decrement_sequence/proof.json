@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_wrapping_sub": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}

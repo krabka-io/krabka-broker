@@ -1,0 +1,22 @@
+(* #"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 9 27 9 32 *)
+
+(* <producer::ProducerBatch as std::clone::Clone> *)
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_Option_i32 = None | Some Int32.t
+
+type t_ProducerBatch = { epoch: Int16.t; last_sequence: Int32.t; last_offset_delta: t_Option_i32; base_offset: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProducerBatch [#"/home/matt/.codex/worktrees/2f88/krabka-broker/crates/verified/src/producer.rs" 9 27 9 32]
+  (self: t_ProducerBatch) (return (x: t_ProducerBatch)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerBatch = Any.any_l () | & self: t_ProducerBatch = self ])
+  [ return (result: t_ProducerBatch) -> (! return {result}) ]
