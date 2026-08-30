@@ -2,6 +2,13 @@
 //! the per-key operations onto the topic's current override map, validates
 //! each new value and the resulting combination, and returns the
 //! `V1TopicConfig` record that carries the merged map.
+//!
+//! `krabka.diskless` is fixed when the topic is created, so the merged map is
+//! also compared against the topic's current one: a SET that restates the
+//! value the topic already has is a no-op and passes, and any op that would
+//! move a partition between the diskless WAL runtime and the local-log
+//! runtime is refused. See
+//! [`crate::config_keys::validate_diskless_unchanged`].
 
 use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource;
@@ -19,10 +26,8 @@ pub(super) fn topic_config_record(
             format!("unknown topic `{}`", resource.resource_name),
         ));
     }
-    let mut merged = image
-        .topic_config(&resource.resource_name)
-        .cloned()
-        .unwrap_or_default();
+    let current = image.topic_config(&resource.resource_name);
+    let mut merged = current.cloned().unwrap_or_default();
     for config in &resource.configs {
         // A controller-managed key is refused before the operation is read.
         // A DELETE of it is an attempt to clear the freeze, so every
@@ -61,23 +66,11 @@ pub(super) fn topic_config_record(
             }
         }
     }
-    // Same reasoning as the cross-key rules below: the ops alone do not say
-    // whether a create-only key changed, because a SET to the value the topic
-    // already carries is a no-op and a DELETE of an absent key is too. Only
-    // the merged map does. A DELETE that drops a live `krabka.diskless=true`
-    // is as much a change as a SET that flips it, and gets the same refusal.
-    if let Some(key) = config_keys::create_only_topic_config_change(
-        &merged,
-        image.topic_config(&resource.resource_name),
-    ) {
-        return Err((
-            codes::INVALID_CONFIG,
-            config_keys::create_only_topic_config_message(key),
-        ));
-    }
     // The ops alone cannot show a conflict: `merged` is what the topic ends up
     // with, so the cross-key rules are checked against that.
     config_keys::validate_config_combination(&merged)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
@@ -143,69 +136,6 @@ mod tests {
                 );
                 check!(!error.1.is_empty(), "{label}, key {key}");
             }
-        }
-    }
-
-    #[test]
-    fn an_op_that_changes_a_create_only_topic_config_is_rejected() {
-        for (key, default) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let img = image_with_topic_config("orders", &[(key, "true")]);
-
-            for (label, config) in [
-                ("a SET that turns the key off", make_set_cfg(key, default)),
-                (
-                    "a DELETE, which drops the override and falls back to the default",
-                    make_del_cfg(key),
-                ),
-            ] {
-                let error = topic_config_record(&make_topic_resource("orders", vec![config]), &img)
-                    .expect_err("changing a create-only key must be rejected");
-
-                check!(error.0 == codes::INVALID_CONFIG, "{label}, key {key}");
-                check!(
-                    error.1 == config_keys::create_only_topic_config_message(key),
-                    "{label}, key {key}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn an_op_that_leaves_a_create_only_topic_config_alone_is_accepted() {
-        // A SET to the value the topic already carries, and a DELETE of a key
-        // the topic never had, are both no-ops. The rule is that the effective
-        // value cannot change, not that the key cannot be named.
-        for (key, _) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let on = image_with_topic_config("orders", &[(key, "true")]);
-            let record = topic_config_record(
-                &make_topic_resource("orders", vec![make_set_cfg(key, "true")]),
-                &on,
-            )
-            .expect("restating the current value is not a change");
-            assert!(
-                record
-                    == MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                        topic: "orders".into(),
-                        overrides: maplit::btreemap! {key.to_string() => "true".to_string()},
-                    }),
-                "key {key}"
-            );
-
-            let off = image_with_topic_config("orders", &[(config_keys::RETENTION_MS, "60000")]);
-            let record = topic_config_record(
-                &make_topic_resource("orders", vec![make_del_cfg(key)]),
-                &off,
-            )
-            .expect("deleting an override the topic never had is not a change");
-            assert!(
-                record
-                    == MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                        topic: "orders".into(),
-                        overrides: maplit::btreemap! {
-                        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-                    }),
-                "key {key}"
-            );
         }
     }
 
@@ -294,6 +224,84 @@ mod tests {
             overrides: maplit::btreemap! {config_keys::CLEANUP_POLICY.to_string() => "compact".to_string()},
         });
         assert!(record == expected);
+    }
+
+    #[test]
+    fn no_operation_can_move_a_topic_between_data_paths() {
+        /// The topic's stored overrides, the ops the request carries, and
+        /// whether the merged map is accepted.
+        type DisklessOps<'a> = (
+            &'a str,
+            &'a [(&'a str, &'a str)],
+            Vec<AlterableConfig>,
+            bool,
+        );
+
+        let cases: [DisklessOps<'_>; 5] = [
+            (
+                "a SET that restates the value the topic already has",
+                &[(config_keys::DISKLESS, "true")],
+                vec![make_set_cfg(config_keys::DISKLESS, "true")],
+                true,
+            ),
+            (
+                "an ordinary SET alongside the untouched flag",
+                &[(config_keys::DISKLESS, "true")],
+                vec![make_set_cfg(config_keys::RETENTION_MS, "60000")],
+                true,
+            ),
+            (
+                "a SET that turns the flag off",
+                &[(config_keys::DISKLESS, "true")],
+                vec![make_set_cfg(config_keys::DISKLESS, "false")],
+                false,
+            ),
+            (
+                "a DELETE of the flag",
+                &[(config_keys::DISKLESS, "true")],
+                vec![make_del_cfg(config_keys::DISKLESS)],
+                false,
+            ),
+            (
+                "a SET that turns the flag on for a local-log topic",
+                &[(config_keys::RETENTION_MS, "60000")],
+                vec![make_set_cfg(config_keys::DISKLESS, "true")],
+                false,
+            ),
+        ];
+
+        for (label, stored, ops, want_ok) in cases {
+            let img = image_with_topic_config("orders", stored);
+
+            let result = topic_config_record(&make_topic_resource("orders", ops), &img);
+
+            check!(result.is_ok() == want_ok, "{label}");
+            if let Err((code, message)) = result {
+                check!(code == codes::INVALID_CONFIG, "{label}");
+                check!(
+                    message.contains(config_keys::DISKLESS),
+                    "{label}: {message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tiered_storage_cannot_be_turned_on_for_a_diskless_topic() {
+        let img = image_with_topic_config("orders", &[(config_keys::DISKLESS, "true")]);
+
+        let (code, message) = topic_config_record(
+            &make_topic_resource(
+                "orders",
+                vec![make_set_cfg("remote.storage.enable", "true")],
+            ),
+            &img,
+        )
+        .expect_err("two object-store data paths on one topic must be rejected");
+
+        assert!(code == codes::INVALID_CONFIG);
+        assert!(message.contains(config_keys::DISKLESS), "got: {message}");
+        assert!(message.contains("remote.storage.enable"), "got: {message}");
     }
 
     #[test]

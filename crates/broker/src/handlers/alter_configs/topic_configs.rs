@@ -3,13 +3,13 @@
 //!
 //! `AlterConfigs` replaces a topic's whole override map, so the per-key
 //! validation and the cross-key combination rules both apply to the map this
-//! module builds.
+//! module builds, and neither reads the topic's current overrides.
 //!
-//! The create-only keys are the one thing here that does read the topic's
-//! current overrides. A replacement that omitted one would drop it, and for
-//! `krabka.diskless` that silently un-disklesses a live topic, so those keys
-//! are carried forward instead. See
-//! [`config_keys::preserve_create_only_topic_configs`].
+//! One rule does read them. `krabka.diskless` is fixed when the topic is
+//! created, and a replacement that simply omits it would otherwise turn a
+//! diskless topic back into a local-log one, so the resulting map is compared
+//! against the stored one. See
+//! [`crate::config_keys::validate_diskless_unchanged`].
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -46,22 +46,13 @@ pub(super) fn topic_config_record(
             .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
         overrides.insert(cfg.name.clone(), value);
     }
-    // Carry every create-only override the request left out into the
-    // replacement, and refuse the request outright if it changes one. This
-    // runs before the cross-key rules, so a preserved `krabka.diskless=true`
-    // still has to survive its exclusion with `remote.storage.enable=true`.
-    config_keys::preserve_create_only_topic_configs(
-        &mut overrides,
-        image.topic_config(&resource.resource_name),
-    )
-    .map_err(|key| {
-        (
-            codes::INVALID_CONFIG,
-            config_keys::create_only_topic_config_message(key),
-        )
-    })?;
     config_keys::validate_config_combination(&overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_diskless_unchanged(
+        image.topic_config(&resource.resource_name),
+        &overrides,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
@@ -130,91 +121,6 @@ mod tests {
     }
 
     #[test]
-    fn topic_replacement_rejects_a_changed_create_only_config() {
-        for (key, default) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let image = image_with_topic_config("orders", &[(key, "true")]);
-
-            let error = topic_config_record(&topic_resource("orders", &[(key, default)]), &image)
-                .expect_err("turning a create-only key off must be rejected");
-
-            check!(error.0 == codes::INVALID_CONFIG, "key {key}");
-            check!(
-                error.1 == config_keys::create_only_topic_config_message(key),
-                "key {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn topic_replacement_carries_an_omitted_create_only_config_forward() {
-        // The regression this guards: `AlterConfigs` sends the topic's whole
-        // override map, so a request that changes only `retention.ms` leaves
-        // `krabka.diskless` out. Dropping it there un-disklesses a live topic,
-        // and the next supervisor reconcile tears down its WAL placement, stops
-        // its followers and prunes its shard directories.
-        for (key, _) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let image = image_with_topic_config("orders", &[(key, "true")]);
-
-            let record = topic_config_record(
-                &topic_resource("orders", &[(crate::config_keys::RETENTION_MS, "60000")]),
-                &image,
-            )
-            .expect("an unrelated config change is valid on a create-only topic");
-
-            let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "orders".into(),
-                overrides: maplit::btreemap! {
-                key.to_string() => "true".to_string(),
-                crate::config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-            });
-            assert!(record == expected, "key {key}");
-        }
-    }
-
-    #[test]
-    fn topic_replacement_accepts_a_restated_create_only_config() {
-        // `kafka-configs --describe` then `--alter` round-trips every value it
-        // read back, so the request names the key with the value the topic
-        // already has. That is not a change and must not be refused.
-        for (key, _) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let image = image_with_topic_config("orders", &[(key, "true")]);
-
-            let record = topic_config_record(
-                &topic_resource(
-                    "orders",
-                    &[(key, "true"), (crate::config_keys::RETENTION_MS, "60000")],
-                ),
-                &image,
-            )
-            .expect("restating the current value is not a change");
-
-            let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "orders".into(),
-                overrides: maplit::btreemap! {
-                key.to_string() => "true".to_string(),
-                crate::config_keys::RETENTION_MS.to_string() => "60000".to_string()},
-            });
-            assert!(record == expected, "key {key}");
-        }
-    }
-
-    #[test]
-    fn topic_replacement_rejects_turning_a_create_only_config_on() {
-        for (key, _) in config_keys::CREATE_ONLY_TOPIC_CONFIGS {
-            let image = image_with_topic("orders");
-
-            let error = topic_config_record(&topic_resource("orders", &[(key, "true")]), &image)
-                .expect_err("turning a create-only key on after creation must be rejected");
-
-            check!(error.0 == codes::INVALID_CONFIG, "key {key}");
-            check!(
-                error.1 == config_keys::create_only_topic_config_message(key),
-                "key {key}"
-            );
-        }
-    }
-
-    #[test]
     fn topic_replacement_rejects_controller_managed_configs() {
         let image = image_with_topic("orders");
 
@@ -234,6 +140,78 @@ mod tests {
                     "key {key} value {value:?}"
                 );
                 check!(!error.1.is_empty(), "key {key} value {value:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn topic_replacement_cannot_move_a_topic_between_data_paths() {
+        /// The topic's stored overrides, the complete replacement the request
+        /// carries, and whether the replacement is accepted.
+        type Replacement<'a> = (
+            &'a str,
+            &'a [(&'a str, &'a str)],
+            &'a [(&'a str, &'a str)],
+            bool,
+        );
+
+        let cases: [Replacement<'_>; 6] = [
+            (
+                "a replacement that restates the diskless flag",
+                &[(config_keys::DISKLESS, "true")],
+                &[
+                    (config_keys::DISKLESS, "true"),
+                    (config_keys::RETENTION_MS, "60000"),
+                ],
+                true,
+            ),
+            (
+                "a replacement that silently drops the diskless flag",
+                &[(config_keys::DISKLESS, "true")],
+                &[(config_keys::RETENTION_MS, "60000")],
+                false,
+            ),
+            (
+                "a replacement that turns the diskless flag off",
+                &[(config_keys::DISKLESS, "true")],
+                &[(config_keys::DISKLESS, "false")],
+                false,
+            ),
+            (
+                "a replacement that turns the diskless flag on",
+                &[(config_keys::RETENTION_MS, "60000")],
+                &[(config_keys::DISKLESS, "true")],
+                false,
+            ),
+            (
+                "a replacement that drops an explicit false, which changes nothing",
+                &[(config_keys::DISKLESS, "false")],
+                &[(config_keys::RETENTION_MS, "60000")],
+                true,
+            ),
+            (
+                "a replacement that adds tiered storage to a diskless topic",
+                &[(config_keys::DISKLESS, "true")],
+                &[
+                    (config_keys::DISKLESS, "true"),
+                    ("remote.storage.enable", "true"),
+                ],
+                false,
+            ),
+        ];
+
+        for (label, stored, replacement, want_ok) in cases {
+            let image = image_with_topic_config("orders", stored);
+
+            let result = topic_config_record(&topic_resource("orders", replacement), &image);
+
+            check!(result.is_ok() == want_ok, "{label}");
+            if let Err((code, message)) = result {
+                check!(code == codes::INVALID_CONFIG, "{label}");
+                check!(
+                    message.contains(config_keys::DISKLESS),
+                    "{label}: {message}"
+                );
             }
         }
     }

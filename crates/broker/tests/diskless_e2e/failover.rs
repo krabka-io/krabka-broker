@@ -22,11 +22,11 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_client_core::Client;
 
 use crate::{
-    RECORDS, TOPIC,
+    CLIENT_PRINCIPAL, PASSWORD, RECORDS, TOPIC,
     cluster::{start_diskless_cluster, wait_for},
+    support,
     topic::{await_wal_quorum, create_diskless_topic},
     voter_dir::{DurableRange, durable_bytes, durable_range, voter_dir},
     wire::{assert_matches_produced, fetch_log, produce_all, value_at},
@@ -44,23 +44,23 @@ async fn diskless_acks_all_append_survives_the_acking_broker() {
     .await;
     cluster.await_ready().await;
 
-    let admin = Client::builder()
-        .bootstrap(cluster.bootstrap_for_node(cluster.node_ids()[0]))
-        .client_id("diskless-e2e-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let admin = support::sasl_client(
+        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
+        CLIENT_PRINCIPAL,
+        PASSWORD,
+    )
+    .await;
     let topic_id = create_diskless_topic(&admin).await;
     let leader = await_wal_quorum(&cluster).await;
     let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
 
     let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
-    let producer = Client::builder()
-        .bootstrap(cluster.bootstrap_for_node(leader))
-        .client_id("diskless-e2e-producer")
-        .build()
-        .await
-        .expect("producer client");
+    let producer = support::sasl_client(
+        &cluster.bootstrap_for_node(leader),
+        CLIENT_PRINCIPAL,
+        PASSWORD,
+    )
+    .await;
     produce_all(&producer, topic_id, &values).await;
 
     let committed = i64::try_from(RECORDS).expect("small count");

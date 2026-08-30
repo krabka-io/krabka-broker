@@ -151,7 +151,14 @@ pub(crate) async fn handle(
         // flag advertises would not exist and local storage would grow without
         // bound. Refuse at creation rather than accept a topic that cannot
         // work.
-        let diskless = crate::broker::diskless_topic_config(Some(&config_overrides));
+        //
+        // This reads *this* broker's configuration, and the topic is
+        // cluster-wide, so it is a guard against the common
+        // one-configuration-fleet mistake rather than a cluster-wide
+        // guarantee: a fleet where only some brokers carry a backend can still
+        // create a topic that some of them cannot serve. Catching the default
+        // configuration is the case worth having.
+        let diskless = config_keys::resolve_diskless(Some(&config_overrides));
         if diskless && broker.config.remote_storage_backend.is_none() {
             results.push(topic_error_result(
                 name,

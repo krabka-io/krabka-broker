@@ -259,6 +259,10 @@ pub struct FileConfig {
     /// controller listeners (inter-broker initiate path).
     pub inter_broker_credentials: Option<FileInterBrokerCredentials>,
 
+    /// Exact authenticated principal name to broker node ID bindings for
+    /// diskless WAL follower fetches.
+    pub inter_broker_principal_node_ids: Option<std::collections::HashMap<String, u64>>,
+
     /// `FedRAMP` 20x MLA audit subsystem configuration.
     /// Absent → secure default (enabled, standard internal topic name).
     pub audit: Option<FileAuditConfig>,

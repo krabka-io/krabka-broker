@@ -57,6 +57,21 @@ pub(crate) fn cluster_alter_denied(
     )
 }
 
+pub(crate) fn cluster_action_denied(
+    authorizer: &dyn crate::authorizer::Authorizer,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+) -> bool {
+    acl_denied(
+        authorizer,
+        image,
+        ctx,
+        krabka_metadata::ResourceType::Cluster,
+        acl_wire::CLUSTER_RESOURCE_NAME,
+        krabka_metadata::AclOperation::ClusterAction,
+    )
+}
+
 /// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of
 /// [`cluster_alter_denied`].
 ///

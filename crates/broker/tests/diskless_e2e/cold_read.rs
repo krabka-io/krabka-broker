@@ -14,11 +14,11 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_client_core::Client;
 
 use crate::{
-    RECORDS, TOPIC,
+    CLIENT_PRINCIPAL, PASSWORD, RECORDS, TOPIC,
     cluster::start_diskless_cluster,
+    support,
     topic::{await_wal_quorum, create_diskless_topic},
     wire::{assert_matches_produced, fetch_log, produce_all, value_at},
 };
@@ -34,22 +34,22 @@ async fn trimmed_diskless_offsets_are_served_from_the_object_store() {
     .await;
     cluster.await_ready().await;
 
-    let admin = Client::builder()
-        .bootstrap(cluster.bootstrap_for_node(cluster.node_ids()[0]))
-        .client_id("diskless-e2e-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let admin = support::sasl_client(
+        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
+        CLIENT_PRINCIPAL,
+        PASSWORD,
+    )
+    .await;
     let topic_id = create_diskless_topic(&admin).await;
     let leader = await_wal_quorum(&cluster).await;
 
     let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
-    let producer = Client::builder()
-        .bootstrap(cluster.bootstrap_for_node(leader))
-        .client_id("diskless-e2e-producer")
-        .build()
-        .await
-        .expect("producer client");
+    let producer = support::sasl_client(
+        &cluster.bootstrap_for_node(leader),
+        CLIENT_PRINCIPAL,
+        PASSWORD,
+    )
+    .await;
     produce_all(&producer, topic_id, &values).await;
 
     // Wait for the flusher to publish an index record covering the whole

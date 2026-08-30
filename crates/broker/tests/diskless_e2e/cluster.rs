@@ -8,19 +8,30 @@
 //! `wal::quorum::placement` refuses to weaken the AZ-loss failure budget and
 //! returns a short voter list when two candidates share one. Every broker
 //! needs the **same object store**, because a flush written by one broker is
-//! read back by another. And every broker needs a **topic-backed metadata
-//! log**, because the WAL flush index is a Kafka topic the whole cluster
-//! consumes.
+//! read back by another. Every broker needs a **topic-backed metadata log**,
+//! because the WAL flush index is a Kafka topic the whole cluster consumes.
+//! And every broker needs an **authenticated inter-broker listener**, because
+//! a WAL follower's Fetch is authorized against the caller's principal: the
+//! leader resolves it to a node id and serves the shard only to a voter that
+//! is who it claims to be, so an anonymous follower is refused and a
+//! plaintext cluster would never form a quorum at all.
 
 use std::{net::SocketAddr, path::Path, time::Duration};
 
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
     RemoteStorageBackend, RlmmKind,
+    config::{InterBrokerCredentials, ListenerSpec},
 };
+use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
-use crate::{VOTERS, support};
+use crate::{CLIENT_PRINCIPAL, PASSWORD, VOTERS, broker_principal, support};
+
+/// Name of the one data-plane listener every broker binds. It carries both the
+/// suite's client traffic and the inter-broker traffic, including the
+/// authenticated WAL follower fetches.
+const LISTENER: &str = "SASL_PLAINTEXT";
 
 /// Three booted brokers, the configs they booted from, and the directories
 /// that must outlive them.
@@ -224,6 +235,39 @@ fn broker_config(
     config.bootstrap_mode = BootstrapMode::Bootstrap;
     config.auto_join = false;
     config.bootstrap_servers = vec![];
+    // One SASL PLAIN data listener carrying both client and inter-broker
+    // traffic. Broker `i` dials its peers as `broker-<i+1>`, which
+    // `conventional_node_id` reads straight back as a node id, so the WAL
+    // leader can tie an incoming shard fetch to a voter. Every broker holds
+    // every principal, because any of them can end up leading the shard and
+    // having to authenticate the other two.
+    let node = u64::try_from(index + 1).expect("small cluster");
+    config.listeners = vec![ListenerSpec {
+        name: LISTENER.to_owned(),
+        bind_addr: client_addrs[index],
+        advertised: client_addrs[index].to_string(),
+        protocol: ListenerProtocol::SaslPlaintext,
+        tls_config: None,
+        sasl_mechanisms: None,
+    }];
+    LISTENER.clone_into(&mut config.inter_broker_listener_name);
+    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    config.plain_credentials = (0..VOTERS)
+        .map(|peer| {
+            (
+                broker_principal(u64::try_from(peer + 1).expect("small cluster")),
+                PASSWORD.to_owned(),
+            )
+        })
+        .chain(std::iter::once((
+            CLIENT_PRINCIPAL.to_owned(),
+            PASSWORD.to_owned(),
+        )))
+        .collect();
+    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: broker_principal(node),
+        password: PASSWORD.to_owned(),
+    });
     // Distinct racks. `select_voters` returns the local node plus one broker
     // per *unused* rack, so two brokers sharing a rack would yield a two-voter
     // placement and the reconcile loop would refuse to run a three-voter

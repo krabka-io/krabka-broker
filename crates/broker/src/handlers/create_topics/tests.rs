@@ -257,7 +257,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
     let p = principal("admin");
     let peer = peer();
 
-    let cases: [RejectedConfig<'_>; 5] = [
+    let cases: [RejectedConfig<'_>; 8] = [
         ("unknown-key", &[("flush.ms", "1000")], &["flush.ms"]),
         (
             "bad-delivery-mode",
@@ -277,10 +277,30 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
             ],
             &["cleanup.policy", "delivery.mode"],
         ),
+        (
+            "bad-diskless",
+            &[("krabka.diskless", "yes")],
+            &["krabka.diskless"],
+        ),
+        (
+            "diskless-and-tiered",
+            &[
+                ("krabka.diskless", "true"),
+                ("remote.storage.enable", "true"),
+            ],
+            &["krabka.diskless", "remote.storage.enable"],
+        ),
+        (
+            "diskless-and-scheduled",
+            &[("krabka.diskless", "true"), ("delivery.mode", "scheduled")],
+            &["krabka.diskless", "delivery.mode"],
+        ),
         // `BrokerConfig::for_tests` configures no object store, and a diskless
         // topic without one could never flush or trim: the broker starts no
         // WAL index projection and no object flusher, so the local logs would
-        // grow without bound behind a flag that advertises the opposite.
+        // grow without bound behind a flag that advertises the opposite. This
+        // is the one case here that the pure key/value validator cannot catch,
+        // because it depends on the broker's own configuration.
         (
             "diskless-without-an-object-tier",
             &[(crate::config_keys::DISKLESS, "true")],
@@ -355,6 +375,86 @@ async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
     "delivery.max.delay.ms".to_string() => "-1".to_string(),
     "delivery.schedule.monotonic".to_string() => "true".to_string()};
     assert!(*configs == expected_configs);
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_path() {
+    // A diskless topic needs an object-store tier: without one the broker
+    // starts no WAL index projection and no object flusher, and the handler
+    // refuses the opt-in rather than create a topic that could never flush or
+    // trim. Configure the tier this test's topic depends on.
+    let object_store = tempfile::TempDir::new().expect("object store dir");
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_store.path().to_path_buf(),
+        });
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_configs(
+        "events",
+        &[("krabka.diskless", "true")],
+    )]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    let expected = CreateTopicsResponse {
+        throttle_time_ms: 0,
+        topics: vec![CreatableTopicResult {
+            name: "events".into(),
+            topic_id: resp.topics[0].topic_id,
+            error_code: codes::NONE,
+            error_message: None,
+            num_partitions: 1,
+            replication_factor: 1,
+            configs: Some(Vec::new()),
+            topic_config_error_code: 0,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+
+    // The override reaches the metadata log unchanged, ...
+    let image = broker_handle.controller_image_for_test();
+    let configs = image.topic_config("events").expect("topic configs");
+    let expected_configs = maplit::btreemap! {"krabka.diskless".to_string() => "true".to_string()};
+    assert!(*configs == expected_configs);
+    // ... and the partition the handler materialized is on the diskless
+    // runtime, which is the whole point of the key.
+    let partition = broker
+        .partitions
+        .get("events", krabka_ids::PartitionIndex(0))
+        .expect("partition materialized locally");
+    assert!(partition.diskless);
+
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let req = request(vec![topic_with_configs(
+        "plain",
+        &[("krabka.diskless", "false")],
+    )]);
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    assert!(resp.topics[0].error_code == codes::NONE);
+    let partition = broker
+        .partitions
+        .get("plain", krabka_ids::PartitionIndex(0))
+        .expect("partition materialized locally");
+    assert!(!partition.diskless);
     broker_handle.shutdown().await;
 }
 

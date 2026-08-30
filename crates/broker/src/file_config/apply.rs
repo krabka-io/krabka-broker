@@ -149,6 +149,13 @@ impl FileConfig {
         );
         apply_oauthbearer(self.oauthbearer, cfg);
 
+        if let Some(bindings) = self.inter_broker_principal_node_ids {
+            cfg.inter_broker_principal_node_ids = bindings
+                .into_iter()
+                .map(|(principal, node_id)| (principal, krabka_raft::NodeId(node_id)))
+                .collect();
+        }
+
         apply_delegation_tokens(self.delegation_token.as_ref(), cfg)?;
 
         // Merge the TOML super-user list into the broker's
@@ -217,6 +224,23 @@ mod tests {
         let cfg: FileConfig = toml::from_str("").unwrap();
         assert!(cfg == FileConfig::default());
     }
+
+    #[test]
+    fn applies_inter_broker_principal_node_ids() {
+        let file: FileConfig = toml::from_str(
+            r"
+[inter_broker_principal_node_ids]
+admin = 1
+",
+        )
+        .unwrap();
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).unwrap();
+
+        assert!(cfg.inter_broker_principal_node_ids.get("admin") == Some(&krabka_raft::NodeId(1)));
+    }
+
     #[test]
     fn full_toml_round_trips() {
         let src = r#"
@@ -293,6 +317,7 @@ protocol = "Plaintext"
             process: None,
             gssapi: None,
             inter_broker_credentials: None,
+            inter_broker_principal_node_ids: None,
             audit: None,
         };
         assert!(cfg == expected);

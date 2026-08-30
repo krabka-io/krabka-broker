@@ -23,6 +23,11 @@
 //! key is krabka's `QoS` routing key, `qos.tier`. Producer quota enforcement
 //! uses it to partition runtime buckets by topic tier.
 //!
+//! One key is krabka's data-path opt-in, `krabka.diskless`. It takes
+//! `true`/`false` and it is the only key a partition reads once, when it is
+//! opened, so [`validate_diskless_unchanged`] pins it for the life of the
+//! topic and `DescribeConfigs` reports it read-only.
+//!
 //! Three keys carry KFC-1 scheduled delivery: `delivery.mode`,
 //! `delivery.max.delay.ms`, and `delivery.schedule.monotonic`. Only the first
 //! propagates live to `Log.config`. The produce path reads the other two,
@@ -35,15 +40,12 @@
 //! turn the check on for record keys and for record values. The mode selects
 //! how much of each record the check reads.
 //!
-//! `cleanup.policy=compact` and `delivery.mode=scheduled` exclude each other.
-//! [`validate_topic_config`] sees one pair at a time and cannot see that, so
-//! [`validate_config_combination`] checks the rule over a whole override map.
-//!
-//! One key is krabka's diskless opt-in, [`DISKLESS`]. It takes `true` or
-//! `false`, it excludes `remote.storage.enable=true`, and it is *create-only*:
-//! a partition reads it once when it opens its runtime, so both alter paths
-//! refuse it by name rather than store a value the running partitions would
-//! ignore. See [`CREATE_ONLY_TOPIC_CONFIGS`][diskless::CREATE_ONLY_TOPIC_CONFIGS].
+//! Three pairs of keys exclude each other: `cleanup.policy=compact` with
+//! `delivery.mode=scheduled`, and `krabka.diskless=true` with each of
+//! `remote.storage.enable=true` and `delivery.mode=scheduled`.
+//! [`validate_topic_config`] sees one pair at a time and cannot see any of
+//! them, so [`validate_config_combination`] checks all three rules over a whole
+//! override map.
 //!
 //! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
 //! synthesised for `DescribeConfigs` and is never stored, so
@@ -70,7 +72,6 @@ pub use self::docs::{TopicConfigDoc, topic_config_docs};
 pub(crate) use self::{
     broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
-    diskless::CREATE_ONLY_TOPIC_CONFIGS,
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
     topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
 };
@@ -85,10 +86,7 @@ pub(crate) use self::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
         resolve_delivery_schedule_monotonic,
     },
-    diskless::{
-        DISKLESS, create_only_topic_config_change, create_only_topic_config_message,
-        is_create_only_topic_config, preserve_create_only_topic_configs,
-    },
+    diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     qos::resolve_qos_tier,
     recovery::{

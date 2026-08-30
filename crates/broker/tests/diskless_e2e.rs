@@ -71,3 +71,22 @@ const RECORDS: usize = 24;
 /// The diskless WAL quorum every case runs: three voters, so one loss still
 /// leaves a strict majority.
 const VOTERS: usize = 3;
+
+/// The one password every SASL PLAIN principal in the suite authenticates
+/// with. The cluster runs `SASL_PLAINTEXT` because a WAL follower's Fetch is
+/// authenticated: the leader maps the caller's principal to a node id and
+/// serves the shard only to a voter that is who it claims to be. An anonymous
+/// follower is refused, so a plaintext cluster could never form a quorum here.
+const PASSWORD: &str = "diskless-e2e";
+
+/// The principal broker `node` authenticates as when it dials a peer.
+/// `wal::quorum::wire::conventional_node_id` reads the node id back out of
+/// this `broker-<id>` form, which is what lets the WAL leader tie the fetch to
+/// a voter without any per-cluster principal mapping.
+fn broker_principal(node: u64) -> String {
+    format!("broker-{node}")
+}
+
+/// The principal this suite's own admin, producer and fetch clients use. It is
+/// deliberately not a `broker-*` name: a client is not a voter.
+const CLIENT_PRINCIPAL: &str = "diskless-e2e-client";

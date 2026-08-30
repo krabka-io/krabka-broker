@@ -11,7 +11,7 @@ use super::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
         DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
     },
-    diskless::DISKLESS,
+    diskless::{DISKLESS, validate_diskless_combination},
     qos::{QOS_TIER, validate_qos_tier},
     recovery::{RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
@@ -61,7 +61,7 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         DISKLESS => match value {
             "true" | "false" => Ok(()),
             _ => Err(format!(
-                "{DISKLESS}={value} not supported; expected `true` or `false`"
+                "krabka.diskless={value} not supported; expected `true` or `false`"
             )),
         },
         QOS_TIER => validate_qos_tier(value),
@@ -131,11 +131,9 @@ pub(crate) fn validate_topic_config_map(
 /// record would then be deleted without a single delivery, which is the
 /// failure scheduled delivery exists to prevent.
 ///
-/// The second rule is that `krabka.diskless=true` and
-/// `remote.storage.enable=true` exclude each other. Both claim the same
-/// partition's cold tier, and the diskless cold-read path stands down whenever
-/// `remote.storage.enable` is set on the log, so the pair would leave the
-/// trimmed prefix of a diskless partition unreadable through either tier.
+/// The other two are the data-path rules in [`validate_diskless_combination`]:
+/// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
+/// `delivery.mode=scheduled`.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -145,18 +143,6 @@ pub(crate) fn validate_config_combination(
     let scheduled = overrides
         .get(DELIVERY_MODE)
         .is_some_and(|mode| mode == DELIVERY_MODE_SCHEDULED);
-    let diskless = overrides.get(DISKLESS).is_some_and(|value| value == "true");
-    let tiered = overrides
-        .get(REMOTE_STORAGE_ENABLE)
-        .is_some_and(|value| value == "true");
-    if diskless && tiered {
-        return Err(format!(
-            "{DISKLESS}=true cannot be combined with {REMOTE_STORAGE_ENABLE}=true: both claim \
-             the partition's cold tier, and the diskless cold-read path stands down when \
-             {REMOTE_STORAGE_ENABLE} is set, so the trimmed prefix would be readable through \
-             neither tier"
-        ));
-    }
     if compacting && scheduled {
         return Err(format!(
             "{CLEANUP_POLICY}=compact cannot be combined with \
@@ -166,7 +152,7 @@ pub(crate) fn validate_config_combination(
              be deleted without a single delivery"
         ));
     }
-    Ok(())
+    validate_diskless_combination(overrides)
 }
 
 /// Map the wire-side `compression.type` value to the matching
@@ -227,11 +213,11 @@ pub(crate) fn is_recognized(key: &str) -> bool {
             | UNCLEAN_LEADER_ELECTION_ENABLE
             | UNCLEAN_RECOVERY_STRATEGY
             | REMOTE_STORAGE_ENABLE
-            | DISKLESS
             | LOCAL_RETENTION_MS
             | LOCAL_RETENTION_BYTES
             | DELETE_RETENTION_MS
             | QOS_TIER
+            | DISKLESS
             | DELIVERY_MODE
             | DELIVERY_MAX_DELAY_MS
             | DELIVERY_SCHEDULE_MONOTONIC

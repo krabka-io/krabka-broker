@@ -53,9 +53,10 @@ pub(super) fn describe_one(
             .filter(|(key, _)| wanted(key.as_str()))
             .map(|(key, value)| {
                 let mut entry = make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC);
-                // A create-only key cannot be altered, so `kafka-configs` must
-                // show it the way it shows every other read-only config.
-                entry.read_only = config_keys::is_create_only_topic_config(key);
+                // The data path is fixed when the topic is created, so
+                // `kafka-configs` must show the key the way it shows every
+                // other config no alter can change.
+                entry.read_only = key == config_keys::DISKLESS;
                 entry
             })
             .collect();

@@ -21,7 +21,7 @@ use krabka_protocol::{
     records::{Record, RecordBatch},
 };
 
-use crate::TOPIC;
+use crate::{CLIENT_PRINCIPAL, PASSWORD, TOPIC, support};
 
 /// Kafka `NOT_LEADER_OR_FOLLOWER`. The Produce handler returns it before it
 /// appends anything, so a retry cannot duplicate a record.
@@ -121,12 +121,7 @@ pub(crate) async fn fetch_log(
     expected: usize,
     timeout: Duration,
 ) -> FetchedLog {
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("diskless-e2e-fetch")
-        .build()
-        .await
-        .expect("fetch client");
+    let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let deadline = Instant::now() + timeout;
     let mut records: Vec<(i64, Bytes)> = Vec::with_capacity(expected);
     let mut bytes = BytesMut::new();
