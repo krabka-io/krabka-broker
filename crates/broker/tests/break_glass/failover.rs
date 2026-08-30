@@ -95,6 +95,14 @@ async fn an_approved_proposal_survives_a_controller_failover() {
         delete_topic(&after_client, "doomed").await == codes::NONE,
         "the surviving controller spends the approval"
     );
+    cluster[0]
+        .0
+        .wait_for_image(|image| {
+            image
+                .break_glass_proposal(wanted)
+                .is_some_and(|proposal| proposal.consumed_at_ms != 0)
+        })
+        .await;
     check!(stored(&after_client, id).await.consumed_at_ms != 0);
 
     for (handle, _, _) in cluster {

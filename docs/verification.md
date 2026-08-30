@@ -21,7 +21,7 @@ types.
 | [`retain_decision`](../crates/verified/src/compaction.rs) implements the KIP-534 record and control-marker retention rules. | [`krabka-log`](../crates/log/src/compact/decision.rs) | [`proof.json`](../verif/krabka_verified_rlib/compaction/retain_decision/proof.json) | None. |
 | [`election_jitter_ms`](../crates/verified/src/consensus.rs) keeps deterministic jitter in `[0, base_ms)`. | [`krabka-kraft-core`](../crates/kraft-core/src/core.rs) | [`proof.json`](../verif/krabka_verified_rlib/consensus/election_jitter_ms/proof.json) | None. |
 | [`log_is_up_to_date`](../crates/verified/src/consensus.rs) implements the KIP-595 candidate-log ordering. | [`krabka-kraft-core`](../crates/kraft-core/src/core/vote_request.rs) | [`proof.json`](../verif/krabka_verified_rlib/consensus/log_is_up_to_date/proof.json) | None. |
-| [`recompute_high_watermark`](../crates/verified/src/consensus.rs) computes the majority offset, applies the epoch gate, and does not regress. | [`krabka-kraft-core`](../crates/kraft-core/src/core/replication.rs) and the [`krabka-broker` WAL](../crates/broker/src/wal/quorum/engine/distributed.rs) | [`proof.json`](../verif/krabka_verified_rlib/consensus/recompute_high_watermark/proof.json) | `1 <= majority <= followers + 1`; `current_hwm <= log_end`; each follower offset is at most `log_end`. |
+| [`recompute_high_watermark`](../crates/verified/src/consensus.rs) computes the majority offset, applies the epoch gate, and does not regress. | [`krabka-kraft-core`](../crates/kraft-core/src/core/replication.rs); the `krabka-broker` WAL [live engine](../crates/broker/src/wal/quorum/engine/distributed.rs) and [recovery path](../crates/broker/src/wal/quorum/engine/recovery.rs); the [diskless crash model](../crates/broker/src/diskless_crash_model.rs) | [`proof.json`](../verif/krabka_verified_rlib/consensus/recompute_high_watermark/proof.json) | `1 <= majority <= followers + 1`; `current_hwm <= log_end`; each follower offset is at most `log_end`. |
 | [`handoff_high_watermark`](../crates/verified/src/consensus.rs) returns the maximum of the old and new frontiers. | No host caller. | [`proof.json`](../verif/krabka_verified_rlib/consensus/handoff_high_watermark/proof.json) | None. |
 | [`offset_index_lookup`](../crates/verified/src/log_index.rs) returns the position for the greatest relative offset at or below the target. | [`krabka-log`](../crates/log/src/index/offset.rs) | [`proof.json`](../verif/krabka_verified_rlib/log_index/offset_index_lookup/proof.json) | Entries have strictly increasing relative offsets. |
 | [`reserve_offsets`](../crates/verified/src/offset_allocator.rs) returns the base and advances the next offset by the count. | [`krabka-raft`](../crates/raft/src/kraft/controller/submit.rs) | [`proof.json`](../verif/krabka_verified_rlib/offset_allocator/reserve_offsets/proof.json) | `count >= 0`; `next + count <= i64::MAX`. |
@@ -37,9 +37,12 @@ contracts in the ledger. They are not additional production kernels.
 ## Run the Creusot Proofs
 
 The [`.creusot-version`](../.creusot-version) file pins the Creusot release.
-That release pins the Rust nightly that `creusot-rustc` needs. The
-[`why3find.json`](../why3find.json) file pins the prover set, versions, time
-limits, and memory limits.
+That release pins the Rust nightly that `creusot-rustc` needs. Its
+`creusot-setup/src/tools_versions_urls.rs` file pins the prover binaries and
+checksums. Its `creusot-deps.opam` file pins Why3 and Why3find. The local
+[`why3find.json`](../why3find.json) file selects the provers and sets the time
+limits, search depth, tactics, and proof-search profile. It does not set a
+memory limit.
 
 Install the pinned Creusot release and its provers as the
 [`proofs` job](../.github/workflows/ci.yml) does. Then run these commands from
