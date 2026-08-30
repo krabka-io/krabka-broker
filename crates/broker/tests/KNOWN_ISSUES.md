@@ -40,12 +40,22 @@ digest-pinned Bazel Docker lane runs them through
 bazel test --config=docker //crates/broker:jvm_acceptance_cli_docker_test
 ```
 
-## Manual GSSAPI validation
+The log differential and KIP-631 checkpoint checks run in the same lane as
+`//crates/log:integration_docker_test` and
+`//crates/raft:kraft_checkpoint_jvm_docker_test`.
 
-`gssapi_e2e` remains manual. Its locally built KDC fixture writes
+## Scheduled GSSAPI validation
+
+`gssapi_e2e` remains a manual Bazel target. Its locally built KDC fixture writes
 `kafka.keytab` and `alice.keytab` into the fixture directory, so it cannot use
-the digest-pinned Bazel lane and must be managed with Docker Compose. Follow
-the command sequence in `gssapi_e2e.rs`.
+the digest-pinned Bazel lane and must be managed with Docker Compose. The
+scheduled and `workflow_dispatch` `container · gssapi` CI job runs both the
+`gssapi_e2e` and `auth_handlers` GSSAPI cases. For a local run, follow the
+Compose and environment setup in `gssapi_e2e.rs`, then run:
+
+```sh
+cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
+```
 
 ## Windows validation
 

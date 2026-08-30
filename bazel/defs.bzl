@@ -221,6 +221,7 @@ def crate_tests(
         stem = src[len("tests/"):-len(".rs")]
         rust_test(
             name = stem + "_test",
+            args = ["--ignored", "--test-threads=1"] if stem in manual or stem in docker else [],
             srcs = [src] + helpers,
             crate_root = src,
             aliases = _aliases(["deps", "dev_deps"]),
@@ -252,11 +253,11 @@ def crate_tests(
         if stem not in docker:
             continue
 
-        # The same sources built again, this time to be driven by a wrapper that
-        # loads Bazel's digest-pinned Kafka images before handing over. Built as
-        # a non-test target so `bazel test //...` does not try to run it bare.
+        # The same sources built again for the digest-pinned Docker wrapper.
+        # `manual` keeps this backing test out of `bazel test //...`.
         rust_test(
             name = stem + "_docker_bin",
+            args = ["--ignored", "--test-threads=1"],
             srcs = [src] + helpers,
             crate_root = src,
             aliases = _aliases(["deps", "dev_deps"]),
