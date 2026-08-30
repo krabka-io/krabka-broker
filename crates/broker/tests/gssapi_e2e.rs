@@ -58,7 +58,7 @@ const BOOTSTRAP: &str = "host.docker.internal:9092";
 
 /// Absolute path to the KDC fixture dir, which holds `kafka.keytab` and
 /// `alice.keytab`.
-use support::manifest_dir;
+use support::{free_port, manifest_dir};
 
 fn kdc_fixtures() -> PathBuf {
     manifest_dir().join("tests/fixtures/security/kdc")
@@ -91,17 +91,26 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
     cfg.broker_id = 1;
     cfg.listen_addr = LISTEN.parse().expect("static addr");
     cfg.advertised_listener = BOOTSTRAP.into();
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: LISTEN.parse().expect("static addr"),
-        advertised: BOOTSTRAP.to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: Some(vec![SaslMechanism::Gssapi]),
-    }];
-    // Single bootstrap node: no peers, so the inter-broker listener is never
-    // dialed. Point it at the only listener to satisfy config validation.
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let internal = format!("127.0.0.1:{}", free_port());
+    cfg.listeners = vec![
+        ListenerSpec {
+            name: "SASL_PLAINTEXT".to_string(),
+            bind_addr: LISTEN.parse().expect("static addr"),
+            advertised: BOOTSTRAP.to_string(),
+            protocol: ListenerProtocol::SaslPlaintext,
+            tls_config: None,
+            sasl_mechanisms: Some(vec![SaslMechanism::Gssapi]),
+        },
+        ListenerSpec {
+            name: "INTERNAL".to_string(),
+            bind_addr: internal.parse().expect("internal addr"),
+            advertised: internal,
+            protocol: ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+        },
+    ];
+    cfg.inter_broker_listener_name = "INTERNAL".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
     cfg.gssapi = Some(GssapiConfig {
         keytab_path: kdc_fixtures().join("kafka.keytab"),
@@ -134,6 +143,8 @@ fn gssapi_docker_prefix() -> Vec<String> {
     vec![
         "run".to_string(),
         "--rm".to_string(),
+        "--user".to_string(),
+        "0".to_string(),
         "--add-host=host.docker.internal:host-gateway".to_string(),
         "-v".to_string(),
         format!("{}:/fixtures", kdc.display()),

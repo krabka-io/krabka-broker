@@ -39,7 +39,7 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
+          disk-cache: false
           repository-cache: true
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
@@ -305,6 +305,31 @@ jobs:
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
       - run: bazel test --config=docker ${{ matrix.suite.target }}
+
+  # The KDC fixture builds Debian packages and writes fresh keytabs through a
+  # bind mount, so it cannot be loaded as one of //bazel/images' immutable
+  # tarballs. Keep the two Kerberos acceptance cases visible in their own
+  # scheduled lane instead of leaving them permanently #[ignore]d.
+  gssapi:
+    name: container · gssapi
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+      - name: run GSSAPI acceptance suites
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/crates/broker/tests/fixtures/security/kdc/krb5.conf
+          RUST_LOG: warn
+          SSPI_KDC_URL: tcp://localhost:88
+        run: |
+          set -euo pipefail
+          fixture=crates/broker/tests/fixtures/security/kdc/docker-compose.yml
+          trap 'docker compose -f "${fixture}" down' EXIT
+          docker compose -f "${fixture}" up --build -d
+          timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
+          cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
   # A mutation sweep rebuilds and re-runs a crate's unit tests once per mutant,
   # so it is far too slow to gate a pull request.
