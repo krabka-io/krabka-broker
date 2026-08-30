@@ -26,7 +26,10 @@ crate::sendfile_cfg! {
 mod test_support;
 mod timestamp_scan;
 
-use crate::index::{OffsetIndex, TimeIndex};
+use crate::{
+    index::{OffsetIndex, TimeIndex},
+    io::LogIo,
+};
 
 /// A single log segment: the `.log` data file paired with its sparse
 /// `.index` (offset → byte position) and `.timeindex` (timestamp →
@@ -47,9 +50,10 @@ pub struct Segment {
     /// `FileRegion { file: Arc<File>, .. }` to the connection's async
     /// `sendfile` loop. The `Arc` pins the inode through the send even when
     /// retention rolls or removes this segment in the meantime, because the
-    /// open fd keeps the inode alive on Unix. Writes go through `&*log_file`,
-    /// because `std::fs::File` implements `Write` and `Seek` for `&File`.
+    /// open fd keeps the inode alive on Unix. Writes and data syncs go through
+    /// `io`, which normally delegates straight to this file.
     log_file: Arc<File>,
+    io: Arc<dyn LogIo>,
     log_size: u64,
     offset_index: OffsetIndex,
     time_index: TimeIndex,

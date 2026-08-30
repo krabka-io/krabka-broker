@@ -9,12 +9,93 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
+    io::LogIo,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        sample_batch, sample_batch_with_epoch, test_batch_at, test_log, verbatim_from,
+        sample_batch, sample_batch_with_epoch, test_batch_at, test_log, transactional_batch,
+        verbatim_from,
     },
     stamp_index::{StampEntry, StampIndex},
 };
+
+#[derive(Debug)]
+struct FailAfterBytes(std::sync::Mutex<usize>);
+
+impl LogIo for FailAfterBytes {
+    fn write(&self, file: &std::fs::File, buf: &[u8]) -> std::io::Result<usize> {
+        use std::io::Write;
+
+        let mut remaining = self.0.lock().unwrap();
+        if *remaining == 0 {
+            return Err(std::io::ErrorKind::StorageFull.into());
+        }
+        let written = (&*file).write(&buf[..buf.len().min(*remaining)])?;
+        *remaining -= written;
+        Ok(written)
+    }
+}
+
+#[derive(Debug)]
+struct FailFirstSync(std::sync::atomic::AtomicUsize);
+
+impl LogIo for FailFirstSync {
+    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            Err(std::io::Error::other("injected sync_data failure"))
+        } else {
+            file.sync_data()
+        }
+    }
+}
+
+#[test]
+fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
+        16,
+    ))));
+
+    let error = log.append(&mut sample_batch(2)).unwrap_err();
+
+    assert!(
+        matches!(error, LogError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull)
+    );
+    assert!(log.log_end_offset() == Offset(0));
+    assert!(log.producer_state_snapshot().is_empty());
+    drop(log);
+    let recovered = Log::open(dir.path(), LogConfig::default()).unwrap();
+    assert!(recovered.log_end_offset() == Offset(0));
+}
+
+#[test]
+fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        flush_on_append: true,
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    let io = std::sync::Arc::new(FailFirstSync(std::sync::atomic::AtomicUsize::new(0)));
+    log.test_set_io(io.clone());
+    let producer = ProducerId(41);
+
+    let error = log
+        .append(&mut transactional_batch(producer.get(), 0, &["value"]))
+        .unwrap_err();
+
+    assert!(matches!(error, LogError::Io(_)));
+    assert!(io.0.load(std::sync::atomic::Ordering::Relaxed) == 2);
+    assert!(log.log_end_offset() == Offset(0));
+    assert!(log.lso() == Offset(0));
+    assert!(log.producer_state_snapshot().is_empty());
+    assert!(log.pending_transaction_start(producer) == None);
+    drop(log);
+    let recovered = Log::open(dir.path(), config).unwrap();
+    assert!(recovered.log_end_offset() == Offset(0));
+    assert!(recovered.producer_state_snapshot().is_empty());
+    assert!(recovered.pending_transaction_start(producer) == None);
+}
 
 /// A leader-epoch transition is recorded only when the epoch is known and
 /// only when it advances past the one already recorded.

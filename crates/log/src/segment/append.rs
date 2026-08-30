@@ -4,14 +4,17 @@
 //! sparse indexes, so the shared side effects stay in one file. The verbatim
 //! path additionally has to leave the producer's CRC-covered bytes untouched.
 
-use std::io::{IoSlice, Write};
+use std::io::IoSlice;
 
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_protocol::records::{HEADER_LEN, RecordBatch, patch_base_offset_and_leader_epoch};
 use krabka_units::prelude::{ByteSize, ByteSizeExt};
 use tracing::instrument;
 
-use super::{Segment, io::write_all_vectored};
+use super::{
+    Segment,
+    io::{write_all, write_all_vectored},
+};
 use crate::error::LogError;
 
 impl Segment {
@@ -49,9 +52,14 @@ impl Segment {
         let bytes = buf.freeze();
 
         let position = self.log_size;
+        let previous_last_offset = self.last_offset;
+        let previous_max_timestamp = self.max_timestamp;
         // The active file cursor is kept at log_size by open/recovery/truncate,
         // so the hot append path does not need an lseek before every write.
-        (&*self.log_file).write_all(&bytes)?;
+        if let Err(error) = write_all(&*self.io, &self.log_file, &bytes) {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error.into());
+        }
         self.log_size += bytes.len() as u64;
 
         let last_offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
@@ -150,8 +158,13 @@ impl Segment {
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
         let position = self.log_size;
+        let previous_last_offset = self.last_offset;
+        let previous_max_timestamp = self.max_timestamp;
         let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
-        write_all_vectored(&*self.log_file, &mut bufs)?;
+        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
+            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            return Err(error.into());
+        }
         self.log_size += bytes.len() as u64;
 
         let last_offset = base_offset + i64::from(last_offset_delta);

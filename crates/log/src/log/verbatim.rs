@@ -184,8 +184,9 @@ impl Log {
             index_interval,
         )?;
 
-        if flush_on_append {
-            self.active_segment_flush()?;
+        if flush_on_append && let Err(error) = self.active_segment_flush() {
+            self.rollback_failed_append(base_offset)?;
+            return Err(error);
         }
 
         // --- .stampindex write (internal sidecar) ---

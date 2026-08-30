@@ -46,10 +46,34 @@ impl Segment {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn flush(&mut self) -> Result<(), LogError> {
-        self.log_file.sync_data()?;
+        self.io.sync_data(&self.log_file)?;
         self.offset_index.flush()?;
         self.time_index.flush()?;
         Ok(())
+    }
+
+    pub(super) fn rollback_failed_write(
+        &mut self,
+        position: u64,
+        last_offset: Offset,
+        max_timestamp: i64,
+    ) -> Result<(), LogError> {
+        self.log_file.set_len(position)?;
+        seek_to_log_size(&self.log_file, position)?;
+        self.log_size = position;
+        self.last_offset = last_offset;
+        self.max_timestamp = max_timestamp;
+        let position = u32::try_from(position)
+            .map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
+        self.offset_index.truncate_by_position(position)?;
+        let next_relative = u32::try_from(last_offset.0 + 1 - self.base_offset.0)
+            .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+        self.time_index.truncate_by_relative_offset(next_relative)?;
+        Ok(())
+    }
+
+    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn crate::io::LogIo>) {
+        self.io = io;
     }
 
     /// Truncate the `.log` file and the indexes so that no batch at

@@ -103,6 +103,7 @@ impl Log {
         // leaves the index sidecars empty, so that scan starts at position 0
         // and sees every batch: the segment's maximum is exact.
         let mut new_seg = Segment::open_active(&self.dir, rewrite.new_base_offset, true)?;
+        new_seg.set_io(self.io.clone());
         new_seg.seal();
         self.segments.push(new_seg);
         Ok(())

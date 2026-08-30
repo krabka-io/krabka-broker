@@ -16,7 +16,7 @@ use std::{
 use krabka_ids::{Offset, ProducerId};
 
 use crate::{
-    config::LogConfig, leader_epoch_checkpoint::LeaderEpochCheckpoint,
+    config::LogConfig, io::LogIo, leader_epoch_checkpoint::LeaderEpochCheckpoint,
     producer_snapshot::ProducerSnapshotEntry, segment::Segment, stamp_index::StampIndex,
     stamp_source::StampSource, txn_index::TxnIndex,
 };
@@ -61,6 +61,7 @@ crate::sendfile_cfg! {
 pub struct Log {
     dir: PathBuf,
     config: std::sync::Arc<std::sync::RwLock<LogConfig>>,
+    io: std::sync::Arc<dyn LogIo>,
     segments: Vec<Segment>,
     active: Option<Segment>,
     dir_sync_needed: bool,
