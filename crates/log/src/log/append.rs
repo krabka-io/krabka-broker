@@ -184,13 +184,7 @@ impl Log {
         active.append(batch, index_interval)?;
 
         if flush_on_append && let Err(error) = self.active_segment_flush() {
-            let active = self
-                .active
-                .as_mut()
-                .expect("active segment must exist after Log::open");
-            let relative = u32::try_from(batch.base_offset - active.base_offset().0)
-                .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
-            active.truncate_to_relative(relative)?;
+            self.rollback_failed_append(Offset(batch.base_offset))?;
             return Err(error);
         }
 

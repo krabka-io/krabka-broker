@@ -36,11 +36,11 @@ impl LogIo for FailAfterBytes {
 }
 
 #[derive(Debug)]
-struct FailFirstSync(std::sync::atomic::AtomicBool);
+struct FailFirstSync(std::sync::atomic::AtomicUsize);
 
 impl LogIo for FailFirstSync {
     fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
-        if self.0.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
             Err(std::io::Error::other("injected sync_data failure"))
         } else {
             file.sync_data()
@@ -76,9 +76,8 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
         ..LogConfig::default()
     };
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
-    log.test_set_io(std::sync::Arc::new(FailFirstSync(
-        std::sync::atomic::AtomicBool::new(true),
-    )));
+    let io = std::sync::Arc::new(FailFirstSync(std::sync::atomic::AtomicUsize::new(0)));
+    log.test_set_io(io.clone());
     let producer = ProducerId(41);
 
     let error = log
@@ -86,6 +85,7 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
         .unwrap_err();
 
     assert!(matches!(error, LogError::Io(_)));
+    assert!(io.0.load(std::sync::atomic::Ordering::Relaxed) == 2);
     assert!(log.log_end_offset() == Offset(0));
     assert!(log.lso() == Offset(0));
     assert!(log.producer_state_snapshot().is_empty());

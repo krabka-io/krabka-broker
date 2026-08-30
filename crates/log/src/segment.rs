@@ -26,8 +26,10 @@ crate::sendfile_cfg! {
 mod test_support;
 mod timestamp_scan;
 
-use crate::index::{OffsetIndex, TimeIndex};
-use crate::io::LogIo;
+use crate::{
+    index::{OffsetIndex, TimeIndex},
+    io::LogIo,
+};
 
 /// A single log segment: the `.log` data file paired with its sparse
 /// `.index` (offset → byte position) and `.timeindex` (timestamp →

@@ -8,6 +8,8 @@
 #[cfg(unix)]
 use std::{fs, path::Path};
 
+use krabka_ids::Offset;
+
 use super::Log;
 use crate::{error::LogError, segment::Segment};
 
@@ -90,6 +92,17 @@ impl Log {
             .as_mut()
             .expect("active segment must exist after Log::open");
         Self::segment_flush(active)
+    }
+
+    pub(super) fn rollback_failed_append(&mut self, base_offset: Offset) -> Result<(), LogError> {
+        let active = self
+            .active
+            .as_mut()
+            .expect("active segment must exist after Log::open");
+        let relative = u32::try_from(base_offset.0 - active.base_offset().0)
+            .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+        active.truncate_to_relative(relative)?;
+        self.active_segment_flush()
     }
 
     fn segment_flush(segment: &mut Segment) -> Result<(), LogError> {
