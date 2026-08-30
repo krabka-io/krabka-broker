@@ -123,7 +123,7 @@ pub(crate) async fn flush_once(
         entries,
     };
     index_log.publish_flush(&record).await?;
-    wait_for_committed_projection(cache.clone(), &record, config.index_projection_timeout).await?;
+    wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await?;
 
     if let Some(lag) = config.trim_safety_lag {
         for partition in partitions {
@@ -152,23 +152,17 @@ pub(crate) async fn flush_once(
 }
 
 async fn wait_for_committed_projection(
-    cache: Arc<AsyncMutex<WalIndexCache>>,
+    index_log: &DisklessIndexLog,
     record: &WalFlushRecord,
     timeout: Duration,
 ) -> Result<(), crate::error::BrokerError> {
-    tokio::time::timeout(timeout, async {
-        loop {
-            {
-                let cache = cache.lock().await;
-                if cache.contains_record(record) {
-                    return;
-                }
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| crate::error::BrokerError::Txn("diskless wal index projection timed out".into()))
+    index_log
+        .wait_until_applied(record, timeout)
+        .await
+        .then_some(())
+        .ok_or_else(|| {
+            crate::error::BrokerError::Txn("diskless wal index projection timed out".into())
+        })
 }
 
 #[cfg(test)]
@@ -259,7 +253,8 @@ mod tests {
 
     #[tokio::test]
     async fn committed_projection_wait_requires_the_record_to_be_applied() {
-        let cache = Arc::new(AsyncMutex::new(WalIndexCache::default()));
+        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let index = DisklessIndexLog::start(event_log).await.unwrap();
         let record = WalFlushRecord {
             object_key: "diskless-wal/test.ckwl".into(),
             format_version: 1,
@@ -273,16 +268,20 @@ mod tests {
             }],
         };
 
-        let error =
-            wait_for_committed_projection(Arc::clone(&cache), &record, Duration::from_millis(10))
-                .await
-                .expect_err("an unapplied record must time out");
+        let error = wait_for_committed_projection(&index, &record, Duration::from_millis(10))
+            .await
+            .expect_err("an unapplied record must time out");
         assert!(error.to_string().contains("projection timed out"));
 
-        cache.lock().await.apply(&record);
-        wait_for_committed_projection(cache, &record, Duration::from_secs(1))
-            .await
-            .expect("the exact applied record is visible");
+        let (published, projected) = tokio::join!(
+            async {
+                tokio::task::yield_now().await;
+                index.publish_flush(&record).await
+            },
+            wait_for_committed_projection(&index, &record, Duration::from_secs(1)),
+        );
+        published.unwrap();
+        projected.expect("the exact applied record is visible");
     }
 
     #[tokio::test]
