@@ -69,6 +69,43 @@ fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
 }
 
 #[test]
+fn shorter_append_after_partial_write_leaves_no_physical_tail() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut first = sample_batch(1);
+    log.append(&mut first).unwrap();
+    let log_path = crate::name::log_path(dir.path(), 0);
+    let position = std::fs::metadata(&log_path).unwrap().len();
+
+    let mut next = sample_batch(1);
+    let mut failed = sample_batch(10);
+    let partial_len = next.encoded_len() + 1;
+    assert!(partial_len < failed.encoded_len());
+    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
+        partial_len,
+    ))));
+
+    let error = log.append(&mut failed).unwrap_err();
+
+    assert!(
+        matches!(error, LogError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull)
+    );
+    assert!(std::fs::metadata(&log_path).unwrap().len() == position);
+
+    log.test_set_io(std::sync::Arc::new(crate::io::FileIo));
+    let next_len = next.encoded_len() as u64;
+    log.append(&mut next).unwrap();
+
+    assert!(std::fs::metadata(log_path).unwrap().len() == position + next_len);
+    assert!(
+        log.read(Offset(0), crate::log::test_support::NO_LIMIT)
+            .unwrap()
+            .batches
+            == vec![first, next]
+    );
+}
+
+#[test]
 fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
     let dir = tempdir().unwrap();
     let config = LogConfig {
