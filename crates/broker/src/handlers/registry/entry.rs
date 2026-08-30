@@ -32,6 +32,8 @@ pub(crate) enum DispatchKind {
 #[derive(Clone, Copy)]
 pub(crate) struct DispatchEntry {
     api_key: ApiKeyCode,
+    min_version: ApiVersion,
+    max_version: ApiVersion,
     flexible_min: ApiVersion,
     quota_policy: RequestQuotaPolicy,
     kind: DispatchKind,
@@ -50,6 +52,8 @@ impl DispatchEntry {
     ) -> Self {
         Self {
             api_key,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
             kind: DispatchKind::Plain(handler),
@@ -63,6 +67,8 @@ impl DispatchEntry {
     ) -> Self {
         Self {
             api_key,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::Context(handler),
@@ -72,6 +78,8 @@ impl DispatchEntry {
     pub(crate) fn produce(flexible_min: ApiVersion, handler: ProduceHandler) -> Self {
         Self {
             api_key: ApiKey::Produce as i16,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::SelfAccounted,
             kind: DispatchKind::Produce(handler),
@@ -85,6 +93,8 @@ impl DispatchEntry {
     ) -> Self {
         Self {
             api_key,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::Telemetry(handler),
@@ -98,6 +108,8 @@ impl DispatchEntry {
     ) -> Self {
         Self {
             api_key,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::Auth(handler),
@@ -107,6 +119,8 @@ impl DispatchEntry {
     pub(crate) fn fetch(flexible_min: ApiVersion) -> Self {
         Self {
             api_key: ApiKey::Fetch as i16,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::SelfAccounted,
             kind: DispatchKind::Fetch,
@@ -116,6 +130,8 @@ impl DispatchEntry {
     pub(crate) fn sasl_metadata(api_key: ApiKeyCode, flexible_min: ApiVersion) -> Self {
         Self {
             api_key,
+            min_version: 0,
+            max_version: 0,
             flexible_min,
             quota_policy: RequestQuotaPolicy::InlineExempt,
             kind: DispatchKind::SaslMetadata,
@@ -134,6 +150,15 @@ impl DispatchEntry {
         self.flexible_min != i16::MAX && version >= self.flexible_min
     }
 
+    pub(crate) fn supports_version(self, version: ApiVersion) -> bool {
+        (self.min_version..=self.max_version).contains(&version)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn version_range(self) -> std::ops::RangeInclusive<ApiVersion> {
+        self.min_version..=self.max_version
+    }
+
     #[cfg(test)]
     pub(crate) fn is_plain(self) -> bool {
         matches!(self.kind, DispatchKind::Plain(_))
@@ -147,6 +172,17 @@ impl DispatchRegistry {
 
     pub(crate) fn register(&mut self, entry: DispatchEntry) -> bool {
         self.table.insert(entry.api_key, entry).is_none()
+    }
+
+    pub(crate) fn apply_api_catalog(&mut self) {
+        for api in crate::api_catalog::supported_apis() {
+            let entry = self
+                .table
+                .get_mut(&api.api_key)
+                .unwrap_or_else(|| panic!("advertised api_key {} is not registered", api.api_key));
+            entry.min_version = api.min_version;
+            entry.max_version = api.max_version;
+        }
     }
 
     pub(crate) fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {

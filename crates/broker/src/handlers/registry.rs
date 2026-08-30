@@ -382,5 +382,7 @@ pub(crate) fn build_registry() -> DispatchRegistry {
         push_telemetry_adapter,
     ));
 
+    registry.apply_api_catalog();
+
     registry
 }

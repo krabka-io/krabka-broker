@@ -198,9 +198,7 @@ pub struct BrokerMetrics {
     /// broker without needing to slice the dashboard by handler.
     pub api_requests: Family<ApiKeyLabel, Counter>,
     /// Per-Kafka-API counter of requests the dispatcher
-    /// answered with the synthetic `UNSUPPORTED_VERSION` response
-    /// because no handler matched the `api_key` (or, for unknown
-    /// `api_key`s, the dispatcher didn't recognise the key at all).
+    /// rejected because the request version was outside the registered range.
     /// Operators alert on `rate(unsupported_api_requests_total[5m]) > 0`
     /// to catch clients on `api_key`/version pairs the broker
     /// doesn't speak — frequently the smoking gun for upgrade-skew
@@ -229,8 +227,8 @@ pub struct BrokerMetrics {
     /// Per-Kafka-API counter of requests whose handler
     /// returned an error (the dispatcher closed the connection). Labelled
     /// by the `ApiKey` variant name; disjoint from
-    /// `unsupported_api_requests` (which counts the synthetic
-    /// `UNSUPPORTED_VERSION` arm). Operators alert on
+    /// `unsupported_api_requests` (which counts the unsupported-version arm).
+    /// Operators alert on
     /// `rate(request_errors_total[5m]) > 0` to catch handler-level faults.
     pub request_errors: Family<ApiKeyLabel, Counter>,
     /// KIP-405: `1` when this broker has finished swapping in

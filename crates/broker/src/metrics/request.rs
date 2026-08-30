@@ -16,9 +16,8 @@ impl BrokerMetrics {
     }
 
     /// Account one request the dispatcher rejected with
-    /// `UNSUPPORTED_VERSION` because no handler matched `api_key`
-    /// (e.g. unknown `api_key`, or known `api_key` with no version
-    /// negotiated). Mirrors the labelling of `record_api_request`.
+    /// `UNSUPPORTED_VERSION` because its version is outside the registered
+    /// range. Mirrors the labelling of `record_api_request`.
     pub fn record_unsupported_api_request(&self, api_key: crate::handlers::ApiKeyCode) {
         let lbl = ApiKeyLabel {
             api_key: api_key_label_name(api_key).to_string(),
@@ -133,9 +132,9 @@ mod tests {
         // only the `unsupported_api_requests` family — operators
         // expect `api_requests` to count *every* dispatched frame and
         // `unsupported_api_requests` to count just the ones that hit
-        // the synthetic UNSUPPORTED_VERSION arm.
+        // the unsupported-version arm.
         m.record_unsupported_api_request(0); // Produce, unsupported
-        m.record_unsupported_api_request(999); // truly unknown
+        m.record_unsupported_api_request(999); // unknown label coverage
 
         let produce = ApiKeyLabel {
             api_key: "Produce".into(),

@@ -191,6 +191,22 @@ fn registry_and_api_catalog_cover_the_same_kafka_api_keys() {
 }
 
 #[test]
+fn registry_version_bounds_match_api_catalog() {
+    let registry = build_registry();
+
+    for api in crate::api_catalog::supported_apis() {
+        let entry = registry
+            .get(api.api_key)
+            .unwrap_or_else(|| panic!("registered api_key {}", api.api_key));
+        assert!(
+            entry.version_range() == (api.min_version..=api.max_version),
+            "api_key {}",
+            api.api_key
+        );
+    }
+}
+
+#[test]
 fn registry_body_flexible_matches_selected_schema_boundaries() {
     use krabka_protocol::owned;
 

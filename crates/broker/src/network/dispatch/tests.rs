@@ -3,6 +3,7 @@
 //! serve loop over a real socket.
 
 use assert2::{assert, check};
+use bytes::{BufMut, BytesMut};
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
@@ -76,7 +77,7 @@ fn raft_voter_rpcs_peek_and_flex_routing() {
 /// the whole serve loop and asserts that it reaches its handler. A
 /// `DenyAll` authorizer stops every handler at the ACL gate with
 /// `CLUSTER_AUTHORIZATION_FAILED` (31), which differs observably from the
-/// unsupported path's 35.
+/// connection close on the unsupported path.
 #[tokio::test]
 async fn raft_voter_registry_routes_to_real_handlers() {
     use krabka_protocol::{
@@ -157,12 +158,98 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         .expect("decode UpdateRaftVoterResponse");
 
     // Each real handler denies at the ACL gate; the fall-through path would
-    // instead yield UNSUPPORTED_VERSION (and not even decode as this type).
+    // instead close the connection.
     check!(add.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
     check!(rem.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
     check!(upd.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
 
     drop(framed);
     server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsupported_versions_fallback_only_for_api_versions() {
+    use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let handle = Broker::start(cfg).await.expect("start broker");
+    let broker = handle.broker_arc_for_test();
+    let metrics = broker.metrics.clone();
+    let registry = crate::handlers::registry::build_registry();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("listener addr");
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            let spec = crate::config::ListenerSpec {
+                name: "PLAINTEXT".to_string(),
+                bind_addr: addr,
+                advertised: "127.0.0.1:9092".to_string(),
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+            };
+            serve_connection_stream(broker.clone(), stream, spec, peer, None).await;
+        }
+    });
+
+    let client = TcpStream::connect(addr).await.expect("connect ApiVersions");
+    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+    let frame = request_frame(API_VERSIONS_KEY, 99, 99, None, Some(0), &[]);
+    framed.send(frame.freeze()).await.expect("send v99 request");
+    let response = framed
+        .next()
+        .await
+        .expect("v99 response frame")
+        .expect("v99 response decode");
+    let decoded =
+        ApiVersionsResponse::decode(&mut &response[4..], 0).expect("v99 response uses the v0 body");
+    check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
+    check!(decoded.api_keys == crate::api_catalog::supported_apis());
+
+    let heartbeat = registry
+        .get(ApiKey::Heartbeat as i16)
+        .expect("Heartbeat entry");
+    let version = heartbeat
+        .version_range()
+        .end()
+        .checked_add(1)
+        .expect("Heartbeat max version has a successor");
+    let frame = request_frame(
+        ApiKey::Heartbeat as i16,
+        version,
+        100,
+        None,
+        heartbeat.body_flexible(version).then_some(0),
+        &[],
+    );
+    framed
+        .send(frame.freeze())
+        .await
+        .expect("send unsupported Heartbeat");
+    check!(
+        framed.next().await.is_none(),
+        "non-ApiVersions unsupported version must close connection"
+    );
+
+    let client = TcpStream::connect(addr).await.expect("connect unknown api");
+    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+    let frame = request_frame(i16::MAX, 0, 101, None, None, &[]);
+    framed.send(frame.freeze()).await.expect("send unknown api");
+    check!(
+        framed.next().await.is_none(),
+        "unknown api must close connection"
+    );
+    let unknown = crate::metrics::ApiKeyLabel {
+        api_key: crate::metrics::UNKNOWN_LABEL.into(),
+    };
+    check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
+
+    server.await.expect("serve loop joins after unknown api");
     handle.shutdown().await;
 }
