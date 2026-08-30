@@ -7,11 +7,11 @@
 
 use std::{
     fs::File,
-    io::{IoSlice, Seek, SeekFrom, Write},
+    io::{IoSlice, Seek, SeekFrom},
 };
 
 use super::Segment;
-use crate::error::LogError;
+use crate::{error::LogError, io::LogIo};
 
 /// Positioned read: fill `buf` from `offset` in `file` without a move of the
 /// file's cursor.
@@ -56,16 +56,30 @@ pub(super) fn seek_to_log_size(file: &File, log_size: u64) -> std::io::Result<()
     Ok(())
 }
 
+pub(super) fn write_all(io: &dyn LogIo, file: &File, mut buf: &[u8]) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        match io.write(file, buf) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(written) => buf = &buf[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn write_all_vectored(
-    mut writer: impl Write,
+    io: &dyn LogIo,
+    file: &File,
     mut bufs: &mut [IoSlice<'_>],
 ) -> std::io::Result<()> {
     while !bufs.is_empty() {
-        let written = writer.write_vectored(bufs)?;
-        if written == 0 {
-            return Err(std::io::ErrorKind::WriteZero.into());
+        match io.write_vectored(file, bufs) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(written) => IoSlice::advance_slices(&mut bufs, written),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
         }
-        IoSlice::advance_slices(&mut bufs, written);
     }
     Ok(())
 }

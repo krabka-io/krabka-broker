@@ -15,6 +15,7 @@ use super::{Segment, io::seek_to_log_size};
 use crate::{
     error::LogError,
     index::{OffsetIndex, TimeIndex},
+    io::FileIo,
     name,
 };
 
@@ -42,6 +43,7 @@ impl Segment {
             dir: dir.to_path_buf(),
             base_offset,
             log_file: Arc::new(log_file),
+            io: Arc::new(FileIo),
             log_size: 0,
             offset_index,
             time_index,
@@ -149,6 +151,7 @@ impl Segment {
             dir: dir.to_path_buf(),
             base_offset,
             log_file: Arc::new(log_file),
+            io: Arc::new(FileIo),
             log_size,
             offset_index,
             time_index,

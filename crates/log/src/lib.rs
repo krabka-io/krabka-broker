@@ -97,6 +97,7 @@ mod delivery;
 mod error;
 mod filter;
 mod index;
+mod io;
 mod leader_epoch_checkpoint;
 mod log;
 pub mod name;
@@ -112,6 +113,8 @@ pub use config::{CleanupPolicy, DeliveryPolicy, LogConfig};
 pub use delivery::DeliveryAdvance;
 pub use error::LogError;
 pub use filter::{FilteredBatch, filter_batch};
+#[cfg(any(test, feature = "test-helpers"))]
+pub use io::LogIo;
 pub use krabka_ids::{LeaderEpoch, Offset, ProducerId};
 pub use leader_epoch_checkpoint::{
     EpochEntry, LeaderEpochCheckpoint, epoch_and_offset_for_entries,

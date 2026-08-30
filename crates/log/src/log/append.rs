@@ -183,8 +183,15 @@ impl Log {
             .expect("active segment must exist after Log::open");
         active.append(batch, index_interval)?;
 
-        if flush_on_append {
-            self.active_segment_flush()?;
+        if flush_on_append && let Err(error) = self.active_segment_flush() {
+            let active = self
+                .active
+                .as_mut()
+                .expect("active segment must exist after Log::open");
+            let relative = u32::try_from(batch.base_offset - active.base_offset().0)
+                .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+            active.truncate_to_relative(relative)?;
+            return Err(error);
         }
 
         // --- .stampindex write (internal sidecar) ---
@@ -261,7 +268,8 @@ impl Log {
             .expect("active segment must exist before rolling");
         old.seal();
         self.segments.push(old);
-        let new_seg = Segment::create(&self.dir, new_base)?;
+        let mut new_seg = Segment::create(&self.dir, new_base)?;
+        new_seg.set_io(self.io.clone());
         self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);

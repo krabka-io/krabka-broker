@@ -155,11 +155,58 @@ pub(crate) async fn run_produce_append_batch_at(
 mod tests {
     use assert2::{assert, check};
     use krabka_compression::CompressionType;
-    use krabka_log::LogConfig;
+    use krabka_log::{LogConfig, LogIo};
     use tempfile::tempdir;
 
     use super::*;
     use crate::partition_writer::test_support::sample_batch;
+
+    #[derive(Debug)]
+    struct FailNthWrite {
+        next: std::sync::atomic::AtomicUsize,
+        fail_at: usize,
+    }
+
+    impl LogIo for FailNthWrite {
+        fn write(&self, file: &std::fs::File, buf: &[u8]) -> std::io::Result<usize> {
+            use std::io::Write;
+
+            let call = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if call == self.fail_at {
+                Err(std::io::ErrorKind::StorageFull.into())
+            } else {
+                (&*file).write(buf)
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_produce_surfaces_nth_log_write_failure_without_advancing_leo() {
+        let dir = tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+        log.test_set_io(Arc::new(FailNthWrite {
+            next: std::sync::atomic::AtomicUsize::new(0),
+            fail_at: 2,
+        }));
+        let log = Mutex::new(log);
+
+        let (results, leo) = append_produce_batch(
+            &log,
+            vec![
+                ProduceData::Owned(sample_batch(1)),
+                ProduceData::Owned(sample_batch(1)),
+            ],
+        );
+
+        assert!(results[0].as_ref().unwrap() == &Offset(0));
+        assert!(matches!(
+            &results[1],
+            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
+                if error.kind() == std::io::ErrorKind::StorageFull
+        ));
+        assert!(leo == Offset(1));
+        assert!(log.lock().unwrap().log_end_offset() == Offset(1));
+    }
 
     #[test]
     fn append_owned_batch_recompresses_to_configured_log_codec() {

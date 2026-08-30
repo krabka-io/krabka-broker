@@ -22,6 +22,7 @@ use super::{
 use crate::{
     config::LogConfig,
     error::LogError,
+    io::FileIo,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
     name,
     producer_snapshot::{self, ProducerSnapshotEntry},
@@ -126,6 +127,7 @@ impl Log {
         let mut log = Self {
             dir,
             config,
+            io: std::sync::Arc::new(FileIo),
             segments,
             active: Some(active),
             dir_sync_needed,

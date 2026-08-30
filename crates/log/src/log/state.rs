@@ -117,7 +117,8 @@ impl Log {
         // Clear the start override so the derived value takes over.
         self.start_offset_override = None;
 
-        let new_active = Segment::create(&self.dir, new_base)?;
+        let mut new_active = Segment::create(&self.dir, new_base)?;
+        new_active.set_io(self.io.clone());
         self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
         let stamp_index_path = new_active.stamp_index_path();
         self.pending.clear(); // reset_to is a hard reset (after divergence)
@@ -230,6 +231,18 @@ impl Log {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn config_snapshot(&self) -> LogConfig {
         self.config.read().unwrap().clone()
+    }
+
+    /// Replace the active log-file I/O implementation for fault-injection tests.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn test_set_io(&mut self, io: std::sync::Arc<dyn crate::io::LogIo>) {
+        self.io = io.clone();
+        for segment in &mut self.segments {
+            segment.set_io(io.clone());
+        }
+        if let Some(active) = &mut self.active {
+            active.set_io(io);
+        }
     }
 
     /// Return all aborted transactions from the active segment's

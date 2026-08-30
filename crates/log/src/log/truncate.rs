@@ -93,7 +93,8 @@ impl Log {
                     index.truncate_from(offset)?;
                 }
             } else {
-                let new_seg = Segment::create(&self.dir, offset)?;
+                let mut new_seg = Segment::create(&self.dir, offset)?;
+                new_seg.set_io(self.io.clone());
                 self.active_txn_index = TxnIndex::open(new_seg.txn_index_path())?;
                 let stamp_index_path = new_seg.stamp_index_path();
                 self.active = Some(new_seg);
