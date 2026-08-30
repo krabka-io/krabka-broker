@@ -4,11 +4,67 @@
 //! Each search reads sealed segments oldest-first and then the active
 //! segment, and ties resolve to the earliest offset as KIP-734 requires.
 
+use std::time::SystemTime;
+
 use krabka_ids::Offset;
+use krabka_units::prelude::ByteSizeExt as _;
 
 use super::Log;
+use crate::{error::LogError, name, retention, segment::Segment};
 
 impl Log {
+    /// Legacy `ListOffsets` v0 segment boundaries at or before `timestamp`,
+    /// newest first and capped by `max_num_offsets`.
+    ///
+    /// Version 0 predates record timestamps. Its timestamp lookup uses each
+    /// segment file's modification time and returns segment base offsets (plus
+    /// the log end for a non-empty active segment), matching Kafka's
+    /// `legacyFetchOffsetsBefore` behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when a segment's modification time cannot be read.
+    pub fn legacy_offsets_before(
+        &self,
+        timestamp: i64,
+        max_num_offsets: usize,
+    ) -> Result<Vec<Offset>, LogError> {
+        let segments: Vec<&Segment> = self.segments.iter().chain(self.active.as_ref()).collect();
+        let log_start = self.log_start_offset();
+        let mut offset_times = Vec::with_capacity(segments.len() + 1);
+        for segment in &segments {
+            let modified = std::fs::metadata(name::log_path(&self.dir, segment.base_offset().0))?
+                .modified()?;
+            offset_times.push((
+                segment.base_offset().max(log_start),
+                retention::now_ms(modified),
+            ));
+        }
+        if segments
+            .last()
+            .is_some_and(|segment| segment.size() > krabka_units::ByteSize::ZERO)
+        {
+            offset_times.push((self.log_end_offset(), retention::now_ms(SystemTime::now())));
+        }
+
+        let start = match timestamp {
+            -1 => offset_times.len().checked_sub(1),
+            -2 => (!offset_times.is_empty()).then_some(0),
+            _ => offset_times
+                .iter()
+                .rposition(|(_, modified)| *modified <= timestamp),
+        };
+        let Some(start) = start else {
+            return Ok(Vec::new());
+        };
+        Ok(offset_times[..=start]
+            .iter()
+            .rev()
+            .take(max_num_offsets)
+            .map(|(offset, _)| *offset)
+            .collect())
+    }
+
     /// Earliest local `(offset, record_timestamp)` whose record timestamp is
     /// `>= target_ts`.
     ///
