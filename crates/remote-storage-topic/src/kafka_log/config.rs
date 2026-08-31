@@ -93,6 +93,8 @@ pub struct KafkaMetadataLogConfig {
     pub replication: i32,
     /// `client_id` for the producer and consumer. It is diagnostic only.
     pub client_id: String,
+    /// Provision and maintain this internal topic with log compaction.
+    pub compacted: bool,
     /// Client TLS/SASL security applied to the producer, the raw client,
     /// the admin client, and every per-partition fetch connection.
     /// `None` is plaintext loopback, and it is the default.
@@ -123,6 +125,7 @@ impl KafkaMetadataLogConfig {
             num_partitions: DEFAULT_NUM_PARTITIONS,
             replication: DEFAULT_REPLICATION,
             client_id: "krabka-rlmm".to_string(),
+            compacted: false,
             security: None,
             topic_create_timeout: DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
             fetch_max_wait: DEFAULT_METADATA_FETCH_MAX_WAIT,
@@ -200,6 +203,7 @@ mod tests {
         check!(cfg.topic == METADATA_TOPIC);
         check!(cfg.num_partitions == 50);
         check!(cfg.replication == 3);
+        check!(!cfg.compacted);
         check!(cfg.bootstrap == "127.0.0.1:9092");
         check!(cfg.security.is_none());
         check!(cfg.topic_create_timeout == secs(30));

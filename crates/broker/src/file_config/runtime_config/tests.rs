@@ -27,6 +27,7 @@ replication_fetch_max_wait = "750ms"
 replication_fetch_min = "2B"
 diskless_wal_flush_interval = "125ms"
 diskless_wal_flush_max_size = "4MiB"
+diskless_wal_hot_tail_max_size = "16MiB"
 diskless_wal_trim_safety_lag = 0
 diskless_wal_index_projection_timeout = "3s"
 controller_heartbeat_interval = "500ms"
@@ -70,6 +71,7 @@ streams_group_max_size = 19
     assert!(cfg.log_config.segment_size == mebibytes(1));
     assert!(cfg.diskless_wal_flush_interval == millis(125));
     assert!(cfg.diskless_wal_flush_max_size == mebibytes(4));
+    assert!(cfg.diskless_wal_hot_tail_max_size == mebibytes(16));
     assert!(cfg.diskless_wal_trim_safety_lag == 0);
     assert!(cfg.diskless_wal_index_projection_timeout == secs(3));
     assert!(cfg.share_group.max_size == 17);

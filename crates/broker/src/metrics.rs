@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 mod auth;
 mod break_glass;
 mod delivery;
+mod diskless;
 mod labels;
 mod log_cleaner;
 mod phases;
@@ -38,6 +39,7 @@ pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
     BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, QuotaType,
     QuotaTypeLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    WalShardLabel, WalVoterLabel,
 };
 pub(crate) use self::{labels::UNKNOWN_LABEL, phases::RequestPhases};
 
@@ -49,7 +51,7 @@ pub type SharedRegistry = Arc<Mutex<Registry>>;
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
 /// in `Broker::start`; hand out clones (each clone is a single
 /// `Arc::clone`) to every subsystem that emits.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BrokerMetrics {
     pub registry: SharedRegistry,
     pub topic_bytes_in: Family<TopicLabel, Counter>,
@@ -505,4 +507,23 @@ pub struct BrokerMetrics {
     /// two-person rule, and an operator should read the audit log for the
     /// partition it names.
     pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
+    /// Quorum-durable offset for each diskless WAL shard led by this broker.
+    pub diskless_wal_durable_watermark: Family<WalShardLabel, Gauge>,
+    /// Leader log-end minus each WAL voter's durable offset.
+    pub diskless_wal_voter_lag: Family<WalVoterLabel, Gauge>,
+    /// Leader-side attempts that could not form a WAL quorum.
+    pub diskless_wal_quorum_loss_events_total: Counter,
+    /// Non-empty WAL objects submitted to object storage.
+    pub diskless_wal_flush_attempts_total: Counter,
+    /// Bytes successfully written as WAL objects.
+    pub diskless_wal_flush_bytes_total: Counter,
+    /// WAL object flushes that failed after an attempt began.
+    pub diskless_wal_flush_failures_total: Counter,
+    /// Durable offsets not yet represented by the committed object index.
+    pub diskless_wal_index_projection_lag: Family<WalShardLabel, Gauge>,
+    /// Local WAL log-start offset after trimming.
+    pub diskless_wal_trim_frontier: Family<WalShardLabel, Gauge>,
+    pub diskless_wal_cold_read_hits_total: Counter,
+    pub diskless_wal_cold_read_misses_total: Counter,
+    pub diskless_wal_cold_read_errors_total: Counter,
 }

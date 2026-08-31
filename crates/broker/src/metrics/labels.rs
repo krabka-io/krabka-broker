@@ -34,6 +34,21 @@ pub struct PartitionLabel {
     pub partition: i32,
 }
 
+/// One diskless WAL shard. Topic UUIDs keep delete/recreate cycles distinct.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WalShardLabel {
+    pub topic_id: String,
+    pub partition: i32,
+}
+
+/// One voter in a diskless WAL shard's metadata-selected quorum.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WalVoterLabel {
+    pub topic_id: String,
+    pub partition: i32,
+    pub voter: u64,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {

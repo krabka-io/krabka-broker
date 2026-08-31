@@ -188,6 +188,46 @@ async fn handle_adds_new_partitions_and_preserves_response_identity() {
 }
 
 #[tokio::test]
+async fn handle_rejects_an_unplaceable_new_diskless_partition() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    seed_topic(&broker_handle, "diskless-grow", 1, 1).await;
+    broker_handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![krabka_metadata::MetadataRecord::V1TopicConfig(
+            krabka_metadata::TopicConfigRecord {
+                topic: "diskless-grow".into(),
+                overrides: maplit::btreemap! {
+                    crate::config_keys::DISKLESS.to_string() => "true".to_string()
+                },
+            },
+        )])
+        .await
+        .expect("mark topic diskless");
+    let broker = broker_handle.broker_arc_for_test();
+    let req = request(
+        vec![topic_req("diskless-grow", 2, Some(vec![assn(&[1])]))],
+        false,
+    );
+
+    let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
+
+    assert!(resp.results[0].error_code == codes::INVALID_CONFIG);
+    let message = resp.results[0].error_message.as_deref().unwrap_or_default();
+    for needle in ["partition 1", "leader 1", "broker.rack"] {
+        check!(message.contains(needle), "{message}");
+    }
+    assert!(
+        broker_handle
+            .controller_image_for_test()
+            .partitions_of("diskless-grow")
+            .count()
+            == 1
+    );
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn strict_create_partitions_rejects_after_quota_exhaustion() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     seed_topic(&broker_handle, "metered", 2, 1).await;

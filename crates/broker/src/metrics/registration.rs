@@ -151,6 +151,17 @@ impl BrokerMetrics {
             break_glass_proposals: Family::default(),
             break_glass_refusals: Family::default(),
             break_glass_bypassed: Family::default(),
+            diskless_wal_durable_watermark: Family::default(),
+            diskless_wal_voter_lag: Family::default(),
+            diskless_wal_quorum_loss_events_total: Counter::default(),
+            diskless_wal_flush_attempts_total: Counter::default(),
+            diskless_wal_flush_bytes_total: Counter::default(),
+            diskless_wal_flush_failures_total: Counter::default(),
+            diskless_wal_index_projection_lag: Family::default(),
+            diskless_wal_trim_frontier: Family::default(),
+            diskless_wal_cold_read_hits_total: Counter::default(),
+            diskless_wal_cold_read_misses_total: Counter::default(),
+            diskless_wal_cold_read_errors_total: Counter::default(),
         }
     }
 
@@ -173,6 +184,7 @@ impl BrokerMetrics {
             metrics.register_group_5(&mut registry);
             metrics.register_group_6(&mut registry);
             metrics.register_group_7(&mut registry);
+            metrics.register_group_8(&mut registry);
         }
         metrics
     }

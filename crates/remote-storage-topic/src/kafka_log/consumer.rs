@@ -195,11 +195,13 @@ async fn partition_fetch_loop(
                             if r.offset < next_offset {
                                 continue; // defensive: never go backwards
                             }
-                            let payload = r.value.unwrap_or_default();
+                            let tombstone = r.value.is_none();
                             let record = MetadataEventRecord {
                                 partition,
                                 offset: r.offset,
-                                payload,
+                                key: r.key,
+                                payload: r.value.unwrap_or_default(),
+                                tombstone,
                             };
                             next_offset = r.offset + 1;
                             if state.tx.send(record).await.is_err() {

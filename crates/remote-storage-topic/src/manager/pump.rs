@@ -31,28 +31,30 @@ pub async fn pump_loop(
             n = stream.next() => n,
         };
         let Some(record) = next else { return };
-        match MetadataEvent::decode(&record.payload) {
-            Ok(MetadataEvent::AddSegment(md)) => {
-                if let Err(e) = inner.add_remote_log_segment_metadata(md) {
-                    warn!(error = ?e, partition = record.partition, offset = record.offset,
-                          "topic-based RLMM: add replay rejected");
+        if !record.tombstone {
+            match MetadataEvent::decode(&record.payload) {
+                Ok(MetadataEvent::AddSegment(md)) => {
+                    if let Err(e) = inner.add_remote_log_segment_metadata(md) {
+                        warn!(error = ?e, partition = record.partition, offset = record.offset,
+                              "topic-based RLMM: add replay rejected");
+                    }
                 }
-            }
-            Ok(MetadataEvent::UpdateSegment(u)) => {
-                if let Err(e) = inner.update_remote_log_segment_metadata(u) {
-                    warn!(error = ?e, partition = record.partition, offset = record.offset,
-                          "topic-based RLMM: update replay rejected");
+                Ok(MetadataEvent::UpdateSegment(u)) => {
+                    if let Err(e) = inner.update_remote_log_segment_metadata(u) {
+                        warn!(error = ?e, partition = record.partition, offset = record.offset,
+                              "topic-based RLMM: update replay rejected");
+                    }
                 }
-            }
-            Ok(MetadataEvent::PartitionDelete(d)) => {
-                if let Err(e) = inner.put_remote_partition_delete_metadata(d) {
-                    warn!(error = ?e, partition = record.partition, offset = record.offset,
-                          "topic-based RLMM: partition-delete replay rejected");
+                Ok(MetadataEvent::PartitionDelete(d)) => {
+                    if let Err(e) = inner.put_remote_partition_delete_metadata(d) {
+                        warn!(error = ?e, partition = record.partition, offset = record.offset,
+                              "topic-based RLMM: partition-delete replay rejected");
+                    }
                 }
-            }
-            Err(e) => {
-                warn!(error = ?e, partition = record.partition, offset = record.offset,
-                      "topic-based RLMM: failed to decode event");
+                Err(e) => {
+                    warn!(error = ?e, partition = record.partition, offset = record.offset,
+                          "topic-based RLMM: failed to decode event");
+                }
             }
         }
         if let Ok(idx) = usize::try_from(record.partition) {

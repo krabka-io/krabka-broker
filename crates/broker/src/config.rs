@@ -45,6 +45,8 @@ pub const DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT: usize = 3;
 pub const DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL: Time = millis(250);
 /// Default byte ceiling for one diskless WAL object-store flush.
 pub const DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE: ByteSize = mebibytes(8);
+/// Default broker-wide byte ceiling for quorum-committed hot-tail batches.
+pub const DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE: ByteSize = mebibytes(64);
 /// Default committed-offset lag retained behind the diskless WAL trim frontier.
 pub const DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG: i64 = 1;
 /// Default wait for a published diskless WAL index record to be projected.
