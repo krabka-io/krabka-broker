@@ -23,14 +23,17 @@
 //! cache, which is the state a tail read finds it in.
 //!
 //! What the sweep leaves out is the read planning ahead of the drain: the
-//! sendfile path walks the segment's batch headers (`Log::read_raw_desc`) to
-//! build its regions, and that walk costs time the vectored path's single
-//! `read_raw` does not spend. It is proportional to the batch count rather
-//! than to the response size, so it shifts both columns by roughly the same
-//! amount at every size and moves the crossover very little. The measured
-//! crossover is therefore a slight over-statement of sendfile's advantage at
-//! the boundary, which is an argument for rounding `sendfile_min` up to a
-//! swept size rather than down.
+//! batch-header walk (`Log::read_raw_desc`) that builds the file regions. That
+//! omission does not tilt the table toward sendfile, because the walk is not
+//! the sendfile path's alone. `handlers::fetch::read` runs it on every
+//! sendfile-capable connection *before* it consults `sendfile_min`, so a
+//! response the threshold rejects pays the walk and then pays `read_raw` on
+//! top of it. Excluding the walk from both columns therefore understates the
+//! vectored column's real cost, not sendfile's.
+//!
+//! `sendfile_min` still sits at the smallest swept size rather than below it:
+//! the sweep says nothing about a response under 4 KiB, and a threshold is
+//! only as good as the measurement under it.
 //!
 //! `bench_crossover` prints ns per response for both paths at every size, the
 //! sendfile-over-vectored ratio, and the smallest swept size at which sendfile
