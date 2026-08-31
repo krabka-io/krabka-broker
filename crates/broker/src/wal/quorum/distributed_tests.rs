@@ -33,6 +33,14 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
         )
         .unwrap(),
     );
+    let metrics = crate::metrics::BrokerMetrics::new();
+    store.engine.attach_observability(
+        crate::wal::quorum::registry::ShardId {
+            topic_id: Uuid::from_u128(99),
+            partition: PartitionIndex(0),
+        },
+        metrics.clone(),
+    );
     store
         .engine
         .configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
@@ -56,6 +64,16 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
 
     assert!(sync.await.unwrap().unwrap() == leo);
     assert!(store.engine.durable_watermark() == leo);
+    assert!(
+        metrics
+            .diskless_wal_durable_watermark
+            .get_or_create(&crate::metrics::WalShardLabel {
+                topic_id: Uuid::from_u128(99).to_string(),
+                partition: 0,
+            })
+            .get()
+            == leo.0
+    );
     assert!(store.engine.replica_end_offsets() == vec![leo]);
     assert!(store.trim_to_offset(leo).await.unwrap() == leo);
     assert!(store.engine.replica_start_offsets() == vec![leo]);
@@ -76,6 +94,7 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
     store.engine.configure_distributed(NodeId(1), &[]);
     let error = sync.await.unwrap().unwrap_err();
     assert!(error.to_string().contains("placement disappeared"));
+    assert!(metrics.diskless_wal_quorum_loss_events_total.get() == 1);
 }
 
 #[tokio::test]

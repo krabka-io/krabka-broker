@@ -104,6 +104,12 @@ impl RuntimeFileConfig {
             cfg.diskless_wal_flush_max_size,
             whole_bytes_usize
         );
+        set_runtime_size_bytes!(
+            runtime,
+            diskless_wal_hot_tail_max_size,
+            cfg.diskless_wal_hot_tail_max_size,
+            whole_bytes_usize
+        );
         if let Some(value) = runtime.diskless_wal_trim_safety_lag {
             if value.is_negative() {
                 return Err(FileConfigError::InvalidConfig(

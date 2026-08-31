@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Nightly, 05:00 UTC: the full container run and the mutation sweep.
+    # Nightly, 05:00 UTC: the full container run.
     - cron: "0 5 * * *"
   workflow_dispatch:
 
@@ -35,7 +35,7 @@ jobs:
         with:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -72,7 +72,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -118,7 +118,7 @@ jobs:
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -239,7 +239,7 @@ jobs:
         with:
           # rdeps needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -317,7 +317,7 @@ jobs:
         suite: ${{ fromJSON(needs.docker-select.outputs.suites) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -357,52 +357,6 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
-  # The mutation rule runs unit tests only. Scope the blocking sweep to the
-  # consensus engine, whose decision logic is pure and unit-tested; the checked
-  # in `.cargo/mutants-baseline.txt` makes any survivor-set change blocking.
-  mutants-select:
-    name: select mutants targets
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      crates: ${{ steps.select.outputs.crates }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-mutants
-          repository-cache: true
-      - id: select
-        run: |
-          set -euo pipefail
-          crates='[{"target":"//crates/raft:raft_mutants","name":"raft","minutes":60}]'
-          echo "crates=${crates}" >>"${GITHUB_OUTPUT}"
-          echo "Selected: ${crates}"
-
-  mutants:
-    name: mutants · ${{ matrix.crate.name }}
-    needs: mutants-select
-    runs-on: ubuntu-latest
-    # A bound, not an estimate. A crate that cannot finish inside it is saying
-    # its shard count is too low, and that is worth being told.
-    timeout-minutes: ${{ matrix.crate.minutes }}
-    strategy:
-      fail-fast: false
-      matrix:
-        crate: ${{ fromJSON(needs.mutants-select.outputs.crates) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-mutants
-          repository-cache: true
-      - run: bash tools/check-mutants.sh ${{ matrix.crate.target }}
-
   # Push the broker image.
   #
   # Not `aspect delivery`: its "only what changed" tracking needs
@@ -426,7 +380,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true

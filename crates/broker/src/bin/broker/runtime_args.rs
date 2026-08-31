@@ -177,6 +177,8 @@ pub struct RuntimeArgs {
     pub diskless_wal_flush_interval: Option<Time>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     pub diskless_wal_flush_max_size: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_HOT_TAIL_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
+    pub diskless_wal_hot_tail_max_size: Option<ByteSize>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     pub diskless_wal_trim_safety_lag: Option<i64>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]

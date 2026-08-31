@@ -10,23 +10,35 @@ pub(crate) fn select_voters(
     local_node: NodeId,
     voters: usize,
 ) -> Vec<NodeId> {
+    let mut brokers = brokers
+        .into_iter()
+        .map(|broker| (broker.node_id, broker.rack))
+        .collect::<Vec<_>>();
+    brokers.sort_by_key(|(node_id, _)| node_id.0);
+    select_voters_from_sorted_racks(&brokers, local_node, voters)
+}
+
+/// Select voters from broker/rack pairs already sorted by node id.
+pub(crate) fn select_voters_from_sorted_racks(
+    brokers: &[(NodeId, Option<String>)],
+    local_node: NodeId,
+    voters: usize,
+) -> Vec<NodeId> {
     if voters == 0 {
         return Vec::new();
     }
-    let mut brokers = brokers.into_iter().collect::<Vec<_>>();
-    brokers.sort_by_key(|broker| broker.node_id.0);
 
     let mut selected = Vec::with_capacity(voters);
     let Some(local) = brokers
         .iter()
-        .find(|broker| broker.node_id == local_node && broker.rack.is_some())
+        .find(|(node_id, rack)| *node_id == local_node && rack.is_some())
     else {
         return selected;
     };
-    selected.push(local.node_id);
+    selected.push(local.0);
 
-    let rack_distinct = rack_distinct_candidates(&brokers, &selected)
-        .map(|broker| broker.node_id)
+    let rack_distinct = rack_distinct_candidates(brokers, &selected)
+        .map(|(node_id, _)| *node_id)
         .collect::<Vec<_>>();
     for node_id in rack_distinct {
         if selected.len() == voters {
@@ -39,23 +51,23 @@ pub(crate) fn select_voters(
 }
 
 fn rack_distinct_candidates<'a>(
-    brokers: &'a [BrokerRegistrationRecord],
+    brokers: &'a [(NodeId, Option<String>)],
     selected: &'a [NodeId],
-) -> impl Iterator<Item = &'a BrokerRegistrationRecord> {
+) -> impl Iterator<Item = &'a (NodeId, Option<String>)> {
     let mut used_racks = selected
         .iter()
         .filter_map(|node_id| {
             brokers
                 .iter()
-                .find(|broker| broker.node_id == *node_id)
-                .and_then(|broker| broker.rack.as_deref())
+                .find(|(broker_id, _)| broker_id == node_id)
+                .and_then(|(_, rack)| rack.as_deref())
         })
         .collect::<Vec<_>>();
-    brokers.iter().filter(move |broker| {
-        if selected.contains(&broker.node_id) {
+    brokers.iter().filter(move |(node_id, rack)| {
+        if selected.contains(node_id) {
             return false;
         }
-        let Some(rack) = broker.rack.as_deref() else {
+        let Some(rack) = rack.as_deref() else {
             return false;
         };
         if used_racks.contains(&rack) {

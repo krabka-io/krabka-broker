@@ -37,6 +37,7 @@ pub(crate) struct WalShardRegistry {
     principal_node_ids: HashMap<String, krabka_raft::NodeId>,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
     placements: RwLock<HashMap<ShardId, WalPlacement>>,
+    metrics: crate::metrics::BrokerMetrics,
     #[cfg(any(test, feature = "test-helpers"))]
     follower_fetchers: DashMap<ShardId, std::collections::BTreeSet<krabka_raft::NodeId>>,
 }
@@ -49,9 +50,16 @@ impl WalShardRegistry {
             principal_node_ids: HashMap::new(),
             engines: DashMap::new(),
             placements: RwLock::new(HashMap::new()),
+            metrics: crate::metrics::BrokerMetrics::new(),
             #[cfg(any(test, feature = "test-helpers"))]
             follower_fetchers: DashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_metrics(mut self, metrics: crate::metrics::BrokerMetrics) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     #[must_use]
@@ -85,6 +93,7 @@ impl WalShardRegistry {
             .get(&shard_id)
             .map_or(&[][..], |placement| placement.voters.as_slice());
         engine.configure_distributed(self.local_node_id, voters);
+        engine.attach_observability(shard_id, self.metrics.clone());
         self.engines.insert(shard_id, engine);
     }
 
@@ -159,7 +168,10 @@ impl WalShardRegistry {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         placements.remove(&shard_id);
-        self.engines.remove(&shard_id).map(|(_, engine)| engine)
+        self.engines.remove(&shard_id).map(|(_, engine)| {
+            engine.clear_observability();
+            engine
+        })
     }
 
     pub(crate) fn route_fetch_request(

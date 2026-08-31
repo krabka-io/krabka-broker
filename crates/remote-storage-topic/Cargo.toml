@@ -20,7 +20,7 @@ workspace = true
 [dependencies]
 assert2 = { workspace = true }
 maplit = { workspace = true }
-krabka-remote-storage = { version = "0.5.1", path = "../remote-storage" }
+krabka-remote-storage = { version = "0.5.2", path = "../remote-storage" }
 krabka-client-admin = { version = "0.4.0" }
 krabka-client-core = { version = "0.4.0" }
 krabka-client-producer = { version = "0.4.0" }

@@ -304,6 +304,10 @@ impl BrokerConfig {
                 "diskless_wal_flush_max_size",
                 self.diskless_wal_flush_max_size,
             ),
+            (
+                "diskless_wal_hot_tail_max_size",
+                self.diskless_wal_hot_tail_max_size,
+            ),
             ("share_recovery_read_max", self.share_recovery_read_max),
             ("barrier_recovery_read_max", self.barrier_recovery_read_max),
             ("socket_request_max", self.socket_request_max),
