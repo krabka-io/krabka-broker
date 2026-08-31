@@ -11,6 +11,7 @@ TESTS = ROOT / "crates/log/tests/integration.rs"
 LOG_BUILD = ROOT / "crates/log/BUILD.bazel"
 IMAGES = ROOT / "bazel/images/BUILD.bazel"
 MODULE = ROOT / "MODULE.bazel"
+THROTTLE_AUDIT = ROOT / "crates/broker/src/network/dispatch/throttle_audit.rs"
 ROWS = (
     (
         "JVM -> krabka",
@@ -23,6 +24,23 @@ ROWS = (
         "jvm_consumes_rust_written_log_dir",
     ),
 )
+
+
+# KIP-219 (throttle-then-respond) responses the broker delays but does not
+# echo, because `ThrottleTimeMs` is not the leading field of the response body
+# and the dispatch loop reports the delay by patching a leading int32. Each row
+# is one entry of `THROTTLE_ECHO_DIVERGENCES` in the audit module below, which
+# fails if the broker starts or stops diverging on any advertised version.
+THROTTLE_ECHO_ROWS = (
+    ("Produce", "0", "1-13", "Sits behind the `Responses` array; the handler charges the bandwidth quota itself and fills the field in before encoding"),
+    ("ApiVersions", "18", "1-5", "Sits behind the `ApiKeys` array, at an offset the response header does not fix"),
+    ("CreateDelegationToken", "38", "1-3", "Last field, behind the principal strings, the token timestamps and the HMAC"),
+    ("RenewDelegationToken", "39", "1-2", "Last field, behind `ErrorCode` and the new expiry timestamp"),
+    ("ExpireDelegationToken", "40", "1-2", "Last field, behind `ErrorCode` and the new expiry timestamp"),
+    ("DescribeDelegationToken", "41", "1-3", "Last field, behind `ErrorCode` and the variable-length token list"),
+    ("OffsetDelete", "47", "0", "Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only"),
+)
+THROTTLE_AUDIT_TEST = "throttle_echo_divergences_are_the_recorded_ones"
 
 
 def match(pattern: str, text: str, source: Path) -> str:
@@ -59,6 +77,21 @@ def render() -> str:
         MODULE,
     )
 
+    audit = THROTTLE_AUDIT.read_text()
+    match(rf"^fn ({re.escape(THROTTLE_AUDIT_TEST)})\(\)", audit, THROTTLE_AUDIT)
+    for _, key, versions, _ in THROTTLE_ECHO_ROWS:
+        low, _, high = versions.partition("-")
+        match(
+            rf"^\s+(\({re.escape(key)}, {re.escape(low)}, {re.escape(high or low)}\)),",
+            audit,
+            THROTTLE_AUDIT,
+        )
+
+    throttle_rows = "\n".join(
+        f"| {api} | {key} | {versions} | {reason} |"
+        for api, key, versions, reason in THROTTLE_ECHO_ROWS
+    )
+
     rows = "\n".join(
         f"| {direction} | Implemented | {contract} | "
         f"[`crates/log`](../crates/log) | "
@@ -80,6 +113,24 @@ segment and index discovery, and record key/value recovery in both directions.
 The Bazel Docker lane supplies the image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
 or checked-in output drift.
+
+## KIP-219 throttle-echo divergences
+
+The broker reports a request-quota delay by patching the leading `ThrottleTimeMs`
+int32 of an already-encoded response, so it can only echo the delay on responses
+whose schema puts that field first. Every other advertised API is audited by
+[`throttle_audit`](../crates/broker/src/network/dispatch/throttle_audit.rs),
+which encodes each response at each advertised version and compares where
+`ThrottleTimeMs` lands against the broker's table.
+
+The APIs below are still throttled -- the connection mute enforces the delay --
+but the response reports `throttle_time_ms = 0`, so a client sees latency
+instead of a back-off signal. Echoing them needs the typed response rather than
+a byte patch.
+
+| API | api_key | Versions | Why the field cannot be patched |
+| :--- | :--- | :--- | :--- |
+{throttle_rows}
 """
 
 

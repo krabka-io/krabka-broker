@@ -34,6 +34,8 @@ mod session;
 mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod throttle_audit;
 mod unsupported_version;
 
 pub use self::accept::serve_connection_on_listener;

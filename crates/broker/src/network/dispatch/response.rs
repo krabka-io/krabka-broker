@@ -87,34 +87,116 @@ pub(super) fn encode_response(
 /// The dispatch loop then reports the request-quota throttle by patching that
 /// leading int32 in place.
 ///
-/// The boundaries are verified against the 4.x response schemas. APIs that are
-/// absent from this table keep the pre-KIP-219 behavior: the channel mute
-/// still enforces the throttle, but the response does not echo it. Produce (0)
-/// and Fetch (1) account for themselves and never reach this path.
-/// `OffsetDelete` (47) is deliberately excluded, because its leading field is
-/// `ErrorCode` and a patch would corrupt it.
-fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
+/// The table is an exhaustive audit of every response schema in the pinned
+/// `krabka-protocol` checkout. The `throttle_audit` sibling module pins it: it
+/// enumerates every advertised `(api_key, version)` pair and compares this
+/// predicate against the byte layout the generated encoder actually produces.
+/// Adding an API to [`crate::api_catalog`] without classifying it here fails
+/// that test.
+///
+/// APIs that answer `false` fall into three groups.
+///
+/// * No `ThrottleTimeMs` field at all: `SaslHandshake` (17),
+///   `SaslAuthenticate` (36), `WriteTxnMarkers` (27), `DescribeQuorum` (55),
+///   `Vote` (52), `BeginQuorumEpoch` (53), `EndQuorumEpoch` (54),
+///   `Envelope` (58), the share-coordinator state RPCs (83-87) and
+///   `GetReplicaLogInfo` (93). There is nothing to echo.
+/// * `Produce` (0) and `Fetch` (1) below v1, whose bandwidth quota is charged
+///   by the handler itself; `maybe_apply_request_quota` returns before this
+///   predicate is consulted for either.
+/// * KIP-219 divergences -- the field is present but sits behind another
+///   field, so patching a leading int32 would corrupt the response. These are
+///   recorded as `THROTTLE_ECHO_DIVERGENCES` in the audit module and as rows
+///   in the generated `docs/KIP_MATRIX.md`:
+///   `Produce` (0) v1+ and `ApiVersions` (18) v1+ carry it after a
+///   variable-length array, the four delegation-token APIs (38-41) carry it
+///   last, and `OffsetDelete` (47) leads with `ErrorCode`. The channel mute
+///   still enforces the delay, so the throttle is applied but not advertised.
+///   Echoing it needs the field set on the typed response before encoding,
+///   which is how the Produce and Fetch handlers already do it.
+pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
     // The version bounds are the schema versions at which each API moved
-    // `ThrottleTimeMs` to the front of its response (verified against the
-    // 4.x response schemas); they are deliberately kept as literals here
-    // and pinned by the schema-boundary tests.
-    match ApiKey::from_i16(api_key) {
-        Some(ApiKey::ListOffsets | ApiKey::JoinGroup | ApiKey::OffsetForLeaderEpoch) => {
-            version >= 2
-        }
-        Some(ApiKey::Metadata | ApiKey::OffsetCommit | ApiKey::OffsetFetch) => version >= 3,
-        Some(
-            ApiKey::FindCoordinator
-            | ApiKey::Heartbeat
-            | ApiKey::LeaveGroup
-            | ApiKey::SyncGroup
-            | ApiKey::DescribeGroups
-            | ApiKey::ListGroups,
-        ) => version >= 1,
-        // InitProducerId / DescribeCluster / ConsumerGroupHeartbeat (all 0+)
-        Some(ApiKey::InitProducerId | ApiKey::DescribeCluster | ApiKey::ConsumerGroupHeartbeat) => {
-            true
-        }
+    // `ThrottleTimeMs` to the front of its response. They are deliberately
+    // kept as literals and pinned by `throttle_audit`.
+    let Some(api) = ApiKey::from_i16(api_key) else {
+        return false;
+    };
+    match api {
+        // Leading at every version the pinned schema defines.
+        ApiKey::DeleteRecords
+        | ApiKey::InitProducerId
+        | ApiKey::AddPartitionsToTxn
+        | ApiKey::AddOffsetsToTxn
+        | ApiKey::EndTxn
+        | ApiKey::TxnOffsetCommit
+        | ApiKey::AlterConfigs
+        | ApiKey::CreatePartitions
+        | ApiKey::DeleteGroups
+        | ApiKey::ElectLeaders
+        | ApiKey::IncrementalAlterConfigs
+        | ApiKey::AlterPartitionReassignments
+        | ApiKey::ListPartitionReassignments
+        | ApiKey::DescribeClientQuotas
+        | ApiKey::AlterClientQuotas
+        | ApiKey::DescribeUserScramCredentials
+        | ApiKey::AlterUserScramCredentials
+        | ApiKey::UpdateFeatures
+        | ApiKey::FetchSnapshot
+        | ApiKey::DescribeCluster
+        | ApiKey::DescribeProducers
+        | ApiKey::BrokerRegistration
+        | ApiKey::BrokerHeartbeat
+        | ApiKey::UnregisterBroker
+        | ApiKey::DescribeTransactions
+        | ApiKey::ListTransactions
+        | ApiKey::AllocateProducerIds
+        | ApiKey::ConsumerGroupHeartbeat
+        | ApiKey::ConsumerGroupDescribe
+        | ApiKey::ControllerRegistration
+        | ApiKey::GetTelemetrySubscriptions
+        | ApiKey::PushTelemetry
+        | ApiKey::AssignReplicasToDirs
+        | ApiKey::ListConfigResources
+        | ApiKey::DescribeTopicPartitions
+        | ApiKey::AddRaftVoter
+        | ApiKey::RemoveRaftVoter
+        | ApiKey::UpdateRaftVoter
+        | ApiKey::StreamsGroupHeartbeat
+        | ApiKey::StreamsGroupDescribe
+        | ApiKey::DescribeShareGroupOffsets
+        | ApiKey::AlterShareGroupOffsets
+        | ApiKey::DeleteShareGroupOffsets => true,
+        // Moved to the front at v1.
+        ApiKey::Fetch
+        | ApiKey::FindCoordinator
+        | ApiKey::Heartbeat
+        | ApiKey::LeaveGroup
+        | ApiKey::SyncGroup
+        | ApiKey::DescribeGroups
+        | ApiKey::ListGroups
+        | ApiKey::DeleteTopics
+        | ApiKey::DescribeAcls
+        | ApiKey::CreateAcls
+        | ApiKey::DeleteAcls
+        | ApiKey::DescribeConfigs
+        | ApiKey::AlterReplicaLogDirs
+        | ApiKey::DescribeLogDirs
+        | ApiKey::ShareGroupHeartbeat
+        | ApiKey::ShareGroupDescribe
+        | ApiKey::ShareFetch
+        | ApiKey::ShareAcknowledge => version >= 1,
+        // Moved to the front at v2.
+        ApiKey::ListOffsets
+        | ApiKey::JoinGroup
+        | ApiKey::CreateTopics
+        | ApiKey::OffsetForLeaderEpoch
+        | ApiKey::AlterPartition => version >= 2,
+        // Moved to the front at v3.
+        ApiKey::Metadata | ApiKey::OffsetCommit | ApiKey::OffsetFetch => version >= 3,
+        // Throttle-free, self-accounting, or a recorded divergence; see the
+        // three groups in the doc comment. `ApiKey` is `#[non_exhaustive]`, so
+        // a future variant lands here until the audit forces it to be
+        // classified.
         _ => false,
     }
 }
@@ -159,31 +241,6 @@ mod tests {
             .expect("encode response");
         // 4 byte corr_id + body, no tagged byte.
         assert!(out.len() == 4 + body.len());
-    }
-
-    #[test]
-    fn throttle_leading_field_table_matches_schemas() {
-        // Present-and-leading version boundaries (verified vs 4.x schemas).
-        // OffsetDelete (47) leads with ErrorCode — must never be patched.
-        // Produce/Fetch self-account; ApiVersions is not in the table.
-        let cases = [
-            (11, 1, false), // JoinGroup v1: no throttle
-            (11, 2, true),  // JoinGroup v2+: leading
-            (3, 2, false),  // Metadata v2: no throttle
-            (3, 3, true),   // Metadata v3+
-            (12, 1, true),  // Heartbeat v1+
-            (68, 0, true),  // ConsumerGroupHeartbeat v0+
-            (47, 0, false), // OffsetDelete
-            (0, 9, false),  // Produce
-            (1, 13, false), // Fetch
-            (18, 3, false), // ApiVersions
-        ];
-        for (api_key, version, want) in cases {
-            assert!(
-                throttle_is_leading_field(api_key, version) == want,
-                "api_key {api_key} version {version}"
-            );
-        }
     }
 
     #[test]
