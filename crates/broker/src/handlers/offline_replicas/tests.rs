@@ -1,6 +1,7 @@
 //! Table-driven coverage of the offline-replica projection: an unregistered
 //! broker, a fenced broker, a replica on a directory the registration no
-//! longer lists, and the two "online" sentinels.
+//! longer lists, a registration left with no online directory at all, and the
+//! two "online" sentinels.
 
 use assert2::assert;
 use krabka_metadata::{LeaderEpoch, MetadataRecord, TopicRecord};
@@ -119,10 +120,18 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
             expected: vec![],
         },
         Case {
-            name: "registration without directory assignment is online",
-            registrations: vec![(1, vec![]), (2, vec![])],
+            name: "registration whose last online dir was retired offlines its replicas",
+            registrations: vec![(1, vec![]), (2, vec![good])],
             replicas: vec![1, 2],
-            directories: vec![bad, bad],
+            directories: vec![bad, good],
+            unavailable: vec![],
+            expected: vec![1],
+        },
+        Case {
+            name: "registration with no online dir keeps an unassigned replica online",
+            registrations: vec![(1, vec![]), (2, vec![good])],
+            replicas: vec![1, 2],
+            directories: vec![Uuid::nil(), good],
             unavailable: vec![],
             expected: vec![],
         },

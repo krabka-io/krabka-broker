@@ -76,7 +76,7 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
     // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
     // as the image; see `handlers::offline_replicas`.
-    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker).await;
+    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
 
     // ── 1. Resolve the topic-name iteration order ──────────────────────
     // Named request: return every requested name, in request order, even

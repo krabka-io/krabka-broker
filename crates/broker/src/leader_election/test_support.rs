@@ -213,6 +213,40 @@ pub fn set_cluster_default(img: &mut MetadataImage, key: &str, value: &str) {
     }));
 }
 
+/// The submitted batches that carry partition changes.
+///
+/// A liveness tick also publishes the controller's fencing decisions (see
+/// [`crate::heartbeat::fencing`]), so a failover test reads the batches it
+/// cares about through this filter rather than by position.
+pub fn partition_batches(batches: &[Vec<MetadataRecord>]) -> Vec<Vec<MetadataRecord>> {
+    batches
+        .iter()
+        .filter(|batch| {
+            batch
+                .iter()
+                .all(|record| matches!(record, MetadataRecord::V1Partition(_)))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The `(broker, fenced)` pairs a liveness tick published, in submission
+/// order. `fenced` is `false` where the tick tombstoned the key.
+pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<(u64, bool)> {
+    batches
+        .iter()
+        .flatten()
+        .filter_map(|record| match record {
+            MetadataRecord::V1BrokerConfig(config)
+                if config.config_name == crate::config_keys::BROKER_FENCED =>
+            {
+                Some((config.node_id.0, config.config_value.is_some()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Extract the single-element `PartitionRecord` from a one-entry change
 /// list. Panics if the list is empty or carries a non-partition record.
 pub fn one_partition_change(changes: &[MetadataRecord]) -> &PartitionRecord {

@@ -8,6 +8,13 @@
 //! log-dir registry, and asserts that the whole partition row of both
 //! responses names the replica on the dead disk — and that a partition on the
 //! surviving disk still reports none.
+//!
+//! The other half of Kafka's rule is the fencing state
+//! (`KRaftMetadataCache.isReplicaOffline` is `fenced() || !hasOnlineDir(dir)`).
+//! Only the controller leader holds the heartbeat registry that decides it, so
+//! the second test boots a three-node cluster, kills a broker, and asks a node
+//! that is *not* the controller the same question. Clients reach whichever
+//! broker they are bootstrapped at, so the two answers have to agree.
 
 use std::{collections::HashSet, io, net::SocketAddr, time::Duration};
 
@@ -109,12 +116,16 @@ async fn start_two_dir_broker() -> (BrokerHandle, TempDir, TempDir, SocketAddr) 
 }
 
 async fn create_topic(addr: SocketAddr) {
+    create_topic_named(addr, TOPIC, PARTITIONS, 1).await;
+}
+
+async fn create_topic_named(addr: SocketAddr, name: &str, partitions: i32, replication: i16) {
     const VERSION: i16 = 7;
     let req = CreateTopicsRequest {
         topics: vec![CreatableTopic {
-            name: TOPIC.to_string(),
-            num_partitions: PARTITIONS,
-            replication_factor: 1,
+            name: name.to_string(),
+            num_partitions: partitions,
+            replication_factor: replication,
             ..Default::default()
         }],
         timeout_ms: 5_000,
@@ -130,9 +141,13 @@ async fn create_topic(addr: SocketAddr) {
 }
 
 async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition> {
+    metadata_partitions_of(addr, TOPIC).await
+}
+
+async fn metadata_partitions_of(addr: SocketAddr, name: &str) -> Vec<MetadataResponsePartition> {
     let req = MetadataRequest {
         topics: Some(vec![MetadataRequestTopic {
-            name: Some(TOPIC.to_string()),
+            name: Some(name.to_string()),
             ..Default::default()
         }]),
         allow_auto_topic_creation: false,
@@ -149,7 +164,7 @@ async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition>
     let topic = resp
         .topics
         .into_iter()
-        .find(|t| t.name.as_deref() == Some(TOPIC))
+        .find(|t| t.name.as_deref() == Some(name))
         .expect("topic row in Metadata response");
     assert!(topic.error_code == 0);
     let mut partitions = topic.partitions;
@@ -320,4 +335,106 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
     assert!(described == expected_described);
 
     handle.shutdown().await;
+}
+
+/// The three-node suite below drives the fencing half of the projection.
+mod support;
+
+const FENCED_TOPIC: &str = "kip112-fenced-broker";
+/// Broker 3 crashes; with a two-second heartbeat timeout and a one-second
+/// liveness tick under `BrokerConfig::for_tests`, the controller notices,
+/// publishes the fencing state and the follower applies it well inside this.
+const FENCING_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn node_id_of(handle: &BrokerHandle) -> i32 {
+    i32::try_from(handle.node_id()).expect("node id fits an i32")
+}
+
+/// The partition row `observer` must eventually serve for `FENCED_TOPIC`: the
+/// leader, epoch, replicas and ISR its own image carries, with `dead` reported
+/// offline.
+fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePartition {
+    let image = observer.controller_image_for_test();
+    let record = image
+        .partition(FENCED_TOPIC, 0)
+        .expect("partition in the observer's image");
+    let ids = |nodes: &[krabka_metadata::NodeId]| -> Vec<i32> {
+        nodes
+            .iter()
+            .map(|node| i32::try_from(node.0).expect("node id fits an i32"))
+            .collect()
+    };
+    MetadataResponsePartition {
+        error_code: 0,
+        partition_index: 0,
+        leader_id: i32::try_from(record.leader.0).expect("node id fits an i32"),
+        leader_epoch: record.leader_epoch.0,
+        replica_nodes: ids(&record.replicas),
+        isr_nodes: ids(&record.isr),
+        offline_replicas: vec![dead],
+        ..Default::default()
+    }
+}
+
+/// A `Metadata` response served by a broker that is not the controller must
+/// report the replicas of a dead broker offline. The fencing state lives in
+/// the controller's heartbeat registry, so it only reaches this node if the
+/// controller writes it to the metadata log.
+#[tokio::test]
+async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
+    let mut cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    create_topic_named(cluster[0].0.listen_addr(), FENCED_TOPIC, 1, 3).await;
+    for (handle, _, _) in &cluster {
+        handle.wait_until_partition_present(FENCED_TOPIC, 0).await;
+    }
+
+    // The controller leader answers this correctly out of its own registry.
+    // The interesting node is one of the two that do not hold one: it serves
+    // clients all the same.
+    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let followers: Vec<usize> = (0..cluster.len())
+        .filter(|&i| cluster[i].0.node_id() != leader.0)
+        .collect();
+    assert!(
+        followers.len() == 2,
+        "a three-node cluster has two non-controller nodes"
+    );
+    // `followers` ascends, so removing the victim leaves the observer's index
+    // where it was.
+    let (observer_index, victim_index) = (followers[0], followers[1]);
+    let victim_id = node_id_of(&cluster[victim_index].0);
+    let observer_addr = cluster[observer_index].0.listen_addr();
+
+    // The config and the log dir stay alive for the rest of the test: a
+    // crashed broker's teardown must not race a deleted directory.
+    let (victim, _victim_config, _victim_dir) = cluster.remove(victim_index);
+    victim.crash_for_test().await;
+
+    let observer = &cluster[observer_index].0;
+    let deadline = tokio::time::Instant::now() + FENCING_TIMEOUT;
+    loop {
+        let expected = vec![expected_partition(observer, victim_id)];
+        let actual = metadata_partitions_of(observer_addr, FENCED_TOPIC).await;
+        if actual == expected {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "broker {victim_id} died but a non-controller node never reported \
+             its replica offline: {actual:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    // The answer above is only worth anything if it came from a node that
+    // does not hold the heartbeat registry.
+    assert!(
+        observer.controller_leader_id() != Some(krabka_raft::NodeId(observer.node_id())),
+        "the observer must still be a follower for this test to mean anything"
+    );
+
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
 }

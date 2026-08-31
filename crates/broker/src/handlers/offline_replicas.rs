@@ -19,11 +19,14 @@
 //! offline set of a broker is therefore the directories named by partition
 //! assignments that its registration no longer lists.
 //!
-//! Fencing state is not in the Krabka metadata image; the controller holds it
-//! in its heartbeat liveness registry. [`unavailable_brokers`] reads that
-//! registry on the controller leader and reports an empty set elsewhere.
-//! `DescribeCluster` calls the same helper for its `is_fenced` column, so the
-//! two answers cannot drift apart.
+//! The fencing half is replicated too. Only the controller leader keeps a
+//! heartbeat registry, so it publishes what that registry decides as the
+//! [`BROKER_FENCED`](crate::config_keys::BROKER_FENCED) broker config (see
+//! [`crate::heartbeat::fencing`]), the way Kafka's controller writes
+//! `BrokerRegistrationChangeRecord.fenced`. [`unavailable_brokers`] reads it
+//! back out of the image, so a request served by a follower answers with the
+//! same set as one served by the controller. `DescribeCluster` calls the same
+//! helper for its `is_fenced` column, so the two answers cannot drift apart.
 
 use std::collections::HashSet;
 
@@ -33,19 +36,20 @@ use crate::broker::Broker;
 
 /// The brokers this node knows to be fenced or past their heartbeat deadline.
 ///
-/// Only the controller leader keeps a heartbeat registry, so a request served
-/// by any other node yields an empty set and the offline projection falls back
-/// to registration and directory state, both of which are quorum-replicated.
+/// The replicated `broker.fenced` state answers this on every node. The
+/// controller leader unions its live registry on top of it: the publication
+/// trails that registry by at most one liveness tick, and the node that made
+/// the decision must not report less than it already knows.
 ///
 /// `DescribeCluster` reads the same set for `is_fenced` and for the KIP-1073
 /// `include_fenced_brokers` filter.
-pub(crate) async fn unavailable_brokers(broker: &Broker) -> HashSet<u64> {
+pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
+    let mut unavailable = crate::config_keys::fenced_node_ids(image);
     let is_controller = *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
     if is_controller {
-        broker.liveness.unavailable_snapshot().await
-    } else {
-        HashSet::new()
+        unavailable.extend(broker.liveness.unavailable_snapshot().await);
     }
+    unavailable
 }
 
 /// The offline replicas of `partition`, in replica order.
@@ -87,17 +91,24 @@ fn is_offline(
 
 /// Whether `directory` is one of the broker's online log directories.
 ///
-/// Mirrors `DirectoryId.isOnline`: the unassigned directory id is online
-/// because the owning broker has not reported its `AssignReplicasToDirs` yet,
-/// and an empty registration directory list means the broker predates
-/// directory assignment, so every replica on it counts as online.
+/// The unassigned directory id is online, as in `DirectoryId.isOnline`,
+/// because the owning broker has not reported its `AssignReplicasToDirs` yet
+/// and no disk can be blamed for a replica nobody has placed.
+///
+/// `DirectoryId.isOnline` also reads an empty directory list as "everything
+/// on this broker is online", for registrations written before metadata
+/// version 3.7-IV2 carried log dirs at all. Krabka has no such registration:
+/// a broker publishes an id for every entry of `log.dirs` when it registers,
+/// and the only writer that shortens that list is the KIP-112 retire path in
+/// [`crate::handlers::broker_heartbeat::failover`]. An empty list here means
+/// the broker reported its last surviving directory offline, so a concrete
+/// non-nil assignment on it names a dead disk, not a broker that predates
+/// directory assignment.
 fn has_online_dir(registration: &BrokerRegistrationRecord, directory: Option<uuid::Uuid>) -> bool {
     let Some(directory) = directory else {
         return true;
     };
-    directory.is_nil()
-        || registration.log_dirs.is_empty()
-        || registration.log_dirs.contains(&directory)
+    directory.is_nil() || registration.log_dirs.contains(&directory)
 }
 
 #[cfg(test)]
