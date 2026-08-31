@@ -56,11 +56,12 @@ macro_rules! api_version {
 
 /// Narrows an advertised range to the single version the engine's codec speaks.
 ///
-/// The bounds check is const-evaluated: the array holds one element, so a
-/// pinned version outside the generated `min..=max` indexes past its end and
-/// the compiler rejects the table. That turns a `krabka-protocol` bump which
-/// drops or renumbers a KIP-595 version into a build failure instead of an
-/// inter-controller RPC that decodes at a version nobody sent.
+/// The bounds check is const-evaluated: the table is a `const`, so a pinned
+/// version outside the generated `min..=max` aborts const evaluation and the
+/// compiler rejects the table, quoting this message and pointing at the entry
+/// that broke. That turns a `krabka-protocol` bump which drops or renumbers a
+/// KIP-595 version into a build failure instead of an inter-controller RPC that
+/// decodes at a version nobody sent.
 const fn pinned(
     api_key: i16,
     version: i16,
@@ -68,7 +69,18 @@ const fn pinned(
     max: i16,
     flexible_min: i16,
 ) -> ControllerApiVersion {
-    let version = [version][(version < min || version > max) as usize];
+    // Written as an `if`/`else` expression rather than a bare guard clause:
+    // `clippy::manual_assert` rewrites the guard form to `assert!`, which
+    // `clippy.toml` disallows in favour of `assert2`, and `assert2` is not a
+    // const macro.
+    let version = if version >= min && version <= max {
+        version
+    } else {
+        panic!(
+            "the wire codec pins this API to a version the generated schema no longer covers; \
+             re-capture the version in `kraft::transport::wire::codec` against a real broker"
+        )
+    };
     ControllerApiVersion {
         api_key,
         min_version: version,
@@ -82,6 +94,13 @@ const fn pinned(
 /// The KIP-919 Admin surface the broker attaches through
 /// [`ControllerAdminRouter`](crate::ControllerAdminRouter) is advertised
 /// alongside this table but declared by the broker, not here.
+///
+/// Every pinned version still intersects what a real peer offers. A
+/// `mirror.gcr.io/apache/kafka:4.0.0` controller listener, asked for
+/// `ApiVersions` on its `CONTROLLER` listener, answers Fetch `4-17`, Vote
+/// `0-2`, `BeginQuorumEpoch` `0-1`, `EndQuorumEpoch` `0-1` and `FetchSnapshot`
+/// `0-1`, so a JVM peer negotiating against the pins below lands on exactly the
+/// versions the codec speaks: Fetch v17, Vote v2, and v1 for the other three.
 pub(super) const CONTROLLER_LISTENER_APIS: &[ControllerApiVersion] = &[
     api_version!(fetch_request, pinned = FETCH_VERSION),
     api_version!(api_versions_request),

@@ -109,8 +109,11 @@ mod tests {
         check!(raft_error_code(&RaftError::Shutdown) == UNKNOWN_SERVER_ERROR);
     }
 
+    /// The declared keys are the generated ones. The versions these are served
+    /// at are asserted with the rest of the advertised table, in
+    /// [`super::super::api_versions::table`].
     #[test]
-    fn lifecycle_api_table_matches_generated_schemas() {
+    fn lifecycle_api_keys_match_generated_schemas() {
         assert2::assert!(SUPPORTED_APIS == [62, 63, 70]);
     }
 }
