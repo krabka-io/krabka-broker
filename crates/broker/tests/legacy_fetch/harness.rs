@@ -89,11 +89,21 @@ pub async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> Wi
 /// Creates a single-partition topic with the modern client and asserts that it
 /// succeeds.
 pub async fn create_topic(client: &krabka_client_core::Client, name: &str) {
+    create_topic_with_partitions(client, name, 1).await;
+}
+
+/// Creates a topic of `num_partitions` partitions with the modern client and
+/// asserts that it succeeds.
+pub async fn create_topic_with_partitions(
+    client: &krabka_client_core::Client,
+    name: &str,
+    num_partitions: i32,
+) {
     let cr = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: name.into(),
-                num_partitions: 1,
+                num_partitions,
                 replication_factor: 1,
                 ..Default::default()
             }],
@@ -112,6 +122,17 @@ pub async fn create_topic(client: &krabka_client_core::Client, name: &str) {
 /// Produces a single v2 batch to (topic, partition=0) with a modern flexible
 /// `ProduceRequest`, version 9. Returns `Ok(())` on success.
 pub async fn produce_batch(addr: std::net::SocketAddr, topic: &str, batch: RecordBatch) {
+    produce_batch_to(addr, topic, 0, batch).await;
+}
+
+/// Produces a single v2 batch to `(topic, partition)` with a modern flexible
+/// `ProduceRequest`, version 9.
+pub async fn produce_batch_to(
+    addr: std::net::SocketAddr,
+    topic: &str,
+    partition: i32,
+    batch: RecordBatch,
+) {
     const PRODUCE_VERSION: i16 = 9;
     let req = ProduceRequest {
         acks: 1,
@@ -119,7 +140,7 @@ pub async fn produce_batch(addr: std::net::SocketAddr, topic: &str, batch: Recor
         topic_data: vec![TopicProduceData {
             name: topic.into(),
             partition_data: vec![PartitionProduceData {
-                index: 0,
+                index: partition,
                 records: Some(RecordsPayload::V2(vec![batch])),
                 ..Default::default()
             }],
@@ -188,6 +209,22 @@ pub async fn fetch_legacy_raw_at(
     version: i16,
     fetch_offset: i64,
 ) -> Vec<u8> {
+    fetch_legacy_raw_partitions(addr, topic, version, &[0], fetch_offset).await
+}
+
+/// Sends one legacy Fetch covering several partitions of the same topic, so
+/// the response carries more than one row for that topic entry.
+///
+/// The single-partition helpers cannot reach the down-conversion loop's
+/// per-partition body more than once, which is where the topic name is turned
+/// into a metric label.
+pub async fn fetch_legacy_raw_partitions(
+    addr: std::net::SocketAddr,
+    topic: &str,
+    version: i16,
+    partitions: &[i32],
+    fetch_offset: i64,
+) -> Vec<u8> {
     let req = FetchRequest {
         replica_id: -1,
         max_wait_ms: 500,
@@ -195,12 +232,15 @@ pub async fn fetch_legacy_raw_at(
         max_bytes: 1 << 20,
         topics: vec![FetchTopic {
             topic: topic.to_string(),
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset,
-                partition_max_bytes: 1 << 20,
-                ..Default::default()
-            }],
+            partitions: partitions
+                .iter()
+                .map(|&partition| FetchPartition {
+                    partition,
+                    fetch_offset,
+                    partition_max_bytes: 1 << 20,
+                    ..Default::default()
+                })
+                .collect(),
             ..Default::default()
         }],
         ..Default::default()
