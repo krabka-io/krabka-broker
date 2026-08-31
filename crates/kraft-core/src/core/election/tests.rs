@@ -303,3 +303,48 @@ fn late_grant_from_removed_voter_does_not_count() {
     );
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
 }
+
+#[test]
+fn removed_voter_response_retallies_retained_grants() {
+    let mut m = machine(
+        NodeId(1),
+        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
+    );
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2001),
+    );
+
+    m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(4)]), SimInstant(2002));
+    let actions = m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(3),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2003),
+    );
+
+    check!(
+        matches!(m.role(), Role::Candidate { .. }),
+        "retained grants form a majority after the voter-set shrink"
+    );
+    assert2::assert!(actions.iter().any(|action| matches!(
+        action,
+        Action::SendVoteRequest {
+            epoch: 1,
+            pre_vote: false
+        }
+    )));
+}

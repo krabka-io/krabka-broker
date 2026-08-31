@@ -110,10 +110,9 @@ impl QuorumStateMachine {
         }
         // A response is tied locally to the peer we contacted, but membership
         // may have changed while that RPC was in flight. Removed voters cannot
-        // contribute to the new configuration's quorum.
-        if !self.state.voters.contains(from) {
-            return Vec::new();
-        }
+        // contribute to the new configuration's quorum, but their response must
+        // still re-tally grants retained by the new voter set.
+        let current_voter = self.state.voters.contains(from);
         // Match the grant to our round by our OWN role + epoch — exactly as
         // Kafka does (its `VoteResponse` carries no pre-vote flag). `Prospective`
         // ⇒ this is a pre-vote grant; `Candidate` ⇒ a real-vote grant. The epoch
@@ -121,7 +120,9 @@ impl QuorumStateMachine {
         // grant at epoch E arriving after we bumped to E+1 and became Candidate).
         match &mut self.role {
             Role::Prospective { granted, .. } if epoch == self.state.leader_epoch => {
-                granted.insert(from);
+                if current_voter {
+                    granted.insert(from);
+                }
                 if self.tally_reached_majority() {
                     self.promote_to_candidate(log, now)
                 } else {
@@ -129,7 +130,9 @@ impl QuorumStateMachine {
                 }
             }
             Role::Candidate { granted, .. } if epoch == self.state.leader_epoch => {
-                granted.insert(from);
+                if current_voter {
+                    granted.insert(from);
+                }
                 if self.tally_reached_majority() {
                     self.promote_to_leader(log)
                 } else {

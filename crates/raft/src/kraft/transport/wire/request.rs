@@ -107,7 +107,7 @@ impl PeerRequest {
                     return None;
                 }
                 let req = VoteRequest {
-                    cluster_id: cluster_id.map(|id| id.to_string()),
+                    cluster_id: cluster_id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes())),
                     voter_id: i32::try_from(voter_id.0).ok()?,
                     topics: vec![vote_req::TopicData {
                         topic_name: METADATA_TOPIC.to_string(),

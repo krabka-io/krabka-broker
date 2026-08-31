@@ -28,8 +28,9 @@ fn raw_vote_body(request: &VoteRequest) -> Bytes {
 
 #[test]
 fn vote_request_round_trips() {
+    let cluster_id = uuid::Uuid::from_u128(1);
     let req = PeerRequest::Vote {
-        cluster_id: Some(uuid::Uuid::from_u128(1)),
+        cluster_id: Some(cluster_id),
         voter_id: NodeId(9),
         voter_directory_id: uuid::Uuid::from_u128(2),
         candidate_epoch: 3,
@@ -39,7 +40,15 @@ fn vote_request_round_trips() {
         last_offset: 42,
         pre_vote: true,
     };
-    assert2::assert!(decode_vote(&req.encode()) == Some(req));
+    let encoded = req.encode();
+    assert2::assert!(decode_vote(&encoded) == Some(req));
+
+    let mut cur = &encoded[..];
+    let raw = VoteRequest::decode(&mut cur, VOTE_VERSION).expect("decode vote request");
+    assert2::assert!(
+        raw.cluster_id
+            == Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()))
+    );
 }
 
 #[test]
