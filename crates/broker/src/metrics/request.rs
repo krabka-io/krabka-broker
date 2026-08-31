@@ -109,7 +109,9 @@ impl BrokerMetrics {
     ///
     /// The `max` lives here rather than at each call site so that the delay
     /// the broker sleeps for, the delay it reports in `ThrottleTimeMs`, and
-    /// the delay it records cannot drift apart.
+    /// the delay it records cannot drift apart. An api that is charged one
+    /// quota still calls with a one-entry slice, for that reason: the
+    /// KIP-599 admin apis pass only their controller-mutation delay.
     pub(crate) fn record_applied_throttle(
         &self,
         api_key: ApiKeyCode,
@@ -221,6 +223,12 @@ mod tests {
                 ],
                 <Time as TimeExt>::ZERO,
                 None,
+            ),
+            (
+                "the KIP-599 admin apis charge one quota and pass one entry",
+                vec![(QuotaType::ControllerMutation, millis(750))],
+                millis(750),
+                Some(QuotaType::ControllerMutation),
             ),
         ];
 

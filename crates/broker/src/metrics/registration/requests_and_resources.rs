@@ -140,9 +140,10 @@ impl BrokerMetrics {
         registry.register(
             "request_throttle_duration_seconds",
             "Per-Kafka-API seconds one request slept in the \
-             KIP-219 quota throttle. Mirrors Kafka's \
-             RequestMetrics.ThrottleTimeMs. Observed once per request whose \
-             quota the broker accounts for, with an explicit zero when no \
+             KIP-219 quota throttle, or in the KIP-599 controller-mutation \
+             throttle the topic-mutating admin apis apply inline. Mirrors \
+             Kafka's RequestMetrics.ThrottleTimeMs. Observed once per request \
+             whose quota the broker accounts for, with an explicit zero when no \
              quota applied. The three phase families are disjoint and sum to \
              at most the total; the remainder is decode, authorization, \
              validation and encode.",
@@ -154,7 +155,8 @@ impl BrokerMetrics {
             "Seconds of throttle the broker actually applied, \
              labelled by the client quota that caused it (Produce = \
              producer_byte_rate, Fetch = consumer_byte_rate, Request = \
-             request_percentage). A request sleeps for the largest of the \
+             request_percentage, ControllerMutation = \
+             controller_mutation_rate). A request sleeps for the largest of the \
              delays it is charged, and the sample lands under the quota that \
              produced it — the one an operator would raise to stop the \
              throttle. Unthrottled requests are not observed, so _count is \

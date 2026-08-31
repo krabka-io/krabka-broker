@@ -230,5 +230,5 @@ pub(crate) async fn handle(
 
     // KIP-599: apply controller_mutation_rate throttle after response assembly,
     // before encoding. Sets throttle_time_ms and sleeps so the client waits.
-    finish_response(quota.delay(), results, version).await
+    finish_response(broker, quota.delay(), results, version).await
 }

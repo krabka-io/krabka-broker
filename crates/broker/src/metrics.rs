@@ -245,8 +245,10 @@ pub struct BrokerMetrics {
     /// per request whose quota the broker accounts for, with an explicit zero
     /// when no quota applied, so a throttled fleet is visible as a shift in
     /// the distribution rather than as an appearing series. The apis the
-    /// dispatch registry marks quota-exempt are not observed at all, so this
-    /// `_count` is at most [`Self::request_duration_seconds`]'s.
+    /// dispatch registry marks quota-exempt are observed only where they
+    /// resolve a throttle of their own — the KIP-599 sleep on `CreateTopics`,
+    /// `CreatePartitions` and `DeleteTopics` — and not at all otherwise, so
+    /// this `_count` is at most [`Self::request_duration_seconds`]'s.
     ///
     /// The three phase families are disjoint: a request is in exactly one of
     /// them at a time, and each interval is charged to exactly one. They do
