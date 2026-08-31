@@ -1,11 +1,18 @@
 //! The per-partition offset resolution: one row of a `ListOffsets` request
 //! turned into one row of the response.
 //!
-//! The version gate runs first, then the partition lookup, and then the match
-//! that sends each sentinel to the log, the remote tier, or the diskless index
-//! that answers it. A partition that fails any of those steps carries its own
-//! error code, because Kafka reports per-partition failures in the row rather
-//! than at the top level.
+//! The version gate runs first, then the partition lookup, then KIP-320's
+//! leader-epoch fence, and then the match that sends each sentinel to the log,
+//! the remote tier, or the diskless index that answers it. A partition that
+//! fails any of those steps carries its own error code, because Kafka reports
+//! per-partition failures in the row rather than at the top level.
+//!
+//! The fence sits exactly where Kafka's does. `Partition.fetchOffsetForTimestamp`
+//! resolves nothing until `localLogWithEpochOrThrow` has compared the request's
+//! `current_leader_epoch` against the live one, so a consumer holding stale
+//! metadata is told to refresh rather than handed an offset resolved against a
+//! leader it no longer believes in -- and then refused by the very next Fetch,
+//! which applies the same comparison.
 
 use std::time::Duration;
 
@@ -52,6 +59,11 @@ pub(super) async fn resolve_partition(
         response.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
         return response;
     };
+    // KIP-320. The `current_leader_epoch` field decodes from v4 up and holds
+    // the `-1` sentinel below it, so a v1-v3 request never trips the fence.
+    if let Some((error_code, _)) = partition.leader_epoch_fence(request.current_leader_epoch) {
+        return error_response(index, error_code);
+    }
     let (local_start, local_end, local_log_start, log_config) = {
         let log = partition.log.lock().expect("log mutex poisoned");
         (
@@ -247,7 +259,79 @@ mod tests {
     use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 
     use super::*;
-    use crate::handlers::list_offsets::test_support::{client_for, create_topic, list_one};
+    use crate::handlers::list_offsets::test_support::{
+        client_for, create_topic, list_one, list_one_at_epoch,
+    };
+
+    #[tokio::test]
+    async fn request_leader_epoch_is_fenced_the_way_the_fetch_path_fences_it() {
+        const TOPIC: &str = "list-offsets-epoch";
+        const CURRENT_EPOCH: i32 = 3;
+        const RECORDS: usize = 4;
+
+        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+        })
+        .await;
+        let client = client_for(&broker).await;
+        create_topic(&client, TOPIC, Vec::new()).await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
+        broker
+            .produce_records_for_test(TOPIC, 0, RECORDS)
+            .await
+            .expect("produce");
+        broker
+            .broker_arc_for_test()
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition")
+            .test_set_leader_epoch(CURRENT_EPOCH);
+
+        let resolved = ListOffsetsPartitionResponse {
+            partition_index: 0,
+            error_code: codes::NONE,
+            timestamp: UNKNOWN_TIMESTAMP,
+            offset: i64::try_from(RECORDS).expect("record count fits an offset"),
+            leader_epoch: UNKNOWN_EPOCH,
+            ..Default::default()
+        };
+        let fenced = |error_code| ListOffsetsPartitionResponse {
+            partition_index: 0,
+            error_code,
+            timestamp: UNKNOWN_TIMESTAMP,
+            offset: UNKNOWN_OFFSET,
+            leader_epoch: UNKNOWN_EPOCH,
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "below the current epoch",
+                CURRENT_EPOCH - 1,
+                fenced(codes::FENCED_LEADER_EPOCH),
+            ),
+            (
+                "equal to the current epoch",
+                CURRENT_EPOCH,
+                resolved.clone(),
+            ),
+            (
+                "above the current epoch",
+                CURRENT_EPOCH + 1,
+                fenced(codes::UNKNOWN_LEADER_EPOCH),
+            ),
+            ("the unknown-epoch sentinel", UNKNOWN_EPOCH, resolved),
+        ];
+        for (name, request_epoch, expected) in cases {
+            assert!(
+                list_one_at_epoch(&client, TOPIC, LATEST_TIMESTAMP, request_epoch).await
+                    == expected,
+                "{name}"
+            );
+        }
+
+        drop(client);
+        broker.shutdown().await;
+    }
 
     #[tokio::test]
     async fn non_tiered_sentinels_use_ordinary_earliest_and_unknown_remote_offsets() {

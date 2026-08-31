@@ -453,7 +453,7 @@ mod tests {
             ready: Arc::new(AtomicBool::new(false)),
         };
 
-        let mut reclaimer = Reclaimer::new(Duration::from_secs(60));
+        let mut reclaimer = Reclaimer::new(Duration::from_mins(1));
         let observed = Instant::now();
         reclaimer.sweep_at(&context, observed).await;
         assert!(
@@ -464,7 +464,7 @@ mod tests {
             "the grace period protects lagging projections"
         );
         reclaimer
-            .sweep_at(&context, observed + Duration::from_secs(60))
+            .sweep_at(&context, observed + Duration::from_mins(1))
             .await;
 
         assert!(

@@ -171,6 +171,29 @@ impl Partition {
         self.hw_advance_notify.notify_waiters();
     }
 
+    /// KIP-320's leader-epoch fence, shared by every request that carries a
+    /// `current_leader_epoch`. A request epoch below this partition's live
+    /// epoch belongs to a leader generation that has already been superseded
+    /// and takes `FENCED_LEADER_EPOCH`; one above it names a generation this
+    /// broker has not observed yet and takes `UNKNOWN_LEADER_EPOCH`. Kafka's
+    /// `Partition.checkCurrentLeaderEpoch` reads the `-1` sentinel as "the
+    /// client is asserting no epoch", so that request passes unfenced.
+    ///
+    /// Returns the error code together with the live epoch, which a response
+    /// shape that reports the current leader back to the client needs.
+    pub(crate) fn leader_epoch_fence(&self, request_epoch: i32) -> Option<(i16, i32)> {
+        let current = self.current_leader_epoch.load(Ordering::Acquire);
+        if request_epoch < 0 || request_epoch == current {
+            return None;
+        }
+        let code = if request_epoch < current {
+            crate::codes::FENCED_LEADER_EPOCH
+        } else {
+            crate::codes::UNKNOWN_LEADER_EPOCH
+        };
+        Some((code, current))
+    }
+
     /// Test-only: directly set the partition's `current_leader_epoch`
     /// and do not use the supervisor's metadata-image-driven path.
     /// `tests/leader_epoch.rs` uses this to simulate split-brain with a
