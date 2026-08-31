@@ -4,11 +4,21 @@
 //! kernel `sendfile(2)` when the stream allows it, and through a buffered
 //! `pread` and `write_all` fallback that produces identical wire bytes when it
 //! does not.
+//!
+//! The drain is also where the broker learns which of those three paths a
+//! fetch actually took. Every other signal a regression would move — the
+//! response bytes, the request counter, the latency histogram — is identical
+//! whether the kernel moved the records or the process copied them, so the
+//! [`FetchDrainPath`] label is recorded here, from the arm that ran, and not
+//! from the decision the fetch handler made earlier.
 
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::{WriteOp, sink::SendfileSink};
-use crate::error::BrokerError;
+use crate::{
+    error::BrokerError,
+    metrics::{BrokerMetrics, FetchDrainPath},
+};
 
 crate::sendfile_cfg! {
     use bytes::BytesMut;
@@ -22,7 +32,25 @@ crate::sendfile_cfg! {
 /// the bytes do not interleave with the codec's write buffer. Inline ops use
 /// `write_all`. File ops use `sendfile` when the stream is a Linux plaintext
 /// `TcpStream`, and a buffered `pread` + `write_all` fallback otherwise.
-pub async fn write_fetch_plan<S>(stream: &mut S, ops: Vec<WriteOp>) -> Result<(), BrokerError>
+///
+/// On success it bumps `fetch_response_drain_total` once, on the path the
+/// plan's records regions took: a plan of inline ops is `vectored`, and a plan
+/// with a file-backed op takes the label of the arm that drained it. A drain
+/// that fails part-way counts nothing, because the response never reached the
+/// client.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Io`] when `ops` is empty, which is not a frame a
+/// Kafka client can parse, and when a write, a `sendfile`, or the fallback's
+/// positioned read fails. Every one of those leaves a partly written frame on
+/// the wire, so the caller closes the connection rather than sending another
+/// response after it.
+pub async fn write_fetch_plan<S>(
+    stream: &mut S,
+    ops: Vec<WriteOp>,
+    metrics: &BrokerMetrics,
+) -> Result<(), BrokerError>
 where
     S: AsyncWrite + SendfileSink + Unpin,
 {
@@ -32,10 +60,16 @@ where
             "fetch handler produced an empty write plan",
         ))
     })?;
+    // The path the ops actually took, not the one the handler asked for. An
+    // inline op claims the vectored path only if no file op has spoken yet; a
+    // file op always overwrites, because every file region of one response
+    // goes to the same stream and so takes the same arm.
+    let mut path: Option<FetchDrainPath> = None;
     for op in std::iter::once(first).chain(ops) {
         match op {
             WriteOp::Inline(b) => {
                 stream.write_all(&b).await.map_err(BrokerError::Io)?;
+                path.get_or_insert(FetchDrainPath::Vectored);
             }
             #[cfg(any(
                 target_os = "linux",
@@ -47,11 +81,14 @@ where
                 target_os = "dragonfly",
             ))]
             WriteOp::File(region) => {
-                drain_file_region(stream, &region).await?;
+                path = Some(drain_file_region(stream, &region).await?);
             }
         }
     }
     stream.flush().await.map_err(BrokerError::Io)?;
+    // The empty plan is rejected above, so the plan named a path; `vectored`
+    // is the honest fallback for a plan that somehow drained no op at all.
+    metrics.record_fetch_response_drain(path.unwrap_or(FetchDrainPath::Vectored));
     Ok(())
 }
 
@@ -87,14 +124,17 @@ crate::sendfile_cfg! {
         Ok(())
     }
 
-    /// Drain one `FileRegion` to the socket. This method uses the kernel
-    /// `sendfile(2)` when the stream is a plaintext `TcpStream` on a
-    /// SENDFILE-alias platform. On TLS it falls back to a buffered `pread` +
-    /// `write_all` that produces identical wire bytes.
+    /// Drain one `FileRegion` to the socket, and report which arm did it.
+    ///
+    /// This method uses the kernel `sendfile(2)` when the stream is a
+    /// plaintext `TcpStream` on a SENDFILE-alias platform. On TLS it falls
+    /// back to a buffered `pread` + `write_all` that produces identical wire
+    /// bytes. The returned [`FetchDrainPath`] is what the caller records, so
+    /// the counter cannot claim a zero-copy drain that the copy arm served.
     async fn drain_file_region<S>(
         stream: &mut S,
         region: &krabka_protocol::records::FileRegion,
-    ) -> Result<(), BrokerError>
+    ) -> Result<FetchDrainPath, BrokerError>
     where
         S: AsyncWrite + SendfileSink + Unpin,
     {
@@ -104,13 +144,14 @@ crate::sendfile_cfg! {
             let tcp = stream
                 .tcp_for_sendfile()
                 .expect("checked Some on the line above");
-            sendfile_region(tcp, region).await
+            sendfile_region(tcp, region).await?;
+            Ok(FetchDrainPath::Sendfile)
         } else {
             // TLS fallback: pread the region into a buffer and write it.
             let mut buf = BytesMut::zeroed(region.len);
             read_region_exact(region, &mut buf)?;
             stream.write_all(&buf).await.map_err(BrokerError::Io)?;
-            Ok(())
+            Ok(FetchDrainPath::Pread)
         }
     }
 }
@@ -118,6 +159,21 @@ crate::sendfile_cfg! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::FetchDrainPathLabel;
+
+    /// The count this drain's counter carries for `path`.
+    fn drained(metrics: &BrokerMetrics, path: FetchDrainPath) -> u64 {
+        metrics
+            .fetch_response_drain
+            .get_or_create(&FetchDrainPathLabel { path })
+            .get()
+    }
+
+    /// The three drain counts, in `FetchDrainPath::ALL` order, so a test can
+    /// compare the whole split at once instead of one path at a time.
+    fn drain_counts(metrics: &BrokerMetrics) -> [u64; 3] {
+        FetchDrainPath::ALL.map(|path| drained(metrics, path))
+    }
 
     #[tokio::test]
     async fn writer_rejects_an_empty_fetch_plan() {
@@ -127,13 +183,47 @@ mod tests {
         ));
         let (mut server, _) = listener.accept().await.unwrap();
         let client = connect.await.unwrap().unwrap();
+        let metrics = BrokerMetrics::new();
 
-        let error = write_fetch_plan(&mut server, Vec::new())
+        let error = write_fetch_plan(&mut server, Vec::new(), &metrics)
             .await
             .expect_err("empty plans cannot form a Kafka response frame");
 
         assert2::assert!(error.to_string().contains("empty write plan"));
+        // A response that never reached the client counts on no path.
+        assert2::assert!((drain_counts(&metrics)) == ([0, 0, 0]));
         drop(client);
+    }
+
+    /// A plan of inline ops is the portable Increment-C path, and it is the
+    /// only path a non-SENDFILE target can take, so it is asserted on every
+    /// platform.
+    #[tokio::test]
+    async fn inline_only_plan_counts_as_the_vectored_path() {
+        use bytes::Bytes;
+        use tokio::io::AsyncReadExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let mut got = Vec::new();
+            stream.read_to_end(&mut got).await.unwrap();
+            got
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+        let metrics = BrokerMetrics::new();
+
+        let ops = vec![
+            WriteOp::Inline(Bytes::from_static(b"header")),
+            WriteOp::Inline(Bytes::from_static(b"records")),
+        ];
+        write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
+        drop(server);
+
+        assert2::assert!((client.await.unwrap()) == (b"headerrecords".to_vec()));
+        // One drained response, on the vectored path and no other.
+        assert2::assert!((drain_counts(&metrics)) == ([0, 1, 0]));
     }
 
     // ─── Increment D/E (cross-platform sendfile) tests ────────────────────
@@ -195,9 +285,95 @@ mod tests {
             }
             let ops = resolve_records_sendfile(&payload).unwrap();
             assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
-            write_fetch_plan(&mut server, ops).await.unwrap();
+            let metrics = BrokerMetrics::new();
+            write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
             drop(server); // EOF for the client's read_exact tail
             client.await.unwrap();
+
+            // Byte equality alone cannot tell the kernel drain apart from the
+            // copy that produces the same bytes. The counter can, and it is
+            // the only thing here that would notice the plaintext fetch path
+            // falling back.
+            assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
+        }
+
+        /// The drain's own fallback arm: a stream that calls itself
+        /// sendfile-capable but hands out no socket has its file region
+        /// `pread` into a buffer. The bytes stay identical, so the counter is
+        /// the only thing that separates this from the zero-copy drain — which
+        /// is exactly why it is a separate label.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn pread_fallback_is_byte_exact_and_counts_as_its_own_path() {
+            use tokio::{
+                io::AsyncReadExt,
+                net::{TcpListener, TcpStream},
+            };
+
+            let mut records = Vec::new();
+            for i in 0..2000u32 {
+                records.extend_from_slice(&i.to_le_bytes());
+            }
+            let records = Bytes::from(records);
+            let (_tf, payload) = file_payload(&records);
+
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let expected = records.clone();
+            let client = tokio::spawn(async move {
+                let mut stream = TcpStream::connect(addr).await.unwrap();
+                let mut got = vec![0u8; expected.len()];
+                stream.read_exact(&mut got).await.unwrap();
+                got
+            });
+
+            let (server, _) = listener.accept().await.unwrap();
+            let mut server = NoSendfileStream(server);
+            let ops = resolve_records_sendfile(&payload).unwrap();
+            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
+            let metrics = BrokerMetrics::new();
+            write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
+            drop(server); // EOF for the client's read_exact tail
+
+            assert2::assert!((client.await.unwrap()) == (records.to_vec()));
+            assert2::assert!((drain_counts(&metrics)) == ([0, 0, 1]));
+        }
+
+        /// A TCP stream that reports itself sendfile-capable but refuses to
+        /// lend its socket, which is the shape of a stream that encrypts in
+        /// userspace. It drives the drain's `pread` arm without standing up a
+        /// TLS session, whose handshake is not what that arm is about.
+        struct NoSendfileStream(tokio::net::TcpStream);
+
+        impl SendfileSink for NoSendfileStream {
+            fn is_sendfile_capable(&self) -> bool {
+                true
+            }
+            fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
+                None
+            }
+        }
+
+        impl tokio::io::AsyncWrite for NoSendfileStream {
+            fn poll_write(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+            }
+            fn poll_flush(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.0).poll_flush(cx)
+            }
+            fn poll_shutdown(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+            }
         }
 
         /// Increment F end-to-end: `sendfile(2)` a `FileRegions` payload onto a
@@ -317,7 +493,10 @@ mod tests {
 
             // sendfile the file region onto the kTLS socket — the kernel
             // encrypts it into TLS records on the way out.
-            write_fetch_plan(&mut ktls_stream, ops).await.unwrap();
+            let metrics = BrokerMetrics::new();
+            write_fetch_plan(&mut ktls_stream, ops, &metrics)
+                .await
+                .unwrap();
             ktls_stream.flush().await.unwrap();
             drop(ktls_stream); // sends close_notify; EOF for the client tail
 
@@ -326,6 +505,9 @@ mod tests {
                 (got) == (&records[..]),
                 "client-decrypted kTLS bytes must equal the file region (wire byte-exact)"
             );
+            // kTLS is the one encrypted path that still reaches the kernel
+            // drain; a fallback to userspace rustls would land on `pread`.
+            assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
         }
     }
 }

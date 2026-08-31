@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 mod auth;
 mod break_glass;
 mod delivery;
+mod fetch_drain;
 mod labels;
 mod log_cleaner;
 mod registration;
@@ -36,8 +37,8 @@ mod traffic;
 pub(crate) use self::labels::UNKNOWN_LABEL;
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, FetchDrainPath, FetchDrainPathLabel,
+    PartitionLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -161,6 +162,40 @@ pub struct BrokerMetrics {
     pub controller_leader_changes_total: Counter,
     pub isr_shrinks_total: Counter,
     pub isr_expands_total: Counter,
+    /// Cumulative count of drained Fetch responses, split by the path their
+    /// records regions took to the socket.
+    ///
+    /// One increment per response the drain finished, labelled with the
+    /// strongest path any of its records regions took: `sendfile` when the
+    /// kernel moved a region with no userspace copy, `pread` when a
+    /// file-backed region had to be copied through a buffer anyway, and
+    /// `vectored` when the response carried no file-backed region at all. A
+    /// response the connection failed to write is not counted, because the
+    /// path it would have taken is not what the client received.
+    ///
+    /// This is the only series that says whether the zero-copy fetch path is
+    /// being used. Operators alert on
+    /// `rate(fetch_response_drain_total{path="sendfile"}[5m]) == 0` on a
+    /// cluster whose consumers read plaintext, because a regression that
+    /// routes every fetch onto a copy path is otherwise invisible.
+    ///
+    /// All three series exist on every platform from startup, at zero. On
+    /// Windows `sendfile` and `pread` stay at zero for the life of the
+    /// process: the platform has no safe file-to-socket call, so every fetch
+    /// is `vectored`.
+    pub fetch_response_drain: Family<FetchDrainPathLabel, Counter>,
+    /// `1` when this broker's startup probe found working Linux kTLS and TLS
+    /// fetch connections therefore drain records through kernel-offloaded
+    /// `sendfile`; `0` when they encrypt in userspace.
+    ///
+    /// It is `0` on a broker with no TLS listener, which never probes, and `0`
+    /// on every non-Linux target, where kTLS does not exist. The probe runs
+    /// once, so the value is a constant of the running process: an operator
+    /// reads it to tell "this build cannot do kTLS" apart from "this kernel
+    /// would not take it", and reads it beside
+    /// `fetch_response_drain_total{path="sendfile"}` to see whether the
+    /// offload is actually carrying traffic.
+    pub ktls_enabled: Gauge,
     /// KIP-227: current count of live incremental-fetch sessions across the
     /// per-broker cache. Sampled periodically from `FetchSessionCache::len()`.
     pub incremental_fetch_sessions: Gauge,

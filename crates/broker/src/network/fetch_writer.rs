@@ -92,9 +92,13 @@ pub enum WriteOp {
 impl WriteOp {
     /// Byte length this op contributes to the frame body. The frame-length
     /// accounting in tests uses it.
+    ///
+    /// It is not called `len`: an op is not a container, and a `len` on a
+    /// publicly reachable type owes callers an `is_empty` that would mean
+    /// nothing here.
     #[must_use]
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub fn body_len(&self) -> usize {
         match self {
             Self::Inline(b) => b.len(),
             #[cfg(any(

@@ -79,6 +79,8 @@ impl BrokerMetrics {
             controller_leader_changes_total: Counter::default(),
             isr_shrinks_total: Counter::default(),
             isr_expands_total: Counter::default(),
+            fetch_response_drain: Family::default(),
+            ktls_enabled: Gauge::default(),
             incremental_fetch_sessions: Gauge::default(),
             incremental_fetch_session_evictions_total: Counter::default(),
             incremental_fetch_partitions_cached: Gauge::default(),

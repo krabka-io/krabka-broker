@@ -32,6 +32,36 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "fetch_response_drain",
+            "Cumulative count of drained Fetch responses, labelled by the path \
+             their records regions took to the socket: sendfile (kernel \
+             zero-copy), pread (a file-backed region the drain had to copy \
+             through a buffer), or vectored (no file-backed region). \
+             rate(...{path=\"sendfile\"}) is how an operator sees that the \
+             zero-copy fetch path is carrying traffic.",
+            self.fetch_response_drain.clone(),
+        );
+        // Create all three series at zero. The drain only ever touches the
+        // path it took, and on some targets it can never take two of them, so
+        // without this a dashboard panel or an alert that names `sendfile` has
+        // no series to read until the first zero-copy fetch — or, on Windows,
+        // ever.
+        for path in crate::metrics::FetchDrainPath::ALL {
+            let _ = self
+                .fetch_response_drain
+                .get_or_create(&crate::metrics::FetchDrainPathLabel { path });
+        }
+
+        registry.register(
+            "ktls_enabled",
+            "1 when the startup probe found working Linux kTLS and TLS fetch \
+             connections drain records through kernel-offloaded sendfile; 0 \
+             when they encrypt in userspace, including on a broker with no TLS \
+             listener and on every non-Linux target.",
+            self.ktls_enabled.clone(),
+        );
+
+        registry.register(
             "incremental_fetch_sessions",
             "KIP-227: live incremental-fetch sessions cached by this broker (gauge).",
             self.incremental_fetch_sessions.clone(),
