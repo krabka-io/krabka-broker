@@ -209,3 +209,10 @@ criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 [[bench]]
 name = "produce"
 harness = false
+
+# The two documented PERF deferrals: the response-framing copies against a
+# chained-`Buf` prototype, and the replicator's extra `encoded_len` walk
+# against the `replicate_batch` it precedes.
+[[bench]]
+name = "perf_deferrals"
+harness = false
