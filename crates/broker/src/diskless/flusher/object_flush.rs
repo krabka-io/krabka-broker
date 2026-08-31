@@ -313,6 +313,12 @@ mod tests {
         let metrics = crate::metrics::BrokerMetrics::new();
         let topic_id = Uuid::from_u128(11);
         let checks = AtomicUsize::new(0);
+        metrics.initialize_diskless_wal_flusher_metrics(
+            topic_id,
+            krabka_ids::PartitionIndex(0),
+            0,
+            0,
+        );
 
         flush_once(
             Arc::new(InMemory::new()),
@@ -331,7 +337,7 @@ mod tests {
                     true
                 } else {
                     metrics.remove_diskless_wal_shard(topic_id, krabka_ids::PartitionIndex(0), &[]);
-                    false
+                    true
                 }
             },
         )

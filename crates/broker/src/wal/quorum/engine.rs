@@ -219,6 +219,12 @@ impl WalShardEngine {
                 self.durable_watermark().0,
             );
             let log_start = source.log.lock().log_start_offset();
+            metrics.initialize_diskless_wal_flusher_metrics(
+                shard.topic_id,
+                shard.partition,
+                leader_end.0.saturating_sub(log_start.0),
+                log_start.0,
+            );
             for voter in &quorum.voters {
                 let durable = quorum
                     .durable_offsets

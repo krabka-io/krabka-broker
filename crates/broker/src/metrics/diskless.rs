@@ -48,8 +48,8 @@ impl BrokerMetrics {
         lag: i64,
     ) {
         self.diskless_wal_index_projection_lag
-            .get_or_create(&Self::wal_shard_label(topic_id, partition))
-            .set(lag.max(0));
+            .get(&Self::wal_shard_label(topic_id, partition))
+            .map(|gauge| gauge.set(lag.max(0)));
     }
 
     pub(crate) fn record_diskless_wal_trim_frontier(
@@ -59,8 +59,24 @@ impl BrokerMetrics {
         frontier: i64,
     ) {
         self.diskless_wal_trim_frontier
-            .get_or_create(&Self::wal_shard_label(topic_id, partition))
-            .set(frontier);
+            .get(&Self::wal_shard_label(topic_id, partition))
+            .map(|gauge| gauge.set(frontier));
+    }
+
+    pub(crate) fn initialize_diskless_wal_flusher_metrics(
+        &self,
+        topic_id: Uuid,
+        partition: PartitionIndex,
+        projection_lag: i64,
+        trim_frontier: i64,
+    ) {
+        let label = Self::wal_shard_label(topic_id, partition);
+        self.diskless_wal_index_projection_lag
+            .get_or_create(&label)
+            .set(projection_lag.max(0));
+        self.diskless_wal_trim_frontier
+            .get_or_create(&label)
+            .set(trim_frontier);
     }
 
     pub(crate) fn remove_diskless_wal_voters(
@@ -103,6 +119,7 @@ mod tests {
         let metrics = BrokerMetrics::new();
         let topic_id = Uuid::from_u128(42);
         let partition = PartitionIndex(3);
+        metrics.initialize_diskless_wal_flusher_metrics(topic_id, partition, 2, 11);
         metrics.record_diskless_wal_watermark(topic_id, partition, 17);
         metrics.record_diskless_wal_voter_lag(topic_id, partition, NodeId(9), 4);
         metrics.record_diskless_wal_projection_lag(topic_id, partition, 2);
