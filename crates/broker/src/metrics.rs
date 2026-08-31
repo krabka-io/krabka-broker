@@ -226,18 +226,24 @@ pub struct BrokerMetrics {
     /// [`Self::request_throttle_duration_seconds`] for what the three do and
     /// do not sum to.
     pub request_local_duration_seconds: Family<ApiKeyLabel, Histogram>,
-    /// Per-Kafka-API seconds one request spent waiting on another broker
+    /// Per-Kafka-API seconds one request spent waiting on something that is
+    /// not this broker's own log
     /// (`krabka_broker_request_remote_duration_seconds{api_key}`). For Produce
     /// it is the `acks=all` high-watermark gate, summed over the request's
     /// partitions: the wait for every in-sync replica to take the append. For
     /// Fetch it is the long poll that parks a `min_bytes`-unsatisfied read on
-    /// the partitions' notifiers. Mirrors Kafka's
-    /// `RequestMetrics.RemoteTimeMs`.
+    /// the partitions' notifiers, plus the object-store round trip a KIP-405
+    /// tiered read or a diskless WAL cold read makes when the local log no
+    /// longer holds the offset. Mirrors Kafka's `RequestMetrics.RemoteTimeMs`,
+    /// which covers the tiered read for the same reason: Kafka serves it out
+    /// of a `DelayedRemoteFetch` in the purgatory, and the purgatory wait is
+    /// what that metric measures.
     ///
-    /// This is the series that separates a lagging follower from a slow local
-    /// disk: a produce that is slow here and fast in
+    /// This is the series that separates a lagging follower or a slow object
+    /// store from a slow local disk: a produce that is slow here and fast in
     /// [`Self::request_local_duration_seconds`] is waiting on replication, not
-    /// on this broker.
+    /// on this broker, and a fetch that is slow here on a tiered topic is
+    /// waiting on the tier.
     pub request_remote_duration_seconds: Family<ApiKeyLabel, Histogram>,
     /// Per-Kafka-API seconds one request spent asleep in the KIP-219 quota
     /// throttle (`krabka_broker_request_throttle_duration_seconds{api_key}`).

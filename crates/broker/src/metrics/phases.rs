@@ -37,7 +37,9 @@ impl RequestPhases {
         Self::add(&self.local_nanos, elapsed);
     }
 
-    /// Charge `elapsed` to the remote phase: a wait on another broker.
+    /// Charge `elapsed` to the remote phase: a wait on something other than
+    /// this broker's own log — a follower, a consumer's long poll, or the
+    /// object store behind a tiered or diskless partition.
     pub(crate) fn add_remote(&self, elapsed: Duration) {
         Self::add(&self.remote_nanos, elapsed);
     }

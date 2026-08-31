@@ -16,7 +16,7 @@ use super::{
     request::EffectivePartition,
     response::group_into_topic_responses,
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes, error::BrokerError, partition::Partition};
 
 type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
@@ -57,15 +57,7 @@ pub(super) async fn execute_pending_reads(
         // feeds the rebalancer, while the phase is per request and is the
         // Fetch half of `request_local_duration_seconds`.
         phases.add_local(started.elapsed());
-        if read.out.error_code == codes::OFFSET_OUT_OF_RANGE {
-            if let Some(remote_bytes) = try_remote_read(broker, read, &partition).await {
-                total_bytes += remote_bytes;
-            } else if let Some(diskless_bytes) =
-                crate::diskless::read::try_diskless_read(broker, read, &partition).await
-            {
-                total_bytes += diskless_bytes;
-            }
-        }
+        total_bytes += serve_from_cold_tier(broker, read, &partition, phases).await;
     }
     let wants_more = total_bytes < usize::try_from(min_bytes.max(0)).unwrap_or(0);
     if wants_more && max_wait_ms > 0 {
@@ -182,30 +174,171 @@ async fn long_poll_then_reread(
         // the same phase.
         phases.add_local(read_start.elapsed());
 
-        // Re-attempt the remote-tier read on the re-read pass
-        // so a long-poll that fires on a non-tiered partition doesn't
-        // clobber the remote batch we'd already served on this one.
-        if p.out.error_code == codes::OFFSET_OUT_OF_RANGE
-            && try_remote_read(broker, p, &part).await.is_none()
-        {
-            let _ = crate::diskless::read::try_diskless_read(broker, p, &part).await;
-        }
+        // Re-attempt the cold-tier read on the re-read pass so a long-poll
+        // that fires on a non-tiered partition doesn't clobber the remote
+        // batch we'd already served on this one.
+        serve_from_cold_tier(broker, p, &part, phases).await;
     }
     Ok(())
+}
+
+/// Serve `read`'s offset out of the cold tier when the local log no longer
+/// holds it, charging the object-store round trip to the request's remote
+/// phase.
+///
+/// A KIP-405 tiered read and a diskless WAL cold read are both a network round
+/// trip to an object store rather than work on this broker's own log, so they
+/// belong beside the long poll and the Produce `acks=all` gate and not beside
+/// `do_read`. Kafka accounts them the same way: a fetch that misses the local
+/// log becomes a `DelayedRemoteFetch` in the purgatory, and the purgatory wait
+/// is what `RequestMetrics.RemoteTimeMs` measures.
+///
+/// Returns the bytes the cold tier served, and zero when the local log already
+/// answered or when no tier holds the offset. A read the local log answered
+/// charges nothing at all: the clock is only read once the fallback is
+/// entered, so a cluster with no tiered or diskless topic sees an unchanged
+/// remote phase.
+async fn serve_from_cold_tier(
+    broker: &Broker,
+    read: &mut PendingRead,
+    part: &Partition,
+    phases: &crate::metrics::RequestPhases,
+) -> usize {
+    if read.out.error_code != codes::OFFSET_OUT_OF_RANGE {
+        return 0;
+    }
+    let started = std::time::Instant::now();
+    let served = match try_remote_read(broker, read, part).await {
+        Some(remote_bytes) => remote_bytes,
+        None => crate::diskless::read::try_diskless_read(broker, read, part)
+            .await
+            .unwrap_or(0),
+    };
+    phases.add_remote(started.elapsed());
+    served
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig};
     use krabka_protocol::{
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch},
     };
+    use object_store::{ObjectStoreExt as _, PutPayload, path::Path};
 
-    use crate::broker::Broker;
+    use crate::{broker::Broker, metrics::RequestPhases};
+
+    /// A cold read is a round trip to an object store, so it belongs to the
+    /// remote phase. Before this was charged, a tiered or diskless fetch could
+    /// spend its whole latency in the object store while both phase histograms
+    /// stayed near zero and the time fell into the unnamed remainder the
+    /// rustdoc describes as decode, authorization and encode.
+    #[tokio::test]
+    async fn cold_tier_fallback_charges_the_object_store_read_to_the_remote_phase() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let object_dir = tempfile::tempdir().expect("object tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_dir.path().to_path_buf(),
+        });
+        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        let topic_id = uuid::Uuid::from_u128(0xC01D);
+        let mut flushed = BytesMut::new();
+        RecordBatch {
+            base_offset: 0,
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"cold")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .encode(&mut flushed)
+        .expect("encode flushed batch");
+        let flushed = flushed.freeze();
+        let read_handle = broker.diskless_read.as_ref().expect("diskless read handle");
+        read_handle
+            .object_store()
+            .put(
+                &Path::from("diskless-wal/cold"),
+                PutPayload::from(flushed.clone()),
+            )
+            .await
+            .expect("put flushed run");
+        read_handle
+            .index
+            .lock()
+            .await
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
+                object_key: "diskless-wal/cold".into(),
+                format_version: 1,
+                entries: vec![crate::diskless::wal_index::WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: u32::try_from(flushed.len()).expect("small run"),
+                }],
+            });
+
+        let part_dir = dir.path().join("cold-0");
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let part = crate::broker::spawn_partition(
+            "cold".into(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            true,
+        );
+        let mut pending = super::PendingRead {
+            topic_name: "cold".into(),
+            topic_id: WireUuid(topic_id.into_bytes()),
+            partition_index: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            max_bytes: i32::try_from(flushed.len()).expect("small run"),
+            read_committed: false,
+            is_follower_fetch: false,
+            partition: Some(std::sync::Arc::clone(&part)),
+            out: super::PartitionData {
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                high_watermark: 1,
+                log_start_offset: 1,
+                ..Default::default()
+            },
+            cpu_micros: 0,
+        };
+
+        let phases = RequestPhases::default();
+        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &phases).await;
+
+        assert!(served == flushed.len());
+        assert!(pending.out.error_code == crate::codes::NONE);
+        assert!(phases.remote_seconds() > 0.0);
+        // The object-store trip is charged to exactly one phase: the local
+        // phase belongs to `do_read`, which this call does not make.
+        assert!(phases.local_seconds() < 1e-9);
+
+        // A partition the local log answered never enters the fallback, so a
+        // cluster with no cold tier sees an unchanged remote phase.
+        pending.out.error_code = crate::codes::NONE;
+        let local_only = RequestPhases::default();
+        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &local_only).await;
+
+        assert!(served == 0);
+        assert!(local_only.remote_seconds() < 1e-9);
+        broker_handle.shutdown().await;
+    }
 
     #[tokio::test]
     async fn long_poll_reread_rechecks_follower_epoch() {
