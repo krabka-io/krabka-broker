@@ -12,11 +12,15 @@
 //! `ReconfigRejected → INVALID_REQUEST`.
 //!
 //! Request validation follows `KafkaRaftClient.handleUpdateVoterRequest` in
-//! the pinned image: a cluster id that is absent or not ours is
+//! the pinned image: a cluster id that names another cluster is
 //! `INCONSISTENT_CLUSTER_ID (104)`, a leader epoch on either side of the
 //! quorum's is `FENCED_LEADER_EPOCH (74)` or `UNKNOWN_LEADER_EPOCH (75)`, and
 //! everything else malformed is `INVALID_REQUEST (42)`. Kafka assigns no
 //! separate "invalid voter update" code.
+//!
+//! A request that carries no cluster id at all passes the first check, because
+//! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
+//! add and remove paths already read it that way.
 
 use bytes::Bytes;
 use krabka_metadata::{Voter, VoterEndpoint};
@@ -61,7 +65,11 @@ pub(crate) async fn handle(
 
     let cluster_id = image.cluster_id().to_string();
     let quorum = broker.controller.quorum_state();
-    if req.cluster_id.as_deref() != Some(cluster_id.as_str()) {
+    if req
+        .cluster_id
+        .as_deref()
+        .is_some_and(|request_cluster| request_cluster != cluster_id)
+    {
         return refuse(version, codes::INCONSISTENT_CLUSTER_ID);
     }
 
@@ -328,6 +336,43 @@ mod tests {
             let resp = decode_response(&resp, version);
             assert!(resp.error_code == want, "{what}");
         }
+        broker_handle.shutdown().await;
+    }
+
+    /// `KafkaRaftClient.hasValidClusterId` answers true for a request that
+    /// carries no cluster id, so an absent one is not an inconsistent one: the
+    /// request runs the rest of the checks and reaches the voter set, which
+    /// holds no voter 2.
+    #[tokio::test]
+    async fn handle_accepts_a_request_that_names_no_cluster() {
+        let version = 0;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = Principal {
+            name: "admin".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: Vec::new(),
+        };
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let mut named = request(2);
+        named.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
+        named.current_leader_epoch =
+            i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
+        let mut anonymous = named.clone();
+        anonymous.cluster_id = None;
+
+        let mut codes_seen = Vec::new();
+        for req in [named, anonymous] {
+            let req_bytes = encode_request(&req, version);
+            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+                .await
+                .expect("handle");
+            codes_seen.push(decode_response(&resp, version).error_code);
+        }
+
+        assert!(codes_seen == vec![codes::VOTER_NOT_FOUND, codes::VOTER_NOT_FOUND]);
         broker_handle.shutdown().await;
     }
 

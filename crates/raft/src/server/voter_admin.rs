@@ -10,6 +10,10 @@
 //! `VOTER_NOT_FOUND (127)` — and none for a malformed voter update, so a
 //! rejected update is `INVALID_REQUEST (42)`, as
 //! `KafkaRaftClient.handleUpdateVoterRequest` answers.
+//!
+//! All three paths read an absent `cluster_id` the way
+//! `KafkaRaftClient.hasValidClusterId` does: a request that names no cluster
+//! is accepted, and only one that names a different cluster is refused.
 
 use bytes::{Bytes, BytesMut};
 
@@ -229,12 +233,12 @@ pub(super) async fn remove_raft_voter_response(
 /// `KafkaRaftClient.handleUpdateVoterRequest` checks the cluster id first, the
 /// leader epoch next, and the voter key, listeners and `kraft.version` range
 /// last. Each check has its own code, and none of them is voter-specific.
-fn update_rejection(
-    cluster_id_matches: bool,
-    epoch_delta: i64,
-    rest_is_valid: bool,
-) -> Option<i16> {
-    if !cluster_id_matches {
+///
+/// `cluster_id_valid` is false only for a request that names another cluster:
+/// `KafkaRaftClient.hasValidClusterId` answers true for a null cluster id, as
+/// the add and remove paths above already read it.
+fn update_rejection(cluster_id_valid: bool, epoch_delta: i64, rest_is_valid: bool) -> Option<i16> {
+    if !cluster_id_valid {
         return Some(104);
     }
     match epoch_delta.signum() {
@@ -266,7 +270,10 @@ pub(super) async fn update_raft_voter_response(
     let max = u16::try_from(request.k_raft_version_feature.max_supported_version);
     let valid_range = matches!((&min, &max), (Ok(min), Ok(max)) if min <= max);
     let rejection = update_rejection(
-        request.cluster_id.as_deref() == Some(cluster_id.as_str()),
+        request
+            .cluster_id
+            .as_deref()
+            .is_none_or(|request_cluster| request_cluster == cluster_id),
         i64::from(request.current_leader_epoch) - i64::from(quorum.leader_epoch),
         request.voter_id >= 0
             && request.voter_directory_id != krabka_protocol::primitives::uuid::Uuid::ZERO
@@ -279,7 +286,9 @@ pub(super) async fn update_raft_voter_response(
                 )
             })),
     );
-    let error_code = if rejection.is_none() {
+    let error_code = if let Some(code) = rejection {
+        code
+    } else {
         let voter = krabka_metadata::Voter {
             id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
             directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
@@ -305,8 +314,6 @@ pub(super) async fn update_raft_voter_response(
                 .await,
         )
         .0
-    } else {
-        rejection.unwrap_or(42)
     };
     let mut output = BytesMut::new();
     UpdateRaftVoterResponse {
