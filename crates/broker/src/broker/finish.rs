@@ -84,6 +84,8 @@ pub(super) async fn finish_broker_startup(
         supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
         disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
         liveness: runtime.liveness,
+        controller_id_rotation:
+            crate::handlers::advertised_controller::ControllerIdRotation::default(),
         tls_dynamic: transport.0,
         ktls_enabled: transport.1,
         inter_broker_client: transport.2,

@@ -120,7 +120,7 @@ pub(crate) async fn handle(
     // listener this request arrived on (Kafka returns the connection
     // listener's advertised address), falling back to the inter-broker
     // endpoint when the connection listener isn't recorded on that broker.
-    let brokers = image
+    let brokers: Vec<MetadataResponseBroker> = image
         .brokers()
         .map(|broker| project_broker(broker, ctx.connection_listener_name, &inter_broker_name))
         .collect();
@@ -135,12 +135,18 @@ pub(crate) async fn handle(
         &acl_by_name,
     );
 
-    // controller_id: the current Raft leader, or -1 when unknown.
-    let controller_id: i32 = controller
-        .watch_leader()
-        .borrow()
-        .and_then(|id| i32::try_from(id.0).ok())
-        .unwrap_or(-1);
+    // controller_id: a broker out of the list this very response carries, not
+    // the raft leader. A role-separated controller registers no broker
+    // endpoint, so naming it would hand the client an id it cannot resolve.
+    // Kafka's KRaft brokers advertise a live broker here for the same reason.
+    // See `crate::handlers::advertised_controller`.
+    let unavailable = broker.unavailable_brokers().await;
+    let eligible: Vec<i32> = brokers
+        .iter()
+        .filter(|row| u64::try_from(row.node_id).is_ok_and(|id| !unavailable.contains(&id)))
+        .map(|row| row.node_id)
+        .collect();
+    let controller_id = broker.controller_id_rotation.pick(&eligible);
 
     // KIP-430: the cluster-level field only exists on the wire for v8-10;
     // the codegen drops it on other versions. Compute when the opt-in

@@ -34,11 +34,10 @@ use crate::{
 /// `DescribeCluster` `endpoint_type` (KIP-919): `1` = BROKERS.
 const ENDPOINT_TYPE_BROKERS: i8 = 1;
 
-// cargo-mutants: the only surviving mutants here flip `-1` node/controller-id
-// sentinel fallbacks (`try_from(id).unwrap_or(-1)`, `watch_leader().map_or(-1, ..)`);
-// broker/controller ids are int32 on the wire so `try_from` never fails, and a
-// started test broker always has an elected leader, making the fallbacks
-// unreachable with realistic inputs. Response shape is pinned by the tests below.
+// cargo-mutants: the only surviving mutant here flips the `-1` broker-id
+// sentinel fallback (`try_from(id).unwrap_or(-1)`); broker ids are int32 on the
+// wire so `try_from` never fails, making the fallback unreachable with
+// realistic inputs. Response shape is pinned by the tests below.
 #[cfg_attr(test, mutants::skip)]
 #[tracing::instrument(
     name = "handle_describe_cluster",
@@ -90,22 +89,11 @@ pub(crate) async fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
-    let controller_id = broker
-        .controller
-        .watch_leader()
-        .borrow()
-        .map_or(-1, |n| i32::try_from(n.0).unwrap_or(-1));
-
     // KIP-919: a broker listener serves only BROKERS. KIP-1073 excludes known
     // dead/fenced brokers unless the request opts in, and marks included
     // unavailable rows as fenced. Unknown liveness entries remain eligible
     // while a newly elected controller seeds its heartbeat registry.
-    let is_controller = *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
-    let unavailable = if is_controller {
-        broker.liveness.unavailable_snapshot().await
-    } else {
-        std::collections::HashSet::new()
-    };
+    let unavailable = broker.unavailable_brokers().await;
     let inter_broker_name = broker.config.inter_broker_listener_name.as_str();
     let brokers: Vec<DescribeClusterBroker> = image
         .brokers()
@@ -126,6 +114,18 @@ pub(crate) async fn handle(
             }
         })
         .collect();
+
+    // controller_id: an unfenced broker out of the rows this response already
+    // carries, so the client can resolve it to a host and port. The raft
+    // leader is not a candidate — a role-separated controller registers no
+    // broker endpoint and never appears here. See
+    // `crate::handlers::advertised_controller`.
+    let eligible: Vec<i32> = brokers
+        .iter()
+        .filter(|row| !row.is_fenced)
+        .map(|row| row.broker_id)
+        .collect();
+    let controller_id = broker.controller_id_rotation.pick(&eligible);
 
     // KIP-430: only populate the bitfield when the client asked for it;
     // otherwise leave the wire-default `i32::MIN` ("not present") sentinel.

@@ -48,6 +48,9 @@ pub(crate) use registry::{DispatchEntry, DispatchKind, DispatchRegistry, Request
 pub(crate) mod acl_wire;
 // KIP-853 dynamic-quorum reconfiguration (api_keys 80/81/82).
 pub(crate) mod add_raft_voter;
+// The `controller_id` that metadata and describe_cluster advertise: a broker
+// from the same response's broker list, the way a KRaft broker does.
+pub(crate) mod advertised_controller;
 pub(crate) mod allocate_producer_ids;
 pub(crate) mod alter_client_quotas;
 pub(crate) mod alter_configs;
