@@ -7,8 +7,8 @@
 //! handlers in the sibling modules read and write these types, so they live
 //! apart from any one mechanism.
 
-use krabka_protocol::ApiKey;
 use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
+use krabka_verified::authz::{RequestAuthState, request_auth_admission};
 use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission, token_api_admission};
 
 use crate::handlers::ApiKeyCode;
@@ -181,11 +181,12 @@ impl ConnectionAuth {
     /// - `Authenticated`: allow everything.
     #[must_use]
     pub fn allows_request(&self, api_key: ApiKeyCode) -> bool {
-        match self {
-            Self::Anonymous | Self::Negotiating { .. } => is_pre_auth_allowed(api_key),
-            Self::Reauthenticating { .. } => api_key == ApiKey::SaslAuthenticate as i16,
-            Self::Authenticated { .. } => true,
-        }
+        let state = match self {
+            Self::Anonymous | Self::Negotiating { .. } => RequestAuthState::PreAuth,
+            Self::Reauthenticating { .. } => RequestAuthState::Reauthenticating,
+            Self::Authenticated { .. } => RequestAuthState::Authenticated,
+        };
+        request_auth_admission(state, api_key)
     }
 }
 
@@ -198,10 +199,7 @@ impl ConnectionAuth {
 /// `ILLEGAL_SASL_STATE` (34) and closes the connection.
 #[must_use]
 pub fn is_pre_auth_allowed(api_key: ApiKeyCode) -> bool {
-    matches!(
-        ApiKey::from_i16(api_key),
-        Some(ApiKey::SaslHandshake | ApiKey::SaslAuthenticate | ApiKey::ApiVersions)
-    )
+    request_auth_admission(RequestAuthState::PreAuth, api_key)
 }
 
 #[cfg(test)]

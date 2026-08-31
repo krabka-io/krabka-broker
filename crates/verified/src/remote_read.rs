@@ -2,6 +2,39 @@
 
 use creusot_std::prelude::*;
 
+/// Compute the inclusive end of a capped remote-segment fetch.
+///
+/// A zero cap means read to the segment end. A finite end exists only when the
+/// exclusive mathematical end stays strictly inside the segment; wider
+/// arithmetic prevents the admission check itself from wrapping.
+#[ensures(match result {
+    Some(end) => max_bytes@ > 0
+        && start_position@ + max_bytes@ < segment_size@
+        && end@ == start_position@ + max_bytes@ - 1
+        && end@ < segment_size@,
+    None => max_bytes@ == 0 || start_position@ + max_bytes@ >= segment_size@,
+})]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the mathematical end is checked below segment_size before conversion"
+)]
+pub fn remote_fetch_end_position(
+    start_position: u32,
+    segment_size: u32,
+    max_bytes: u32,
+) -> Option<u32> {
+    if max_bytes == 0 {
+        return None;
+    }
+    let exclusive_end = u64::from(start_position) + u64::from(max_bytes);
+    if exclusive_end >= u64::from(segment_size) {
+        None
+    } else {
+        Some((exclusive_end - 1) as u32)
+    }
+}
+
 /// Admit a remote segment for one requested offset and derive its relative
 /// offset for Kafka's `u32` sparse index.
 ///
@@ -91,6 +124,20 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn fetch_end_position_handles_exact_and_overflow_boundaries() {
+        for (start, segment, max_bytes, expected) in [
+            (0, 2, 1, Some(0)),
+            (0, 1, 1, None),
+            (0, 1, 0, None),
+            (u32::MAX - 2, u32::MAX, 1, Some(u32::MAX - 2)),
+            (u32::MAX - 1, u32::MAX, 1, None),
+            (u32::MAX, u32::MAX, u32::MAX, None),
+        ] {
+            check!(remote_fetch_end_position(start, segment, max_bytes) == expected);
+        }
+    }
 
     #[test]
     fn admits_exact_finished_lineage_range_and_rejects_every_other_case() {
