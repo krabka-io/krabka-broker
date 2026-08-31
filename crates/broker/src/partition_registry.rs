@@ -241,6 +241,42 @@ mod tests {
         check!(reg.arcs().is_empty());
     }
 
+    /// The point of keying the outer map by `Arc<str>`: a caller that needs
+    /// an owned topic name gets the registry's own allocation back, not a
+    /// fresh copy of the bytes. `Arc::ptr_eq` is the only thing that can tell
+    /// those two apart — string equality holds either way.
+    #[tokio::test]
+    async fn shared_topic_name_hands_back_the_registry_s_own_allocation() {
+        let dir = tempdir().unwrap();
+        let reg = PartitionRegistry::new();
+
+        // A topic no partition of which is hosted here has no shared copy to
+        // give, so the name is allocated. It still compares equal.
+        let absent = reg.shared_topic_name("t");
+        assert!(&*absent == "t");
+
+        let key: Arc<str> = Arc::from("t");
+        reg.insert(
+            Arc::clone(&key),
+            PartitionIndex(0),
+            fixture_partition(dir.path(), "t", PartitionIndex(0)),
+        );
+
+        let shared = reg.shared_topic_name("t");
+        check!(Arc::ptr_eq(&shared, &key));
+        // The miss above really was one: it handed back a different
+        // allocation from the one the registry now holds.
+        check!(!Arc::ptr_eq(&absent, &key));
+
+        // A second partition of the same topic does not fork the key.
+        reg.insert(
+            Arc::from("t"),
+            PartitionIndex(1),
+            fixture_partition(dir.path(), "t", PartitionIndex(1)),
+        );
+        check!(Arc::ptr_eq(&reg.shared_topic_name("t"), &key));
+    }
+
     #[tokio::test]
     async fn partitions_of_and_len_track_topics_and_removals() {
         let dir = tempdir().unwrap();

@@ -1,8 +1,6 @@
 //! Assembly of the wire response: the resolved reads are grouped back into
 //! per-topic entries, down-converted for a v0-v3 fetcher, and metered.
 
-use std::sync::Arc;
-
 use krabka_protocol::{
     owned::fetch_response::{FetchableTopicResponse, PartitionData},
     primitives::uuid::Uuid as WireUuid,
@@ -61,6 +59,10 @@ pub(super) fn downconvert_legacy_responses(
         return;
     }
     for topic in responses {
+        // Resolve the owned name once per topic, not once per converted
+        // partition: the counter's label set holds an `Arc<str>`, and the
+        // registry hands back the copy it already keys the topic by.
+        let topic_name = broker.partitions.shared_topic_name(&topic.topic);
         for partition in &mut topic.partitions {
             let Some(payload) = partition.records.take() else {
                 continue;
@@ -73,9 +75,7 @@ pub(super) fn downconvert_legacy_responses(
                         partition.records = Some(converted);
                     }
                     if !topic.topic.is_empty() {
-                        broker
-                            .metrics
-                            .record_fetch_message_conversion(&Arc::from(topic.topic.as_str()));
+                        broker.metrics.record_fetch_message_conversion(&topic_name);
                     }
                 }
                 Ok(None) => {}
