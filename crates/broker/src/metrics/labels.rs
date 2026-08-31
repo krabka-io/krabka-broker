@@ -45,6 +45,26 @@ pub struct PartitionLabel {
     pub partition: i32,
 }
 
+/// Per-follower replica-lag label set, paired with the `replica_lag_records`
+/// gauge family. `replica` is the follower's node id, so a partition this
+/// broker leads carries one series per follower in its replica set and none
+/// for the leader itself.
+///
+/// Cardinality is bounded by the partitions this broker leads times their
+/// replication factor. Two rules hold that bound. The lag sampler republishes
+/// the whole set each pass and releases what the pass no longer justifies, so
+/// losing leadership or dropping a replica takes the series with it, and
+/// `metrics::eviction` releases the rest when the image stops naming this
+/// broker in the partition's replica set. No client input reaches this label
+/// set: both the partition and the follower come from the leader's own
+/// replica state.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ReplicaLagLabel {
+    pub topic: String,
+    pub partition: i32,
+    pub replica: u64,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {

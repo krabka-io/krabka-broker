@@ -64,6 +64,8 @@ impl BrokerMetrics {
             replication_bytes_in: Family::default(),
             replication_bytes_out: Family::default(),
             partition_disk_bytes: Family::default(),
+            replica_lag: Family::default(),
+            replica_lag_max: Gauge::default(),
             share_group_backlog: Family::default(),
             partition_cpu_micros: Family::default(),
             partitions_led: Gauge::default(),
@@ -133,6 +135,7 @@ impl BrokerMetrics {
             break_glass_proposals: Family::default(),
             break_glass_refusals: Family::default(),
             break_glass_bypassed: Family::default(),
+            lag_series: crate::metrics::LagSeriesIndex::default(),
         }
     }
 

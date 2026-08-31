@@ -27,6 +27,7 @@ mod break_glass;
 mod delivery;
 mod eviction;
 mod labels;
+mod lag;
 mod log_cleaner;
 mod registration;
 mod replication;
@@ -36,10 +37,12 @@ mod traffic;
 
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, ReplicaLagLabel,
+    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
 };
-pub(crate) use self::{eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL};
+pub(crate) use self::{
+    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, lag::LagSeriesIndex,
+};
 
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`
@@ -96,6 +99,21 @@ pub struct BrokerMetrics {
     /// `partition_bytes_out`).
     pub replication_bytes_out: Family<PartitionLabel, Counter>,
     pub partition_disk_bytes: Family<PartitionLabel, Gauge>,
+    /// Records each follower of a partition this broker leads still has to
+    /// fetch: the leader's log end offset minus the follower's last-fetched
+    /// offset, per follower.
+    ///
+    /// `under_replicated_partitions` says only that a follower fell out of the
+    /// ISR. This says how far behind it is while it is still in, which is what
+    /// tells an operator whether a follower is drifting toward an ISR shrink
+    /// or holding steady. Mirrors the per-partition half of Kafka's
+    /// `ReplicaFetcherManager` lag reporting.
+    pub replica_lag: Family<ReplicaLagLabel, Gauge>,
+    /// The largest value `replica_lag` carries on this broker, or zero when it
+    /// leads no partition with a follower. Mirrors Kafka's
+    /// `ReplicaFetcherManager.MaxLag`: one series an operator alerts on
+    /// without having to aggregate a per-follower family first.
+    pub replica_lag_max: Gauge,
     /// Records waiting for acquisition in each share-group partition.
     pub share_group_backlog: Family<ShareGroupLabel, Gauge>,
     /// Cumulative handler-thread microseconds spent processing each
@@ -443,4 +461,8 @@ pub struct BrokerMetrics {
     /// two-person rule, and an operator should read the audit log for the
     /// partition it names.
     pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
+    /// The label sets [`Self::replica_lag`] currently carries, so that a
+    /// caller holding only part of a lag label set can still release the
+    /// series. See [`LagSeriesIndex`].
+    pub(crate) lag_series: LagSeriesIndex,
 }

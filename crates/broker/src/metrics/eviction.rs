@@ -14,6 +14,11 @@
 //! `share_partition::backlog_poller` uses for the share-group backlog gauge:
 //! remember the label sets the last image justified, then remove the ones the
 //! next image no longer does.
+//!
+//! The replica-lag family of `metrics::lag` joins in here rather than keeping
+//! its own rule. Its sampler already releases what a pass stops naming, but a
+//! reassignment or a topic delete must not wait for the next pass, so the
+//! entry points below reach that family too.
 
 use std::{collections::HashSet, sync::Arc};
 
@@ -48,6 +53,7 @@ impl BrokerMetrics {
         ] {
             family.remove(label);
         }
+        self.evict_partition_lag_series(label);
     }
 
     /// Drop every series that any per-topic family carries for `topic`.
@@ -82,6 +88,7 @@ impl BrokerMetrics {
                     reason: reason.to_string(),
                 });
         }
+        self.evict_topic_lag_series(topic);
     }
 }
 

@@ -277,6 +277,15 @@ impl Broker {
         }
         .spawn();
 
+        crate::lag::LagPoller {
+            node_id: config.node_id,
+            partitions: Arc::clone(&partitions),
+            period: crate::lag::LAG_POLL_INTERVAL,
+            metrics: runtime.metrics.clone(),
+            shutdown: runtime.supervisor_shutdown.child_token(),
+        }
+        .spawn();
+
         finish_broker_startup(
             config,
             data_plane_listeners,

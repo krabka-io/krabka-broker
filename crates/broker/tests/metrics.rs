@@ -214,6 +214,9 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
         "krabka_broker_active_controller",
         "krabka_broker_isr_shrinks_total",
         "krabka_broker_isr_expands_total",
+        // The replica-lag rollup is a scalar, so it renders before any
+        // follower exists and shows that the family reached the registry.
+        "krabka_broker_replica_lag_max_records",
     ] {
         assert!(body.contains(needle), "missing {needle} in:\n{body}");
     }
