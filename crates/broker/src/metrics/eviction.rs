@@ -18,9 +18,13 @@
 //! The two lag families of `metrics::lag` join in here rather than keeping
 //! their own rule. Their samplers already release what a pass stops naming,
 //! but a reassignment or a topic delete must not wait for the next pass, and a
-//! group that leaves this coordinator is never named by a pass again. The
-//! entry points below therefore reach both families, and `evict_group_series`
-//! gives group removal — which no image records — the same one call to make.
+//! group that leaves this coordinator is never named by a pass again. Each
+//! entry point below reaches the families its own rule justifies: the
+//! per-partition one covers replica lag, because "this broker left the replica
+//! set" is exactly what ends a follower's series, while consumer-group lag
+//! follows the group rather than the host and so is reached only by the
+//! per-topic entry point and by `evict_group_series`, which gives group
+//! removal — an event no image records — its own one call to make.
 
 use std::{collections::HashSet, sync::Arc};
 

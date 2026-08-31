@@ -81,28 +81,40 @@ impl BrokerMetrics {
         }
     }
 
-    /// Drop every lag series either family carries for one partition.
+    /// Drop the replica-lag series for one partition.
     ///
-    /// Called from [`BrokerMetrics::evict_partition_series`], which is where a
-    /// reassignment or a topic delete lands. Both families are covered: a
-    /// partition that left this broker has no follower lag to report, and a
-    /// partition that left the cluster has no high watermark for a group to
-    /// lag behind.
+    /// Called from [`BrokerMetrics::evict_partition_series`], whose rule is
+    /// "this broker left the partition's replica set". That rule justifies the
+    /// replica-lag family exactly: a partition this broker no longer hosts has
+    /// no follower for it to report on, and waiting for the sampler's next
+    /// pass would hold the series for up to
+    /// [`crate::lag::LAG_POLL_INTERVAL`].
+    ///
+    /// It does not justify the consumer-group family, which is left alone
+    /// here. A group's lag on a partition depends on this broker coordinating
+    /// the *group*, not on it hosting the *partition*: the sampler reads a
+    /// remote leader's high watermark with a probe precisely so that a group
+    /// can lag on a partition this broker has no replica of. Releasing the
+    /// series on a reassignment would blank a still-justified gauge until the
+    /// next pass, and would do so only for the partitions this broker happened
+    /// to host. The one partition event that does end a group's series —
+    /// a topic delete — arrives through [`Self::evict_topic_lag_series`],
+    /// which is not filtered by hosting.
     pub(super) fn evict_partition_lag_series(&self, partition: &PartitionLabel) {
         self.retain_replica_lag(|label| {
-            label.topic != partition.topic || label.partition != partition.partition
-        });
-        self.retain_group_lag(|label| {
             label.topic != partition.topic || label.partition != partition.partition
         });
     }
 
     /// Drop every lag series either family carries for one topic.
     ///
-    /// Called from [`BrokerMetrics::evict_topic_series`]. A topic delete
-    /// removes its partitions from the image too, so this mostly duplicates
-    /// the per-partition pass; it is what covers a partition index the image
-    /// had already stopped naming when the delete arrived.
+    /// Called from [`BrokerMetrics::evict_topic_series`], which fires for
+    /// every topic the image drops rather than only for the ones this broker
+    /// hosted. That is what makes it the right place for the consumer-group
+    /// family: a deleted topic has no high watermark left for any group to lag
+    /// behind, wherever its partitions lived. For the replica-lag family it
+    /// overlaps [`Self::evict_partition_lag_series`], and covers the partition
+    /// index the image had already stopped naming when the delete arrived.
     pub(super) fn evict_topic_lag_series(&self, topic: &str) {
         self.retain_replica_lag(|label| label.topic != topic);
         self.retain_group_lag(|label| label.topic != topic);
@@ -219,17 +231,19 @@ mod tests {
         check!(group_lag_of(&metrics, &theirs) == Some(3));
     }
 
-    /// Losing a partition releases both families for it, across every
-    /// follower and every group, and leaves the sibling partition alone.
+    /// Losing a partition releases its follower series and leaves the sibling
+    /// partition's alone. A group's lag on the same partition survives: this
+    /// broker still coordinates the group, and the sampler reads the new
+    /// leader's high watermark over the wire.
     #[test]
-    fn evicting_a_partition_releases_both_lag_families_for_it() {
+    fn evicting_a_partition_releases_its_replica_lag_but_not_a_groups() {
         let metrics = BrokerMetrics::new();
         let (gone, kept) = (replica("orders", 0, 2), replica("orders", 1, 2));
         metrics.publish_replica_lag(&HashMap::from([(gone.clone(), 9), (kept.clone(), 4)]));
-        let (gone_group, kept_group) =
+        let (reassigned_group, kept_group) =
             (group("billing", "orders", 0), group("billing", "orders", 1));
         metrics.publish_consumer_group_lag(&HashMap::from([
-            (gone_group.clone(), 9),
+            (reassigned_group.clone(), 9),
             (kept_group.clone(), 4),
         ]));
 
@@ -240,7 +254,7 @@ mod tests {
 
         check!(replica_lag_of(&metrics, &gone) == None);
         check!(replica_lag_of(&metrics, &kept) == Some(4));
-        check!(group_lag_of(&metrics, &gone_group) == None);
+        check!(group_lag_of(&metrics, &reassigned_group) == Some(9));
         check!(group_lag_of(&metrics, &kept_group) == Some(4));
     }
 
