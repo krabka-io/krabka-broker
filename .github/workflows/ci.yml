@@ -271,15 +271,41 @@ jobs:
                 targets="$(all)"
               else
                 # `rdeps` takes a target set, so every path here must be a
-                # target Bazel knows. A crate README is not one: no rule globs
-                # it and no crate pulls one in with `include_str!`. Feeding it
-                # to `set(...)` fails the whole query, so a documentation-only
-                # change would kill the suite selection rather than select
+                # target Bazel knows, and plenty of files under `crates/` are
+                # not. A crate README is one: no rule globs it and no crate
+                # pulls one in with `include_str!`. A Criterion bench is
+                # another: benches are a Cargo-only concern, declared by a
+                # `[[bench]]` section and nothing else, so `//bazel:defs.bzl`
+                # has no rule that could claim the source. Feeding either to
+                # `set(...)` fails the whole query, so a change that happens to
+                # touch one would kill the suite selection rather than select
                 # nothing.
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
-                  grep -vE '\.md$' | while read -r f; do
-                  [ -e "${f}" ] && printf '%s\n' "${f}"
-                done)
+                #
+                # Naming each such class as it turns up only holds until the
+                # next one, so ask Bazel which paths it knows rather than
+                # guessing. A file that is an input to no rule is reachable
+                # from no target, so dropping it selects exactly what querying
+                # it would have -- and a file that becomes a target later, a
+                # README some crate starts pulling in with `include_str!` say,
+                # begins selecting on its own.
+                known="$(bazel query 'kind("source file", //crates/...:*)' |
+                  sed 's|^//||; s|:|/|' | sort -u)"
+                # No source files under `//crates/...` means the query broke,
+                # not that the tree is empty. Selecting nothing on that answer
+                # would ship the container suites unrun and say so nowhere.
+                if [ -z "${known}" ]; then
+                  echo "::error::no source files under //crates/..." >&2
+                  exit 1
+                fi
+                mapfile -t touched < <(grep -E '^crates/' <<<"${changed}" | sort -u)
+                files=()
+                for f in "${touched[@]}"; do
+                  if grep -qxF "${f}" <<<"${known}"; then
+                    files+=("${f}")
+                  else
+                    echo "Not a Bazel target, ignored for selection: ${f}"
+                  fi
+                done
                 if [ "${#files[@]}" -eq 0 ]; then
                   targets=""
                 else
