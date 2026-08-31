@@ -108,16 +108,25 @@ pub(crate) enum ConfigScope {
 /// closed set or a numeric floor. [`ValueCheck::Parsed`] names the keys whose
 /// check is a parser their own module owns, and
 /// [`ValueCheck::NotAltered`] names the keys no alter path accepts at all.
+///
+/// The width of a numeric check follows the row's [`ConfigType`], because the
+/// width is what the JVM `AdminClient` parses the value with: a key krabka
+/// reports as [`ConfigType::Int`] must refuse what Kafka's `INT` cannot hold.
+/// `apache/kafka:4.3.1` refuses `segment.bytes=2147483648` with
+/// `Invalid value 2147483648 for configuration segment.bytes: Not a number of
+/// type INT`, so krabka refuses it too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueCheck {
     /// `true` or `false`, exactly.
     Bool,
     /// One of a closed list, in the order the refusal names them.
     OneOf(&'static [&'static str]),
-    /// An `i64` no smaller than the bound.
+    /// An `i64` no smaller than the bound. Only a [`ConfigType::Long`] row
+    /// may carry it.
     I64AtLeast(i64),
-    /// A `u64` no smaller than the bound.
-    U64AtLeast(u64),
+    /// An `i32` no smaller than the bound, which is the width Kafka's `INT`
+    /// carries on the wire.
+    I32AtLeast(i32),
     /// Checked by a parser the key's own module owns.
     Parsed,
     /// Never accepted by an alter path: the broker synthesises the key, or
@@ -247,7 +256,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Int,
             Some("1073741824"),
             "Target size of a single log segment file.",
-            ValueCheck::U64AtLeast(1),
+            ValueCheck::I32AtLeast(1),
         )
     },
     key(
@@ -274,7 +283,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Int,
             Some("1"),
             "With acks=all, the minimum in-sync replicas required to accept a write; otherwise NOT_ENOUGH_REPLICAS (19).",
-            ValueCheck::I64AtLeast(1),
+            ValueCheck::I32AtLeast(1),
         )
     },
     ConfigKey {
@@ -580,7 +589,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::ClientMetrics,
             ConfigType::List,
             Some(""),
-            "Metric name prefixes this subscription collects. Empty means every metric.",
+            "Metric name prefixes this subscription collects. `*` collects every metric; an empty list collects none, as it does on Kafka, where an empty subscription contributes no metric name to the client's set.",
             ValueCheck::Parsed,
         )
     },
@@ -696,7 +705,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Group,
             ConfigType::String,
             None,
-            "Where a share group starts when it has no committed offset: `earliest` or `latest`.",
+            "Where a share group starts when it has no committed offset. krabka accepts `earliest` alone; Kafka's `latest` and `by_duration:<duration>` are refused with INVALID_CONFIG until the share coordinator implements them.",
             ValueCheck::Parsed,
         )
     },

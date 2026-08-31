@@ -182,6 +182,27 @@ fn the_two_synthesised_keys_are_the_only_unstored_rows() {
 }
 
 #[test]
+fn a_numeric_check_is_as_wide_as_the_type_the_row_advertises() {
+    // The width a row's check enforces is the width the JVM `AdminClient`
+    // parses the value with. A `ConfigType::Int` row that accepted an `i64`
+    // would tell a typed client that a value it cannot represent is valid, so
+    // no `Int` row may carry a 64-bit floor and no `Long` row a 32-bit one.
+    let mismatched: Vec<&str> = CONFIG_KEYS
+        .iter()
+        .filter(|row| {
+            matches!(
+                (row.config_type, row.check),
+                (ConfigType::Int, ValueCheck::I64AtLeast(_))
+                    | (ConfigType::Long, ValueCheck::I32AtLeast(_))
+            )
+        })
+        .map(|row| row.name)
+        .collect();
+
+    assert!(mismatched == Vec::<&str>::new());
+}
+
+#[test]
 fn no_key_krabka_has_today_is_sensitive() {
     // The redaction path still has to hold before a secret-valued key exists,
     // which `handlers::describe_configs::entry` tests directly.

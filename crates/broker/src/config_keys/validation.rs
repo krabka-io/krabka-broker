@@ -27,7 +27,7 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         ValueCheck::Bool => expect_one_of(key, value, BOOLEAN_VALUES),
         ValueCheck::OneOf(accepted) => expect_one_of(key, value, accepted),
         ValueCheck::I64AtLeast(min) => parse_i64_at_least(min, value).map(|_| ()),
-        ValueCheck::U64AtLeast(min) => parse_u64_at_least(min, value).map(|_| ()),
+        ValueCheck::I32AtLeast(min) => parse_i32_at_least(min, value).map(|_| ()),
         ValueCheck::Parsed => match key {
             COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
             QOS_TIER => validate_qos_tier(value),
@@ -153,10 +153,16 @@ fn parse_i64_at_least(min: i64, value: &str) -> Result<i64, String> {
     Ok(parsed)
 }
 
-fn parse_u64_at_least(min: u64, value: &str) -> Result<u64, String> {
-    let parsed: u64 = value
+/// The check an `INT` row carries. Kafka parses the value of a key it types
+/// `INT` with `Integer.parseInt`, so `2147483648` is not a value the key can
+/// hold however large the broker's own runtime type is: `apache/kafka:4.3.1`
+/// answers `Invalid value 2147483648 for configuration min.insync.replicas:
+/// Not a number of type INT`. Refusing it here keeps the value an operator
+/// may set inside the type `DescribeConfigs` advertises.
+fn parse_i32_at_least(min: i32, value: &str) -> Result<i32, String> {
+    let parsed: i32 = value
         .parse()
-        .map_err(|_| format!("expected non-negative integer, got `{value}`"))?;
+        .map_err(|_| format!("expected a 32-bit integer, got `{value}`"))?;
     if parsed < min {
         return Err(format!("value `{value}` must be >= {min}"));
     }

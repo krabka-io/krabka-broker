@@ -102,6 +102,30 @@ fn validate_min_isr_positive_accepted() {
 }
 
 #[test]
+fn an_int_key_refuses_what_kafkas_int_cannot_hold() {
+    // `DescribeConfigs` reports both keys as `ConfigType::Int`, and
+    // `apache/kafka:4.3.1` refuses a value past `i32::MAX` on both:
+    // `Invalid value 2147483648 for configuration segment.bytes: Not a number
+    // of type INT`. A value the broker accepts must fit the type it
+    // advertises, so the largest accepted value is `i32::MAX`.
+    let cases = [
+        (SEGMENT_BYTES, "2147483647", true),
+        (SEGMENT_BYTES, "2147483648", false),
+        (SEGMENT_BYTES, "9223372036854775807", false),
+        (MIN_INSYNC_REPLICAS, "2147483647", true),
+        (MIN_INSYNC_REPLICAS, "2147483648", false),
+        (MIN_INSYNC_REPLICAS, "0", false),
+        (MIN_INSYNC_REPLICAS, "-1", false),
+    ];
+    for (key, value, want_ok) in cases {
+        assert!(
+            validate_topic_config(key, value).is_ok() == want_ok,
+            "{key}={value}"
+        );
+    }
+}
+
+#[test]
 fn validate_unknown_key_rejected() {
     let err = validate_topic_config("flush.ms", "1000").unwrap_err();
     assert!(err.contains("unrecognized"));
