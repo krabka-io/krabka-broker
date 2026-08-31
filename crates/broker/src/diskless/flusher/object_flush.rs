@@ -19,6 +19,7 @@ use crate::diskless::{
     wal_object::WalObjectBuilder,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn flush_once(
     object_store: Arc<dyn ObjectStore>,
     broker_id: i32,
@@ -27,9 +28,13 @@ pub(crate) async fn flush_once(
     cache: Arc<AsyncMutex<WalIndexCache>>,
     partitions: &[FlushPartition],
     config: &FlushConfig,
+    is_current_leader: impl Fn(&FlushPartition) -> bool,
 ) -> Result<Option<WalFlushRecord>, crate::error::BrokerError> {
     let mut builder = WalObjectBuilder::new();
     for partition in partitions {
+        if !is_current_leader(partition) {
+            continue;
+        }
         let remaining = config
             .max_size
             .bytes_usize()
@@ -94,7 +99,13 @@ pub(crate) async fn flush_once(
         .diskless_wal_flush_bytes_total
         .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
-    let entries = batch_index_entries(&object)?;
+    let entries = match batch_index_entries(&object) {
+        Ok(entries) => entries,
+        Err(error) => {
+            metrics.diskless_wal_flush_failures_total.inc();
+            return Err(error);
+        }
+    };
     let record = WalFlushRecord {
         object_key,
         format_version: 1,
@@ -112,6 +123,9 @@ pub(crate) async fn flush_once(
     }
 
     for partition in partitions {
+        if !is_current_leader(partition) {
+            continue;
+        }
         if let Some(frontier) = cache
             .lock()
             .await
@@ -215,6 +229,8 @@ async fn wait_for_committed_projection(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
     use krabka_metadata::NodeId;
@@ -272,6 +288,7 @@ mod tests {
                 high_watermark: Offset(3),
             }],
             &FlushConfig::default(),
+            |_| true,
         )
         .await
         .unwrap()
@@ -282,6 +299,49 @@ mod tests {
         assert!(cache.lock().await.flushed_frontier(topic_id, 0) == Some(3));
         assert!(store.head(&Path::from(record.object_key)).await.is_ok());
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+    }
+
+    #[tokio::test]
+    async fn leadership_loss_does_not_recreate_shard_metrics() {
+        let dir = tempdir().unwrap();
+        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let index = DisklessIndexLog::start(
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+        )
+        .await
+        .unwrap();
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let topic_id = Uuid::from_u128(11);
+        let checks = AtomicUsize::new(0);
+
+        flush_once(
+            Arc::new(InMemory::new()),
+            7,
+            &metrics,
+            &index,
+            index.cache(),
+            &[FlushPartition {
+                topic_id,
+                handle,
+                high_watermark: Offset(3),
+            }],
+            &FlushConfig::default(),
+            |_| {
+                if checks.fetch_add(1, Ordering::Relaxed) == 0 {
+                    true
+                } else {
+                    metrics.remove_diskless_wal_shard(topic_id, krabka_ids::PartitionIndex(0), &[]);
+                    false
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut body = String::new();
+        let registry = metrics.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        assert!(!body.contains(&topic_id.to_string()));
     }
 
     #[tokio::test]
@@ -313,6 +373,7 @@ mod tests {
                 high_watermark: Offset(3),
             }],
             &FlushConfig::default(),
+            |_| true,
         )
         .await
         .expect_err("the object-store root became a file");
@@ -360,6 +421,7 @@ mod tests {
                 trim_safety_lag: Some(3),
                 ..FlushConfig::default()
             },
+            |_| true,
         )
         .await
         .expect("a no-op trim must not depend on the partition writer")
@@ -439,6 +501,7 @@ mod tests {
                 },
             ],
             &config,
+            |_| true,
         )
         .await
         .unwrap()

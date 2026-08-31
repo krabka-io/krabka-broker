@@ -268,20 +268,6 @@ impl WalShardEngine {
         );
     }
 
-    fn warn_quorum_not_reached(&self, from: NodeId, offset: Offset) {
-        let Some((shard, _)) = self.observability.get() else {
-            return;
-        };
-        tracing::warn!(
-            topic_id = %shard.topic_id,
-            partition = shard.partition.0,
-            voter = from.0,
-            offset = offset.0,
-            durable_watermark = self.durable_watermark().0,
-            "diskless WAL voter acknowledgement did not reach quorum"
-        );
-    }
-
     pub(crate) async fn wait_for_durable_advance(&self, after: Offset) -> Offset {
         loop {
             let advanced = self.durable_advanced.notified();

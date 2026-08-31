@@ -183,7 +183,6 @@ impl WalShardEngine {
             if offset_changed {
                 self.record_observability();
             }
-            self.warn_quorum_not_reached(from, offset);
             return false;
         }
         self.durable_watermark.store(durable.0, Ordering::Release);

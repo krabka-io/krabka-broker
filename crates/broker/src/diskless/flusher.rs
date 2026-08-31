@@ -141,6 +141,7 @@ async fn flush_tick(
         context.index_log.cache(),
         &partitions,
         config,
+        |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
 }

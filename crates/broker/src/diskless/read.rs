@@ -77,7 +77,12 @@ impl DisklessReadHandle {
         else {
             return Ok(None);
         };
-        Ok(first_batch_bytes_at_or_after(&run, offset, max_bytes))
+        let Some(records) = first_batch_bytes_at_or_after(&run, offset, max_bytes)? else {
+            return Err(crate::error::BrokerError::Txn(format!(
+                "diskless WAL indexed range contains no batch at offset {offset}"
+            )));
+        };
+        Ok(Some(records))
     }
 }
 
@@ -135,15 +140,21 @@ pub(crate) async fn try_diskless_read(
     Some(bytes_est)
 }
 
-fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64, max_bytes: usize) -> Option<Bytes> {
+fn first_batch_bytes_at_or_after(
+    run: &Bytes,
+    floor: i64,
+    max_bytes: usize,
+) -> Result<Option<Bytes>, crate::error::BrokerError> {
     let mut offset = 0;
     let mut selected = None;
     while offset < run.len() {
         let slice = run.slice(offset..);
         let mut cur: &[u8] = &slice;
-        let Ok(batch) = RecordBatch::decode(&mut cur) else {
-            return None;
-        };
+        let batch = RecordBatch::decode(&mut cur).map_err(|error| {
+            crate::error::BrokerError::Txn(format!(
+                "diskless WAL indexed range contains an invalid batch: {error}"
+            ))
+        })?;
         let encoded_len = slice.len() - cur.len();
         let last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
         if selected.is_none() && last_offset >= floor {
@@ -151,11 +162,13 @@ fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64, max_bytes: usize) -> O
         } else if let Some(start) = selected
             && offset + encoded_len - start > max_bytes
         {
-            return Some(run.slice(start..offset));
+            return Ok(Some(run.slice(start..offset)));
         }
-        offset = offset.checked_add(encoded_len)?;
+        offset = offset.checked_add(encoded_len).ok_or_else(|| {
+            crate::error::BrokerError::Txn("diskless WAL batch offset overflow".into())
+        })?;
     }
-    selected.map(|start| run.slice(start..offset))
+    Ok(selected.map(|start| run.slice(start..offset)))
 }
 
 #[cfg(test)]
@@ -232,7 +245,9 @@ mod tests {
         let mut expected = BytesMut::new();
         second.encode(&mut expected).unwrap();
 
-        let got = first_batch_bytes_at_or_after(&run, 1, usize::MAX).unwrap();
+        let got = first_batch_bytes_at_or_after(&run, 1, usize::MAX)
+            .unwrap()
+            .unwrap();
 
         assert!(got == expected.freeze());
     }
@@ -241,7 +256,11 @@ mod tests {
     fn cold_read_miss_leaves_out_of_range() {
         let run = encode_batches(&[batch(0, b"a")]);
 
-        assert!(first_batch_bytes_at_or_after(&run, 5, usize::MAX).is_none());
+        assert!(
+            first_batch_bytes_at_or_after(&run, 5, usize::MAX)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -259,7 +278,9 @@ mod tests {
             ..Default::default()
         }]);
 
-        let got = first_batch_bytes_at_or_after(&run, 11, usize::MAX).unwrap();
+        let got = first_batch_bytes_at_or_after(&run, 11, usize::MAX)
+            .unwrap()
+            .unwrap();
 
         assert!(got == run);
     }
@@ -270,8 +291,13 @@ mod tests {
         let second = encode_batches(&[batch(1, b"b")]);
         let run = encode_batches(&[batch(0, b"a"), batch(1, b"b")]);
 
-        assert!(first_batch_bytes_at_or_after(&run, 0, 1).unwrap() == first);
-        assert!(first_batch_bytes_at_or_after(&run, 0, first.len() + second.len()).unwrap() == run);
+        assert!(first_batch_bytes_at_or_after(&run, 0, 1).unwrap().unwrap() == first);
+        assert!(
+            first_batch_bytes_at_or_after(&run, 0, first.len() + second.len())
+                .unwrap()
+                .unwrap()
+                == run
+        );
     }
 
     #[test]
@@ -286,8 +312,26 @@ mod tests {
         let run = encode_batches(&[compressed, batch(1, b"next")]);
 
         assert!(first.len() < run.len());
-        assert!(first_batch_bytes_at_or_after(&run, 0, first.len()).unwrap() == first);
-        assert!(first_batch_bytes_at_or_after(&run, 1, usize::MAX).unwrap() == second);
+        assert!(
+            first_batch_bytes_at_or_after(&run, 0, first.len())
+                .unwrap()
+                .unwrap()
+                == first
+        );
+        assert!(
+            first_batch_bytes_at_or_after(&run, 1, usize::MAX)
+                .unwrap()
+                .unwrap()
+                == second
+        );
+    }
+
+    #[test]
+    fn malformed_indexed_range_is_an_error() {
+        let error =
+            first_batch_bytes_at_or_after(&Bytes::from_static(b"bad"), 0, usize::MAX).unwrap_err();
+
+        assert!(error.to_string().contains("invalid batch"));
     }
 
     #[tokio::test]
