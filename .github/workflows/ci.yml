@@ -357,9 +357,9 @@ jobs:
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
-  # The mutation rule runs unit tests only. Scope the blocking sweep to the
-  # consensus engine, whose decision logic is pure and unit-tested; the checked
-  # in `.cargo/mutants-baseline.txt` makes any survivor-set change blocking.
+  # One job per workspace package. cargo-mutants runs the package's unit and
+  # `tests/*.rs` integration targets against each mutation; the Bazel mutation
+  # rule cannot do that because it only rebuilds one `rust_test` target.
   mutants-select:
     name: select mutants targets
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -369,16 +369,15 @@ jobs:
       crates: ${{ steps.select.outputs.crates }}
     steps:
       - uses: actions/checkout@v7
-      - uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352 # v2026.26.9
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-mutants
-          repository-cache: true
       - id: select
         run: |
           set -euo pipefail
-          crates='[{"target":"//crates/raft:raft_mutants","name":"raft","minutes":60}]'
+          crates="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -c '[.packages[] | select(.source == null) |
+                {package: .name, name: (.manifest_path | split("/") | .[-2])} |
+                . + {minutes: (if .name == "broker" then 300 else 60 end)}]'
+          )"
           echo "crates=${crates}" >>"${GITHUB_OUTPUT}"
           echo "Selected: ${crates}"
 
@@ -401,7 +400,7 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-mutants
           repository-cache: true
-      - run: bash tools/check-mutants.sh ${{ matrix.crate.target }}
+      - run: bash tools/check-mutants.sh ${{ matrix.crate.package }}
 
   # Push the broker image.
   #
