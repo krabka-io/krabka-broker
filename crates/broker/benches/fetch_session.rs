@@ -256,8 +256,7 @@ fn bench_occupancy_ratio(_c: &mut Criterion) {
             .map(|occupancy| {
                 (0..RUNS)
                     .map(|_| {
-                        let elapsed =
-                            timed_across_threads(occupancy, threads, u64::from(SAMPLES));
+                        let elapsed = timed_across_threads(occupancy, threads, u64::from(SAMPLES));
                         elapsed.as_secs_f64() * 1e9 / f64::from(SAMPLES)
                     })
                     .fold(f64::INFINITY, f64::min)
