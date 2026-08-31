@@ -458,7 +458,10 @@ mod tests {
     use assert2::assert;
     use bytes::Bytes;
     use krabka_log::{DeliveryPolicy, Log, LogConfig, Offset};
-    use krabka_protocol::records::{Record, RecordBatch, RecordsPayload};
+    use krabka_protocol::{
+        owned::fetch_response::{AbortedTransaction, PartitionData},
+        records::{Attributes, Record, RecordBatch, RecordsPayload},
+    };
     use krabka_units::prelude::mebibytes;
     use qubit_clock::{Clock as _, SystemClock};
 
@@ -466,13 +469,13 @@ mod tests {
     /// the served bytes are the whole batch under either runtime flavor.
     const UNBOUNDED: krabka_units::ByteSize = mebibytes(1);
 
-    /// [`super::run_blocking_read`] picks its hand-off from the runtime
-    /// flavor: `block_in_place` on the multi-threaded runtime the broker runs
-    /// on, and `spawn_blocking` on a current-thread runtime, where
-    /// `block_in_place` panics outright rather than degrading. Both arms have
-    /// to serve exactly the bytes a direct read serves.
-    #[test]
-    fn either_runtime_flavor_serves_the_same_bytes() {
+    /// The producer that opens and aborts the transaction the
+    /// `read_committed` case reads back.
+    const PID: i64 = 1000;
+
+    /// One batch of two records in a fresh log directory. The directory is
+    /// returned because dropping it deletes the segments underneath the log.
+    fn two_record_log() -> (tempfile::TempDir, Log) {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
         log.append(&mut RecordBatch {
@@ -492,9 +495,14 @@ mod tests {
             ..RecordBatch::default()
         })
         .expect("append the batch under test");
-        let limit = log.log_end_offset();
-        let log = Arc::new(Mutex::new(log));
-        let read = super::BlockingRead {
+        (dir, log)
+    }
+
+    /// The plain read the cases below vary: everything from offset 0 to
+    /// `limit`, no byte budget in the way, no sendfile and no `read_committed`
+    /// bookkeeping.
+    fn whole_log_read(limit: Offset) -> super::BlockingRead {
+        super::BlockingRead {
             fetch_offset: Offset(0),
             limit_offset: limit,
             effective_lso: limit,
@@ -502,7 +510,20 @@ mod tests {
             read_committed_aborts: false,
             sendfile_capable: false,
             sendfile_min_bytes: 0,
-        };
+        }
+    }
+
+    /// [`super::run_blocking_read`] picks its hand-off from the runtime
+    /// flavor: `block_in_place` on the multi-threaded runtime the broker runs
+    /// on, and `spawn_blocking` on a current-thread runtime, where
+    /// `block_in_place` panics outright rather than degrading. Both arms have
+    /// to serve exactly the bytes a direct read serves.
+    #[test]
+    fn either_runtime_flavor_serves_the_same_bytes() {
+        let (_dir, log) = two_record_log();
+        let limit = log.log_end_offset();
+        let log = Arc::new(Mutex::new(log));
+        let read = whole_log_read(limit);
         let expected = (
             Some(RecordsPayload::Raw(
                 log.lock()
@@ -540,6 +561,272 @@ mod tests {
         assert!(super::should_use_sendfile(64, true, 64));
         assert!(!super::should_use_sendfile(63, true, 64));
         assert!(!super::should_use_sendfile(64, false, 64));
+    }
+
+    /// On a plaintext connection [`super::read_records`] describes the records
+    /// run for the `sendfile` drain instead of `pread`ing it, but only once
+    /// the run is long enough to pay for the syscall. Below the threshold it
+    /// falls back to the byte copy, and both answers carry the same bytes.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
+    #[test]
+    fn a_sendfile_capable_read_describes_the_run_only_above_the_threshold() {
+        let (_dir, log) = two_record_log();
+        let limit = log.log_end_offset();
+        let raw = log
+            .read_raw(Offset(0), limit, UNBOUNDED)
+            .expect("the test log holds the range it is asked for")
+            .bytes;
+        let log = Mutex::new(log);
+
+        let described = super::read_records(
+            &log,
+            &super::BlockingRead {
+                sendfile_capable: true,
+                ..whole_log_read(limit)
+            },
+        )
+        .expect("the blocking read succeeds");
+        let copied = super::read_records(
+            &log,
+            &super::BlockingRead {
+                sendfile_capable: true,
+                sendfile_min_bytes: raw.len() + 1,
+                ..whole_log_read(limit)
+            },
+        )
+        .expect("the blocking read succeeds");
+
+        assert!(let RecordsPayload::FileRegions(_) = &described.0);
+        assert!(described.0.payload_len() == raw.len());
+        assert!(described.1.is_empty());
+        assert!(copied == (RecordsPayload::Raw(raw), Vec::new()));
+    }
+
+    /// A `read_committed` fetch does no server-side filtering: it serves the
+    /// verbatim bytes, aborted batches included, and reports the aborted
+    /// ranges beside them so the consumer can drop those client-side. The same
+    /// read without the flag reports none, and neither answer moves a byte.
+    #[test]
+    fn read_committed_reports_the_aborted_ranges_beside_the_same_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+        log.append(&mut transactional_batch(PID))
+            .expect("append the transaction's one data batch");
+        log.append(&mut abort_marker(PID))
+            .expect("append the abort marker that closes it");
+        let limit = log.log_end_offset();
+        let raw = log
+            .read_raw(Offset(0), limit, UNBOUNDED)
+            .expect("the test log holds the range it is asked for")
+            .bytes;
+        let log = Mutex::new(log);
+
+        let read_committed = super::read_records(
+            &log,
+            &super::BlockingRead {
+                read_committed_aborts: true,
+                ..whole_log_read(limit)
+            },
+        )
+        .expect("the blocking read succeeds");
+        let read_uncommitted =
+            super::read_records(&log, &whole_log_read(limit)).expect("the blocking read succeeds");
+
+        assert!(
+            read_committed
+                == (
+                    RecordsPayload::Raw(raw.clone()),
+                    vec![AbortedTransaction {
+                        producer_id: PID,
+                        first_offset: 0,
+                        ..AbortedTransaction::default()
+                    }],
+                )
+        );
+        assert!(read_uncommitted == (RecordsPayload::Raw(raw), Vec::new()));
+    }
+
+    /// One transactional data record from `pid`, the batch that opens the
+    /// transaction on this partition. `Log::append` rewrites the offsets.
+    fn transactional_batch(pid: i64) -> RecordBatch {
+        RecordBatch {
+            producer_id: pid,
+            attributes: Attributes::default().with_transactional(true),
+            records: vec![Record {
+                offset_delta: 0,
+                value: Some(Bytes::from_static(b"in a transaction")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        }
+    }
+
+    /// `pid`'s abort control batch: a control record whose 4-byte key is
+    /// (version=0: i16, `marker_type`=0: i16) big-endian, with the
+    /// coordinator epoch in its value. Appending it writes the transaction's
+    /// offset range into the partition's `.txnindex`.
+    fn abort_marker(pid: i64) -> RecordBatch {
+        let mut key = [0u8; 4];
+        key[2..4].copy_from_slice(&0i16.to_be_bytes());
+        let mut value = [0u8; 6];
+        value[2..6].copy_from_slice(&17i32.to_be_bytes());
+        RecordBatch {
+            producer_id: pid,
+            attributes: Attributes::default()
+                .with_transactional(true)
+                .with_control(true),
+            records: vec![Record {
+                offset_delta: 0,
+                key: Some(Bytes::copy_from_slice(&key)),
+                value: Some(Bytes::copy_from_slice(&value)),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        }
+    }
+
+    /// A consumer's `read_uncommitted` request for everything from
+    /// `fetch_offset`, with a byte budget larger than the log.
+    fn consumer_request(fetch_offset: i64) -> super::ReadRequest {
+        super::ReadRequest {
+            topic_id: None,
+            hot_tail: None,
+            fetch_offset: Offset(fetch_offset),
+            max_bytes: 1 << 20,
+            read_committed: false,
+            is_follower_fetch: false,
+            sendfile_capable: false,
+            sendfile_min_bytes: 0,
+        }
+    }
+
+    /// [`super::do_read`] hands the bounds its plan decided to the blocking
+    /// read and fills the response from what came back. The three cases are
+    /// the three shapes the plan has: a range to serve, nothing to serve
+    /// because the fetch sits at the high watermark, and an offset outside the
+    /// log, which reports `OFFSET_OUT_OF_RANGE` and serves nothing.
+    #[tokio::test]
+    async fn do_read_serves_the_window_its_plan_decided() {
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (limit, records) = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                last_offset_delta: 1,
+                records: vec![
+                    Record {
+                        offset_delta: 0,
+                        value: Some(Bytes::from_static(b"first")),
+                        ..Record::default()
+                    },
+                    Record {
+                        offset_delta: 1,
+                        value: Some(Bytes::from_static(b"second")),
+                        ..Record::default()
+                    },
+                ],
+                ..RecordBatch::default()
+            })
+            .expect("append the batch under test");
+            let limit = log.log_end_offset();
+            let records = log
+                .read_raw(Offset(0), limit, UNBOUNDED)
+                .expect("the test log holds the range it is asked for")
+                .bytes;
+            (limit, records)
+        };
+        partition.replica_state.lock().await.hw = limit;
+
+        let served = PartitionData {
+            error_code: crate::codes::NONE,
+            high_watermark: limit.0,
+            last_stable_offset: limit.0,
+            log_start_offset: 0,
+            records: Some(RecordsPayload::Raw(records.clone())),
+            ..PartitionData::default()
+        };
+        let cases = [
+            ("the whole log", 0, records.len(), served.clone()),
+            (
+                "nothing left to serve",
+                limit.0,
+                0,
+                PartitionData {
+                    records: None,
+                    ..served.clone()
+                },
+            ),
+            (
+                "past the high watermark",
+                limit.0 + 1,
+                0,
+                PartitionData {
+                    records: None,
+                    ..served
+                },
+            ),
+        ];
+
+        for (name, fetch_offset, expected_bytes, expected) in cases {
+            let mut out = PartitionData::default();
+            let bytes = super::do_read(&partition, consumer_request(fetch_offset), &mut out)
+                .await
+                .expect("the read succeeds");
+            assert!(bytes == expected_bytes, "{name}");
+            assert!(out == expected, "{name}");
+        }
+    }
+
+    /// The one plan shape that serves nothing and still reports an error: a
+    /// fetch below the log start, which is where a consumer resuming from an
+    /// offset retention has already deleted lands. The response carries the
+    /// bounds the consumer needs to reset itself, and no records.
+    #[tokio::test]
+    async fn do_read_reports_a_fetch_below_the_log_start_out_of_range() {
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let limit = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"deleted by retention")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .expect("append the batch retention then deletes");
+            let limit = log.log_end_offset();
+            log.trim_to_offset(limit)
+                .expect("trim the whole log away from under the fetch");
+            limit
+        };
+        partition.replica_state.lock().await.hw = limit;
+
+        let mut out = PartitionData::default();
+        let bytes = super::do_read(&partition, consumer_request(0), &mut out)
+            .await
+            .expect("the read succeeds");
+
+        assert!(bytes == 0);
+        assert!(
+            out == PartitionData {
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                high_watermark: limit.0,
+                last_stable_offset: limit.0,
+                log_start_offset: limit.0,
+                records: None,
+                ..PartitionData::default()
+            }
+        );
     }
 
     /// A log holding one batch per entry of `activations`, two records each.

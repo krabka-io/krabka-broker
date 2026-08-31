@@ -1,6 +1,10 @@
-//! Fixture builders that the partition module's unit tests share: a partition
-//! over a temporary log directory, one wired to a live writer task, and a
-//! helper that appends records straight to the log.
+//! Fixture builders for unit tests that need a real partition: one over a
+//! temporary log directory, one wired to a live writer task, and a helper that
+//! appends records straight to the log.
+//!
+//! [`test_partition`] is `pub(crate)` because the fetch read path's own tests
+//! drive [`crate::handlers::fetch`] against a partition too, and a second copy
+//! of this fixture would be a second thing to keep in step with `Partition`.
 
 use std::sync::{
     Arc, Mutex,
@@ -18,7 +22,7 @@ use crate::{
     partition::{Partition, WriterMessage, initial_replication_target},
 };
 
-pub(super) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
+pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let log = Log::open(dir.path(), LogConfig::default()).expect("open log");
     let (tx, _rx) = mpsc::channel::<WriterMessage>(1);
