@@ -209,3 +209,10 @@ criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 [[bench]]
 name = "produce"
 harness = false
+
+# The fetch read loop's thread-pool hand-off: one `spawn_blocking` per
+# partition against one covering the whole pending set, and against
+# `block_in_place`, over the partition counts a wide subscription reaches.
+[[bench]]
+name = "fetch_handoff"
+harness = false
