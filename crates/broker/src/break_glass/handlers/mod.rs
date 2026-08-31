@@ -255,6 +255,7 @@ pub(crate) mod tests {
             connection_id: "test-connection",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
+            throttle: crate::quota::ThrottleSlot::default(),
         }
     }
 

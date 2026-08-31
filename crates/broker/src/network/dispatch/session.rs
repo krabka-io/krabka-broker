@@ -1,6 +1,7 @@
 //! Per-connection authentication session state. It derives the initial
-//! `ConnectionAuth` for a listener, borrows the connection's principal, and
-//! arms the KIP-368 session-expiry deadline that races the next frame read.
+//! `ConnectionAuth` for a listener, borrows the connection's principal, arms
+//! the KIP-368 session-expiry deadline that races the next frame read, and
+//! holds the read off for the KIP-219 mute window a throttled request earned.
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -107,21 +108,48 @@ fn auth_deadline(auth: &crate::network::auth::ConnectionAuth) -> Option<tokio::t
     }
 }
 
+/// Logs the KIP-368 session expiry that ends the connection.
+fn log_session_expiry(auth: &crate::network::auth::ConnectionAuth) {
+    tracing::info!(
+        principal = ?auth_principal_name(auth),
+        "SASL session expired, closing connection (KIP-368)"
+    );
+}
+
+/// Reads the next request frame, after honouring any KIP-219 mute window.
+///
+/// `mute_until` is the deadline the previous response's throttle earned. Kafka
+/// enforces a quota by muting the connection: the response is already on the
+/// wire, and the broker simply stops reading requests until the window closes.
+/// Holding the read back here — rather than delaying the write — is what keeps
+/// a throttled client from timing out its in-flight request and retrying into
+/// the quota that is shedding load.
+///
+/// The KIP-368 session-expiry deadline races the mute as well as the read, so
+/// an expiring session still closes the connection on time.
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     auth: &crate::network::auth::ConnectionAuth,
+    mute_until: Option<tokio::time::Instant>,
 ) -> Option<Bytes>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    if let Some(mute_until) = mute_until {
+        tokio::select! {
+            biased;
+            () = sleep_until_some(auth_deadline(auth)) => {
+                log_session_expiry(auth);
+                return None;
+            }
+            () = tokio::time::sleep_until(mute_until) => {}
+        }
+    }
     let frame_result = tokio::select! {
         biased;
         next = framed.next() => next,
         () = sleep_until_some(auth_deadline(auth)) => {
-            tracing::info!(
-                principal = ?auth_principal_name(auth),
-                "SASL session expired, closing connection (KIP-368)"
-            );
+            log_session_expiry(auth);
             return None;
         }
     };

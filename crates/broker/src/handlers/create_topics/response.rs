@@ -7,7 +7,7 @@ use krabka_protocol::{
     Encode,
     owned::create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
 };
-use krabka_units::{Time, convert::TimeExt};
+use krabka_units::Time;
 
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -68,7 +68,7 @@ pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes
     crate::handlers::encode_response(resp, version)
 }
 
-pub(super) async fn finish_response(
+pub(super) fn finish_response(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     results: Vec<CreatableTopicResult>,
@@ -81,9 +81,9 @@ pub(super) async fn finish_response(
         created_topic_resources(&results),
     );
     let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    if delay > <Time as TimeExt>::ZERO {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    // KIP-219: the KIP-599 window is reported here and enforced by the
+    // connection loop, which mutes the connection after the response is sent.
+    context.record_throttle(delay);
     encode_response(&response, version)
 }
 

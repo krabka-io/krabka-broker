@@ -32,7 +32,7 @@ pub(super) fn produce_bytes_by_qos_tier(
     out
 }
 
-pub(super) async fn finish_produce_response(
+pub(super) fn finish_produce_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
@@ -76,9 +76,10 @@ pub(super) async fn finish_produce_response(
         throttle_time_ms: crate::quota::throttle_time_ms(delay),
         ..Default::default()
     };
-    if delay > <Time as TimeExt>::ZERO {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    // KIP-219: report the window in the response and hand it to the connection
+    // loop, which mutes the connection once these bytes are written. Sleeping
+    // here would hold the response back past the client's request timeout.
+    context.record_throttle(delay);
     let mut encoded = BytesMut::new();
     if (0..3).contains(&version) {
         let legacy: krabka_protocol::kafka_3_6_2::owned::produce_response::ProduceResponse =

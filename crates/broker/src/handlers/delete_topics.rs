@@ -43,7 +43,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_raft::RaftError;
-use krabka_units::{Time, convert::TimeExt};
 
 use crate::{
     break_glass::{
@@ -79,12 +78,6 @@ use self::{
     tiering::{spawn_remote_cascades, tiered_partitions},
     wire::{delete_topic_result, delete_topics_response, refused_topic_result},
 };
-
-/// KIP-599: a zero delay means the request was never throttled, so the
-/// response path must not sleep at all.
-fn should_wait_for_quota_delay(delay: Time) -> bool {
-    delay > <Time as TimeExt>::ZERO
-}
 
 #[tracing::instrument(
     name = "handle_delete_topics",
@@ -304,12 +297,12 @@ pub(crate) async fn handle(
         deleted_topic_resources(&results),
     );
 
-    // KIP-599: apply controller_mutation_rate throttle after response assembly.
+    // KIP-599: report the controller_mutation_rate throttle in the response and
+    // hand the window to the connection loop, which mutes the connection once
+    // the response is written (KIP-219).
     let delay = quota.delay();
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
-    if should_wait_for_quota_delay(delay) {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    ctx.record_throttle(delay);
 
     let resp = delete_topics_response(results, throttle_time_ms);
     crate::handlers::encode_response(&resp, version)

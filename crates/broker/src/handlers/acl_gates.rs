@@ -125,6 +125,7 @@ mod tests {
             connection_id: "connection-a",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
+            throttle: crate::quota::ThrottleSlot::default(),
         };
 
         assert!(acl_denied(
@@ -152,6 +153,7 @@ mod tests {
             connection_id: "connection-a",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
+            throttle: crate::quota::ThrottleSlot::default(),
         };
 
         for (label, super_users, denied) in [

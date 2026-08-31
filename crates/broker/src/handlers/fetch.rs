@@ -152,7 +152,7 @@ pub(crate) async fn handle(
     let throttle_time_ms_val = if is_follower_fetch {
         0
     } else {
-        apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses).await
+        apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses)
     };
 
     record_fetch_metrics(broker, &responses, &cpu_micros_by_idx, is_follower_fetch);

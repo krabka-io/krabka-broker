@@ -18,7 +18,10 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use futures_util::SinkExt;
 use krabka_protocol::{Decode as _, api_key::ApiKey};
-use krabka_units::convert::ByteSizeExt as _;
+use krabka_units::{
+    Time,
+    convert::{ByteSizeExt as _, TimeExt},
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::Instrument as _;
@@ -41,11 +44,33 @@ use self::{
     fetch::dispatch_fetch,
     guards::{ActiveConnectionGuard, InFlightGuard},
     registry::{DispatchContext, send_registry_response},
-    response::{encode_response, maybe_apply_request_quota},
+    response::{apply_request_quota, encode_response},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
     session::{initial_connection_auth, next_connection_frame},
 };
 use crate::{broker::Broker, codes, handlers::ApiKeyCode, network::codec};
+
+/// What the connection loop does once a response has been written.
+///
+/// KIP-219 splits a quota violation between the response, which tells the
+/// client how long to back off, and the connection, which the broker mutes for
+/// exactly that long. The write always happens first; the mute is what
+/// enforces the quota.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum AfterResponse {
+    /// Keep serving, but read no further request for this window. It is a zero
+    /// extent when the request tripped no quota.
+    Mute(Time),
+    /// Close the connection.
+    Close,
+}
+
+/// Turns a KIP-219 throttle window into the deadline the connection stays
+/// muted until, measured from now — that is, from the moment the response
+/// finished being written.
+fn mute_deadline(window: Time) -> Option<tokio::time::Instant> {
+    (window > <Time as TimeExt>::ZERO).then(|| tokio::time::Instant::now() + window.to_std())
+}
 
 /// `ApiVersions` wire `api_key`. It has its own name because it is the one API
 /// whose response header is always v0, whatever the body flexibility, and
@@ -135,7 +160,7 @@ async fn send_unsupported_version<S>(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     started: std::time::Instant,
-) -> bool
+) -> AfterResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -157,13 +182,13 @@ where
             api_key = parsed.api_key,
             "missing unsupported-version response shape, closing"
         );
-        return false;
+        return AfterResponse::Close;
     };
     let body = match encoded_body {
         Ok(body) => body,
         Err(error) => {
             tracing::warn!(%error, "unsupported-version response encode error, closing");
-            return false;
+            return AfterResponse::Close;
         }
     };
     let response = match encode_response(
@@ -176,15 +201,15 @@ where
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "response exceeds configured frame maximum, closing");
-            return false;
+            return AfterResponse::Close;
         }
     };
-    let response = maybe_apply_request_quota(broker, response, parsed, auth, started).await;
-    if let Err(error) = framed.send(response).await {
+    let response = apply_request_quota(broker, response, parsed, auth, started);
+    if let Err(error) = framed.send(response.bytes).await {
         tracing::warn!(%error, "framed.send error, closing");
-        return false;
+        return AfterResponse::Close;
     }
-    true
+    AfterResponse::Mute(response.throttle)
 }
 
 /// Generic per-connection request loop.
@@ -226,8 +251,13 @@ async fn serve_connection_stream<S>(
     // never sent `ApiVersions` (e.g. early-version clients).
     let mut client_software = (String::new(), String::new());
 
+    // KIP-219 channel mute. A throttled response is written immediately and
+    // the quota is enforced by refusing to read the next request until this
+    // deadline passes.
+    let mut mute_until: Option<tokio::time::Instant> = None;
+
     loop {
-        let Some(frame) = next_connection_frame(&mut framed, &auth).await else {
+        let Some(frame) = next_connection_frame(&mut framed, &auth, mute_until.take()).await else {
             break;
         };
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
@@ -277,9 +307,11 @@ async fn serve_connection_stream<S>(
                 api_version = parsed.api_version,
                 "unsupported api version"
             );
-            if !send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, started).await
+            match send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, started)
+                .await
             {
-                break;
+                AfterResponse::Close => break,
+                AfterResponse::Mute(window) => mute_until = mute_deadline(window),
             }
             continue;
         }
@@ -318,7 +350,7 @@ async fn serve_connection_stream<S>(
         let (started, _in_flight) = begin_request(&broker, &parsed);
 
         if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
-            if !dispatch_fetch(
+            match dispatch_fetch(
                 &mut framed,
                 &broker,
                 &parsed,
@@ -328,7 +360,8 @@ async fn serve_connection_stream<S>(
             )
             .await
             {
-                break;
+                AfterResponse::Close => break,
+                AfterResponse::Mute(window) => mute_until = mute_deadline(window),
             }
             continue;
         }
@@ -344,8 +377,9 @@ async fn serve_connection_stream<S>(
             client_software_name: &client_software.0,
             client_software_version: &client_software.1,
         };
-        if !send_registry_response(&mut framed, entry, context, req_span, started).await {
-            break;
+        match send_registry_response(&mut framed, entry, context, req_span, started).await {
+            AfterResponse::Close => break,
+            AfterResponse::Mute(window) => mute_until = mute_deadline(window),
         }
     }
     broker

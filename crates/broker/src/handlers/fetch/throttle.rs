@@ -41,7 +41,7 @@ pub(super) fn throttle_follower_responses(
     }
 }
 
-pub(super) async fn apply_consumer_fetch_quota(
+pub(super) fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
@@ -75,7 +75,10 @@ pub(super) async fn apply_consumer_fetch_quota(
     if delay <= <Time as TimeExt>::ZERO {
         return 0;
     }
-    tokio::time::sleep(delay.to_std()).await;
+    // KIP-219: the window goes back to the connection loop, which mutes the
+    // connection after the fetch plan is written. Sleeping here would delay the
+    // records the client is already waiting on.
+    context.record_throttle(delay);
     crate::quota::throttle_time_ms(delay)
 }
 

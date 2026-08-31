@@ -1,10 +1,14 @@
 //! Unit tests for the dispatch module root: request peeking, the flexible
-//! header metadata the KIP-853 voter RPCs need, and an end-to-end drive of the
-//! serve loop over a real socket.
+//! header metadata the KIP-853 voter RPCs need, the KIP-219 throttle mute, and
+//! an end-to-end drive of the serve loop over a real socket.
+
+use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
 use futures_util::StreamExt;
+use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
+use krabka_units::{convert::TimeExt as _, millis};
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
@@ -265,5 +269,131 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 
     server.await.expect("serve loop joins after unknown API");
+    handle.shutdown().await;
+}
+
+/// Writes a v0 `ApiVersions` request, the cheapest frame that still reaches a
+/// real handler through the whole serve loop.
+async fn send_api_versions(
+    framed: &mut Framed<TcpStream, tokio_util::codec::LengthDelimitedCodec>,
+    correlation_id: i32,
+) {
+    let frame = request_frame(API_VERSIONS_KEY, 0, correlation_id, None, None, &[]).freeze();
+    framed.send(frame).await.expect("send ApiVersions");
+}
+
+/// Reads the leading correlation id of a response frame.
+fn response_correlation_id(frame: &BytesMut) -> i32 {
+    i32::from_be_bytes(frame[..4].try_into().expect("response correlation id"))
+}
+
+/// KIP-219: a throttled request is answered at once, and the quota is enforced
+/// by muting the connection afterwards.
+///
+/// `request_percentage = 0.0001` gives the KIP-124 bucket a budget of one
+/// microsecond of handler time per second, so the first request overruns it by
+/// orders of magnitude and earns the configured maximum window. The
+/// pre-KIP-219 broker slept for that window *before* writing the response,
+/// which is what this pins down: the response has to beat a client timeout far
+/// shorter than the window, and the next request must go unserved until the
+/// window closes.
+#[tokio::test]
+async fn throttled_connection_answers_first_and_mutes_afterwards() {
+    /// The one `request_percentage` rate this test configures, as a percentage
+    /// of one request-handler thread.
+    const RATE: f64 = 0.0001;
+    /// Stands in for a client `request.timeout.ms` well inside the window.
+    const CLIENT_TIMEOUT: Duration = Duration::from_millis(150);
+    /// Scheduling slack on the lower bound for the muted read.
+    const SLACK: Duration = Duration::from_millis(50);
+
+    let mute_window = millis(600);
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    cfg.quota_throttle_max = mute_window;
+    let handle = Broker::start(cfg).await.expect("start broker");
+    let broker = handle.broker_arc_for_test();
+
+    // PLAINTEXT authenticates every connection as ANONYMOUS, so that is the
+    // principal the request quota is looked up under.
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+            entity: vec![QuotaEntity {
+                entity_type: "user".into(),
+                entity_name: Some("ANONYMOUS".into()),
+            }],
+            config_key: "request_percentage".into(),
+            config_value: Some(RATE),
+        })])
+        .await
+        .expect("seed request quota");
+    handle
+        .wait_for_image(|image| {
+            let key: EntityKey = vec![("user".into(), Some("ANONYMOUS".into()))];
+            image
+                .client_quotas()
+                .get(&key)
+                .and_then(|configs| configs.get("request_percentage"))
+                == Some(&RATE)
+        })
+        .await;
+
+    let serve_broker = broker.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("listener addr");
+    let server = tokio::spawn(async move {
+        let (stream, peer) = listener.accept().await.expect("accept");
+        let spec = crate::config::ListenerSpec {
+            name: "PLAINTEXT".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+        };
+        serve_connection_stream(serve_broker, stream, spec, peer, None).await;
+    });
+
+    let client = TcpStream::connect(addr).await.expect("connect");
+    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+
+    // The first request trips the quota. Its response must still arrive well
+    // inside a client timeout that the throttle window would blow through.
+    let sent_at = Instant::now();
+    send_api_versions(&mut framed, 1).await;
+    let first = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("throttled response must beat the client timeout, not wait out the window")
+        .expect("a response frame")
+        .expect("response decode");
+    let answered_at = Instant::now();
+    check!(response_correlation_id(&first) == 1);
+    check!(sent_at.elapsed() < mute_window.to_std());
+
+    // The connection is now muted: the second request sits unread until the
+    // window closes, and is then served.
+    send_api_versions(&mut framed, 2).await;
+    check!(
+        tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+            .await
+            .is_err(),
+        "a muted connection must serve no further request inside the throttle window"
+    );
+    let second = tokio::time::timeout(Duration::from_secs(5), framed.next())
+        .await
+        .expect("the mute must lift once the window closes")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&second) == 2);
+    // The mute began when the first response was written, marginally before it
+    // was read back here, so the lower bound carries a little slack.
+    check!(answered_at.elapsed() >= mute_window.to_std().saturating_sub(SLACK));
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
     handle.shutdown().await;
 }

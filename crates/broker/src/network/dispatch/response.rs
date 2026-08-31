@@ -1,6 +1,10 @@
 //! Response framing and the KIP-219 throttle. It prepends the response header
 //! to a handler's body, charges the request quota, and patches the leading
 //! `ThrottleTimeMs` of the responses whose schema carries that field first.
+//!
+//! Charging a quota never sleeps here. It returns the throttle window
+//! alongside the bytes, and the connection loop enforces it by muting the
+//! connection *after* the response is written, which is what KIP-219 asks for.
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::api_key::ApiKey;
@@ -13,18 +17,44 @@ use crate::{
     network::codec,
 };
 
-pub(super) async fn maybe_apply_request_quota(
+/// A framed response together with the KIP-219 window the connection must
+/// stay muted for once those bytes are on the wire.
+#[derive(Debug)]
+pub(super) struct ThrottledResponse {
+    pub(super) bytes: Bytes,
+    pub(super) throttle: Time,
+}
+
+impl ThrottledResponse {
+    /// A response that trips no quota, so the connection is not muted.
+    pub(super) fn unthrottled(bytes: Bytes) -> Self {
+        Self {
+            bytes,
+            throttle: <Time as TimeExt>::ZERO,
+        }
+    }
+}
+
+/// Charges the KIP-124 request quota for a finished request and returns the
+/// response with the throttle window it earned.
+///
+/// The function does not wait. It patches the response's leading
+/// `ThrottleTimeMs` where the schema has one, so the client learns how long to
+/// back off, and returns the window so the caller can mute the connection
+/// after the write.
+pub(super) fn apply_request_quota(
     broker: &Broker,
     mut response_bytes: Bytes,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
     started: std::time::Instant,
-) -> Bytes {
+) -> ThrottledResponse {
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let self_accounts = matches!(
         ApiKey::from_i16(parsed.api_key),
         Some(ApiKey::Produce | ApiKey::Fetch)
     );
+    let mut throttle = <Time as TimeExt>::ZERO;
     if !self_accounts && let Some(principal) = auth.principal() {
         let image = broker.controller.current_image();
         let delay = crate::quota::consume_request_quota(
@@ -45,10 +75,13 @@ pub(super) async fn maybe_apply_request_quota(
                     delay_ms,
                 );
             }
-            tokio::time::sleep(delay.to_std()).await;
+            throttle = delay;
         }
     }
-    response_bytes
+    ThrottledResponse {
+        bytes: response_bytes,
+        throttle,
+    }
 }
 
 /// Prepends the response header, the `corr_id` and an optional tagged-fields
