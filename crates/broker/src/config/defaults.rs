@@ -99,7 +99,7 @@ impl Default for BrokerConfig {
             share_recovery_read_max: mebibytes(1),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
-            sendfile_min: kibibytes(32),
+            sendfile_min: kibibytes(4),
             socket_send_buffer: mebibytes(1),
             socket_receive_buffer: mebibytes(1),
             acl_max_principal: bytes(256),

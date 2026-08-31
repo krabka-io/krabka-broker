@@ -209,3 +209,9 @@ criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 [[bench]]
 name = "produce"
 harness = false
+
+# The zero-copy fetch drain: `sendfile(2)` against the `pread` + write copy,
+# swept across response size to locate the crossover `sendfile_min` encodes.
+[[bench]]
+name = "fetch_drain"
+harness = false

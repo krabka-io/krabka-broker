@@ -126,6 +126,15 @@ macro_rules! tuning_fields {
             /// Maximum encoded request size accepted from a socket.
             pub socket_request_max: ByteSize,
             /// Minimum response size eligible for `sendfile`.
+            ///
+            /// The default is 4 KiB, the floor of the sweep in
+            /// `benches/fetch_drain.rs`. That sweep drains a whole response
+            /// over a loopback socket at 4, 16, 32, 64 and 256 KiB, through
+            /// the kernel and through the `pread` + write copy, and finds no
+            /// crossover inside its range: the kernel drain wins at every
+            /// size, by 15% to 23% at 4 KiB and by 30% to 50% from 16 KiB up.
+            /// The threshold sits at the smallest size that was measured
+            /// rather than below it, because nothing below it was measured.
             pub sendfile_min: ByteSize,
             /// Broker socket send-buffer size.
             pub socket_send_buffer: ByteSize,
