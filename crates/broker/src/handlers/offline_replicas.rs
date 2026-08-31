@@ -21,8 +21,9 @@
 //!
 //! Fencing state is not in the Krabka metadata image; the controller holds it
 //! in its heartbeat liveness registry. [`unavailable_brokers`] reads that
-//! registry on the controller leader and reports an empty set elsewhere, which
-//! is the rule `DescribeCluster` already applies to `is_fenced`.
+//! registry on the controller leader and reports an empty set elsewhere.
+//! `DescribeCluster` calls the same helper for its `is_fenced` column, so the
+//! two answers cannot drift apart.
 
 use std::collections::HashSet;
 
@@ -35,6 +36,9 @@ use crate::broker::Broker;
 /// Only the controller leader keeps a heartbeat registry, so a request served
 /// by any other node yields an empty set and the offline projection falls back
 /// to registration and directory state, both of which are quorum-replicated.
+///
+/// `DescribeCluster` reads the same set for `is_fenced` and for the KIP-1073
+/// `include_fenced_brokers` filter.
 pub(crate) async fn unavailable_brokers(broker: &Broker) -> HashSet<u64> {
     let is_controller = *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
     if is_controller {
