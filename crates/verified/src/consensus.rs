@@ -6,6 +6,20 @@
 
 use creusot_std::prelude::*;
 
+/// Majority size for a voter set: `floor(n / 2) + 1`.
+#[ensures(result@ == voter_count@ / 2 + 1)]
+#[must_use]
+pub const fn majority_size(voter_count: usize) -> usize {
+    voter_count / 2 + 1
+}
+
+/// Whether the unique grants from current voters reach a majority.
+#[ensures(result == (current_grants@ >= voter_count@ / 2 + 1))]
+#[must_use]
+pub const fn election_has_quorum(voter_count: usize, current_grants: usize) -> bool {
+    current_grants >= majority_size(voter_count)
+}
+
 /// Members of `{log_end} U s` with value >= `v`. This is the
 /// majority-replication witness.
 #[cfg(creusot)]
@@ -504,6 +518,21 @@ mod tests {
                     == expected,
                 "case {name}"
             );
+        }
+    }
+
+    #[test]
+    fn election_quorum_is_a_strict_majority() {
+        for (voters, grants, expected) in [
+            (1, 1, true),
+            (2, 1, false),
+            (2, 2, true),
+            (3, 1, false),
+            (3, 2, true),
+            (4, 2, false),
+            (4, 3, true),
+        ] {
+            check!(election_has_quorum(voters, grants) == expected);
         }
     }
 

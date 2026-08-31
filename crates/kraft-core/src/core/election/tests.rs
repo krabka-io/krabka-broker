@@ -2,7 +2,7 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{FakeLog, machine},
+    core::test_support::{FakeLog, machine, voters},
     event::{Event, LogEnd},
 };
 
@@ -248,4 +248,55 @@ fn stale_prevote_grant_ignored_after_promotion() {
     } else {
         panic!("expected Candidate");
     }
+}
+
+#[test]
+fn late_grant_from_removed_voter_does_not_count() {
+    let mut m = machine(
+        NodeId(1),
+        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
+    );
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2001),
+    );
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+
+    m.apply_voter_set(voters(&[NodeId(1), NodeId(4), NodeId(5)]), SimInstant(2002));
+    let actions = m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2003),
+    );
+    check!(
+        (
+            matches!(m.role(), Role::Prospective { .. }),
+            actions.is_empty()
+        ) == (true, true)
+    );
+
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(4),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2004),
+    );
+    assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
 }

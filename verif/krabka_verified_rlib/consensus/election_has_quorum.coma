@@ -1,0 +1,38 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 19 0 19 83 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 20 22 20 48
+let%span sconsensus'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 17 10 17 61
+let%span sconsensus'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 10 10 10 41
+
+use creusot.int.UInt64
+use int.ComputerDivision
+use creusot.prelude.Any
+use int.Int
+
+let majority_size (voter_count: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:majority_size ensures] [%#sconsensus'1] UInt64.t'int result
+    = ComputerDivision.div (UInt64.t'int voter_count) 2 + 1}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let election_has_quorum [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 19 0 19 83]
+  (voter_count: UInt64.t) (current_grants: UInt64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = majority_size [%#sconsensus] {voter_count} (fun (_x: UInt64.t) -> [ &_7 <- _x ] s1)
+    | s1 = [ &_ret <- UInt64.ge current_grants _7 ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & voter_count: UInt64.t = voter_count
+  | & current_grants: UInt64.t = current_grants
+  | & _7: UInt64.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:election_has_quorum ensures] [%#sconsensus'0] result
+    = ge_log_Int (UInt64.t'int current_grants) (ComputerDivision.div (UInt64.t'int voter_count) 2 + 1)}
+    (! return {result}) ]
