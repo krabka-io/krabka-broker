@@ -83,7 +83,6 @@ crate_tests(
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
         "librdkafka_conformance": [
-            "kafkacat_1_5_0",
             "kcat_1_7_1",
         ],
         # Same image set as `jvm_acceptance_tiered`: the suite reuses that

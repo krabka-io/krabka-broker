@@ -44,8 +44,8 @@ async fn alter_replica_log_dirs_rejects_unknown_replica() {
         .iter()
         .find(|t| t.topic_name == "missing")
         .expect("topic in response");
-    // 11 == REPLICA_NOT_AVAILABLE
-    assert!(topic.partitions[0].error_code == 11);
+    // 9 == REPLICA_NOT_AVAILABLE
+    assert!(topic.partitions[0].error_code == 9);
 
     handle.shutdown().await;
 }
