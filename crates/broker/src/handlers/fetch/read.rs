@@ -190,18 +190,36 @@ struct BlockingRead {
 /// per-partition remote-tier and diskless fallbacks, which are async and
 /// cannot run inside one blocking closure. So the read side lands where the
 /// append side did in [`crate::partition_writer`]: `block_in_place`, called
-/// once per partition, which is what the arm above measures. The first call
-/// hands the worker's core to a replacement thread and the rest find no core
-/// left to hand over, so only the first pays for the swap.
+/// once per partition, which is what the arm above measures. Only a call that
+/// still holds a worker's core pays for a hand-off, and after the first read
+/// in a fetch the calling thread usually does not hold one -- the replacement
+/// took it while that read ran. The 200-partition column prices the whole
+/// sequence either way.
 ///
-/// What it costs is a worker. `block_in_place` parks the one it runs on and
-/// hands that worker's other tasks to a replacement thread, so a fetch reading
-/// 200 partitions occupies a worker for the whole read rather than releasing
-/// it between partitions. The broker's `#[tokio::main]` is multi-threaded, so
-/// there is another worker to take the load. It is also flatly illegal on a
-/// current-thread runtime, where it panics rather than degrading, so the
-/// current-thread runtimes that `#[tokio::test]` builds keep the
-/// `spawn_blocking` path.
+/// What it costs is a thread. `block_in_place` parks the one it runs on and
+/// hands that worker's core, with the tasks queued on it, to a replacement
+/// taken from the same blocking pool `spawn_blocking` draws on. So a fetch
+/// reading 200 partitions holds a thread for the whole read rather than
+/// releasing it between partitions, and the broker's `#[tokio::main]` is
+/// multi-threaded, so there is a replacement to take the core.
+///
+/// That pool is the bound, 512 threads by default. While it is saturated the
+/// replacement is queued instead of started, and the handed-off core waits for
+/// a thread rather than resuming: a read that would merely have queued under
+/// `spawn_blocking` costs a unit of runtime parallelism instead. Three things
+/// keep that bounded. There is one core per worker thread and a call can only
+/// give away the core it holds, so no more than `worker_threads` are ever in
+/// flight. The tasks on a handed-off core stay stealable through the
+/// scheduler's remote handles, so they are delayed rather than stranded. And
+/// reads do not queue on this path, so the wait ends when any in-flight read
+/// finishes rather than behind a backlog of them. Bounding it further is one
+/// broker-wide admission decision over blocking work rather than a
+/// per-call-site one: appends in [`crate::partition_writer`], WAL fsync and
+/// trim, and quorum replica IO all draw on the same pool the same way.
+///
+/// `block_in_place` is also flatly illegal on a current-thread runtime, where
+/// it panics rather than degrading, so the current-thread runtimes that
+/// `#[tokio::test]` builds keep the `spawn_blocking` path.
 async fn run_blocking_read(
     log: &Arc<Mutex<Log>>,
     read: &BlockingRead,
