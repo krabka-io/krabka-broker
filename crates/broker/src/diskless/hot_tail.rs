@@ -270,6 +270,22 @@ mod tests {
         check!(cache.get(topic_id, PartitionIndex(1), 2, UNBOUNDED, usize::MAX) == Some(second));
     }
 
+    #[test]
+    fn oversized_replacement_removes_the_cached_batch() {
+        let topic_id = Uuid::from_u128(13);
+        let first = batch_bytes(0, 1);
+        let cache = HotTailCache::new(first.len());
+
+        cache.insert_run(topic_id, PartitionIndex(0), &first);
+        cache.insert_run(topic_id, PartitionIndex(0), &batch_bytes(0, 2));
+
+        check!(
+            cache
+                .get(topic_id, PartitionIndex(0), 0, UNBOUNDED, usize::MAX)
+                .is_none()
+        );
+    }
+
     fn batch_bytes(base_offset: i64, records: i32) -> Bytes {
         let mut batch = RecordBatch {
             base_offset,

@@ -214,7 +214,7 @@ async fn diskless_writer_delegates_trim_to_the_wal() {
 }
 
 #[tokio::test]
-async fn diskless_writer_invalidates_hot_tail_after_truncate() {
+async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     let dir = tempdir().expect("tempdir");
     let log = Arc::new(Mutex::new(
         Log::open(dir.path(), LogConfig::default()).expect("open log"),
@@ -231,7 +231,8 @@ async fn diskless_writer_invalidates_hot_tail_after_truncate() {
     let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
     let mut encoded = BytesMut::new();
     sample_batch(2).encode(&mut encoded).expect("encode batch");
-    cache.insert_run(topic_id, partition, &encoded.freeze());
+    let encoded = encoded.freeze();
+    cache.insert_run(topic_id, partition, &encoded);
     let gated_wal = Arc::new(
         GatedWal::new(sync_started_tx, release_sync_rx).with_hot_tail(
             cache.clone(),
@@ -267,6 +268,22 @@ async fn diskless_writer_invalidates_hot_tail_after_truncate() {
         .await
         .expect("truncate ack")
         .expect("truncate succeeds");
+    check!(
+        cache
+            .get(topic_id, partition, 0, i64::MAX, usize::MAX)
+            .is_none()
+    );
+
+    cache.insert_run(topic_id, partition, &encoded);
+    let (ack, ack_rx) = oneshot::channel();
+    tx.send(WriterMessage::ResetTo {
+        new_base: Offset(5),
+        ack,
+    })
+    .await
+    .expect("send reset");
+
+    ack_rx.await.expect("reset ack").expect("reset succeeds");
     check!(
         cache
             .get(topic_id, partition, 0, i64::MAX, usize::MAX)
