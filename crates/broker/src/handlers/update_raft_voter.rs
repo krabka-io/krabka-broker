@@ -10,6 +10,13 @@
 //! [`super::add_raft_voter`]. `UpdateVoter` never returns
 //! `VoterNotCaughtUp`. An unknown voter id comes back as
 //! `ReconfigRejected → INVALID_REQUEST`.
+//!
+//! Request validation follows `KafkaRaftClient.handleUpdateVoterRequest` in
+//! the pinned image: a cluster id that is absent or not ours is
+//! `INCONSISTENT_CLUSTER_ID (104)`, a leader epoch on either side of the
+//! quorum's is `FENCED_LEADER_EPOCH (74)` or `UNKNOWN_LEADER_EPOCH (75)`, and
+//! everything else malformed is `INVALID_REQUEST (42)`. Kafka assigns no
+//! separate "invalid voter update" code.
 
 use bytes::Bytes;
 use krabka_metadata::{Voter, VoterEndpoint};
@@ -49,71 +56,45 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::CLUSTER_AUTHORIZATION_FAILED);
     }
 
     let cluster_id = image.cluster_id().to_string();
     let quorum = broker.controller.quorum_state();
-    if req.cluster_id.as_deref() != Some(cluster_id.as_str())
-        || req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
-        || i64::from(req.current_leader_epoch)
-            != i64::try_from(quorum.current_term).unwrap_or(i64::MAX)
+    if req.cluster_id.as_deref() != Some(cluster_id.as_str()) {
+        return refuse(version, codes::INCONSISTENT_CLUSTER_ID);
+    }
+
+    let current_epoch = i64::try_from(quorum.current_term).unwrap_or(i64::MAX);
+    let requested_epoch = i64::from(req.current_leader_epoch);
+    if requested_epoch < current_epoch {
+        return refuse(version, codes::FENCED_LEADER_EPOCH);
+    }
+    if requested_epoch > current_epoch {
+        return refuse(version, codes::UNKNOWN_LEADER_EPOCH);
+    }
+
+    if req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
         || req.listeners.is_empty()
         || req.listeners.iter().any(|listener| {
             listener.name.is_empty() || listener.host.is_empty() || listener.port == 0
         })
     {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::INVALID_UPDATE,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::INVALID_REQUEST);
     }
 
     let Ok(min_version) = u16::try_from(req.k_raft_version_feature.min_supported_version) else {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::INVALID_UPDATE,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::INVALID_REQUEST);
     };
     let Ok(max_version) = u16::try_from(req.k_raft_version_feature.max_supported_version) else {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::INVALID_UPDATE,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::INVALID_REQUEST);
     };
     if min_version > max_version {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::INVALID_UPDATE,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::INVALID_REQUEST);
     }
 
     let Ok(id) = u64::try_from(req.voter_id) else {
-        return encode_resp(
-            version,
-            &UpdateRaftVoterResponse {
-                error_code: codes::INVALID_REQUEST,
-                ..Default::default()
-            },
-        );
+        return refuse(version, codes::INVALID_REQUEST);
     };
 
     let voter = Voter {
@@ -150,6 +131,17 @@ fn encode_resp(version: i16, resp: &UpdateRaftVoterResponse) -> Result<Bytes, Br
     crate::handlers::encode_response(resp, version)
 }
 
+/// Encodes a response that carries nothing but `error_code`.
+fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
+    encode_resp(
+        version,
+        &UpdateRaftVoterResponse {
+            error_code,
+            ..Default::default()
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
@@ -183,6 +175,9 @@ mod tests {
             ..Default::default()
         }
     }
+
+    /// Applies one malformation to an otherwise well-formed request.
+    type Mutate = fn(&mut UpdateRaftVoterRequest);
 
     crate::test_support::wire_helpers!(
         UpdateRaftVoterRequest,
@@ -261,6 +256,78 @@ mod tests {
         let resp = decode_response(&resp, version);
 
         assert!(resp.error_code == codes::INVALID_REQUEST);
+        broker_handle.shutdown().await;
+    }
+
+    /// Each rejected field carries the code that
+    /// `KafkaRaftClient.handleUpdateVoterRequest` carries for it. None of
+    /// them is voter-specific: KIP-853 adds no "invalid voter update" code.
+    #[tokio::test]
+    async fn handle_reports_the_kafka_code_for_each_rejected_field() {
+        let version = 0;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = Principal {
+            name: "admin".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: Vec::new(),
+        };
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let cluster_id = broker.controller.current_image().cluster_id().to_string();
+        let epoch = i32::try_from(broker.controller.quorum_state().current_term)
+            .expect("the test quorum's term fits an i32");
+        let well_formed = || {
+            let mut req = request(2);
+            req.cluster_id = Some(cluster_id.clone());
+            req.current_leader_epoch = epoch;
+            req
+        };
+
+        let cases: [(&str, Mutate, i16); 6] = [
+            (
+                "another cluster's id",
+                |req| req.cluster_id = Some("not-this-cluster".into()),
+                codes::INCONSISTENT_CLUSTER_ID,
+            ),
+            (
+                "an epoch the quorum has left behind",
+                |req| req.current_leader_epoch -= 1,
+                codes::FENCED_LEADER_EPOCH,
+            ),
+            (
+                "an epoch ahead of the quorum's",
+                |req| req.current_leader_epoch += 1,
+                codes::UNKNOWN_LEADER_EPOCH,
+            ),
+            (
+                "a zero voter directory id",
+                |req| req.voter_directory_id = ProtoUuid([0; 16]),
+                codes::INVALID_REQUEST,
+            ),
+            (
+                "no listeners at all",
+                |req| req.listeners.clear(),
+                codes::INVALID_REQUEST,
+            ),
+            (
+                "an inverted kraft.version range",
+                |req| req.k_raft_version_feature.min_supported_version = 2,
+                codes::INVALID_REQUEST,
+            ),
+        ];
+
+        for (what, mutate, want) in cases {
+            let mut req = well_formed();
+            mutate(&mut req);
+            let req_bytes = encode_request(&req, version);
+            let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&resp, version);
+            assert!(resp.error_code == want, "{what}");
+        }
         broker_handle.shutdown().await;
     }
 

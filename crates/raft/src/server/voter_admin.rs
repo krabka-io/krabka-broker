@@ -2,6 +2,14 @@
 //! `RemoveRaftVoter` and `UpdateRaftVoter`, together with the request
 //! validation, the candidate probe and the translation of a reconfiguration
 //! outcome into a Kafka error code that all three share.
+//!
+//! The numeric codes below are the ones
+//! `org.apache.kafka.common.protocol.Errors` assigns in the pinned
+//! `apache/kafka:4.3.1` image. KIP-853 adds exactly three of them —
+//! `INVALID_VOTER_KEY (125)`, `DUPLICATE_VOTER (126)` and
+//! `VOTER_NOT_FOUND (127)` — and none for a malformed voter update, so a
+//! rejected update is `INVALID_REQUEST (42)`, as
+//! `KafkaRaftClient.handleUpdateVoterRequest` answers.
 
 use bytes::{Bytes, BytesMut};
 
@@ -29,14 +37,17 @@ fn reconfiguration_error_code(
         Err(RaftError::VoterNotCaughtUp { id, lag }) => {
             (42, Some(format!("voter {id} not caught up (lag {lag})")))
         }
-        Err(RaftError::DuplicateVoter(id)) => (139, Some(format!("voter {id} already exists"))),
-        Err(RaftError::VoterNotFound(id)) => (140, Some(format!("voter {id} was not found"))),
-        Err(RaftError::InvalidVoterUpdate(message)) => (141, Some(message)),
+        Err(RaftError::DuplicateVoter(id)) => (126, Some(format!("voter {id} already exists"))),
+        Err(RaftError::VoterNotFound(id)) => (127, Some(format!("voter {id} was not found"))),
         Err(RaftError::UnsupportedKraftVersion(_)) => (
             35,
             Some("dynamic voter changes require kraft.version 1".into()),
         ),
-        Err(RaftError::ReconfigRejected(message)) => (42, Some(message)),
+        // Kafka has no "invalid voter update" code, so a rejected change and a
+        // malformed one land on the same 42 that `UpdateVoterHandler` returns.
+        Err(RaftError::InvalidVoterUpdate(message) | RaftError::ReconfigRejected(message)) => {
+            (42, Some(message))
+        }
         Err(error) => (-1, Some(error.to_string())),
     }
 }
@@ -212,6 +223,28 @@ pub(super) async fn remove_raft_voter_response(
     Ok(output.freeze())
 }
 
+/// The error code for an `UpdateRaftVoter` request the leader will not act on,
+/// or `None` when the request is well formed.
+///
+/// `KafkaRaftClient.handleUpdateVoterRequest` checks the cluster id first, the
+/// leader epoch next, and the voter key, listeners and `kraft.version` range
+/// last. Each check has its own code, and none of them is voter-specific.
+fn update_rejection(
+    cluster_id_matches: bool,
+    epoch_delta: i64,
+    rest_is_valid: bool,
+) -> Option<i16> {
+    if !cluster_id_matches {
+        return Some(104);
+    }
+    match epoch_delta.signum() {
+        -1 => Some(74),
+        1 => Some(75),
+        _ if rest_is_valid => None,
+        _ => Some(42),
+    }
+}
+
 pub(super) async fn update_raft_voter_response(
     version: i16,
     body: &[u8],
@@ -232,19 +265,21 @@ pub(super) async fn update_raft_voter_response(
     let min = u16::try_from(request.k_raft_version_feature.min_supported_version);
     let max = u16::try_from(request.k_raft_version_feature.max_supported_version);
     let valid_range = matches!((&min, &max), (Ok(min), Ok(max)) if min <= max);
-    let valid = request.cluster_id.as_deref() == Some(cluster_id.as_str())
-        && request.voter_id >= 0
-        && request.voter_directory_id != krabka_protocol::primitives::uuid::Uuid::ZERO
-        && i64::from(request.current_leader_epoch) == i64::from(quorum.leader_epoch)
-        && valid_range
-        && valid_wire_listeners(request.listeners.iter().map(|listener| {
-            (
-                listener.name.as_str(),
-                listener.host.as_str(),
-                listener.port,
-            )
-        }));
-    let error_code = if valid {
+    let rejection = update_rejection(
+        request.cluster_id.as_deref() == Some(cluster_id.as_str()),
+        i64::from(request.current_leader_epoch) - i64::from(quorum.leader_epoch),
+        request.voter_id >= 0
+            && request.voter_directory_id != krabka_protocol::primitives::uuid::Uuid::ZERO
+            && valid_range
+            && valid_wire_listeners(request.listeners.iter().map(|listener| {
+                (
+                    listener.name.as_str(),
+                    listener.host.as_str(),
+                    listener.port,
+                )
+            })),
+    );
+    let error_code = if rejection.is_none() {
         let voter = krabka_metadata::Voter {
             id: crate::NodeId(u64::try_from(request.voter_id).unwrap_or_default()),
             directory_id: uuid::Uuid::from_bytes(request.voter_directory_id.0),
@@ -271,7 +306,7 @@ pub(super) async fn update_raft_voter_response(
         )
         .0
     } else {
-        141
+        rejection.unwrap_or(42)
     };
     let mut output = BytesMut::new();
     UpdateRaftVoterResponse {
