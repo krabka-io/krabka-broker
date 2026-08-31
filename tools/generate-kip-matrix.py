@@ -160,6 +160,19 @@ that appears on one side only, changes that file and so changes this table.
 
 The oracle is `{api_image}`.
 
+It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
+Both facts shape the Kafka column, so a `krabka only` verdict means "that broker
+did not advertise the key there", not "Kafka does not have the API". Two reasons
+account for every such row:
+
+- Kafka scopes an `ApiVersions` response to the listener it arrives on
+  (`ApiVersionsResponse.filterApis` takes a `ListenerType`), and answers the
+  controller-plane APIs on the controller listener, which this table does not
+  read. krabka runs both roles behind one listener and advertises the union.
+- Kafka advertises `GetTelemetrySubscriptions` and `PushTelemetry` only while a
+  client-telemetry exporter is configured, and this oracle configures none.
+  krabka advertises them unconditionally.
+
 | API | Key | krabka | Kafka | Verdict |
 | :--- | ---: | :--- | :--- | :--- |
 {api_rows}

@@ -37,7 +37,9 @@ pub(crate) enum Verdict {
     Same,
     /// Both advertise the key, over different ranges.
     RangeDiffers,
-    /// krabka advertises the key and the oracle does not.
+    /// krabka advertises the key and the oracle does not -- a statement about
+    /// the listener and configuration the oracle was read on, which `oracle`
+    /// spells out, rather than about Kafka's API set.
     KrabkaOnly,
     /// The oracle advertises the key and krabka does not.
     KafkaOnly,

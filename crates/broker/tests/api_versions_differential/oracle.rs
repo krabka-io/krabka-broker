@@ -6,6 +6,18 @@
 //! oracle is the same image running as a broker, and the tool runs inside that
 //! container against its own loopback listener -- so the oracle needs no
 //! published port and cannot collide with a concurrent suite.
+//!
+//! The oracle keeps a stock configuration, and the tool reads its PLAINTEXT
+//! *broker* listener. Both bound what the Kafka side of the join can hold:
+//! Kafka scopes an `ApiVersions` response to the listener the request arrived
+//! on (`ApiVersionsResponse.filterApis` takes a `ListenerType`), so its
+//! controller-plane APIs answer elsewhere and never reach this table, and it
+//! withholds `GetTelemetrySubscriptions` and `PushTelemetry` unless a
+//! client-telemetry exporter is configured, which a stock broker has none of.
+//! krabka runs both roles behind one listener and advertises the union, so
+//! those are the rows the expectation records as `krabka_only`.
+//! `docs/KIP_MATRIX.md` repeats this beside the table a reader sees, because
+//! `krabka_only` otherwise reads as "Kafka does not have the API".
 
 use std::process::Command;
 
