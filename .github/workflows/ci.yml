@@ -288,13 +288,20 @@ jobs:
                 # it would have -- and a file that becomes a target later, a
                 # README some crate starts pulling in with `include_str!` say,
                 # begins selecting on its own.
-                known="$(bazel query 'kind("source file", //crates/...:*)' |
+                # `//...` rather than the `rdeps` universe below: the two are
+                # allowed to diverge, and the failure when they do is silent.
+                # Narrowing this to the universe would drop every path outside
+                # it as "not a target" -- so widening the universe to take in,
+                # say, `//packaging` would quietly stop selecting that suite
+                # instead of failing. Asking the whole repository costs one
+                # loading phase and cannot under-cover.
+                known="$(bazel query 'kind("source file", //...:*)' |
                   sed 's|^//||; s|:|/|' | sort -u)"
-                # No source files under `//crates/...` means the query broke,
-                # not that the tree is empty. Selecting nothing on that answer
-                # would ship the container suites unrun and say so nowhere.
+                # No source files in the repository means the query broke, not
+                # that the tree is empty. Selecting nothing on that answer would
+                # ship the container suites unrun and say so nowhere.
                 if [ -z "${known}" ]; then
-                  echo "::error::no source files under //crates/..." >&2
+                  echo "::error::no source files under //..." >&2
                   exit 1
                 fi
                 mapfile -t touched < <(grep -E '^crates/' <<<"${changed}" | sort -u)
