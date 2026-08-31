@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use krabka_ids::LeaderEpoch;
+use krabka_verified::remote_read_relative_offset;
 use uuid::Uuid;
 
 use crate::{
@@ -123,9 +124,23 @@ impl RemoteLogMetadataCache {
         let map = self.epoch_to_offset_to_id.get(&leader_epoch)?;
         let (_start, id) = map.range(..=offset).next_back()?;
         let md = self.id_to_metadata.get(id)?;
-        // The epoch index holds only finished segments, but double-check the
-        // offset actually falls within this segment's range.
-        if md.state() == RemoteLogSegmentState::CopySegmentFinished && offset <= md.end_offset() {
+        let epochs = md.segment_leader_epochs();
+        let epoch_start = epochs.get(&leader_epoch).copied();
+        let next_epoch_start = epochs
+            .iter()
+            .filter(|(epoch, _)| **epoch > leader_epoch)
+            .map(|(_, start)| *start)
+            .min();
+        if remote_read_relative_offset(
+            md.start_offset(),
+            md.end_offset(),
+            offset,
+            md.state() == RemoteLogSegmentState::CopySegmentFinished,
+            epoch_start,
+            next_epoch_start,
+        )
+        .is_some()
+        {
             Some(md.clone())
         } else {
             None
@@ -303,6 +318,19 @@ mod tests {
     }
 
     #[test]
+    fn offset_lookup_rejects_offsets_below_segment_start_and_extreme_spans() {
+        let mut c = RemoteLogMetadataCache::default();
+        c.add(seg(10, &[(0, 0)], 100, 199)).unwrap();
+        c.update(&finish(10)).unwrap();
+        check!(c.segment_for(LeaderEpoch(0), 50).is_none());
+
+        c.add(seg(11, &[(1, i64::MIN)], i64::MIN, i64::MAX))
+            .unwrap();
+        c.update(&finish(11)).unwrap();
+        check!(c.segment_for(LeaderEpoch(1), i64::MAX).is_none());
+    }
+
+    #[test]
     fn list_by_epoch_returns_matching_segments() {
         let mut c = RemoteLogMetadataCache::default();
         c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
@@ -344,8 +372,13 @@ mod tests {
         c.update(&finish(11)).unwrap();
 
         for (epoch, offset, want) in [
-            // Epoch 0 lookups only see the first segment.
+            // Exact subrange boundary: epoch 0 owns through 49, epoch 1 starts
+            // at 50 even though both occur in the same remote segment.
             (LeaderEpoch(0), 10, Some(Uuid::from_u128(10))),
+            (LeaderEpoch(0), 49, Some(Uuid::from_u128(10))),
+            (LeaderEpoch(0), 50, None),
+            (LeaderEpoch(1), 49, None),
+            (LeaderEpoch(1), 50, Some(Uuid::from_u128(10))),
             // Epoch 0 has no segment at 150.
             (LeaderEpoch(0), 150, None),
             // Epoch 1 floor lookup picks the right segment.
