@@ -35,7 +35,7 @@ use krabka_protocol::owned::{
     describe_delegation_token_response::DescribeDelegationTokenResponse,
 };
 use krabka_security::{KafkaPrincipal, SecretBytes};
-use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
+use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission, token_describe_visible};
 
 mod response;
 
@@ -97,75 +97,37 @@ pub(crate) fn handle(
         _ => None,
     };
 
-    // Build the visible-token set per the rules above.
-    let tokens: Vec<krabka_metadata::DelegationToken> = if *authenticated_via_token {
-        // KIP-48: a token-authed caller is restricted to tokens they
-        // own. The wire owner filter is intentionally ignored, and the
-        // ACL extension below does NOT apply to token-authed callers.
-        image
-            .delegation_tokens_by_owner(&caller)
-            .into_iter()
-            .cloned()
-            .collect()
-    } else {
-        // Step 1: tokens visible via owner / renewer (and the optional
-        // owner filter, if present).
-        let base: Vec<&krabka_metadata::DelegationToken> = if let Some(owners) = &candidate_owners {
-            image
-                .all_delegation_tokens()
-                .filter(|t| {
-                    owners.contains(&t.owner) && (t.owner == caller || t.renewers.contains(&caller))
-                })
-                .collect()
-        } else {
-            image.delegation_tokens_visible_to(&caller)
-        };
-
-        // Step 2 (spec §5.3): extend with tokens whose owner has
-        // granted `Describe` on `TOKEN:<owner_principal_string>` to
-        // the calling principal. Apply the same owner filter if one
-        // was supplied so the filter remains authoritative.
-        //
-        // We consult the authorizer for every candidate
-        // token. With `AllowAllAuthorizer` every token surfaces (which
-        // is correct: the operator opted into "allow everything"), but
-        // dedup-by-token_id below means the base owner/renewer set
-        // already covers anything the caller would see anyway. With
-        // `SimpleAclAuthorizer` (no matching ACL ⇒ default-deny) or
-        // `OpaAuthorizer` (policy decides), the extension contributes
-        // only tokens the caller is explicitly authorized to Describe.
-        let acl_extra: Vec<&krabka_metadata::DelegationToken> = image
-            .all_delegation_tokens()
-            .filter(|t| match &candidate_owners {
-                Some(owners) => owners.contains(&t.owner),
-                None => true,
-            })
-            .filter(|t| {
-                let resource = t.owner.to_string();
-                authorizer.authorize(
+    // Build the visible-token set through the verified per-token predicate.
+    let tokens: Vec<krabka_metadata::DelegationToken> = image
+        .all_delegation_tokens()
+        .filter(|t| {
+            let owner_filter_matches = candidate_owners
+                .as_ref()
+                .is_none_or(|owners| owners.contains(&t.owner));
+            let caller_is_owner = t.owner == caller;
+            let caller_is_renewer = t.renewers.contains(&caller);
+            let acl_allows = !*authenticated_via_token
+                && owner_filter_matches
+                && authorizer.authorize(
                     &*image,
                     &AuthorizationRequest {
                         principal,
                         host: peer,
                         resource_type: ResourceType::DelegationToken,
-                        resource_name: &resource,
+                        resource_name: &t.owner.to_string(),
                         operation: AclOperation::Describe,
                     },
-                ) == AuthorizationResult::Allow
-            })
-            .collect();
-
-        // Merge + dedup by token_id. Order is unspecified (matches the
-        // existing `delegation_tokens_*` accessor contracts).
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut merged: Vec<krabka_metadata::DelegationToken> = Vec::new();
-        for t in base.into_iter().chain(acl_extra) {
-            if seen.insert(t.token_id.as_str()) {
-                merged.push(t.clone());
-            }
-        }
-        merged
-    };
+                ) == AuthorizationResult::Allow;
+            token_describe_visible(
+                *authenticated_via_token,
+                owner_filter_matches,
+                caller_is_owner,
+                caller_is_renewer,
+                acl_allows,
+            )
+        })
+        .cloned()
+        .collect();
 
     DescribeDelegationTokenResponse {
         error_code: 0,

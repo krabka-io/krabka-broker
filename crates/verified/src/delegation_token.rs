@@ -23,6 +23,71 @@ pub enum TokenApiAdmission {
     Allow,
 }
 
+/// Credential source selected for the first SCRAM round.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum ScramCredentialSource {
+    Regular,
+    DelegationToken,
+    ExpiredDelegationToken,
+    Unknown,
+}
+
+/// Preserve regular-credential precedence and restrict KIP-48 fallback.
+#[ensures((result == ScramCredentialSource::Regular) == has_regular_credential)]
+#[ensures((result == ScramCredentialSource::DelegationToken) ==
+    (!has_regular_credential && token_mechanism && has_token && token_active))]
+#[ensures((result == ScramCredentialSource::ExpiredDelegationToken) ==
+    (!has_regular_credential && token_mechanism && has_token && !token_active))]
+#[ensures((result == ScramCredentialSource::Unknown) ==
+    (!has_regular_credential && (!token_mechanism || !has_token)))]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies four independent credential lookup facts"
+)]
+#[must_use]
+pub fn scram_credential_source(
+    has_regular_credential: bool,
+    token_mechanism: bool,
+    has_token: bool,
+    token_active: bool,
+) -> ScramCredentialSource {
+    if has_regular_credential {
+        ScramCredentialSource::Regular
+    } else if !token_mechanism || !has_token {
+        ScramCredentialSource::Unknown
+    } else if token_active {
+        ScramCredentialSource::DelegationToken
+    } else {
+        ScramCredentialSource::ExpiredDelegationToken
+    }
+}
+
+/// Whether one delegation token is visible to a Describe caller.
+#[ensures(result == if authenticated_via_token {
+    caller_is_owner
+} else {
+    owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
+})]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent token visibility relationships"
+)]
+#[must_use]
+pub fn token_describe_visible(
+    authenticated_via_token: bool,
+    owner_filter_matches: bool,
+    caller_is_owner: bool,
+    caller_is_renewer: bool,
+    acl_allows: bool,
+) -> bool {
+    if authenticated_via_token {
+        caller_is_owner
+    } else {
+        owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
+    }
+}
+
 /// Admit delegation-token APIs only for a securely authenticated identity.
 ///
 /// A delegation-token-authenticated identity may describe its own tokens, but
@@ -293,6 +358,36 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn token_visibility_respects_token_isolation_filter_and_acl() {
+        for (token_auth, filter, owner, renewer, acl, visible) in [
+            (true, false, true, false, false, true),
+            (true, true, false, true, true, false),
+            (false, false, true, false, false, false),
+            (false, true, true, false, false, true),
+            (false, true, false, true, false, true),
+            (false, true, false, false, true, true),
+            (false, true, false, false, false, false),
+        ] {
+            check!(token_describe_visible(token_auth, filter, owner, renewer, acl) == visible);
+        }
+    }
+
+    #[test]
+    fn scram_source_prefers_regular_and_limits_token_fallback() {
+        use ScramCredentialSource::{DelegationToken, ExpiredDelegationToken, Regular, Unknown};
+
+        for (regular, token_mechanism, token, active, expected) in [
+            (true, false, true, false, Regular),
+            (false, true, true, true, DelegationToken),
+            (false, true, true, false, ExpiredDelegationToken),
+            (false, false, true, true, Unknown),
+            (false, true, false, true, Unknown),
+        ] {
+            check!(scram_credential_source(regular, token_mechanism, token, active) == expected);
+        }
+    }
 
     #[test]
     fn token_api_admission_requires_identity_and_blocks_token_mutations() {

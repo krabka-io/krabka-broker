@@ -1,6 +1,49 @@
 //! Classic Kafka ISR high-watermark computation.
 
+#[cfg(creusot)]
+use std::clone::Clone;
+
 use creusot_std::prelude::*;
+
+/// Ordered outcome of one controller-side ISR proposal.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum IsrAdmission {
+    FencedLeaderEpoch,
+    InvalidProposal,
+    IneligibleReplica,
+    Admit,
+}
+
+/// Apply Kafka's fail-closed ISR validation precedence.
+#[ensures((result == IsrAdmission::FencedLeaderEpoch) == !leader_epoch_matches)]
+#[ensures((result == IsrAdmission::InvalidProposal) ==
+    (leader_epoch_matches && (!proposed_nonempty || !proposed_subset)))]
+#[ensures((result == IsrAdmission::IneligibleReplica) ==
+    (leader_epoch_matches && proposed_nonempty && proposed_subset && !replicas_eligible))]
+#[ensures((result == IsrAdmission::Admit) ==
+    (leader_epoch_matches && proposed_nonempty && proposed_subset && replicas_eligible))]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies four independent ISR validation facts"
+)]
+#[must_use]
+pub fn isr_admission(
+    leader_epoch_matches: bool,
+    proposed_nonempty: bool,
+    proposed_subset: bool,
+    replicas_eligible: bool,
+) -> IsrAdmission {
+    if !leader_epoch_matches {
+        IsrAdmission::FencedLeaderEpoch
+    } else if !proposed_nonempty || !proposed_subset {
+        IsrAdmission::InvalidProposal
+    } else if !replicas_eligible {
+        IsrAdmission::IneligibleReplica
+    } else {
+        IsrAdmission::Admit
+    }
+}
 
 /// Return the minimum represented log-end offset across the leader and ISR.
 #[ensures(result@ <= leader_leo@)]
@@ -45,6 +88,21 @@ mod tests {
         for &(leader, followers) in cases {
             let expected = followers.iter().copied().fold(leader, i64::min);
             assert2::assert!((isr_high_watermark(leader, followers)) == (expected));
+        }
+    }
+
+    #[test]
+    fn isr_admission_is_ordered_and_fail_closed() {
+        use IsrAdmission::{Admit, FencedLeaderEpoch, IneligibleReplica, InvalidProposal};
+
+        for (epoch_matches, nonempty, subset, eligible, expected) in [
+            (false, false, false, false, FencedLeaderEpoch),
+            (true, false, true, true, InvalidProposal),
+            (true, true, false, true, InvalidProposal),
+            (true, true, true, false, IneligibleReplica),
+            (true, true, true, true, Admit),
+        ] {
+            assert2::check!(isr_admission(epoch_matches, nonempty, subset, eligible) == expected);
         }
     }
 }

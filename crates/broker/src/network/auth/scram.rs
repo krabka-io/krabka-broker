@@ -10,6 +10,7 @@ use krabka_protocol::owned::{
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
 use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
+use krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source};
 
 use super::{
     response::fail_authenticate,
@@ -65,31 +66,47 @@ pub fn handle_authenticate_scram(
         // the token's `expiry_timestamp_ms` for the
         // KIP-368 re-auth ceiling.
         let image = controller.current_image();
-        let (cred, principal_override, token_expiry_ms) =
-            if let Some(scram_cred) = image.scram_credential(&username, mech) {
-                (scram_cred.clone(), None, None)
-            } else if mech == SaslMechanism::ScramSha256 {
-                if let Some(token) = image.delegation_token_by_id(&username) {
-                    if !krabka_verified::token_is_active(
-                        crate::time_util::now_ms(),
-                        token.expiry_timestamp_ms,
-                        token.max_timestamp_ms,
-                    ) {
-                        return fail_authenticate("delegation token expired");
-                    }
-                    let synth = synthesize_token_scram_credential(token);
-                    let owner = Principal {
-                        name: token.owner.name.clone(),
-                        auth_method: krabka_security::AuthMethod::SaslScramSha256,
-                        groups: vec![],
-                    };
-                    (synth, Some(owner), Some(token.expiry_timestamp_ms))
-                } else {
-                    return fail_authenticate("unknown user");
-                }
-            } else {
+        let regular = image.scram_credential(&username, mech);
+        let token = if regular.is_none() && mech == SaslMechanism::ScramSha256 {
+            image.delegation_token_by_id(&username)
+        } else {
+            None
+        };
+        let token_active = token.is_some_and(|token| {
+            krabka_verified::token_is_active(
+                crate::time_util::now_ms(),
+                token.expiry_timestamp_ms,
+                token.max_timestamp_ms,
+            )
+        });
+        let (cred, principal_override, token_expiry_ms) = match scram_credential_source(
+            regular.is_some(),
+            mech == SaslMechanism::ScramSha256,
+            token.is_some(),
+            token_active,
+        ) {
+            ScramCredentialSource::Regular => (
+                regular.expect("verified regular source exists").clone(),
+                None,
+                None,
+            ),
+            ScramCredentialSource::DelegationToken => {
+                let token = token.expect("verified token source exists");
+                let synth = synthesize_token_scram_credential(token);
+                let owner = Principal {
+                    name: token.owner.name.clone(),
+                    auth_method: krabka_security::AuthMethod::SaslScramSha256,
+                    groups: vec![],
+                };
+                (synth, Some(owner), Some(token.expiry_timestamp_ms))
+            }
+            ScramCredentialSource::ExpiredDelegationToken => {
+                return fail_authenticate("delegation token expired");
+            }
+            ScramCredentialSource::Unknown => {
                 return fail_authenticate("unknown user");
-            };
+            }
+        };
 
         let server = match principal_override {
             Some(p) => ScramServerExchange::new_with_principal(username, cred, p),

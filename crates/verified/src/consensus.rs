@@ -4,6 +4,9 @@
 //! postconditions, invariants, variants, and supporting lemmas directly beside
 //! the executable bodies.
 
+#[cfg(creusot)]
+use std::clone::Clone;
+
 use creusot_std::prelude::*;
 
 /// Majority size for a voter set: `floor(n / 2) + 1`.
@@ -18,6 +21,140 @@ pub const fn majority_size(voter_count: usize) -> usize {
 #[must_use]
 pub const fn election_has_quorum(voter_count: usize, current_grants: usize) -> bool {
     current_grants >= majority_size(voter_count)
+}
+
+/// Offset-aware recovery mode resolved for one partition.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FailoverRecovery {
+    None,
+    Balanced,
+    Aggressive,
+}
+
+/// Safety action selected after the host classifies live ISR and replicas.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FailoverAction {
+    ElectClean,
+    Recover(FailoverRecovery),
+    ElectUnclean,
+    Unavailable,
+    ShrinkIsr,
+    NoChange,
+}
+
+/// Select the only safe failover class, preserving clean-election precedence.
+#[ensures(match result {
+    FailoverAction::ElectClean => leader_dead && has_electable_isr,
+    FailoverAction::Recover(selected) => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && recovery != FailoverRecovery::None
+        && selected == recovery,
+    FailoverAction::ElectUnclean => leader_dead
+        && !has_electable_isr
+        && alive_isr_empty
+        && recovery == FailoverRecovery::None
+        && unclean_enabled
+        && has_unclean_candidate,
+    FailoverAction::Unavailable => leader_dead
+        && !has_electable_isr
+        && (!alive_isr_empty
+            || (recovery == FailoverRecovery::None
+                && (!unclean_enabled || !has_unclean_candidate))),
+    FailoverAction::ShrinkIsr => !leader_dead && isr_shrunk,
+    FailoverAction::NoChange => !leader_dead && !isr_shrunk,
+})]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent failover facts supplied by the host"
+)]
+#[must_use]
+pub fn failover_action(
+    leader_dead: bool,
+    has_electable_isr: bool,
+    alive_isr_empty: bool,
+    recovery: FailoverRecovery,
+    unclean_enabled: bool,
+    has_unclean_candidate: bool,
+    isr_shrunk: bool,
+) -> FailoverAction {
+    if !leader_dead {
+        return if isr_shrunk {
+            FailoverAction::ShrinkIsr
+        } else {
+            FailoverAction::NoChange
+        };
+    }
+    if has_electable_isr {
+        return FailoverAction::ElectClean;
+    }
+    if !alive_isr_empty {
+        return FailoverAction::Unavailable;
+    }
+    match recovery {
+        FailoverRecovery::Balanced | FailoverRecovery::Aggressive => {
+            FailoverAction::Recover(recovery)
+        }
+        FailoverRecovery::None if unclean_enabled && has_unclean_candidate => {
+            FailoverAction::ElectUnclean
+        }
+        FailoverRecovery::None => FailoverAction::Unavailable,
+    }
+}
+
+/// Select the replica with highest `(last leader epoch, log end offset)` and
+/// lowest broker ID as the deterministic tie-breaker.
+#[ensures((result == None) == (candidates@.len() == 0))]
+#[ensures(match result {
+    None => true,
+    Some(index) => index@ < candidates@.len()
+        && (forall<j: Int> 0 <= j && j < candidates@.len() ==>
+            candidates@[j].0@ <= candidates@[index@].0@)
+        && (forall<j: Int> 0 <= j && j < candidates@.len()
+            && candidates@[j].0@ == candidates@[index@].0@ ==>
+            candidates@[j].1@ <= candidates@[index@].1@)
+        && (forall<j: Int> 0 <= j && j < candidates@.len()
+            && candidates@[j].0@ == candidates@[index@].0@
+            && candidates@[j].1@ == candidates@[index@].1@ ==>
+            candidates@[index@].2@ <= candidates@[j].2@),
+})]
+#[allow(
+    clippy::len_zero,
+    reason = "Creusot 0.13 has no contract for slice::is_empty"
+)]
+#[must_use]
+pub fn select_best_recovery_replica(candidates: &[(i32, i64, u64)]) -> Option<usize> {
+    if candidates.len() == 0 {
+        return None;
+    }
+    let mut best = 0usize;
+    let mut i = 1usize;
+    #[invariant(1 <= i@ && i@ <= candidates@.len())]
+    #[invariant(best@ < i@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
+        candidates@[j].0@ <= candidates@[best@].0@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@
+        && candidates@[j].0@ == candidates@[best@].0@ ==>
+        candidates@[j].1@ <= candidates@[best@].1@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@
+        && candidates@[j].0@ == candidates@[best@].0@
+        && candidates@[j].1@ == candidates@[best@].1@ ==>
+        candidates@[best@].2@ <= candidates@[j].2@)]
+    #[variant(candidates@.len() - i@)]
+    while i < candidates.len() {
+        let candidate = candidates[i];
+        let current = candidates[best];
+        if candidate.0 > current.0
+            || (candidate.0 == current.0 && candidate.1 > current.1)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
+        {
+            best = i;
+        }
+        i += 1;
+    }
+    Some(best)
 }
 
 /// Members of `{log_end} U s` with value >= `v`. This is the
@@ -575,5 +712,64 @@ mod tests {
     fn handoff_high_watermark_is_monotonic() {
         check!(handoff_high_watermark(7, 5) == 7);
         check!(handoff_high_watermark(7, 9) == 9);
+    }
+
+    #[test]
+    fn failover_action_covers_clean_unclean_recovery_and_shrink_paths() {
+        use FailoverAction::{ElectClean, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable};
+        use FailoverRecovery::{Aggressive, Balanced, None};
+
+        for (leader_dead, electable, empty, strategy, unclean, candidate, shrunk, expected) in [
+            (true, true, false, None, false, false, true, ElectClean),
+            (
+                true,
+                false,
+                true,
+                Balanced,
+                false,
+                true,
+                false,
+                Recover(Balanced),
+            ),
+            (
+                true,
+                false,
+                true,
+                Aggressive,
+                true,
+                true,
+                false,
+                Recover(Aggressive),
+            ),
+            (true, false, true, None, true, true, false, ElectUnclean),
+            (true, false, true, None, false, true, false, Unavailable),
+            (true, false, false, Balanced, true, true, false, Unavailable),
+            (false, false, false, None, false, false, true, ShrinkIsr),
+            (false, false, false, None, false, false, false, NoChange),
+        ] {
+            check!(
+                failover_action(
+                    leader_dead,
+                    electable,
+                    empty,
+                    strategy,
+                    unclean,
+                    candidate,
+                    shrunk,
+                ) == expected
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_replica_ranking_is_epoch_then_offset_then_lowest_node() {
+        for (candidates, expected) in [
+            (&[][..], None),
+            (&[(4, 100, 2), (5, 10, 3)][..], Some(1)),
+            (&[(5, 90, 2), (5, 120, 3)][..], Some(1)),
+            (&[(5, 100, 3), (5, 100, 1), (5, 100, 2)][..], Some(1)),
+        ] {
+            check!(select_best_recovery_replica(candidates) == expected);
+        }
     }
 }
