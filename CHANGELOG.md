@@ -18,6 +18,27 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Added
+
+- Diskless partitions. `krabka.diskless` is a create-only topic config that
+  puts a partition's durability behind a quorum-replicated write-ahead log in
+  front of object storage, with an index log that readers project. It is
+  read-only in `DescribeConfigs`, pinned for the life of the topic, and refused
+  alongside `remote.storage.enable=true` or `delivery.mode=scheduled`.
+- A WAL fetch is authenticated as the broker node that sent it, through a
+  configured principal-to-node-ID mapping (KIP-595).
+- Compaction of the diskless WAL index, and reclamation of the objects it
+  leaves stale.
+
+### Fixed
+
+- A diskless partition needs a distributed identity and a registry before it
+  spawns.
+- A diskless fetch honours the byte limits the request asks for.
+- A stalled index replay recovers, the first flush waits for the index
+  projection to catch up, and a divergent follower offset stays out of quorum
+  accounting.
+
 ## [0.5.1] - 2026-08-30
 
 ### Added
