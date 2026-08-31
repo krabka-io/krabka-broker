@@ -9,7 +9,7 @@ use super::*;
 use crate::{
     heartbeat::controller_state::TestClock,
     leader_election::test_support::{
-        TestMetadataSource, img_with_partition, one_partition_change, recovery_handle_for_tests,
+        fake_source, img_with_partition, one_partition_change, recovery_handle_for_tests,
         register_brokers,
     },
 };
@@ -20,7 +20,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     // controller. Brokers 2 and 3 heartbeat as usual.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(2))));
+    let source = fake_source(img, Some(NodeId(2)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -52,7 +52,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     assert!(!liveness.is_alive(1).await);
     assert!(liveness.unavailable_snapshot().await.contains(&1));
     assert!(liveness.dead_snapshot().await.is_empty());
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // One full window later brokers 2 and 3 heartbeated again. Broker 1
     // did not. The tick expires it and fails t-0 over to broker 2.
@@ -69,7 +69,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
     )
     .await;
 
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(batches.len() == 1, "the edge submits once, got {batches:?}");
     let expected = PartitionRecord {
         topic: "t".into(),
@@ -97,7 +97,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
         &mut state,
     )
     .await;
-    let batches = source.submitted_batches().await;
+    let batches = source.submitted();
     assert!(batches.len() == 2, "the sweep retries, got {batches:?}");
     assert!(*one_partition_change(&batches[1]) == expected);
 }
@@ -106,7 +106,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
 async fn tick_on_a_follower_tracks_nothing_and_submits_nothing() {
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(9))));
+    let source = fake_source(img, Some(NodeId(9)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -141,7 +141,7 @@ async fn tick_on_a_follower_tracks_nothing_and_submits_nothing() {
     // sessions from the image. Otherwise every broker would look dead.
     assert!(liveness.dead_snapshot().await.is_empty());
     assert!(!liveness.is_alive(1).await);
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     // stale dead set and fail over partitions whose leaders are healthy.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    let source = Arc::new(TestMetadataSource::new(img, Some(NodeId(9))));
+    let source = fake_source(img, Some(NodeId(9)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
     let liveness = Arc::new(ControllerLivenessState::with_test_clock(
@@ -183,7 +183,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     // registered broker alive and submits nothing.
     // `send_replace` does not need a live receiver: the tick subscribes
     // on demand and drops its receiver at once.
-    source.leader_tx.send_replace(Some(NodeId(2)));
+    source.set_leader(Some(NodeId(2)));
     run_liveness_tick(
         &controller,
         NodeId(2),
@@ -195,7 +195,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     .await;
     assert!(liveness.dead_snapshot().await.is_empty());
     assert!(liveness.is_alive(1).await);
-    assert!(source.submitted_batches().await.is_empty());
+    assert!(source.submitted().is_empty());
 
     // The seeded window is a real one: a broker that stays silent for a
     // full window afterwards still expires and fails over.
@@ -212,5 +212,5 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     )
     .await;
     assert!(liveness.dead_snapshot().await == [1].into_iter().collect());
-    assert!(source.submitted_batches().await.len() == 1);
+    assert!(source.submitted().len() == 1);
 }

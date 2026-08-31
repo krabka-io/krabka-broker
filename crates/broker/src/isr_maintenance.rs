@@ -105,9 +105,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::isr_maintenance::test_support::{
-        TestMetadataSource, fixture_partition, set_replica_state,
-    };
+    use crate::isr_maintenance::test_support::{fake_source, fixture_partition, set_replica_state};
 
     #[tokio::test]
     async fn run_bumps_shrink_metric_for_leader_partition() {
@@ -126,9 +124,8 @@ mod tests {
 
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert("t".to_string(), PartitionIndex(0), part);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
-            TestMetadataSource::new(MetadataImage::new(uuid::Uuid::nil()), None),
-        );
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> =
+            Arc::new(fake_source(MetadataImage::new(uuid::Uuid::nil()), None));
         let metrics = crate::metrics::BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {

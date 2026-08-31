@@ -11,11 +11,9 @@ use krabka_metadata::MetadataRecord;
 use krabka_units::millis;
 
 use crate::{
-    barrier::{
-        config::BarrierConfig, marker::BarrierMarker, state::TargetPartition,
-        test_support::StaticSource,
-    },
+    barrier::{config::BarrierConfig, marker::BarrierMarker, state::TargetPartition},
     metadata_source::MetadataSource,
+    test_support::FakeMetadataSource,
 };
 
 pub(super) fn at(topic: &str, partition: i32) -> TargetPartition {
@@ -43,5 +41,5 @@ pub(super) fn fast_config() -> BarrierConfig {
 }
 
 pub(super) fn source(records: &[MetadataRecord]) -> Arc<dyn MetadataSource> {
-    Arc::new(StaticSource::new(records))
+    Arc::new(FakeMetadataSource::builder().records(records).build())
 }

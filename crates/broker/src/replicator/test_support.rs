@@ -2,11 +2,7 @@
 //! metadata-image builders for the leader and follower-throttle cases, a
 //! `Config` over a temporary log dir, and `Fetch` response builders.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::LogConfig;
@@ -17,18 +13,14 @@ use krabka_protocol::{
     owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
     primitives::uuid::Uuid as WireUuid,
 };
-use krabka_raft::{
-    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    UpdateVoter,
-};
+use krabka_raft::NodeId;
 use krabka_security::ListenerProtocol;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::Config;
 use crate::{
     config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
-    throttle::ThrottleState,
+    test_support::FakeMetadataSource, throttle::ThrottleState,
 };
 pub(super) const TOPIC: &str = "orders";
 pub(super) const PARTITION: i32 = 0;
@@ -36,90 +28,13 @@ pub(super) const NODE_ID: NodeId = NodeId(2);
 pub(super) const LEADER_ID: NodeId = NodeId(1);
 pub(super) const WIRE_TOPIC_ID: WireUuid = WireUuid([7; 16]);
 
-struct StaticMetadataSource {
-    image: Arc<MetadataImage>,
-    image_rx: watch::Receiver<Arc<MetadataImage>>,
-    leader_rx: watch::Receiver<Option<NodeId>>,
-}
-
-impl StaticMetadataSource {
-    fn new(image: MetadataImage) -> Self {
-        let image = Arc::new(image);
-        let (_image_tx, image_rx) = watch::channel(image.clone());
-        let (_leader_tx, leader_rx) = watch::channel(None);
-        Self {
-            image,
-            image_rx,
-            leader_rx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for StaticMetadataSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image.clone()
-    }
-
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.image_rx.clone()
-    }
-
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_rx.clone()
-    }
-
-    fn quorum_state(&self) -> QuorumState {
-        QuorumState {
-            current_term: 0,
-            last_applied_index: 0,
-            current_leader: None,
-            voters: Vec::new(),
-            voter_nodes: BTreeMap::new(),
-            per_voter_matched_index: BTreeMap::new(),
-        }
-    }
-
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    fn controller_bound_addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 0))
-    }
-
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-        SnapshotRange::NoSnapshot
-    }
-
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        panic!("unused in replicator tests")
-    }
-
-    async fn cancel(&self) {}
+/// A metadata source over `image` with no controller leader elected, and a
+/// loopback controller listener.
+fn static_source(image: MetadataImage) -> FakeMetadataSource {
+    FakeMetadataSource::builder()
+        .image(image)
+        .controller_bound_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .build()
 }
 
 pub(super) fn image_with_leader(leader: NodeId) -> MetadataImage {
@@ -187,7 +102,7 @@ pub(super) fn test_config(image: MetadataImage) -> (Config, tempfile::TempDir) {
         inter_broker_server_name: "localhost".into(),
         replication: ReplicationRuntimeConfig::default(),
         throttle_state: Arc::new(ThrottleState::new()),
-        controller: Arc::new(StaticMetadataSource::new(image)),
+        controller: Arc::new(static_source(image)),
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
         metrics: crate::metrics::BrokerMetrics::default(),

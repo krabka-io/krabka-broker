@@ -10,7 +10,7 @@ use std::{
 use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_log::{Log, LogConfig, Offset, SegmentExport};
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
+use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_remote_storage::{
     CustomMetadata, IndexType, LogSegmentData, ObjectEntry, RemoteLogMetadataManager,
@@ -21,7 +21,7 @@ use krabka_remote_storage::{
 use krabka_units::bytes;
 use uuid::Uuid;
 
-use crate::partition::Partition;
+use crate::{partition::Partition, test_support::FakeMetadataSource};
 
 /// A stand-in write-once archive. Every copy seals a real (unsigned) WORM
 /// manifest over the segment's leader-epoch bytes, keeps that manifest in
@@ -104,103 +104,13 @@ impl RemoteStorageManager for FakeWormArchive {
     }
 }
 
-pub struct FixedMetadataSource {
-    image: Arc<MetadataImage>,
-    leader_tx: tokio::sync::watch::Sender<Option<NodeId>>,
-}
-
-impl FixedMetadataSource {
-    pub fn new(image: MetadataImage) -> Self {
-        let (leader_tx, _) = tokio::sync::watch::channel(Some(NodeId(1)));
-        Self {
-            image: Arc::new(image),
-            leader_tx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for FixedMetadataSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image.clone()
-    }
-
-    fn watch_image(&self) -> tokio::sync::watch::Receiver<Arc<MetadataImage>> {
-        let (_, rx) = tokio::sync::watch::channel(self.image.clone());
-        rx
-    }
-
-    fn watch_leader(&self) -> tokio::sync::watch::Receiver<Option<NodeId>> {
-        self.leader_tx.subscribe()
-    }
-
-    fn quorum_state(&self) -> krabka_raft::QuorumState {
-        krabka_raft::QuorumState {
-            current_term: 0,
-            last_applied_index: 0,
-            current_leader: *self.leader_tx.borrow(),
-            voters: Vec::new(),
-            voter_nodes: std::collections::BTreeMap::new(),
-            per_voter_matched_index: std::collections::BTreeMap::new(),
-        }
-    }
-
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn change_membership(
-        &self,
-        _new_voters: std::collections::BTreeSet<NodeId>,
-    ) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn add_learner(
-        &self,
-        _node_id: NodeId,
-        _node: krabka_raft::Node,
-    ) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    fn controller_bound_addr(&self) -> std::net::SocketAddr {
-        std::net::SocketAddr::from(([0, 0, 0, 0], 0))
-    }
-
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> krabka_raft::SnapshotRange {
-        krabka_raft::SnapshotRange::NoSnapshot
-    }
-
-    async fn trigger_snapshot(&self) -> Result<(), krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn add_voter(
-        &self,
-        _req: krabka_raft::AddVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn remove_voter(
-        &self,
-        _req: krabka_raft::RemoveVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn update_voter(
-        &self,
-        _req: krabka_raft::UpdateVoter,
-    ) -> Result<krabka_raft::ReconfigOutcome, krabka_raft::RaftError> {
-        Err(krabka_raft::RaftError::Unsupported("fixed metadata source"))
-    }
-
-    async fn cancel(&self) {}
+/// A metadata source over `image`, with node 1 reported as the controller
+/// leader so that the sweep treats this broker as the partition leader.
+pub fn fixed_source(image: MetadataImage) -> FakeMetadataSource {
+    FakeMetadataSource::builder()
+        .image(image)
+        .leader(Some(NodeId(1)))
+        .build()
 }
 
 pub fn tp() -> TopicIdPartition {

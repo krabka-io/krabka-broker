@@ -69,107 +69,30 @@ impl OffsetSequencer for ControllerSequencer {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
-    use krabka_metadata::{MetadataImage, MetadataRecord};
-    use krabka_raft::{
-        AddVoter, Node, NodeId, OffsetReservation, QuorumState, RaftError, ReconfigOutcome,
-        RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
-    };
-    use tokio::sync::watch;
+    use krabka_raft::{OffsetReservation, SubmitChangeResult};
 
     use super::*;
-
-    struct FakeMetadataSource {
-        result: SubmitChangeResult,
-    }
-
-    #[async_trait]
-    impl MetadataSource for FakeMetadataSource {
-        fn current_image(&self) -> Arc<MetadataImage> {
-            Arc::new(MetadataImage::default())
-        }
-
-        fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            let (_tx, rx) = watch::channel(self.current_image());
-            rx
-        }
-
-        fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-            let (_tx, rx) = watch::channel(None);
-            rx
-        }
-
-        fn quorum_state(&self) -> QuorumState {
-            QuorumState {
-                current_term: 0,
-                last_applied_index: 0,
-                current_leader: None,
-                voters: Vec::new(),
-                voter_nodes: std::collections::BTreeMap::new(),
-                per_voter_matched_index: std::collections::BTreeMap::new(),
-            }
-        }
-
-        async fn submit_change(
-            &self,
-            records: Vec<MetadataRecord>,
-        ) -> Result<SubmitChangeResult, RaftError> {
-            assert2::assert!(matches!(
-                records.as_slice(),
-                [MetadataRecord::V1PartitionOffsetAdvance(record)]
-                    if record.topic == "topic" && record.partition == 0 && record.count == 3
-            ));
-            Ok(self.result.clone())
-        }
-
-        async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        fn controller_bound_addr(&self) -> SocketAddr {
-            "127.0.0.1:0".parse().unwrap()
-        }
-
-        fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-            SnapshotRange::NoSnapshot
-        }
-
-        async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-            unimplemented!("unused in offset sequencer tests")
-        }
-
-        async fn cancel(&self) {}
-    }
+    use crate::test_support::FakeMetadataSource;
 
     #[tokio::test]
     async fn controller_sequencer_uses_returned_reservation_base() {
-        let sequencer = ControllerSequencer::new(Arc::new(FakeMetadataSource {
-            result: SubmitChangeResult {
-                offset_reservations: vec![OffsetReservation {
-                    topic: "topic".to_string(),
-                    partition: 0,
-                    base_offset: 11,
-                    count: 3,
-                }],
-            },
-        }));
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .on_submit(|_| {
+                    Ok(SubmitChangeResult {
+                        offset_reservations: vec![OffsetReservation {
+                            topic: "topic".to_string(),
+                            partition: 0,
+                            base_offset: 11,
+                            count: 3,
+                        }],
+                    })
+                })
+                .build(),
+        );
+        let sequencer = ControllerSequencer::new(Arc::clone(&source) as Arc<dyn MetadataSource>);
 
         let base = sequencer
             .assign("topic", PartitionIndex(0), 3)
@@ -177,5 +100,16 @@ mod tests {
             .unwrap();
 
         assert2::assert!((base) == (Offset(11)));
+        // One batch, carrying exactly the advance the caller asked for.
+        assert2::assert!(
+            source.submitted()
+                == vec![vec![MetadataRecord::V1PartitionOffsetAdvance(
+                    PartitionOffsetAdvanceRecord {
+                        topic: "topic".to_string(),
+                        partition: 0,
+                        count: 3,
+                    }
+                )]]
+        );
     }
 }

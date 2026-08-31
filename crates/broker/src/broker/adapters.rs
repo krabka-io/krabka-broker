@@ -129,15 +129,14 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::broker::test_support::{MockMetadataSource, metadata_topic_record};
+    use crate::broker::test_support::{fake_source, metadata_topic_record};
 
     #[test]
     fn controller_adapters_report_leadership_from_leader_watch() {
-        let source: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(MockMetadataSource::new(
-                krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-                Some(krabka_raft::NodeId(7)),
-            ));
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(fake_source(
+            krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
+            Some(krabka_raft::NodeId(7)),
+        ));
 
         let leader_adapter = ControllerAdapter {
             handle: source.clone(),
@@ -173,11 +172,10 @@ mod tests {
     #[test]
     fn image_watcher_adapters_forward_current_image() {
         let cluster_id = uuid::Uuid::from_u128(0x5150);
-        let source: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(MockMetadataSource::new(
-                krabka_metadata::MetadataImage::new(cluster_id),
-                Some(krabka_raft::NodeId(1)),
-            ));
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(fake_source(
+            krabka_metadata::MetadataImage::new(cluster_id),
+            Some(krabka_raft::NodeId(1)),
+        ));
 
         let leader = ControllerAdapter {
             handle: source.clone(),
@@ -210,11 +208,17 @@ mod tests {
 
     #[tokio::test]
     async fn controller_adapters_forward_submit_errors() {
-        let source: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(MockMetadataSource::new(
-                krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-                Some(krabka_raft::NodeId(1)),
-            ));
+        // The only site that needs a rejecting write: each adapter must
+        // surface the controller's error rather than swallow it into `Ok`.
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
+            crate::test_support::FakeMetadataSource::builder()
+                .image(krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(
+                    1,
+                )))
+                .leader(Some(krabka_raft::NodeId(1)))
+                .on_submit(|_| Err(krabka_raft::RaftError::Unsupported("adapter test")))
+                .build(),
+        );
         let record = metadata_topic_record("adapter-submit-mutant-topic", 0xADAD);
 
         let leader = ControllerAdapter {

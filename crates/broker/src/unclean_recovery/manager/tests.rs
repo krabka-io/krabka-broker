@@ -2,20 +2,14 @@
 //! needed, when no replica is eligible, and how a duplicate job for the same
 //! partition is refused.
 
-use std::{collections::BTreeSet, net::SocketAddr};
-
 use assert2::{assert, check};
 use krabka_audit::{AuditEvent, AuditLog, AuditOutcome, PrivilegedPhase};
 use krabka_metadata::{
     BreakGlassAction, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
     TopicRecord,
 };
-use krabka_raft::{
-    AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    UpdateVoter,
-};
 use krabka_units::secs;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::*;
@@ -24,84 +18,21 @@ use crate::{
     config_keys::RecoveryStrategy,
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
+    test_support::FakeMetadataSource,
     unclean_recovery::BackgroundRecovery,
 };
 
-/// Minimal `MetadataSource` that drives the control flow of
-/// `run_recovery`. These paths exercise only `watch_leader`,
-/// `current_image`, and `submit_change`, and never reach the rest.
-struct MockSource {
-    leader_rx: watch::Receiver<Option<NodeId>>,
-    _leader_tx: watch::Sender<Option<NodeId>>,
-    image: Arc<MetadataImage>,
-    /// Every batch that reached `submit_change`, in order. A test that
-    /// asks what the URM appended reads this rather than a success flag.
-    submitted: Arc<std::sync::Mutex<Vec<Vec<MetadataRecord>>>>,
-}
-
-impl MockSource {
-    fn new(leader: Option<u64>, image: MetadataImage) -> Self {
-        let (tx, rx) = watch::channel(leader.map(NodeId));
-        Self {
-            leader_rx: rx,
-            _leader_tx: tx,
-            image: Arc::new(image),
-            submitted: Arc::new(std::sync::Mutex::new(Vec::new())),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl MetadataSource for MockSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image.clone()
-    }
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        unimplemented!()
-    }
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_rx.clone()
-    }
-    fn quorum_state(&self) -> QuorumState {
-        unimplemented!()
-    }
-    async fn submit_change(
-        &self,
-        records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-        self.submitted
-            .lock()
-            .expect("the submitted batches are not poisoned")
-            .push(records);
-        Ok(krabka_raft::SubmitChangeResult::default())
-    }
-    async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    fn controller_bound_addr(&self) -> SocketAddr {
-        unimplemented!()
-    }
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-        unimplemented!()
-    }
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn cancel(&self) {
-        unimplemented!()
-    }
+/// A metadata source over `image` whose controller leader is `leader`.
+///
+/// These paths read only the leader, the image, and what `run_recovery`
+/// appends, which the fake captures for the assertions below.
+fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSource> {
+    Arc::new(
+        FakeMetadataSource::builder()
+            .image(image)
+            .leader(leader.map(NodeId))
+            .build(),
+    )
 }
 
 const NODE: u64 = 10;
@@ -153,7 +84,10 @@ async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
     Arc::new(l)
 }
 
-fn manager(source: MockSource, liveness: Arc<ControllerLivenessState>) -> UncleanRecoveryManager {
+fn manager(
+    source: Arc<FakeMetadataSource>,
+    liveness: Arc<ControllerLivenessState>,
+) -> UncleanRecoveryManager {
     manager_with(
         source,
         liveness,
@@ -173,13 +107,13 @@ fn gated(mode: BackgroundUncleanRecovery) -> BreakGlassConfig {
 
 /// A manager whose break-glass configuration and audit log the caller picks.
 fn manager_with(
-    source: MockSource,
+    source: Arc<FakeMetadataSource>,
     liveness: Arc<ControllerLivenessState>,
     break_glass: &BreakGlassConfig,
     audit_log: Arc<AuditLog>,
 ) -> UncleanRecoveryManager {
     UncleanRecoveryManager {
-        controller: Arc::new(source),
+        controller: source,
         liveness,
         node_id: NodeId(NODE),
         inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
@@ -219,7 +153,7 @@ fn approved_job() -> RecoveryJob {
 #[tokio::test]
 async fn not_controller_leader_is_not_needed() {
     let mgr = manager(
-        MockSource::new(Some(99), image_with_partition(1, &[1, 2])),
+        source_with(Some(99), image_with_partition(1, &[1, 2])),
         liveness_with_alive(&[]).await,
     );
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NotNeeded);
@@ -228,7 +162,7 @@ async fn not_controller_leader_is_not_needed() {
 #[tokio::test]
 async fn missing_partition_is_not_needed() {
     let mgr = manager(
-        MockSource::new(Some(NODE), MetadataImage::new(Uuid::nil())),
+        source_with(Some(NODE), MetadataImage::new(Uuid::nil())),
         liveness_with_alive(&[]).await,
     );
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NotNeeded);
@@ -237,7 +171,7 @@ async fn missing_partition_is_not_needed() {
 #[tokio::test]
 async fn live_leader_is_not_needed() {
     let mgr = manager(
-        MockSource::new(Some(NODE), image_with_partition(1, &[1, 2])),
+        source_with(Some(NODE), image_with_partition(1, &[1, 2])),
         liveness_with_alive(&[1]).await,
     );
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NotNeeded);
@@ -247,7 +181,7 @@ async fn live_leader_is_not_needed() {
 async fn dead_leader_no_alive_replicas_is_no_eligible() {
     // Leader 1 is dead and no replica is alive: nothing to query.
     let mgr = manager(
-        MockSource::new(Some(NODE), image_with_partition(1, &[1, 2])),
+        source_with(Some(NODE), image_with_partition(1, &[1, 2])),
         liveness_with_alive(&[]).await,
     );
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NoEligibleReplica);
@@ -260,7 +194,7 @@ async fn dead_leader_all_queries_fail_is_no_eligible() {
     let mut img = image_with_partition(1, &[1, 2]);
     register_broker(&mut img, 2, "127.0.0.1", 1);
     let mgr = manager(
-        MockSource::new(Some(NODE), img),
+        source_with(Some(NODE), img),
         liveness_with_alive(&[2]).await,
     );
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::NoEligibleReplica);
@@ -279,7 +213,7 @@ fn dead_leader_with_a_survivor() -> MetadataImage {
 
 async fn outcome_under(break_glass: BreakGlassConfig, job: &RecoveryJob) -> RecoveryOutcome {
     let mgr = manager_with(
-        MockSource::new(Some(NODE), dead_leader_with_a_survivor()),
+        source_with(Some(NODE), dead_leader_with_a_survivor()),
         liveness_with_alive(&[2]).await,
         &break_glass,
         AuditLog::disabled(),
@@ -339,10 +273,9 @@ async fn require_still_runs_a_recovery_that_a_proposal_approved() {
 #[tokio::test]
 async fn a_refused_recovery_appends_nothing_and_audits_why() {
     let (audit_log, mut events) = AuditLog::new(8);
-    let source = MockSource::new(Some(NODE), dead_leader_with_a_survivor());
-    let submitted = Arc::clone(&source.submitted);
+    let source = source_with(Some(NODE), dead_leader_with_a_survivor());
     let mgr = manager_with(
-        source,
+        Arc::clone(&source),
         liveness_with_alive(&[2]).await,
         &gated(BackgroundUncleanRecovery::Require),
         audit_log,
@@ -350,12 +283,7 @@ async fn a_refused_recovery_appends_nothing_and_audits_why() {
 
     assert!(mgr.run_recovery(&job()).await == RecoveryOutcome::BreakGlassRequired);
 
-    assert!(
-        submitted
-            .lock()
-            .expect("the submitted batches are not poisoned")
-            .is_empty()
-    );
+    assert!(source.submitted().is_empty());
     let event = events.try_recv().expect("a refusal reaches the audit log");
     assert!(let AuditEvent::PrivilegedAction { phase, action, target, outcome, .. } = &event);
     check!(*phase == PrivilegedPhase::Refused);
@@ -367,11 +295,10 @@ async fn a_refused_recovery_appends_nothing_and_audits_why() {
 #[tokio::test]
 async fn audit_only_elects_and_records_the_bypass() {
     let (audit_log, mut events) = AuditLog::new(8);
-    let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+    let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
     let image = source.current_image();
-    let submitted = Arc::clone(&source.submitted);
     let mgr = manager_with(
-        source,
+        Arc::clone(&source),
         liveness_with_alive(&[2]).await,
         &gated(BackgroundUncleanRecovery::AuditOnly),
         audit_log,
@@ -383,10 +310,7 @@ async fn audit_only_elects_and_records_the_bypass() {
     let outcome = mgr.commit_elected_leader(&job(), pr, NodeId(2)).await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
-    let batches = submitted
-        .lock()
-        .expect("the submitted batches are not poisoned")
-        .clone();
+    let batches = source.submitted();
     let elected = PartitionRecord {
         leader: NodeId(2),
         isr: vec![NodeId(2)],
@@ -414,7 +338,7 @@ async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
     ];
     for (label, mode, job) in cases {
         let (audit_log, mut events) = AuditLog::new(8);
-        let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+        let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
         let image = source.current_image();
         let mgr = manager_with(
             source,
@@ -449,7 +373,7 @@ fn bypasses(metrics: &crate::metrics::BrokerMetrics) -> u64 {
 #[tokio::test]
 async fn recover_one_dedups_in_flight_job() {
     let mgr = Arc::new(manager(
-        MockSource::new(Some(NODE), image_with_partition(1, &[1, 2])),
+        source_with(Some(NODE), image_with_partition(1, &[1, 2])),
         liveness_with_alive(&[]).await,
     ));
     // Pre-mark this partition as already recovering.

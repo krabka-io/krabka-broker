@@ -144,7 +144,7 @@ mod tests {
     use super::*;
     use crate::replicator_supervisor::{
         materialize::{MaterializePartitionConfig, materialize_partition},
-        test_support::{StaticMetadataSource, image_with, partition_record, supervisor_fixture},
+        test_support::{image_with, partition_record, static_source, supervisor_fixture},
     };
 
     #[tokio::test]
@@ -152,7 +152,7 @@ mod tests {
         // The real network reporter must surface send_assignments' error
         // (here: no controller leader elected), not swallow it into Ok(()).
         let source: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(StaticMetadataSource::new(MetadataImage::new(Uuid::nil())));
+            Arc::new(static_source(MetadataImage::new(Uuid::nil())));
         let err = NetworkAssignDirsReporter::default()
             .send(
                 &source,

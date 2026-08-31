@@ -203,7 +203,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        test_support::{FixedMetadataSource, rolled_tiered_partition_with_config, tp},
+        test_support::{fixed_source, rolled_tiered_partition_with_config, tp},
         *,
     };
 
@@ -263,7 +263,7 @@ mod tests {
         partitions.insert("orders".to_string(), PartitionIndex(0), partition);
 
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(FixedMetadataSource::new(image_with_orders_topic()));
+            Arc::new(fixed_source(image_with_orders_topic()));
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
@@ -313,7 +313,7 @@ mod tests {
         assert!(export_count >= 2, "test needs multiple sealed segments");
         partitions.insert("orders".to_string(), PartitionIndex(0), partition);
 
-        let controller = FixedMetadataSource::new(image_with_orders_topic());
+        let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
@@ -348,7 +348,7 @@ mod tests {
         partition.current_leader.store(2, Ordering::Relaxed);
         partitions.insert("orders".to_string(), PartitionIndex(0), partition);
 
-        let controller = FixedMetadataSource::new(image_with_orders_topic());
+        let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
@@ -385,7 +385,7 @@ mod tests {
         );
         partitions.insert("orders".to_string(), PartitionIndex(0), partition);
 
-        let controller = FixedMetadataSource::new(image_with_orders_topic());
+        let controller = fixed_source(image_with_orders_topic());
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm: Arc<dyn RemoteLogMetadataManager> =

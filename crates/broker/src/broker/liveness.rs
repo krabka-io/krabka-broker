@@ -199,7 +199,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::broker::test_support::MockMetadataSource;
+    use crate::broker::test_support::fake_source;
 
     fn image_with_registered_broker(node_id: u64) -> krabka_metadata::MetadataImage {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
@@ -225,9 +225,8 @@ mod tests {
             ControllerLivenessState, LivenessTransition, TestClock,
         };
         let me = krabka_raft::NodeId(7);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
-            MockMetadataSource::new(image_with_registered_broker(1), Some(me)),
-        );
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> =
+            Arc::new(fake_source(image_with_registered_broker(1), Some(me)));
         let clock = TestClock::new();
         let liveness =
             ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
@@ -289,10 +288,7 @@ mod tests {
     async fn leadership_watcher_seeds_liveness_when_this_node_takes_the_lead() {
         use crate::heartbeat::controller_state::ControllerLivenessState;
         let me = krabka_raft::NodeId(7);
-        let mock = Arc::new(MockMetadataSource::new(
-            image_with_registered_broker(1),
-            None,
-        ));
+        let mock = Arc::new(fake_source(image_with_registered_broker(1), None));
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = mock.clone();
         let liveness = Arc::new(ControllerLivenessState::new(krabka_units::secs(60)));
         let metrics = crate::metrics::BrokerMetrics::new();
@@ -306,7 +302,7 @@ mod tests {
         );
         assert!(!liveness.is_alive(1).await);
 
-        mock.leader_tx
+        mock.leader_tx()
             .send(Some(me))
             .expect("watcher holds a receiver");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
