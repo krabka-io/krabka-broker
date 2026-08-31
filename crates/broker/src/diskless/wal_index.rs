@@ -230,9 +230,15 @@ impl WalIndexCache {
         max_bytes: usize,
     ) -> Option<(String, u64, u64)> {
         let entries = self.by_topic_partition.get(&(topic_id, partition))?;
-        let (&first_offset, (object_key, first)) = match entries.range(..=offset).next_back() {
-            Some(entry) if offset <= entry.1.1.last_offset => entry,
-            _ => entries.range(offset..).next()?,
+        let preceding = entries.range(..=offset).next_back()?;
+        let (&first_offset, (object_key, first)) = match preceding {
+            entry if offset <= entry.1.1.last_offset => entry,
+            (&first_offset, _) => entries
+                .range((
+                    std::ops::Bound::Excluded(first_offset),
+                    std::ops::Bound::Unbounded,
+                ))
+                .next()?,
         };
 
         let mut byte_len = u64::from(first.byte_len);
@@ -345,6 +351,18 @@ mod tests {
         });
 
         assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 1, 10) == Some(("o".into(), 10, 10)));
+    }
+
+    #[test]
+    fn fetch_range_keeps_offsets_below_the_object_floor_out_of_range() {
+        let mut c = WalIndexCache::default();
+        c.apply(&WalFlushRecord {
+            object_key: "o".into(),
+            format_version: 1,
+            entries: vec![entry(0, 5, 5)],
+        });
+
+        assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
     }
 
     #[test]
