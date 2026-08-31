@@ -428,4 +428,5 @@ mod tests {
         .unwrap();
         assert!(index.cache().lock().await.lookup(topic_id, 0, 2).is_some());
     }
+
 }

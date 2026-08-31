@@ -230,10 +230,10 @@ impl WalIndexCache {
         max_bytes: usize,
     ) -> Option<(String, u64, u64)> {
         let entries = self.by_topic_partition.get(&(topic_id, partition))?;
-        let (&first_offset, (object_key, first)) = entries.range(..=offset).next_back()?;
-        if offset > first.last_offset {
-            return None;
-        }
+        let (&first_offset, (object_key, first)) = match entries.range(..=offset).next_back() {
+            Some(entry) if offset <= entry.1.1.last_offset => entry,
+            _ => entries.range(offset..).next()?,
+        };
 
         let mut byte_len = u64::from(first.byte_len);
         let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
@@ -328,6 +328,23 @@ mod tests {
 
         assert!(c.lookup_fetch_range(t, 0, 0, 5) == Some(("o".into(), 0, 10)));
         assert!(c.lookup_fetch_range(t, 0, 0, 20) == Some(("o".into(), 0, 20)));
+    }
+
+    #[test]
+    fn fetch_range_falls_forward_across_an_offset_gap() {
+        let mut c = WalIndexCache::default();
+        let mut first = entry(0, 0, 0);
+        first.byte_len = 10;
+        let mut next = entry(0, 2, 2);
+        next.byte_start = 10;
+        next.byte_len = 10;
+        c.apply(&WalFlushRecord {
+            object_key: "o".into(),
+            format_version: 1,
+            entries: vec![first, next],
+        });
+
+        assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 1, 10) == Some(("o".into(), 10, 10)));
     }
 
     #[test]

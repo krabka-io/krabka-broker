@@ -139,7 +139,7 @@ fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64, max_bytes: usize) -> O
         let Ok(batch) = RecordBatch::decode(&mut cur) else {
             return None;
         };
-        let encoded_len = batch.encoded_len();
+        let encoded_len = slice.len() - cur.len();
         let last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
         if selected.is_none() && last_offset >= floor {
             selected = Some(offset);
@@ -157,6 +157,7 @@ fn first_batch_bytes_at_or_after(run: &Bytes, floor: i64, max_bytes: usize) -> O
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
+    use krabka_compression::CompressionType;
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig};
     use krabka_protocol::{
@@ -266,6 +267,22 @@ mod tests {
 
         assert!(first_batch_bytes_at_or_after(&run, 0, 1).unwrap() == first);
         assert!(first_batch_bytes_at_or_after(&run, 0, first.len() + second.len()).unwrap() == run);
+    }
+
+    #[test]
+    fn compressed_batches_advance_by_consumed_source_bytes() {
+        let mut compressed = batch(0, b"");
+        compressed.records[0].value = Some(Bytes::from(vec![0; 4096]));
+        compressed.attributes = compressed
+            .attributes
+            .with_compression(CompressionType::Gzip);
+        let first = encode_batches(&[compressed.clone()]);
+        let second = encode_batches(&[batch(1, b"next")]);
+        let run = encode_batches(&[compressed, batch(1, b"next")]);
+
+        assert!(first.len() < run.len());
+        assert!(first_batch_bytes_at_or_after(&run, 0, first.len()).unwrap() == first);
+        assert!(first_batch_bytes_at_or_after(&run, 1, usize::MAX).unwrap() == second);
     }
 
     #[tokio::test]
