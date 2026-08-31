@@ -71,12 +71,16 @@ impl BrokerMetrics {
         trim_frontier: i64,
     ) {
         let label = Self::wal_shard_label(topic_id, partition);
-        self.diskless_wal_index_projection_lag
-            .get_or_create(&label)
-            .set(projection_lag.max(0));
-        self.diskless_wal_trim_frontier
-            .get_or_create(&label)
-            .set(trim_frontier);
+        if self.diskless_wal_index_projection_lag.get(&label).is_none() {
+            self.diskless_wal_index_projection_lag
+                .get_or_create(&label)
+                .set(projection_lag.max(0));
+        }
+        if self.diskless_wal_trim_frontier.get(&label).is_none() {
+            self.diskless_wal_trim_frontier
+                .get_or_create(&label)
+                .set(trim_frontier);
+        }
     }
 
     pub(crate) fn remove_diskless_wal_voters(
@@ -124,6 +128,7 @@ mod tests {
         metrics.record_diskless_wal_voter_lag(topic_id, partition, NodeId(9), 4);
         metrics.record_diskless_wal_projection_lag(topic_id, partition, 2);
         metrics.record_diskless_wal_trim_frontier(topic_id, partition, 11);
+        metrics.initialize_diskless_wal_flusher_metrics(topic_id, partition, 99, 99);
         metrics.diskless_wal_quorum_loss_events_total.inc();
         metrics.diskless_wal_flush_attempts_total.inc();
         metrics.diskless_wal_flush_bytes_total.inc_by(128);
