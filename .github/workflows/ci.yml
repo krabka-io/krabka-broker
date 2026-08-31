@@ -249,7 +249,11 @@ jobs:
       - id: select
         run: |
           set -euo pipefail
-          all() { bazel query 'attr(tags, "docker", //crates/...)'; }
+          # `//...`, not `//crates/...`: the container suites live under
+          # `//crates`, but `//packaging:image_docker_test` -- which loads the
+          # published image and runs every operator binary it carries -- does
+          # not, and a query scoped to the crates would never select it.
+          all() { bazel query 'attr(tags, "docker", //...)'; }
 
           event="${{ github.event_name }}"
           if [ "${event}" = "schedule" ] || [ "${event}" = "workflow_dispatch" ]; then
@@ -276,14 +280,14 @@ jobs:
                 # to `set(...)` fails the whole query, so a documentation-only
                 # change would kill the suite selection rather than select
                 # nothing.
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
+                mapfile -t files < <(grep -E '^(crates|packaging)/' <<<"${changed}" |
                   grep -vE '\.md$' | while read -r f; do
                   [ -e "${f}" ] && printf '%s\n' "${f}"
                 done)
                 if [ "${#files[@]}" -eq 0 ]; then
                   targets=""
                 else
-                  targets="$(bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${files[*]})))")"
+                  targets="$(bazel query "attr(tags, 'docker', rdeps(//..., set(${files[*]})))")"
                 fi
               fi
             fi

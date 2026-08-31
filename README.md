@@ -190,10 +190,18 @@ in the image cannot be run in a container at all, and `krabka-format` has to run
 against the log directory before the broker will boot:
 
 ```
-docker run --rm -v krabka-data:/var/lib/krabka \
+mkdir -p krabka-data && chown 65532:65532 krabka-data
+docker run --rm -v "${PWD}/krabka-data:/var/lib/krabka" \
     --entrypoint /usr/bin/krabka-format krabka-io/krabka-broker:dev \
-    --log-dir /var/lib/krabka --standalone ...
+    --log-dir /var/lib/krabka --standalone --node-id 1 \
+    --controller-listener 127.0.0.1:9093
 ```
+
+The `chown` is not incidental. Both the formatter and the broker run as
+`nonroot`, and neither the image nor the distroless base carries
+`/var/lib/krabka`, so a freshly created Docker volume or host directory belongs
+to root and the format step fails with `Permission denied` before it writes
+`meta.properties.json`.
 
 `//packaging:image_binaries_test` asserts what those layers carry and that each
 binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
