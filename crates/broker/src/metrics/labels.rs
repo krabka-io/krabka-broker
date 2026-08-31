@@ -25,9 +25,14 @@ pub struct TopicLabel {
 }
 
 /// Per-partition label set, paired with the `partition_*` and `delivery_*`
-/// metric families. Consumed by the rebalancer's metric scraper. Cardinality is
-/// bounded by the number of partitions this broker hosts, because both fields
-/// come from the metadata image and never from client input.
+/// metric families. Consumed by the rebalancer's metric scraper.
+///
+/// Both fields come from the metadata image and never from client input, and
+/// the `metrics::eviction` watcher drops a partition's series once the image
+/// stops naming this broker in that partition's replica set. Cardinality is
+/// therefore bounded by the partitions this broker hosts *now*, rather than by
+/// every partition it has ever hosted: reassignment and topic deletion each
+/// release the series they created.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct PartitionLabel {
     pub topic: String,

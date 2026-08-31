@@ -32,6 +32,19 @@ pub enum RejectReason {
 }
 
 impl RejectReason {
+    /// Every value [`RejectReason::label`] can return.
+    ///
+    /// The `schema_validation_rejections` family keys on the topic paired with
+    /// one of these, so evicting a deleted topic's series has to name each of
+    /// them; there is no way to enumerate a `Family`'s live label sets.
+    pub const LABELS: [&'static str; 5] = [
+        "unframed",
+        "unknown_id",
+        "wrong_subject",
+        "body_mismatch",
+        "registry_unavailable",
+    ];
+
     /// The metric label for this reason. Low cardinality by construction: it
     /// carries none of the ids or subjects the message does.
     #[must_use]
@@ -99,9 +112,13 @@ mod tests {
                 "registry_unavailable",
             ),
         ];
+        check!(cases.len() == RejectReason::LABELS.len());
         for (reason, label) in cases {
             check!(reason.label() == label);
             check!(!reason.to_string().is_empty(), "{label}");
+            // Metric eviction names every label from `LABELS`, so a label a
+            // variant can return but `LABELS` omits would leak a series.
+            check!(RejectReason::LABELS.contains(&label), "{label}");
         }
     }
 }

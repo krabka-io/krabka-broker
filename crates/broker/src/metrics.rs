@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 mod auth;
 mod break_glass;
 mod delivery;
+mod eviction;
 mod labels;
 mod log_cleaner;
 mod registration;
@@ -33,12 +34,12 @@ mod request;
 mod schema_validation;
 mod traffic;
 
-pub(crate) use self::labels::UNKNOWN_LABEL;
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
     BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
     SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
 };
+pub(crate) use self::{eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL};
 
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`
