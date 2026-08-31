@@ -14,13 +14,17 @@
 //! controller-routed admin call fails before it leaves the client.
 //!
 //! Apache Kafka answers this by not naming the controller at all. `KafkaApis`
-//! maps a `KRaftCachedControllerId` through `getRandomAliveBrokerId`, so a
-//! `KRaft` broker advertises one of the live brokers instead. Brokers forward
-//! controller-only requests to the quorum, so any of them is a correct
-//! destination. Measured against `apache/kafka:4.3.1` in a role-separated
-//! cluster -- controller-only node 1, brokers 2 and 3 -- where repeated
-//! `Metadata` and `DescribeCluster` calls returned `controller_id` 2 or 3 and
-//! never 1.
+//! answers both APIs from `MetadataCache.getRandomAliveBrokerId`, so a `KRaft`
+//! broker advertises one of the live brokers instead, and `-1` when it knows
+//! of none. Brokers forward controller-only requests to the quorum, so any of
+//! them is a correct destination.
+//!
+//! Measured against the pinned image. A role-separated `apache/kafka:4.3.1`
+//! cluster -- controller-only node 1, brokers 2 and 3, raft leader 1 -- was
+//! driven with raw `Metadata` v1 and `DescribeCluster` v0 requests against
+//! broker 2. Both broker lists held only nodes 2 and 3, and twelve calls to
+//! each API returned `controller_id` 2 or 3, in no fixed order, and never 1.
+//! `4.3.1` is the tag `MODULE.bazel` pins for the JVM suites.
 //!
 //! [`ControllerIdRotation`] makes the same choice and rotates over the
 //! eligible brokers rather than drawing at random. The client-visible contract

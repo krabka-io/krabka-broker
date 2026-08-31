@@ -191,13 +191,13 @@ mod tests {
         }
     }
 
-    async fn seed_broker(handle: &BrokerHandle) {
+    async fn seed_broker(handle: &BrokerHandle, node_id: u64, host: &str) {
         handle
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
-                    node_id: NodeId(42),
+                    node_id: NodeId(node_id),
                     broker_epoch: 7,
                     incarnation_id: uuid::Uuid::nil(),
                     host: "legacy-host".into(),
@@ -206,7 +206,7 @@ mod tests {
                     log_dirs: vec![],
                     endpoints: vec![BrokerEndpoint {
                         name: "PLAINTEXT".into(),
-                        host: "broker-a".into(),
+                        host: host.into(),
                         port: 29092,
                         protocol: ListenerProtocol::Plaintext,
                     }],
@@ -250,7 +250,7 @@ mod tests {
     async fn broker_endpoint_response_preserves_non_default_fields() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_broker(&broker_handle).await;
+        seed_broker(&broker_handle, 42, "broker-a").await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("admin");
         let peer = peer();
@@ -300,7 +300,7 @@ mod tests {
     async fn fenced_brokers_require_explicit_opt_in() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_broker(&broker_handle).await;
+        seed_broker(&broker_handle, 42, "broker-a").await;
         let broker = broker_handle.broker_arc_for_test();
         broker.liveness.record_fenced_heartbeat(42).await;
         assert!(broker.liveness.apply_fencing(42, true, true).await);
@@ -338,6 +338,48 @@ mod tests {
             .find(|row| row.broker_id == 42)
             .expect("fenced broker row");
         assert!(fenced.is_fenced);
+
+        broker_handle.shutdown().await;
+    }
+
+    /// A fenced broker is a row a client cannot route a controller-forwarded
+    /// call to, so the advertised `controller_id` must skip it even when the
+    /// request opted the row back into the list. Kafka draws that id from its
+    /// alive brokers only.
+    ///
+    /// Two brokers are seeded and one of them is fenced, so an id drawn
+    /// without regard to fencing would land on the fenced row inside the
+    /// handful of calls below.
+    #[tokio::test]
+    async fn a_fenced_broker_is_never_advertised_as_the_controller() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_broker(&broker_handle, 42, "broker-a").await;
+        seed_broker(&broker_handle, 43, "broker-b").await;
+        let broker = broker_handle.broker_arc_for_test();
+        broker.liveness.record_fenced_heartbeat(42).await;
+        assert!(broker.liveness.apply_fencing(42, true, true).await);
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let mut include_fenced = request(false);
+        include_fenced.include_fenced_brokers = true;
+        let req = encode_request(&include_fenced);
+
+        for _ in 0..6 {
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+                .await
+                .expect("handle");
+            let response = decode_response(&bytes);
+            let named = response
+                .brokers
+                .iter()
+                .find(|row| row.broker_id == response.controller_id)
+                .expect("controller_id names a row this response carries");
+            assert!(!named.is_fenced);
+            assert!(!named.host.is_empty());
+            assert!(response.controller_id != 42);
+        }
 
         broker_handle.shutdown().await;
     }

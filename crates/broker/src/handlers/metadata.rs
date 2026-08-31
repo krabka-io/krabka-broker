@@ -479,4 +479,87 @@ mod tests {
             assert!(crate::handlers::is_internal_topic(name) == expected);
         }
     }
+
+    /// The first flexible `Metadata` version. `controller_id` has been on the
+    /// wire since v1, so this version carries it.
+    const VERSION: i16 = 9;
+
+    crate::test_support::wire_helpers!(
+        MetadataRequest,
+        MetadataResponse,
+        version = VERSION,
+        client_id = "admin-client"
+    );
+
+    /// Register `node_id` as a broker on the controller's committed image.
+    async fn seed_broker(handle: &crate::broker::BrokerHandle, node_id: u64, host: &str) {
+        handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(vec![krabka_metadata::MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_metadata::NodeId(node_id),
+                    broker_epoch: 7,
+                    incarnation_id: uuid::Uuid::nil(),
+                    host: "legacy-host".to_string(),
+                    port: 19092,
+                    rack: None,
+                    log_dirs: vec![],
+                    endpoints: vec![endpoint("PLAINTEXT", host, 29092)],
+                    features: std::collections::BTreeMap::new(),
+                },
+            )])
+            .await
+            .expect("seed broker registration");
+    }
+
+    /// A dead or fenced broker keeps its `Metadata` row -- a client still
+    /// needs its endpoint to reach a partition it has not yet lost -- but it
+    /// is not somewhere a controller-forwarded call can land, so the
+    /// advertised `controller_id` never names it. Kafka draws that id from its
+    /// alive brokers only.
+    ///
+    /// Two brokers are seeded and one of them is fenced, so an id drawn
+    /// without regard to liveness would land on the fenced node inside the
+    /// handful of calls below.
+    #[tokio::test]
+    async fn a_fenced_broker_keeps_its_row_but_is_never_advertised_as_the_controller() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+        )
+        .await;
+        seed_broker(&broker_handle, 42, "broker-a").await;
+        seed_broker(&broker_handle, 43, "broker-b").await;
+        let broker = broker_handle.broker_arc_for_test();
+        broker.liveness.record_fenced_heartbeat(42).await;
+        assert!(broker.liveness.apply_fencing(42, true, true).await);
+        let p = crate::test_support::principal("admin");
+        let peer = crate::test_support::peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&MetadataRequest {
+            topics: Some(vec![]),
+            ..Default::default()
+        });
+
+        for _ in 0..6 {
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+            assert!(
+                resp.brokers.iter().any(|row| row.node_id == 42),
+                "the fenced broker keeps its endpoint row: {:?}",
+                resp.brokers
+            );
+            let named = resp
+                .brokers
+                .iter()
+                .find(|row| row.node_id == resp.controller_id)
+                .expect("controller_id names a row this response carries");
+            assert!(!named.host.is_empty());
+            assert!(resp.controller_id != 42);
+        }
+
+        broker_handle.shutdown().await;
+    }
 }
