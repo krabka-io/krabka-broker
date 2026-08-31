@@ -27,6 +27,9 @@ impl MetadataSource for ControllerHandle {
     fn quorum_state(&self) -> QuorumState {
         ControllerHandle::quorum_state(self)
     }
+    fn quorum_committed_offset(&self) -> i64 {
+        ControllerHandle::quorum_committed_offset(self)
+    }
     fn voted_directory_id(&self) -> Option<uuid::Uuid> {
         ControllerHandle::voted_directory_id(self)
     }

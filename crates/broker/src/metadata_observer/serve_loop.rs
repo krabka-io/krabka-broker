@@ -44,9 +44,17 @@ pub(super) async fn run_loop(
             () = shutdown.cancelled() => return,
             r = fetch_once(&config, &addr, target, fetch_offset, &observer.image) => r,
         };
-        if let Some(new_offset) = result {
+        if let Some(outcome) = result {
+            let new_offset = outcome.next_fetch_offset;
             observer.metadata_offset.store(
                 i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
+                Ordering::Release,
+            );
+            // The controller's high watermark counts committed *records*; the
+            // offset convention here is one-past-the-last, so the last
+            // committed offset is one below it, matching `metadata_offset`.
+            observer.quorum_committed_offset.store(
+                outcome.quorum_high_watermark.saturating_sub(1),
                 Ordering::Release,
             );
             let _ = observer.leader.send_replace(Some(target));

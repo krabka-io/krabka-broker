@@ -123,10 +123,12 @@ pub fn build_engine_only_with_policy(
     let image = MetadataImage::new(uuid::Uuid::nil());
     let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
     let (leader_tx, _leader_rx) = watch::channel(core.quorum_state().leader_id);
+    let log_hwm_at_open = log.hwm().0;
     let initial_snapshot = QuorumStateSnapshot {
         leader_id: core.quorum_state().leader_id,
         leader_epoch: core.quorum_state().leader_epoch,
-        high_watermark: log.hwm().0,
+        high_watermark: log_hwm_at_open,
+        quorum_high_watermark: log_hwm_at_open,
         log_end_offset: log.log_end_offset().0,
         log_start_offset: log.log_start_offset().0,
         voters: core.quorum_state().voters.clone(),
@@ -176,6 +178,7 @@ pub fn build_engine_only_with_policy(
             installed_snapshot_epoch: None,
             controls,
             replica_fetch_offsets: BTreeMap::new(),
+            leader_reported_hwm: log_hwm_at_open,
             pending_reconfig: None,
         },
         dir,

@@ -384,3 +384,39 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
     assert2::assert!(send.peer == 3);
 }
+
+/// A follower clamps its own high watermark to its log end, so that value
+/// alone cannot say how far behind the quorum this node is. The snapshot
+/// therefore carries the leader's watermark separately, and it never goes
+/// backwards when a later response reports a lower one.
+#[tokio::test]
+async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+
+    // A node that has heard from nobody reports its own watermark.
+    assert!(engine.quorum_state_snapshot().quorum_high_watermark == 0);
+
+    let response = |hwm: i64| {
+        wire::PeerResponse::Fetch {
+            leader_id: NodeId(2),
+            leader_epoch: 3,
+            diverging: None,
+            snapshot_id: None,
+            hwm,
+            records: bytes::Bytes::new(),
+        }
+        .encode()
+    };
+
+    // The leader has committed 10 000 records and this node has none of them.
+    engine.on_fetch_response(NodeId(2), &response(10_000));
+    let snapshot = engine.quorum_state_snapshot();
+    assert!(snapshot.high_watermark == 0);
+    assert!(snapshot.quorum_high_watermark == 10_000);
+
+    // A stale response cannot walk the quorum's committed offset back: every
+    // watermark a leader reports is committed, so the highest one seen is a
+    // lower bound on what the quorum has.
+    engine.on_fetch_response(NodeId(2), &response(9_000));
+    assert!(engine.quorum_state_snapshot().quorum_high_watermark == 10_000);
+}

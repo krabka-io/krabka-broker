@@ -151,6 +151,11 @@ impl Engine {
 
         // `hwm` arrives raw on the KIP-595 Fetch response wire; wrap into the
         // log offset domain.
+        //
+        // Record the leader's watermark before the clamp below drops it to our
+        // own log end: it is the quorum's committed offset, and the readiness
+        // probe needs the gap between it and where this node has got to.
+        self.leader_reported_hwm = self.leader_reported_hwm.max(hwm);
         let hwm = Offset(hwm);
         if let Some(point) = diverging {
             // Diverged: truncate to the leader's hint. The follower will

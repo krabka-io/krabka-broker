@@ -65,6 +65,7 @@ impl Engine {
             leader_id: qs.leader_id,
             leader_epoch: qs.leader_epoch,
             high_watermark: self.log.hwm().0,
+            quorum_high_watermark: self.log.hwm().0.max(self.leader_reported_hwm),
             log_end_offset: self.log.log_end_offset().0,
             log_start_offset: self.log.log_start_offset().0,
             voters: qs.voters.clone(),

@@ -43,6 +43,9 @@ impl MetadataSource for ObserverSource {
     fn current_metadata_offset(&self) -> i64 {
         self.observer.current_metadata_offset()
     }
+    fn quorum_committed_offset(&self) -> i64 {
+        self.observer.quorum_committed_offset()
+    }
     fn quorum_state(&self) -> QuorumState {
         // A broker-only node is not a voter and has no openraft state of its
         // own, so only `current_leader` is meaningful here. `current_term` /

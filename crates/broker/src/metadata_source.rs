@@ -38,6 +38,17 @@ pub trait MetadataSource: Send + Sync {
             .unwrap_or(i64::MAX)
             .saturating_sub(1)
     }
+    /// Highest `__cluster_metadata` offset the metadata quorum has committed,
+    /// as this node last heard it, or `-1` before it has heard anything.
+    ///
+    /// [`Self::current_metadata_offset`] says how far this node has got;
+    /// this says how far the quorum has got. The gap between the two is the
+    /// metadata lag the readiness probe bounds. The default treats the node's
+    /// own applied offset as the quorum's, which is what a source with no
+    /// separate view of the quorum can honestly report.
+    fn quorum_committed_offset(&self) -> i64 {
+        self.current_metadata_offset()
+    }
     /// Directory identity voted for in the current controller epoch.
     fn voted_directory_id(&self) -> Option<uuid::Uuid> {
         None
