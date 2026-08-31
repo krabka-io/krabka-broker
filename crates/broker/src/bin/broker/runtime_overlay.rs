@@ -88,6 +88,7 @@ impl RuntimeArgs {
             share_recovery_read_max,
             diskless_wal_flush_interval,
             diskless_wal_flush_max_size,
+            diskless_wal_hot_tail_max_size,
             diskless_wal_trim_safety_lag,
             diskless_wal_index_projection_timeout,
         );
