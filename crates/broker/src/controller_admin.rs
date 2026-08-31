@@ -24,26 +24,46 @@ macro_rules! api_version {
     };
 }
 
-/// KIP-919's controller-listener Admin subset. `DescribeQuorum`,
-/// `DescribeCluster`, `ApiVersions`, and controller registration are served
-/// directly by `krabka-raft`, so only the shared broker-handler subset lives
-/// here.
+/// The Kafka 4.x controller-listener Admin surface, in `api_key` order.
+///
+/// Apache Kafka marks each request schema with the listeners that accept it,
+/// and a controller's `ApiVersionManager` advertises exactly the ones tagged
+/// `controller`. A live `mirror.gcr.io/apache/kafka:4.3.1` controller answers
+/// `ApiVersions` with 1, 17-20, 29-33, 36-41, 43-46, 49-60, 62-64, 67, 70, 73
+/// and 80-82; 4.0.0's schemas carry the same tags.
+///
+/// This table is that set minus the RPCs `krabka-raft` serves itself: `Fetch`,
+/// `ApiVersions`, the SASL handshake pair, the KIP-595 quorum RPCs,
+/// `AlterPartition`, `Envelope`, `FetchSnapshot`, `DescribeCluster`,
+/// `AllocateProducerIds`, broker and controller registration, and the KIP-853
+/// voter RPCs. What remains is the subset that reuses a broker handler, which
+/// is what this router bridges to.
+///
+/// `DescribeClientQuotas` is deliberately absent: its schema is tagged
+/// `broker` only, so a Kafka controller neither advertises nor answers it.
 const SUPPORTED_APIS: &[ControllerApiVersion] = &[
-    api_version!(alter_configs_request),
+    api_version!(create_topics_request),
+    api_version!(delete_topics_request),
+    api_version!(describe_acls_request),
     api_version!(create_acls_request),
     api_version!(delete_acls_request),
-    api_version!(describe_acls_request),
     api_version!(describe_configs_request),
-    api_version!(describe_client_quotas_request),
-    api_version!(alter_client_quotas_request),
-    api_version!(incremental_alter_configs_request),
+    api_version!(alter_configs_request),
+    api_version!(create_partitions_request),
+    api_version!(create_delegation_token_request),
+    api_version!(renew_delegation_token_request),
+    api_version!(expire_delegation_token_request),
     api_version!(describe_delegation_token_request),
     api_version!(elect_leaders_request),
+    api_version!(incremental_alter_configs_request),
     api_version!(alter_partition_reassignments_request),
     api_version!(list_partition_reassignments_request),
+    api_version!(alter_client_quotas_request),
     api_version!(describe_user_scram_credentials_request),
+    api_version!(alter_user_scram_credentials_request),
     api_version!(update_features_request),
     api_version!(unregister_broker_request),
+    api_version!(assign_replicas_to_dirs_request),
 ];
 
 /// Late-bound bridge from the controller, which starts before the broker, to
@@ -82,7 +102,10 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                 // Kafka's AdminClient rejects APIs outside the KIP-919
                 // controller surface locally. A raw disabled API is rejected
                 // by the controller listener before dispatch, which closes the
-                // connection rather than inventing a response body.
+                // connection rather than inventing a response body. Send a
+                // `Metadata` request to a live
+                // `mirror.gcr.io/apache/kafka:4.3.1` controller listener and
+                // it half-closes too: no error frame comes back.
                 return Ok(None);
             };
             if !(version.min_version..=version.max_version).contains(&request.api_version) {
@@ -112,6 +135,15 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
             let client_id = request.client_id.as_deref().unwrap_or("");
 
             let result = match entry.kind() {
+                DispatchKind::Plain(handler) => {
+                    handler(
+                        &broker,
+                        request.api_version,
+                        request.correlation_id,
+                        &request.body,
+                    )
+                    .await
+                }
                 DispatchKind::Context(handler) => {
                     let context = RequestContext::new(
                         &principal,
@@ -173,13 +205,20 @@ mod tests {
 
     use super::*;
 
+    /// The Kafka 4.x controller-listener set, as a live
+    /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
+    /// set the 4.0.0 request schemas tag `controller`), minus the keys
+    /// `krabka-raft` answers without this router.
     #[test]
-    fn supported_set_matches_kip_919_shared_handlers() {
+    fn supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
 
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
-            keys == maplit::btreeset! {29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 64,}
+            keys == maplit::btreeset! {
+                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 64,
+                73,
+            }
         );
     }
 
