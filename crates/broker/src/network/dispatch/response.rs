@@ -53,17 +53,39 @@ pub(super) async fn maybe_apply_request_quota(
 
 /// Prepends the response header, the `corr_id` and an optional tagged-fields
 /// byte, in front of the handler's body bytes.
-// PERF: this copies the whole body to prepend a 4-5 byte header. A
-// `bytes::Buf::chain(header, body)` would avoid the copy, but the sink is a
-// `Framed<S, LengthDelimitedCodec>` and `LengthDelimitedCodec` only implements
-// `Encoder<Bytes>` (a single concrete impl) — `framed.send` therefore requires
-// a contiguous `Bytes` and will not accept a `Chain`/`impl Buf`. Worse, that
-// `Encoder::encode` itself does `dst.extend_from_slice(&data[..])`, i.e. it
-// copies the body into the codec's write buffer regardless. Eliminating the
-// copy here would require swapping the codec for a custom `Encoder<impl Buf>`
-// that vectored-writes header+body, which ripples through `codec.rs`, the
-// roundtrip test, and all ~50 `framed.send(bytes)` call sites in this file.
-// Out of scope for a single-file change; left as-is to keep wire bytes exact.
+// PERF — measured; decision: KEEP.
+//
+// This copies the whole body to prepend a 4-5 byte header, and the sink copies
+// it a second time: the sink is a `Framed<S, LengthDelimitedCodec>`, and
+// `LengthDelimitedCodec` only implements `Encoder<Bytes>` (a single concrete
+// impl), so `framed.send` requires a contiguous `Bytes` and will not accept a
+// `bytes::Buf::chain(header, body)`. Worse, that `Encoder::encode` itself does
+// `dst.extend_from_slice(&data[..])` into the codec's write buffer. Removing
+// both copies means swapping the codec for a custom `Encoder<impl Buf>` that
+// vectored-writes header and body, which reaches `codec.rs`, the roundtrip
+// test, and every signature that names `Framed<S, LengthDelimitedCodec>`.
+//
+// `benches/perf_deferrals.rs` prices that chained-`Buf` prototype against this
+// path. Both sides write to a sink that keeps no bytes, so the socket write is
+// out of the comparison on both and the reported saving is an upper bound:
+//
+//     body       copy    chained     saved
+//     1 KiB     67 ns      32 ns     35 ns   (52%)
+//     64 KiB  1557 ns      32 ns    1.5 us   (98%)
+//     1 MiB     31 us      32 ns     31 us   (99.9%)
+//
+// Keep. The saving is proportional to the body, and the one API whose bodies
+// are unbounded does not come through here: Fetch is written by
+// `network::fetch_writer`, which already skips both copies (its module doc has
+// the same motivation). What is left on this path is produce, metadata and
+// admin responses on the order of a kilobyte, where the whole framing step
+// costs under 100 ns against a request that takes tens of microseconds to
+// serve. Note the old price estimate of "~50 `framed.send` call sites" is
+// stale — the dispatch tree has since funnelled its responses through three —
+// but a custom codec is still the wrong trade for ~35 ns a response. Revisit
+// only if a non-Fetch response becomes both large and hot; a Metadata response
+// for a very large cluster is the plausible candidate, and clients refresh it
+// on the order of minutes.
 pub(super) fn encode_response(
     api_key: ApiKeyCode,
     correlation_id: CorrelationId,

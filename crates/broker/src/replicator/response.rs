@@ -138,10 +138,20 @@ pub(super) async fn handle_response(mut resp: FetchResponse, cfg: &Config) -> Lo
                     }
                     // Capture byte count before the move into replicate_batch
                     // so the metrics update only fires on a successful append.
-                    // PERF: `encoded_len()` is computed here for the metric and
-                    // again inside the append path; threading a single
-                    // computation through would save the re-walk, but that
-                    // touches the writer API (cross-file) so it's left as-is.
+                    // PERF — measured; decision: KEEP. `encoded_len()` is
+                    // computed here for the metric and again inside the append
+                    // path; threading a single computation through would save
+                    // the re-walk, but that changes the writer API
+                    // (cross-file). `benches/perf_deferrals.rs` times the walk
+                    // against the `replicate_batch` it precedes, over the
+                    // batch shapes a producer actually writes: 0.01% of the
+                    // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
+                    // for 1000 x 100 B. Even that worst shape's ~4% sits
+                    // inside the append's own run-to-run spread, so the
+                    // re-walk is not separable from noise in production.
+                    // Revisit only if the replicator's shape mix moves to very
+                    // wide batches of tiny records, where the walk is a
+                    // per-record cost and the append is not.
                     let batch_bytes = batch.encoded_len();
                     if let Err(e) = part.replicate_batch(batch).await {
                         warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
