@@ -103,6 +103,11 @@ impl HotTailCache {
         let last_offset = base_offset + i64::from(batch.last_offset_delta);
         let key = (topic_id, partition.0);
         let len = bytes.len();
+        let bytes = if len <= self.max_bytes {
+            Bytes::copy_from_slice(&bytes)
+        } else {
+            bytes
+        };
         let mut state = self
             .state
             .lock()
@@ -284,6 +289,27 @@ mod tests {
                 .get(topic_id, PartitionIndex(0), 0, UNBOUNDED, usize::MAX)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn cached_batch_does_not_retain_the_run_allocation() {
+        let topic_id = Uuid::from_u128(14);
+        let large = batch_bytes(0, 100);
+        let small = batch_bytes(100, 1);
+        let mut run = BytesMut::with_capacity(large.len() + small.len());
+        run.extend_from_slice(&large);
+        run.extend_from_slice(&small);
+        let run = run.freeze();
+        let small_in_run = run[large.len()..].as_ptr();
+        let cache = HotTailCache::new(small.len());
+
+        cache.insert_run(topic_id, PartitionIndex(0), &run);
+
+        let cached = cache
+            .get(topic_id, PartitionIndex(0), 100, UNBOUNDED, usize::MAX)
+            .expect("small batch is cached");
+        check!(cached.as_ptr() != small_in_run);
+        check!(cached == small);
     }
 
     fn batch_bytes(base_offset: i64, records: i32) -> Bytes {
