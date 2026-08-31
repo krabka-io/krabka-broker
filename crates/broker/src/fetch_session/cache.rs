@@ -18,6 +18,7 @@ use qubit_clock::{NanoClock, NanoMonotonicClock};
 
 use super::{
     epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
+    order::SessionOrder,
     state::{CachedPartitionState, FetchSessionKey},
 };
 
@@ -30,14 +31,15 @@ pub struct FetchSession {
     pub privileged: bool,
     pub creator_principal: String,
     pub partitions: HashMap<FetchSessionKey, CachedPartitionState>,
-    /// Monotonic epoch-nanosecond timestamp of the last use of this session,
-    /// read from the cache's injected [`NanoClock`]. The order of these values
-    /// selects the LRU eviction victim. Only their relative order matters.
-    pub last_used_nanos: i128,
 }
 
 pub(super) struct Inner {
     pub(super) sessions: HashMap<FetchSessionId, FetchSession>,
+    /// Recency order over `sessions`, split by privilege. It carries each
+    /// session's last-use stamp and is what makes victim selection O(1). The
+    /// two must be updated together under this lock, which is why they share
+    /// one `Inner`.
+    pub(super) order: SessionOrder,
 }
 
 pub struct FetchSessionCache {
@@ -55,10 +57,10 @@ pub struct FetchSessionCache {
     /// them on forget, evict, and close. `total_partitions_cached()` reads it
     /// lock-free.
     pub(super) num_partitions: AtomicUsize,
-    /// Monotonic time source that the cache stamps onto
-    /// `FetchSession::last_used_nanos` for LRU eviction. It is injectable, so
-    /// tests drive the eviction order with a [`qubit_clock::MockClock`]
-    /// instead of `thread::sleep`.
+    /// Monotonic time source that the cache stamps onto each session's entry
+    /// in the recency order for LRU eviction. It is injectable, so tests drive
+    /// the eviction order with a [`qubit_clock::MockClock`] instead of
+    /// `thread::sleep`.
     pub(super) clock: Arc<dyn NanoClock>,
 }
 
@@ -72,13 +74,14 @@ impl FetchSessionCache {
     ///
     /// Production uses [`FetchSessionCache::new`], which supplies a
     /// [`NanoMonotonicClock`]. Tests pass a [`qubit_clock::MockClock`], so
-    /// that successive allocations get distinct, deterministic
-    /// `last_used_nanos` without a sleep between them.
+    /// that successive allocations land on distinct, deterministic points in
+    /// the recency order without a sleep between them.
     #[must_use]
     pub fn with_clock(max_slots: usize, clock: Arc<dyn NanoClock>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 sessions: HashMap::new(),
+                order: SessionOrder::new(),
             }),
             // Id allocation starts at FIRST_SESSION_ID — id 0 is reserved
             // as the INVALID_SESSION_ID sentinel.
@@ -154,6 +157,7 @@ impl FetchSessionCache {
     pub fn close(&self, session_id: FetchSessionId) {
         let mut guard = self.inner.lock().expect("poisoned");
         if let Some(session) = guard.sessions.remove(&session_id) {
+            guard.order.remove(session_id, session.privileged);
             self.num_sessions.fetch_sub(1, Ordering::Relaxed);
             self.num_partitions
                 .fetch_sub(session.partitions.len(), Ordering::Relaxed);

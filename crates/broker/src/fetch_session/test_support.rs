@@ -14,8 +14,9 @@ use super::cache::FetchSessionCache;
 
 /// Builds a cache whose LRU clock is a mock timeline anchored at the Unix
 /// epoch. It returns the [`MockTime`] handle, so a test can put successive
-/// allocations on distinct `last_used_nanos`. The test advances logical
-/// time with `mock.advance(..)` instead of a sleep between allocations.
+/// allocations on distinct points in the cache's recency order. The test
+/// advances logical time with `mock.advance(..)` instead of a sleep between
+/// allocations.
 pub(super) fn mock_cache(max_slots: usize) -> (FetchSessionCache, MockTime) {
     let mock = MockTime::unix_epoch();
     let cache = FetchSessionCache::with_clock(max_slots, Arc::new(mock.clock()));
@@ -23,7 +24,7 @@ pub(super) fn mock_cache(max_slots: usize) -> (FetchSessionCache, MockTime) {
 }
 
 /// A one-nanosecond tick: the smallest advance that still gives the next
-/// allocation a strictly greater `last_used_nanos` than the previous one.
+/// allocation a strictly greater last-use stamp than the previous one.
 pub(super) const TICK: std::time::Duration = std::time::Duration::from_nanos(1);
 
 pub(super) fn req(

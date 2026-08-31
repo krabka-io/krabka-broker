@@ -107,8 +107,6 @@ impl FetchSessionCache {
             };
         }
 
-        session.last_used_nanos = self.clock.nanos();
-
         // The forget + merge below add and drop partitions; snapshot the
         // count now so we can fold the net delta into `num_partitions`
         // (which backs the lock-free `total_partitions_cached()` gauge).
@@ -141,6 +139,14 @@ impl FetchSessionCache {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let privileged = session.privileged;
+
+        // Mark the session most-recently-used. This is the only place a live
+        // session moves in the recency order, and it is O(1): the entry is
+        // unlinked and relinked at the head of its class's list. It happens
+        // after the `session` borrow above ends, because both halves of the
+        // cache live behind the one `guard`.
+        guard.order.touch(sid, privileged, self.clock.nanos());
 
         SessionDecision::Incremental {
             session_id: sid,

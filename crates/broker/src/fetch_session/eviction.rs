@@ -5,6 +5,9 @@
 //! draws a fresh wire-legal session id and inserts the new session. It refuses
 //! the allocation when no session may be displaced, and the caller then falls
 //! back to a sessionless response.
+//!
+//! The victim comes from the recency order in `super::order`, so choosing it
+//! costs the same whether the cache holds one session or all of them.
 
 use std::{collections::HashMap, sync::atomic::Ordering};
 
@@ -46,22 +49,16 @@ impl FetchSessionCache {
             // otherwise (only when the caller is itself privileged) the
             // LRU session of any kind. Non-privileged callers cannot
             // evict privileged sessions — they fall back to sessionless.
-            let victim: Option<FetchSessionId> = guard
-                .sessions
-                .iter()
-                .filter(|(_, s)| if privileged { true } else { !s.privileged })
-                .min_by_key(|(_, s)| s.last_used_nanos)
-                .map(|(id, _)| *id);
-            match victim {
-                Some(id) => {
-                    let evicted = guard.sessions.remove(&id).expect("victim present");
-                    self.num_sessions.fetch_sub(1, Ordering::Relaxed);
-                    self.num_partitions
-                        .fetch_sub(evicted.partitions.len(), Ordering::Relaxed);
-                    self.evictions.fetch_add(1, Ordering::Relaxed);
-                }
-                None => return INVALID_SESSION_ID,
-            }
+            // The order index answers this in O(1); it does not scan.
+            let Some(id) = guard.order.victim(privileged) else {
+                return INVALID_SESSION_ID;
+            };
+            let evicted = guard.sessions.remove(&id).expect("victim present");
+            guard.order.remove(id, evicted.privileged);
+            self.num_sessions.fetch_sub(1, Ordering::Relaxed);
+            self.num_partitions
+                .fetch_sub(evicted.partitions.len(), Ordering::Relaxed);
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
 
         // Allocate a fresh id. AtomicI32::fetch_add wraps, so we skip
@@ -99,10 +96,10 @@ impl FetchSessionCache {
             privileged,
             creator_principal,
             partitions,
-            last_used_nanos: self.clock.nanos(),
         };
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);
+        guard.order.touch(id, privileged, self.clock.nanos());
         self.num_sessions.fetch_add(1, Ordering::Relaxed);
         self.num_partitions
             .fetch_add(added_partitions, Ordering::Relaxed);
@@ -116,7 +113,10 @@ mod tests {
     use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::*;
-    use crate::fetch_session::test_support::{TICK, mock_cache};
+    use crate::fetch_session::{
+        SessionDecision,
+        test_support::{TICK, mock_cache, req},
+    };
 
     #[test]
     fn allocate_returns_nonzero_monotonic_ids() {
@@ -162,7 +162,7 @@ mod tests {
         let (cache, mock) = mock_cache(2);
         let a = cache.try_allocate(false, "a".into(), vec![]);
         // Advance logical time so each session gets a strictly increasing
-        // `last_used_nanos`, making `a` the unambiguous LRU victim — no sleep.
+        // recency stamp, making `a` the unambiguous LRU victim — no sleep.
         mock.advance(TICK);
         let b = cache.try_allocate(false, "b".into(), vec![]);
         mock.advance(TICK);
@@ -202,6 +202,81 @@ mod tests {
         let g = cache.inner.lock().unwrap();
         assert!(!g.sessions.contains_key(&p1));
         assert!(g.sessions.contains_key(&p2));
+    }
+
+    #[test]
+    fn incremental_fetch_moves_a_session_off_the_victim_slot() {
+        // The recency order is only useful if a live session's own traffic
+        // updates it. `refetched` is allocated first, so it starts as the
+        // victim; one incremental fetch on it must hand that role to `idle`.
+        let (cache, mock) = mock_cache(2);
+        let refetched = cache.try_allocate(false, "refetched".into(), vec![]);
+        mock.advance(TICK);
+        let idle = cache.try_allocate(false, "idle".into(), vec![]);
+
+        mock.advance(TICK);
+        let incremental = req(refetched, 1, vec![], vec![]);
+        assert!(matches!(
+            cache.classify(&incremental),
+            SessionDecision::Incremental { .. }
+        ));
+
+        mock.advance(TICK);
+        let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
+        check!(cache.evictions_total() == 1);
+        let guard = cache.inner.lock().unwrap();
+        let mut ids: Vec<i32> = guard.sessions.keys().copied().collect();
+        ids.sort_unstable();
+        assert!(!ids.contains(&idle) && ids == vec![refetched, newcomer]);
+    }
+
+    #[test]
+    fn privileged_caller_takes_the_older_of_the_two_classes() {
+        // A follower may displace either class, so the victim is simply the
+        // oldest session, whichever class it belongs to. Run it both ways
+        // round so neither answer can come from a standing class preference.
+        let cases = [("follower is older", true), ("consumer is older", false)];
+        for (label, follower_first) in cases {
+            let (cache, mock) = mock_cache(2);
+            let first = cache.try_allocate(follower_first, "first".into(), vec![]);
+            mock.advance(TICK);
+            let second = cache.try_allocate(!follower_first, "second".into(), vec![]);
+            mock.advance(TICK);
+            let third = cache.try_allocate(true, "follower".into(), vec![]);
+
+            check!(cache.evictions_total() == 1, "{label}");
+            let g = cache.inner.lock().unwrap();
+            let mut ids: Vec<i32> = g.sessions.keys().copied().collect();
+            ids.sort_unstable();
+            check!(!ids.contains(&first), "{label}");
+            check!(ids == vec![second, third], "{label}");
+        }
+    }
+
+    #[test]
+    fn a_closed_session_is_never_chosen_as_a_victim() {
+        // Close has to drop the session from the recency order as well as from
+        // the map. If it did not, the order would still name the closed
+        // session as the oldest and the next allocation into a full cache
+        // would go looking for a session that is no longer there.
+        let (cache, mock) = mock_cache(2);
+        let closed = cache.try_allocate(false, "closed".into(), vec![]);
+        mock.advance(TICK);
+        let oldest_live = cache.try_allocate(false, "oldest-live".into(), vec![]);
+        cache.close(closed);
+
+        mock.advance(TICK);
+        let refill = cache.try_allocate(false, "refill".into(), vec![]);
+        mock.advance(TICK);
+        let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
+
+        // The cache refilled to {oldest_live, refill}; `newcomer` displaced
+        // `oldest_live`, the oldest session that is still there.
+        check!(cache.len() == 2);
+        let guard = cache.inner.lock().unwrap();
+        let mut ids: Vec<i32> = guard.sessions.keys().copied().collect();
+        ids.sort_unstable();
+        assert!(!ids.contains(&oldest_live) && ids == vec![refill, newcomer]);
     }
 
     #[test]
