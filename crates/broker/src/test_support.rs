@@ -35,6 +35,7 @@ use crate::{
     broker::{Broker, BrokerHandle},
     config::BrokerConfig,
     handlers::RequestContext,
+    metadata_source::MetadataSource,
 };
 
 /// Authorizer that denies every request. It drives the authorization-failure
@@ -265,10 +266,10 @@ type SubmitOutcome =
 /// through.
 ///
 /// One image, one leader, and one capture buffer stand in for the whole
-/// controller. Every [`crate::metadata_source::MetadataSource`] method has a
-/// behaving default, so a method added to the trait reaches every suite that
-/// fakes metadata at once, rather than arriving as another `unimplemented!()`
-/// in another hand-rolled double.
+/// controller. Every [`MetadataSource`] method has a behaving default, so a
+/// method added to the trait reaches every suite that fakes metadata at once,
+/// rather than arriving as another `unimplemented!()` in another hand-rolled
+/// double.
 ///
 /// The image and the leader live in `watch` channels whose senders the fake
 /// keeps, so [`FakeMetadataSource::set_image`] and
@@ -442,7 +443,7 @@ fn unsupported() -> RaftError {
 }
 
 #[async_trait::async_trait]
-impl crate::metadata_source::MetadataSource for FakeMetadataSource {
+impl MetadataSource for FakeMetadataSource {
     fn current_image(&self) -> Arc<MetadataImage> {
         self.current_image_calls
             .fetch_add(1, atomic::Ordering::Relaxed);
