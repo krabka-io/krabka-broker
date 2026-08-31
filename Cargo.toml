@@ -167,10 +167,10 @@ krabka-units = "0.4.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
-krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
-krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
-krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
-krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f0c86c1ccdecd1776e32349764d7d2efe5dae347" }
+krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "056e7e3eddb7da2ba21c7893993897e6169bc8f2" }
+krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "056e7e3eddb7da2ba21c7893993897e6169bc8f2" }
+krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "056e7e3eddb7da2ba21c7893993897e6169bc8f2" }
+krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "056e7e3eddb7da2ba21c7893993897e6169bc8f2" }
 krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "141a660b1324d8dea57a35c4447e2d7c437ab927" }
 krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "141a660b1324d8dea57a35c4447e2d7c437ab927" }
 krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "141a660b1324d8dea57a35c4447e2d7c437ab927" }
