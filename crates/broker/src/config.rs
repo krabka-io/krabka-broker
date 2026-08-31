@@ -75,6 +75,15 @@ pub const DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS: u64 = 10_000;
 /// Default follower metadata snapshot fetch limit: the 1 GiB core ceiling.
 pub const DEFAULT_METADATA_SNAPSHOT_FETCH_MAX: ByteSize = gibibytes(1);
 
+/// Default bound on how far this node's `__cluster_metadata` offset may trail
+/// the quorum's committed offset while `/readyz` still answers 200.
+///
+/// It is the same 100 records as [`DEFAULT_OBSERVER_LAG_BOUND`], and for the
+/// same reason: a node within a hundred records of the quorum is one fetch
+/// round trip from current, while one further behind than that is answering
+/// `Metadata` from an image whose partition leaders may already have moved.
+pub const DEFAULT_READINESS_MAX_METADATA_LAG: u64 = 100;
+
 /// KIP-853: default maximum log-entry lag at which an observer is still
 /// promotable to a quorum voter.
 pub const DEFAULT_OBSERVER_LAG_BOUND: u64 = 100;

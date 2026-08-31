@@ -8,7 +8,7 @@ use krabka_units::convert::TimeExt as _;
 use crate::{
     bootstrap::detect_bootstrap_mode,
     cli::Args,
-    config::{parse_metrics_addr, parse_roles_arg},
+    config::{parse_optional_listen_addr, parse_roles_arg},
     signals::wait_for_termination_signal,
 };
 
@@ -76,7 +76,8 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("broker_id must be non-negative");
         std::process::exit(1);
     });
-    let metrics_listen_addr = parse_metrics_addr(&args.metrics_listen_addr)?;
+    let metrics_listen_addr = parse_optional_listen_addr(&args.metrics_listen_addr)?;
+    let health_listen_addr = parse_optional_listen_addr(&args.health_listen_addr)?;
     let roles = if args.process_roles.is_empty() {
         None
     } else {
@@ -114,7 +115,22 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         "selected bootstrap mode"
     );
 
-    let handle = Broker::start(config).await?;
+    // Serve the probes before the broker starts, not after. Log-dir recovery
+    // and metadata catch-up both run inside `Broker::start`, and those are
+    // exactly the windows in which the orchestrator has to be able to ask
+    // whether this pod is alive (yes) and ready (not yet). The state goes into
+    // the broker by the same handle, so each startup phase marks its own
+    // condition on the state these routes read.
+    let health = krabka_broker::HealthState::new(
+        args.readiness_max_metadata_lag
+            .unwrap_or(krabka_broker::config::DEFAULT_READINESS_MAX_METADATA_LAG),
+    );
+    let health_shutdown = tokio_util::sync::CancellationToken::new();
+    if let Some(addr) = health_listen_addr {
+        krabka_broker::health::serve(addr, health.clone(), health_shutdown.child_token()).await?;
+    }
+
+    let handle = Broker::start_with_health(config, health).await?;
     tracing::info!(addr = %handle.listen_addr(), "krabka-broker listening");
 
     let mut shutdown_rx = handle.should_shutdown_rx();
@@ -148,6 +164,10 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(()) => tracing::info!("controlled shutdown complete (leadership drained)"),
         Err(e) => tracing::warn!(error = %e, "controlled shutdown incomplete; hard-stopped"),
     }
+    // The probes outlive the broker's own drain deliberately: the kubelet is
+    // still polling while `controlled_shutdown` hands leadership over, and a
+    // refused connection there is indistinguishable from a crash.
+    health_shutdown.cancel();
     tracing::info!("krabka-broker stopped");
     telemetry.shutdown();
     Ok(())

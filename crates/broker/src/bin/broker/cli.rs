@@ -92,6 +92,22 @@ pub struct Args {
     )]
     pub metrics_listen_addr: String,
 
+    /// Bind address for the `/healthz` and `/readyz` HTTP probes.
+    /// An empty string or `none` disables them. Default: `0.0.0.0:9405`,
+    /// one past the metrics port. The reference Kubernetes manifests under
+    /// `packaging/k8s/` point both probes at it.
+    #[arg(
+        long,
+        env = "KRABKA_HEALTH_LISTEN_ADDR",
+        default_value = "0.0.0.0:9405"
+    )]
+    pub health_listen_addr: String,
+
+    /// How many `__cluster_metadata` records this node may trail the quorum's
+    /// committed offset by and still answer `/readyz` with 200.
+    #[arg(long, env = "KRABKA_READINESS_MAX_METADATA_LAG")]
+    pub readiness_max_metadata_lag: Option<u64>,
+
     /// Partition disk-usage scan cadence. `0s` disables the scanner entirely.
     /// The scanner populates the `partition_disk_bytes` gauge, and the
     /// rebalancer's usage scraper reads that gauge.
