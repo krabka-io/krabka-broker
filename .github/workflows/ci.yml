@@ -267,7 +267,16 @@ jobs:
               # targets at all -- `rdeps` takes a target set, and `//:MODULE.bazel`
               # is a source file no rule exports. Treat them as "everything"
               # rather than trying to name them.
-              if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
+              #
+              # A package's own `BUILD.bazel` belongs here too, for a different
+              # reason: it resolves as a target, so it survives the known-paths
+              # filter below, but nothing depends on it and `rdeps` answers with
+              # the empty set. A change that retags a suite, or adds one, or
+              # moves a `srcs` glob would select nothing and report success --
+              # the quiet failure this step exists to avoid. The build file
+              # defines the graph rather than sitting in it, so the only honest
+              # answer to "what does this affect" is everything.
+              if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)|(^|/)BUILD\.bazel$|\.bzl$' <<<"${changed}"; then
                 targets="$(all)"
               else
                 # `rdeps` takes a target set, so every path here must be a
