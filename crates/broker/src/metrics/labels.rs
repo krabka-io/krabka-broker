@@ -65,6 +65,27 @@ pub struct ReplicaLagLabel {
     pub replica: u64,
 }
 
+/// Per-(group, topic, partition) consumer-group-lag label set, paired with the
+/// `consumer_group_lag_records` gauge family. It covers classic and KIP-848
+/// groups alike, because a group's committed offsets live on the
+/// protocol-agnostic `CoordinatorGroup` whichever protocol its members speak.
+///
+/// This is the widest label set the broker emits, so its bound is worth
+/// stating exactly. A series exists only for a `(topic, partition)` a group
+/// this broker coordinates has actually committed an offset for, and only
+/// while that partition is still in the metadata image. The commit itself is
+/// bounded: `OffsetCommit` writes to `__consumer_offsets`, so a client cannot
+/// invent a series more cheaply than it can write a record. Every way a series
+/// stops being justified releases it — the group is deleted, this broker stops
+/// coordinating the group, the topic is deleted, or the sampler's next pass no
+/// longer names the tuple.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConsumerGroupLabel {
+    pub group_id: String,
+    pub topic: String,
+    pub partition: i32,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {

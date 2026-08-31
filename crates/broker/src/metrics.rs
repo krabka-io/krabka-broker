@@ -37,8 +37,8 @@ mod traffic;
 
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, ReplicaLagLabel,
-    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
+    ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
 };
 pub(crate) use self::{
     eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, lag::LagSeriesIndex,
@@ -114,6 +114,14 @@ pub struct BrokerMetrics {
     /// `ReplicaFetcherManager.MaxLag`: one series an operator alerts on
     /// without having to aggregate a per-follower family first.
     pub replica_lag_max: Gauge,
+    /// Records a consumer group has yet to consume from one partition: the
+    /// partition's high watermark minus the group's committed offset.
+    ///
+    /// It covers classic and KIP-848 groups alike, because committed offsets
+    /// live on the protocol-agnostic `CoordinatorGroup`. This is the metric
+    /// most consumer-owning teams alert on, and the broker is the only place
+    /// that holds both halves of the subtraction without a client round trip.
+    pub consumer_group_lag: Family<ConsumerGroupLabel, Gauge>,
     /// Records waiting for acquisition in each share-group partition.
     pub share_group_backlog: Family<ShareGroupLabel, Gauge>,
     /// Cumulative handler-thread microseconds spent processing each
@@ -461,8 +469,17 @@ pub struct BrokerMetrics {
     /// two-person rule, and an operator should read the audit log for the
     /// partition it names.
     pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
-    /// The label sets [`Self::replica_lag`] currently carries, so that a
-    /// caller holding only part of a lag label set can still release the
-    /// series. See [`LagSeriesIndex`].
+    /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
+    /// currently carry, so that a caller holding only part of a lag label set
+    /// can still release the series. See [`LagSeriesIndex`].
     pub(crate) lag_series: LagSeriesIndex,
+}
+
+/// Opaque `Debug`, so that a type holding a [`BrokerMetrics`] can still derive
+/// its own. The bundle is a registry and some seventy metric handles, and
+/// printing them says nothing a scrape does not say better.
+impl std::fmt::Debug for BrokerMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrokerMetrics").finish_non_exhaustive()
+    }
 }

@@ -104,6 +104,7 @@ impl GroupCoordinator {
         rx.await.map_err(|_| DeleteGroupError::NotFound)??;
         self.groups.remove(group_id);
         self.group_types.remove(group_id);
+        self.forget_group_metrics(group_id);
         Ok(())
     }
 
@@ -147,6 +148,7 @@ impl GroupCoordinator {
         self.groups.remove(group_id);
         self.streams_seeds.remove(group_id);
         self.streams_seeds_cache.remove(group_id);
+        self.forget_group_metrics(group_id);
         Ok(())
     }
 

@@ -66,6 +66,7 @@ impl BrokerMetrics {
             partition_disk_bytes: Family::default(),
             replica_lag: Family::default(),
             replica_lag_max: Gauge::default(),
+            consumer_group_lag: Family::default(),
             share_group_backlog: Family::default(),
             partition_cpu_micros: Family::default(),
             partitions_led: Gauge::default(),

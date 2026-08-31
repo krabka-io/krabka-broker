@@ -228,5 +228,14 @@ impl BrokerMetrics {
              rather than aggregating the per-follower family.",
             self.replica_lag_max.clone(),
         );
+
+        registry.register(
+            "consumer_group_lag_records",
+            "Records a consumer group this broker coordinates has yet to \
+             consume from one partition: the partition's high watermark \
+             minus the group's committed offset. Classic and KIP-848 \
+             groups both report here.",
+            self.consumer_group_lag.clone(),
+        );
     }
 }

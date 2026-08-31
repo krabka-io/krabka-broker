@@ -277,9 +277,19 @@ impl Broker {
         }
         .spawn();
 
+        // The coordinator owns the lifetime of a group's lag series: a group
+        // is deleted or moves to another coordinator without the metadata
+        // image recording anything the series evictor could act on, so the
+        // removal has to release the series itself.
+        group_coordinator.set_metrics(runtime.metrics.clone());
         crate::lag::LagPoller {
             node_id: config.node_id,
+            coordinator: Arc::clone(&group_coordinator),
+            metadata: Arc::clone(&controller),
             partitions: Arc::clone(&partitions),
+            inter_broker: Arc::clone(&inter_broker_client),
+            listener_protocol: runtime.inter_listener_protocol,
+            listener_name: config.inter_broker_listener_name.clone(),
             period: crate::lag::LAG_POLL_INTERVAL,
             metrics: runtime.metrics.clone(),
             shutdown: runtime.supervisor_shutdown.child_token(),

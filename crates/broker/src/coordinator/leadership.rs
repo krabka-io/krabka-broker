@@ -210,6 +210,10 @@ async fn unload_partition(
         coordinator.streams_seeds.remove(&group_id);
         coordinator.streams_seeds_cache.remove(&group_id);
         coordinator.group_types.remove(&group_id);
+        // The group's offsets partition moved to another broker, so its lag is
+        // that broker's to report from here on. Nothing else would release the
+        // series: this broker's sampler will never name the group again.
+        coordinator.forget_group_metrics(&group_id);
     }
 }
 

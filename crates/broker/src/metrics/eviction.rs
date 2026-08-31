@@ -15,10 +15,12 @@
 //! remember the label sets the last image justified, then remove the ones the
 //! next image no longer does.
 //!
-//! The replica-lag family of `metrics::lag` joins in here rather than keeping
-//! its own rule. Its sampler already releases what a pass stops naming, but a
-//! reassignment or a topic delete must not wait for the next pass, so the
-//! entry points below reach that family too.
+//! The two lag families of `metrics::lag` join in here rather than keeping
+//! their own rule. Their samplers already release what a pass stops naming,
+//! but a reassignment or a topic delete must not wait for the next pass, and a
+//! group that leaves this coordinator is never named by a pass again. The
+//! entry points below therefore reach both families, and `evict_group_series`
+//! gives group removal — which no image records — the same one call to make.
 
 use std::{collections::HashSet, sync::Arc};
 
