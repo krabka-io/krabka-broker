@@ -94,24 +94,46 @@ pub(super) fn encode_response(
 /// Adding an API to [`crate::api_catalog`] without classifying it here fails
 /// that test.
 ///
-/// APIs that answer `false` fall into three groups.
+/// Classifying an API correctly is necessary but not sufficient for it to echo
+/// a delay. This predicate is only consulted where `maybe_apply_request_quota`
+/// runs: the dispatch entries whose policy is
+/// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
+/// ones) and the unsupported-version reply path, which takes it for every
+/// `api_key`. The `InlineExempt` entries -- every handler that takes a
+/// `RequestContext`, which is most of the admin and ACL surface -- are exempt
+/// from the request quota altogether and so are neither delayed nor throttle-
+/// stamped. Narrowing that exemption is KIP-124 work rather than KIP-219 work;
+/// this table is what a narrowing would land on.
 ///
-/// * No `ThrottleTimeMs` field at all: `SaslHandshake` (17),
-///   `SaslAuthenticate` (36), `WriteTxnMarkers` (27), `DescribeQuorum` (55),
-///   `Vote` (52), `BeginQuorumEpoch` (53), `EndQuorumEpoch` (54),
-///   `Envelope` (58), the share-coordinator state RPCs (83-87) and
-///   `GetReplicaLogInfo` (93). There is nothing to echo.
-/// * `Produce` (0) and `Fetch` (1) below v1, whose bandwidth quota is charged
-///   by the handler itself; `maybe_apply_request_quota` returns before this
-///   predicate is consulted for either.
+/// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
+/// bandwidth quota and their share of the request quota are charged by the
+/// handler, which sets `ThrottleTimeMs` on the typed response before encoding,
+/// so `maybe_apply_request_quota` returns for both before consulting the
+/// table. They are still classified below, and the audit still probes them, so
+/// a schema move cannot pass unnoticed.
+///
+/// Everything else that answers `false` falls into three groups.
+///
+/// * Versions below the one at which the API moved `ThrottleTimeMs` to the
+///   front of its response body: `Metadata` v0-2, `JoinGroup` v0-1,
+///   `ListOffsets` v0-1, `FindCoordinator` v0 and the rest. The version bounds
+///   in the arms below are exactly those boundaries.
+/// * No `ThrottleTimeMs` field at any version: `SaslHandshake` (17),
+///   `WriteTxnMarkers` (27), `SaslAuthenticate` (36), `DescribeQuorum` (55),
+///   the share-coordinator state RPCs (83-87) and `GetReplicaLogInfo` (93).
+///   There is nothing to echo. `Vote` (52), `BeginQuorumEpoch` (53),
+///   `EndQuorumEpoch` (54) and `Envelope` (58) are throttle-free as well, but
+///   the broker does not advertise them, so the audit does not reach them.
 /// * KIP-219 divergences -- the field is present but sits behind another
 ///   field, so patching a leading int32 would corrupt the response. These are
 ///   recorded as `THROTTLE_ECHO_DIVERGENCES` in the audit module and as rows
 ///   in the generated `docs/KIP_MATRIX.md`:
 ///   `Produce` (0) v1+ and `ApiVersions` (18) v1+ carry it after a
 ///   variable-length array, the four delegation-token APIs (38-41) carry it
-///   last, and `OffsetDelete` (47) leads with `ErrorCode`. The channel mute
-///   still enforces the delay, so the throttle is applied but not advertised.
+///   last, and `OffsetDelete` (47) leads with `ErrorCode`. Where
+///   `maybe_apply_request_quota` runs the delay is still applied -- it holds
+///   the response before the dispatch loop writes it -- but the response does
+///   not advertise it.
 ///   Echoing it needs the field set on the typed response before encoding,
 ///   which is how the Produce and Fetch handlers already do it.
 pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {

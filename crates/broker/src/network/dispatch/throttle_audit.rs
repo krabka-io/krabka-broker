@@ -2,10 +2,11 @@
 //!
 //! [`super::response::throttle_is_leading_field`] decides whether the dispatch
 //! loop may report a request-quota delay by patching the first int32 of an
-//! already-encoded response body. Getting that table wrong is silent: an API
-//! that is missing from it answers `throttle_time_ms = 0` while the broker
-//! sleeps on the connection, so a client never backs off and the quota
-//! degrades into latency injection.
+//! already-encoded response body. Getting that table wrong is silent in both
+//! directions: an API missing from it answers `throttle_time_ms = 0` while the
+//! broker holds the response, so a client never backs off and the quota
+//! degrades into latency injection; an API wrongly in it has four bytes of
+//! some other field overwritten.
 //!
 //! This module pins the table against the generated encoders. For every
 //! `(api_key, version)` pair [`crate::api_catalog::supported_apis`] advertises
@@ -60,8 +61,10 @@ enum ThrottlePosition {
 ///   covers all seven is to set the field on the typed response before
 ///   encoding, the way the Produce and Fetch handlers already do.
 ///
-/// Mirrored as rows in the generated `docs/KIP_MATRIX.md`, which is
-/// regenerated in CI from this constant.
+/// Mirrored as rows in the generated `docs/KIP_MATRIX.md`.
+/// `tools/generate-kip-matrix.py` renders those rows and refuses to run unless
+/// every one of them is matched by an entry of this constant, so the page and
+/// the audit cannot drift apart; CI regenerates the page and fails on a diff.
 const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion)] = &[
     (0, 1, 13), // Produce
     (18, 1, 5), // ApiVersions

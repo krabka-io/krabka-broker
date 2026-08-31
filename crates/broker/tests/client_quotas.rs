@@ -27,6 +27,11 @@
 //!    assert `throttle_time_ms` > 0. Proves the request-quota throttle is
 //!    communicated in the response (KIP-219 throttle-then-respond) and not
 //!    just silently muted.
+//! 7. `request_percentage_throttle_is_echoed_on_a_patched_api` — the same tiny
+//!    `request_percentage`, but on `AddOffsetsToTxn`, whose delay the dispatch
+//!    loop reports by patching the leading `ThrottleTimeMs` of the encoded
+//!    body rather than by having the handler fill it in. Asserts the throttled
+//!    response differs from the unthrottled one in that field alone.
 //!
 //! Test 4 exercises header `client_id` propagation through Produce and the
 //! tuple-over-user precedence rule end to end. Fetch uses the same request

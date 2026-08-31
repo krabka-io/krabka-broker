@@ -32,13 +32,52 @@ ROWS = (
 # is one entry of `THROTTLE_ECHO_DIVERGENCES` in the audit module below, which
 # fails if the broker starts or stops diverging on any advertised version.
 THROTTLE_ECHO_ROWS = (
-    ("Produce", "0", "1-13", "Sits behind the `Responses` array; the handler charges the bandwidth quota itself and fills the field in before encoding"),
-    ("ApiVersions", "18", "1-5", "Sits behind the `ApiKeys` array, at an offset the response header does not fix"),
-    ("CreateDelegationToken", "38", "1-3", "Last field, behind the principal strings, the token timestamps and the HMAC"),
-    ("RenewDelegationToken", "39", "1-2", "Last field, behind `ErrorCode` and the new expiry timestamp"),
-    ("ExpireDelegationToken", "40", "1-2", "Last field, behind `ErrorCode` and the new expiry timestamp"),
-    ("DescribeDelegationToken", "41", "1-3", "Last field, behind `ErrorCode` and the variable-length token list"),
-    ("OffsetDelete", "47", "0", "Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only"),
+    (
+        "Produce",
+        "0",
+        "1-13",
+        "Sits behind the `Responses` array; the handler charges the bandwidth "
+        "quota itself and fills the field in before encoding",
+    ),
+    (
+        "ApiVersions",
+        "18",
+        "1-5",
+        "Sits behind the `ApiKeys` array, at an offset the response header "
+        "does not fix",
+    ),
+    (
+        "CreateDelegationToken",
+        "38",
+        "1-3",
+        "Last field, behind the principal strings, the token timestamps and "
+        "the HMAC",
+    ),
+    (
+        "RenewDelegationToken",
+        "39",
+        "1-2",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (
+        "ExpireDelegationToken",
+        "40",
+        "1-2",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (
+        "DescribeDelegationToken",
+        "41",
+        "1-3",
+        "Last field, behind `ErrorCode` and the variable-length token list",
+    ),
+    (
+        "OffsetDelete",
+        "47",
+        "0",
+        "Leads with `ErrorCode`; the field is at a fixed offset of 2, but the "
+        "dispatch loop patches leading fields only",
+    ),
 )
 THROTTLE_AUDIT_TEST = "throttle_echo_divergences_are_the_recorded_ones"
 
@@ -116,17 +155,26 @@ or checked-in output drift.
 
 ## KIP-219 throttle-echo divergences
 
-The broker reports a request-quota delay by patching the leading `ThrottleTimeMs`
-int32 of an already-encoded response, so it can only echo the delay on responses
-whose schema puts that field first. Every other advertised API is audited by
+The broker reports a request-quota delay by patching the leading
+`ThrottleTimeMs` int32 of an already-encoded response, so it can only echo the
+delay on responses whose schema puts that field first. Every advertised API is
+audited by
 [`throttle_audit`](../crates/broker/src/network/dispatch/throttle_audit.rs),
 which encodes each response at each advertised version and compares where
 `ThrottleTimeMs` lands against the broker's table.
 
-The APIs below are still throttled -- the connection mute enforces the delay --
-but the response reports `throttle_time_ms = 0`, so a client sees latency
-instead of a back-off signal. Echoing them needs the typed response rather than
-a byte patch.
+The APIs below carry `ThrottleTimeMs` behind another field. Wherever the
+dispatch loop does charge the request quota, it applies the delay -- it holds
+the response before writing it -- and the response still goes out reporting
+`throttle_time_ms = 0`, so a client sees latency instead of a back-off signal.
+Echoing them needs the field set on the typed response before encoding rather
+than a byte patch.
+
+The table is a precondition, not the whole story: the leading-int32 patch is
+only reached for dispatch entries whose request-quota policy is
+`ApplyFallbackAccounting`, plus the unsupported-version reply path. Entries
+marked `InlineExempt` -- most of the admin and ACL surface -- are exempt from
+the request quota altogether, so they are neither delayed nor stamped.
 
 | API | api_key | Versions | Why the field cannot be patched |
 | :--- | :--- | :--- | :--- |
