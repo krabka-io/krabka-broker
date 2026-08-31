@@ -420,3 +420,27 @@ async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp
     engine.on_fetch_response(NodeId(2), &response(9_000));
     assert!(engine.quorum_state_snapshot().quorum_high_watermark == 10_000);
 }
+
+/// A node whose fetch offset is below the leader's pruned log start is told to
+/// take a snapshot instead, and that response carries the leader's watermark
+/// like any other. It is also the node furthest behind the quorum, so dropping
+/// the watermark on that path would report the worst laggard as caught up.
+#[tokio::test]
+async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+
+    let redirect = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: Some((20_000, 3)),
+        hwm: 20_000,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+
+    engine.on_fetch_response(NodeId(2), &redirect);
+    let snapshot = engine.quorum_state_snapshot();
+    assert!(snapshot.high_watermark == 0);
+    assert!(snapshot.quorum_high_watermark == 20_000);
+}

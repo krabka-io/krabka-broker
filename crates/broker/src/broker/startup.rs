@@ -41,8 +41,11 @@ impl Broker {
     /// and metadata catch-up both happen inside it. So the caller creates the
     /// state, serves [`crate::health::router`] over it, and passes this clone
     /// in. [`Self::start`] builds its own state instead, which nothing reads.
+    ///
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    ///
+    /// Returns an error when log I/O fails, a record or index is corrupt, or
+    /// the requested offset violates the segment state.
     pub async fn start_with_health(
         config: BrokerConfig,
         health: HealthState,

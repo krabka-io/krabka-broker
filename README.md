@@ -213,8 +213,10 @@ against a loaded image through Docker.
 `packaging/k8s/` holds a reference deployment of that image: a three-node
 StatefulSet, a headless Service plus a bootstrap Service, and a
 PodDisruptionBudget. They are a starting point to read and adapt, not a chart.
-Set the image tag, the storage class and size, and above all the seed directory
-ids in `KRABKA_INITIAL_CONTROLLERS`, before you apply them.
+Set the image tag, the storage class and size, and above all the two identities
+the manifests ship placeholders for -- `KRABKA_CLUSTER_ID` and the seed
+directory ids in `KRABKA_INITIAL_CONTROLLERS` -- before you apply them. They
+have not been applied to a live cluster.
 
 ```
 kubectl apply -f packaging/k8s/

@@ -5,7 +5,10 @@
 # downward API turns that into KRABKA_POD_INDEX, and Kubernetes expands
 # `$(KRABKA_POD_INDEX)` in `args`, so the node id and the broker id are the
 # ordinal without a shell to compute them in. The image is distroless and
-# carries none.
+# carries none. That label is what sets the floor on the Kubernetes version
+# these manifests need: it reached beta, and so became set by default, in 1.29.
+# On anything older KRABKA_POD_INDEX resolves to the empty string and the
+# format step fails on `--node-id=`.
 #
 # Kubernetes expands an env value against the variables declared *before* it,
 # so POD_NAMESPACE leads each list that a later value interpolates it into.
@@ -55,6 +58,7 @@ spec:
           args:
             - --log-dir=/var/lib/krabka
             - --node-id=$(KRABKA_POD_INDEX)
+            - --cluster-id=$(KRABKA_CLUSTER_ID)
             - --initial-controllers=$(KRABKA_INITIAL_CONTROLLERS)
             - --ignore-formatted
           env:
@@ -66,6 +70,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            # One cluster id, shared by all three pods. It has to be passed
+            # explicitly: each pod formats its own volume, and `krabka format`
+            # generates a fresh id when none is given, so three pods would
+            # bootstrap three one-node clusters that cannot recognise each
+            # other's records.
+            #
+            # GENERATE YOUR OWN before you deploy this, the same way you
+            # generate the directory ids below.
+            - name: KRABKA_CLUSTER_ID
+              value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
             # The KIP-853 seed voter set: `id@host:port:directory-id` per
             # controller, comma-separated with no spaces. Each node reads its
             # own directory id back out of this list, which is why one shared
@@ -118,8 +132,19 @@ spec:
             # name. The headless Service below is what makes that name resolve.
             - name: KRABKA_ADVERTISED_LISTENER
               value: "$(POD_NAME).krabka.$(POD_NAMESPACE).svc.cluster.local:9092"
-            - name: KRABKA_CONTROLLER_BOOTSTRAP_SERVERS
-              value: "krabka-0.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,krabka-1.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,krabka-2.krabka.$(POD_NAMESPACE).svc.cluster.local:9093"
+            # The same id the init container formatted the volume with, so the
+            # metadata image this node serves `DescribeCluster` from names the
+            # cluster rather than the nil UUID the broker falls back to.
+            - name: KRABKA_CLUSTER_ID
+              value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
+            # There is deliberately no KRABKA_CONTROLLER_BOOTSTRAP_SERVERS here.
+            # These three nodes are seeded voters: `--initial-controllers` put
+            # the voter set in the offset-0 checkpoint, so there is no quorum to
+            # discover at cold start. It would also not parse -- the flag takes
+            # `SocketAddr`s, which accept an IP literal and not a Service DNS
+            # name. A node formatted with `--no-initial-controllers` that joins
+            # an existing quorum is the case that needs it, and it needs pod IPs
+            # or a resolved address to express it.
             - name: KRABKA_METRICS_LISTEN_ADDR
               value: 0.0.0.0:9404
             - name: KRABKA_HEALTH_LISTEN_ADDR
