@@ -114,28 +114,12 @@ pub(super) fn prepare_batch(
         PartitionPayload::Slice(b) => b,
     };
 
-    // Owned fallback for a v≥3 records slice that the verbatim predicate
-    // rejects. Routes the raw field bytes through `RecordsPayload::from_bytes`
-    // — which dispatches v2 (parse every batch) vs legacy (v0/v1 `MessageSet`,
-    // kept opaque) by the magic byte — then through `decode_owned_batch`, the
-    // SAME pipeline the request decoder used before this change. This is what
-    // up-converts a v1 `MessageSet` carried over a v≥3 produce (older
-    // message-format clients) and surfaces INVALID_RECORD on malformed bytes.
-    let owned_fallback = |bytes: Bytes| -> Result<PreparedBatch, i16> {
-        match RecordsPayload::from_bytes_with_policy(bytes, policy) {
-            Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
-                validate_owned_client_batch(&batch)?;
-                Ok(PreparedBatch::from_owned(batch))
-            }),
-            Err(_) => Err(codes::INVALID_RECORD),
-        }
-    };
     // Extract the header fields into owned values up front so the borrow of
     // `bytes` (via the `ValidatedBatch`) ends before any `owned_fallback(bytes)`
     // move or the final `Verbatim(bytes)` construction.
     let validated = match validate_one_v2_batch(&bytes) {
         Ok(batch) if batch.total_len == bytes.len() => batch,
-        _ => return owned_fallback(bytes),
+        _ => return owned_fallback(bytes, topic_name, metrics, policy),
     };
     let header = ValidatedHeader::from(&validated);
     let attributes = header.attributes;
@@ -145,13 +129,37 @@ pub(super) fn prepare_batch(
     if let Some(target) = topic_compression
         && target != attributes.compression()
     {
-        return owned_fallback(bytes);
+        return owned_fallback(bytes, topic_name, metrics, policy);
     }
     validated
         .validate_records(policy)
         .map_err(|_| codes::INVALID_RECORD)?;
 
     Ok(PreparedBatch::from_header(header, bytes))
+}
+
+/// The owned-decode fallback for a v≥3 records slice that the verbatim
+/// predicate rejects.
+///
+/// Routes the raw field bytes through `RecordsPayload::from_bytes` — which
+/// dispatches v2 (parse every batch) vs legacy (v0/v1 `MessageSet`, kept
+/// opaque) by the magic byte — then through [`decode_owned_batch`], the same
+/// pipeline the request decoder used before the verbatim path existed. This is
+/// what up-converts a v1 `MessageSet` carried over a v≥3 produce (older
+/// message-format clients) and surfaces `INVALID_RECORD` on malformed bytes.
+pub(super) fn owned_fallback(
+    bytes: Bytes,
+    topic_name: &str,
+    metrics: &crate::metrics::BrokerMetrics,
+    policy: RecordDecompressionPolicy,
+) -> Result<PreparedBatch, i16> {
+    match RecordsPayload::from_bytes_with_policy(bytes, policy) {
+        Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
+            validate_owned_client_batch(&batch)?;
+            Ok(PreparedBatch::from_owned(batch))
+        }),
+        Err(_) => Err(codes::INVALID_RECORD),
+    }
 }
 
 /// The v2 batch header fields that the gates need, copied out of a borrowed
