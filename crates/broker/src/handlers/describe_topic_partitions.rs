@@ -48,7 +48,8 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{authorized_operations::authorized_operations_bits, is_internal_topic},
+    handlers::authorized_operations::authorized_operations_bits,
+    internal_topics::is_internal_topic,
 };
 
 // Read-only handler — never suspends. The `async fn` shape matches the
@@ -344,21 +345,5 @@ mod tests {
             part.leader_epoch
         );
         broker_handle.shutdown().await;
-    }
-
-    #[test]
-    fn is_internal_topic_matches_known_internal_names() {
-        for (name, want) in [
-            ("__consumer_offsets", true),
-            ("__transaction_state", true),
-            ("__remote_log_metadata", true),
-            ("foo", false),
-            ("_foo", false),
-            ("__user_topic", false),
-            // No accidental prefix matching.
-            ("__consumer_offsets-2", false),
-        ] {
-            assert!(is_internal_topic(name) == want, "{name}");
-        }
     }
 }
