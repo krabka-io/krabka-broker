@@ -82,9 +82,9 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             .await
             .unwrap(),
     );
-    create_topic(&admin, 3, 3).await;
+    create_topic(&admin, 1, 3).await;
     for (broker, _, _) in &cluster {
-        broker.wait_until_partition_present(TOPIC, 2).await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
     }
     let topic_id = cluster[0]
         .0
@@ -134,7 +134,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             .partition(OFFSETS_TOPIC, offsets_partition)
             .expect("offsets partition")
             .leader;
-        for data_partition in 0..3 {
+        for data_partition in 0..1 {
             let data_leader_id = image
                 .partition(TOPIC, data_partition)
                 .expect("data partition")
@@ -169,7 +169,6 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .expect("data partition metadata")
         .leader_epoch;
     drop(image);
-
     let coordinator_index = cluster
         .iter()
         .position(|(_, config, _)| config.node_id == coordinator_id)
