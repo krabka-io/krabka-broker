@@ -272,12 +272,14 @@ jobs:
               else
                 # `rdeps` takes a target set, so every path here must be a
                 # target Bazel knows. A crate README is not one: no rule globs
-                # it and no crate pulls one in with `include_str!`. Feeding it
-                # to `set(...)` fails the whole query, so a documentation-only
-                # change would kill the suite selection rather than select
-                # nothing.
+                # it and no crate pulls one in with `include_str!`. Nor is a
+                # criterion bench: `[[bench]]` has no rule in //bazel/defs.bzl,
+                # so a `benches/` source belongs to no target either. Feeding
+                # such a path to `set(...)` fails the whole query, so a
+                # documentation-only or bench-only change would kill the suite
+                # selection rather than select nothing.
                 mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
-                  grep -vE '\.md$' | while read -r f; do
+                  grep -vE '\.md$|(^|/)benches/' | while read -r f; do
                   [ -e "${f}" ] && printf '%s\n' "${f}"
                 done)
                 if [ "${#files[@]}" -eq 0 ]; then
