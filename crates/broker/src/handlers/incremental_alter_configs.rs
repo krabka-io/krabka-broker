@@ -114,7 +114,8 @@ async fn process_resource(
     // Per-resource authorization based on resource_type.
     // Topic (2) → AlterConfigs on Topic(resource_name) → TOPIC_AUTHORIZATION_FAILED on Deny.
     // Broker (4) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED on Deny.
-    // Other resource types are unsupported (INVALID_RESOURCE_TYPE) — checked after ACL.
+    // Other resource types are unsupported; Kafka assigns no distinct code for
+    // that, so they get INVALID_REQUEST — checked after ACL.
     let acl_result = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
             image,
@@ -147,7 +148,7 @@ async fn process_resource(
             },
         ),
         _ => {
-            out.error_code = codes::INVALID_RESOURCE_TYPE;
+            out.error_code = codes::INVALID_REQUEST;
             out.error_message = Some(format!(
                 "resource_type={} not supported",
                 resource.resource_type
@@ -203,7 +204,7 @@ async fn process_resource(
         _ => {
             // Already handled by the ACL match above (unreachable), but be
             // explicit for exhaustiveness.
-            out.error_code = codes::INVALID_RESOURCE_TYPE;
+            out.error_code = codes::INVALID_REQUEST;
             out.error_message = Some(format!(
                 "resource_type={} not supported",
                 resource.resource_type
