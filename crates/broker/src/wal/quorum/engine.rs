@@ -201,13 +201,20 @@ impl WalShardEngine {
     }
 
     fn record_observability(&self) {
-        let Some((shard, metrics)) = self.observability.get() else {
-            return;
-        };
         let Some(source) = self.replicas.first() else {
             return;
         };
-        let leader_end = source.log.lock().log_end_offset();
+        let (log_start, leader_end) = {
+            let log = source.log.lock();
+            (log.log_start_offset(), log.log_end_offset())
+        };
+        self.record_observability_at(log_start, leader_end);
+    }
+
+    fn record_observability_at(&self, log_start: Offset, leader_end: Offset) {
+        let Some((shard, metrics)) = self.observability.get() else {
+            return;
+        };
         let distributed = self
             .distributed
             .lock()
@@ -218,7 +225,6 @@ impl WalShardEngine {
                 shard.partition,
                 self.durable_watermark().0,
             );
-            let log_start = source.log.lock().log_start_offset();
             metrics.initialize_diskless_wal_flusher_metrics(
                 shard.topic_id,
                 shard.partition,

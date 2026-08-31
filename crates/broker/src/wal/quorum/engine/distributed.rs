@@ -181,14 +181,14 @@ impl WalShardEngine {
         if durable <= current {
             drop(distributed);
             if offset_changed {
-                self.record_observability();
+                self.record_observability_at(log_start, leader_end);
             }
             return false;
         }
         self.durable_watermark.store(durable.0, Ordering::Release);
         drop(distributed);
         self.durable_advanced.notify_waiters();
-        self.record_observability();
+        self.record_observability_at(log_start, leader_end);
         true
     }
 }
