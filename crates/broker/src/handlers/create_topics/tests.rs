@@ -477,6 +477,24 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
     broker_handle.shutdown().await;
 }
 
+#[test]
+fn diskless_wal_validation_uses_the_local_registration_fallback() {
+    let dir = tempfile::TempDir::new().expect("log dir");
+    let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.rack = Some("rack-a".into());
+    config.diskless_wal_local_replica_count = 1;
+
+    assert!(
+        diskless_wal_placement_error(
+            &krabka_metadata::MetadataImage::default(),
+            &config,
+            0,
+            &[vec![config.node_id]],
+        )
+        .is_none()
+    );
+}
+
 #[tokio::test]
 async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
