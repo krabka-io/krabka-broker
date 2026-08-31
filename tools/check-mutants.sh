@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-package="${1:?usage: check-mutants.sh PACKAGE}"
+target="${1:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
+shard_index="${2:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
+shard_count="${3:?usage: check-mutants.sh TARGET SHARD_INDEX SHARD_COUNT}"
 
-# Build cargo-mutants from the repository's pinned tools/mutants/Cargo.lock,
-# then let Cargo run every unit and integration test belonging to the package.
-exec bazel run @mutants//:cargo-mutants__cargo-mutants -- \
-  mutants --package "${package}" --test-tool cargo --jobs 4
+# The pinned rules_rs_mutants runner reads Bazel's standard test-sharding
+# variables even when launched with `bazel run`.
+export TEST_SHARD_INDEX="${shard_index}"
+export TEST_TOTAL_SHARDS="${shard_count}"
+exec bazel run --test_sharding_strategy=disabled "${target}"

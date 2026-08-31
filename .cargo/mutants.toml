@@ -1,8 +1,8 @@
 # cargo-mutants configuration — https://mutants.rs
 #
 # Read by local cargo-mutants and by Bazel through the label flag in `.bazelrc`.
-# The CI sweep runs each workspace package without a survivor baseline, so any
-# missed mutant fails its package job.
+# The manually triggered Bazel sweep has no survivor baseline, so any missed
+# mutant fails its shard.
 
 test_tool = "nextest"
 profile = "mutants"
