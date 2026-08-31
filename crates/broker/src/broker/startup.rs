@@ -110,6 +110,7 @@ impl Broker {
             ktls_enabled,
             inter_broker_client,
         } = prepare_startup_transport(&config).await?;
+        let metrics = crate::metrics::BrokerMetrics::new();
         let diskless_runtime = DisklessRuntime::new(
             config.node_id,
             config.inter_broker_principal_node_ids.clone(),
@@ -118,6 +119,7 @@ impl Broker {
                 .bytes_u64()
                 .try_into()
                 .unwrap_or(usize::MAX),
+            metrics.clone(),
         );
 
         // 1. Bring up the metadata quorum BEFORE the client listener so
@@ -195,7 +197,6 @@ impl Broker {
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
         // start first. BrokerMetrics clones cheaply.
-        let metrics = crate::metrics::BrokerMetrics::new();
         let CoordinatorStartup {
             txn_coordinator,
             barrier_coordinator,
