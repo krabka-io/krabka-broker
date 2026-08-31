@@ -1,0 +1,323 @@
+//! KIP-112 / KIP-858 `offlineReplicas` reporting.
+//!
+//! `kafka-topics --describe --unavailable-partitions` and
+//! `--under-replicated-partitions`, Cruise Control and every `AdminClient`
+//! dashboard read `offlineReplicas` off `Metadata` and
+//! `DescribeTopicPartitions`. This suite boots a single broker over two log
+//! dirs, spreads a topic across both, flips one dir offline through the
+//! log-dir registry, and asserts that the whole partition row of both
+//! responses names the replica on the dead disk — and that a partition on the
+//! surviving disk still reports none.
+
+use std::{collections::HashSet, io, net::SocketAddr, time::Duration};
+
+use assert2::assert;
+use bytes::{Buf, BufMut, BytesMut};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_response::CreateTopicsResponse,
+        describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
+        describe_topic_partitions_response::{
+            DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
+        },
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        metadata_response::{MetadataResponse, MetadataResponsePartition},
+    },
+};
+use tempfile::TempDir;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
+
+const CLIENT_ID: &str = "krabka-offline-replicas-test";
+const TOPIC: &str = "kip112-offline-replicas";
+/// Six partitions spread across both dirs under the least-loaded placement
+/// algorithm; `jbod.rs` relies on the same premise.
+const PARTITIONS: i32 = 6;
+const BROKER_ID: i32 = 1;
+const METADATA_VERSION: i16 = 12;
+const DESCRIBE_TOPIC_PARTITIONS_VERSION: i16 = 0;
+/// The heartbeat that carries the offline dir to the controller runs every
+/// 200 ms under `BrokerConfig::for_tests`.
+const CONVERGE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Raw wire round trip: frames a request, reads the response and strips the
+/// correlation-id plus tagged-fields response-header prefix. Every api this
+/// suite drives is flexible at the version it uses.
+async fn round_trip(
+    stream: &mut TcpStream,
+    api_key: i16,
+    api_version: i16,
+    body: &[u8],
+) -> Result<Vec<u8>, io::Error> {
+    let mut frame = BytesMut::with_capacity(16 + body.len());
+    frame.put_i16(api_key);
+    frame.put_i16(api_version);
+    frame.put_i32(1); // correlation id
+    frame.put_i16(i16::try_from(CLIENT_ID.len()).unwrap());
+    frame.put_slice(CLIENT_ID.as_bytes());
+    frame.put_u8(0); // header tagged-fields (flexible APIs)
+    frame.put_slice(body);
+
+    stream
+        .write_u32(u32::try_from(frame.len()).unwrap())
+        .await?;
+    stream.write_all(&frame).await?;
+    stream.flush().await?;
+
+    let resp_len = stream.read_u32().await?;
+    let mut resp = vec![0u8; resp_len as usize];
+    stream.read_exact(&mut resp).await?;
+
+    let mut cur = &resp[..];
+    let _corr = cur.get_i32();
+    let _tagged = cur.get_u8();
+    Ok(cur.to_vec())
+}
+
+/// Boots one broker over `primary` + `extra`.
+///
+/// The address is reserved before the boot and advertised verbatim, because
+/// this suite depends on the broker reaching *itself* over the inter-broker
+/// path: the replicator supervisor's `AssignReplicasToDirs` report and the
+/// heartbeat that carries the offline dir both dial the controller leader at
+/// the endpoint its registration advertises. The `for_tests` default
+/// advertises `127.0.0.1:0`, which no one can connect to.
+async fn start_two_dir_broker() -> (BrokerHandle, TempDir, TempDir, SocketAddr) {
+    let primary = tempfile::tempdir().unwrap();
+    let extra = tempfile::tempdir().unwrap();
+    // Hold the listeners until `start_with_listeners` adopts them, so a
+    // concurrently running test binary cannot steal the port in between.
+    let data_plane = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = data_plane.local_addr().unwrap();
+    let controller_addr = controller.local_addr().unwrap();
+    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
+    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    cfg.listen_addr = addr;
+    cfg.advertised_listener = addr.to_string();
+    cfg.controller_listen_addr = controller_addr;
+    cfg.controller_quorum_voters = vec![(cfg.node_id, controller_addr.to_string())];
+    let handle = Broker::start_with_listeners(cfg, Some(controller), [data_plane])
+        .await
+        .expect("broker start");
+    (handle, primary, extra, addr)
+}
+
+async fn create_topic(addr: SocketAddr) {
+    const VERSION: i16 = 7;
+    let req = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: TOPIC.to_string(),
+            num_partitions: PARTITIONS,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut body = BytesMut::new();
+    req.encode(&mut body, VERSION).unwrap();
+    let resp_bytes = round_trip(&mut stream, 19, VERSION, &body).await.unwrap();
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = CreateTopicsResponse::decode(&mut cur, VERSION).unwrap();
+    assert!(resp.topics[0].error_code == 0, "CreateTopics must succeed");
+}
+
+async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition> {
+    let req = MetadataRequest {
+        topics: Some(vec![MetadataRequestTopic {
+            name: Some(TOPIC.to_string()),
+            ..Default::default()
+        }]),
+        allow_auto_topic_creation: false,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, METADATA_VERSION).unwrap();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let resp_bytes = round_trip(&mut stream, 3, METADATA_VERSION, &body)
+        .await
+        .unwrap();
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = MetadataResponse::decode(&mut cur, METADATA_VERSION).unwrap();
+    let topic = resp
+        .topics
+        .into_iter()
+        .find(|t| t.name.as_deref() == Some(TOPIC))
+        .expect("topic row in Metadata response");
+    assert!(topic.error_code == 0);
+    let mut partitions = topic.partitions;
+    partitions.sort_by_key(|p| p.partition_index);
+    partitions
+}
+
+async fn describe_topic_partitions(
+    addr: SocketAddr,
+) -> Vec<DescribeTopicPartitionsResponsePartition> {
+    let req = DescribeTopicPartitionsRequest {
+        topics: vec![TopicRequest {
+            name: TOPIC.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    req.encode(&mut body, DESCRIBE_TOPIC_PARTITIONS_VERSION)
+        .unwrap();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let resp_bytes = round_trip(&mut stream, 75, DESCRIBE_TOPIC_PARTITIONS_VERSION, &body)
+        .await
+        .unwrap();
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = DescribeTopicPartitionsResponse::decode(&mut cur, DESCRIBE_TOPIC_PARTITIONS_VERSION)
+        .unwrap();
+    let topic = resp
+        .topics
+        .into_iter()
+        .find(|t| t.name.as_deref() == Some(TOPIC))
+        .expect("topic row in DescribeTopicPartitions response");
+    assert!(topic.error_code == 0);
+    let mut partitions = topic.partitions;
+    partitions.sort_by_key(|p| p.partition_index);
+    partitions
+}
+
+/// Polls `condition` against the live controller image until it holds.
+async fn wait_for_image(
+    handle: &BrokerHandle,
+    what: &str,
+    condition: impl Fn(&krabka_metadata::MetadataImage) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + CONVERGE_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if condition(&handle.controller_image_for_test()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("controller image never converged: {what}");
+}
+
+/// The partition indices of `TOPIC` whose replica sits on `directory`.
+fn partitions_on_dir(handle: &BrokerHandle, directory: uuid::Uuid) -> Vec<i32> {
+    let image = handle.controller_image_for_test();
+    let mut indices: Vec<i32> = image
+        .partitions_of(TOPIC)
+        .filter(|p| p.directories.first() == Some(&directory))
+        .map(|p| p.partition)
+        .collect();
+    indices.sort_unstable();
+    indices
+}
+
+fn leader_epoch(handle: &BrokerHandle, partition: i32) -> i32 {
+    handle
+        .controller_image_for_test()
+        .partition(TOPIC, partition)
+        .expect("partition in image")
+        .leader_epoch
+        .0
+}
+
+#[tokio::test]
+async fn offline_log_dir_is_reported_as_an_offline_replica() {
+    let (handle, primary, extra, addr) = start_two_dir_broker().await;
+    handle.wait_until_controller_leader().await;
+    create_topic(addr).await;
+    for partition in 0..PARTITIONS {
+        handle.wait_until_partition_present(TOPIC, partition).await;
+    }
+
+    // The replicator supervisor reports every local replica's owning dir with
+    // `AssignReplicasToDirs`; until it has, `directories` holds the unassigned
+    // sentinel and no replica can be attributed to a disk.
+    wait_for_image(&handle, "all replica directories assigned", |image| {
+        image
+            .partitions_of(TOPIC)
+            .filter(|p| p.directories.first().is_some_and(|d| !d.is_nil()))
+            .count()
+            == usize::try_from(PARTITIONS).unwrap()
+    })
+    .await;
+
+    let ids = krabka_broker::log_dir_id::LogDirIds::resolve(&[
+        primary.path().to_path_buf(),
+        extra.path().to_path_buf(),
+    ]);
+    let extra_id = ids.id_for(extra.path()).expect("extra dir id");
+    let primary_id = ids.id_for(primary.path()).expect("primary dir id");
+
+    let doomed = partitions_on_dir(&handle, extra_id);
+    let survivors = partitions_on_dir(&handle, primary_id);
+    assert!(
+        !doomed.is_empty() && !survivors.is_empty(),
+        "test premise: JBOD placement must spread {TOPIC} across both dirs \
+         (primary={survivors:?} extra={doomed:?})"
+    );
+
+    // Flip only the extra dir offline: the primary stays online, so the broker
+    // does not take the all-dirs-offline self-shutdown path.
+    assert!(
+        handle.test_mark_log_dir_offline(extra.path()),
+        "mark_offline must return true (dir was registered and online)"
+    );
+
+    // The heartbeat carries the offline dir to the controller, which retires
+    // it from the broker registration's online set.
+    wait_for_image(&handle, "offline dir retired from registration", |image| {
+        image
+            .broker(krabka_raft::NodeId(u64::try_from(BROKER_ID).unwrap()))
+            .is_some_and(|b| b.log_dirs == vec![primary_id])
+    })
+    .await;
+
+    let expected_offline: HashSet<i32> = doomed.iter().copied().collect();
+
+    let metadata = metadata_partitions(addr).await;
+    let expected_metadata: Vec<MetadataResponsePartition> = (0..PARTITIONS)
+        .map(|partition| MetadataResponsePartition {
+            error_code: 0,
+            partition_index: partition,
+            leader_id: BROKER_ID,
+            leader_epoch: leader_epoch(&handle, partition),
+            replica_nodes: vec![BROKER_ID],
+            isr_nodes: vec![BROKER_ID],
+            offline_replicas: if expected_offline.contains(&partition) {
+                vec![BROKER_ID]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        })
+        .collect();
+    assert!(metadata == expected_metadata);
+
+    let described = describe_topic_partitions(addr).await;
+    let expected_described: Vec<DescribeTopicPartitionsResponsePartition> = (0..PARTITIONS)
+        .map(|partition| DescribeTopicPartitionsResponsePartition {
+            error_code: 0,
+            partition_index: partition,
+            leader_id: BROKER_ID,
+            leader_epoch: leader_epoch(&handle, partition),
+            replica_nodes: vec![BROKER_ID],
+            isr_nodes: vec![BROKER_ID],
+            eligible_leader_replicas: Some(vec![]),
+            last_known_elr: Some(vec![]),
+            offline_replicas: if expected_offline.contains(&partition) {
+                vec![BROKER_ID]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        })
+        .collect();
+    assert!(described == expected_described);
+
+    handle.shutdown().await;
+}
