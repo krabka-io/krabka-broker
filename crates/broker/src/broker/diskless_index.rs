@@ -47,6 +47,7 @@ pub(super) struct DisklessFlusherStartup {
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
     pub(super) node_id: krabka_metadata::NodeId,
     pub(super) broker_id: i32,
+    pub(super) metrics: crate::metrics::BrokerMetrics,
     pub(super) flush_config: crate::diskless::flusher::FlushConfig,
     pub(super) ready: Arc<AtomicBool>,
 }
@@ -126,6 +127,7 @@ async fn bootstrap_from_source(
                         index_log,
                         node_id: flusher.node_id,
                         broker_id: flusher.broker_id,
+                        metrics: flusher.metrics.clone(),
                         ready: Arc::clone(&flusher.ready),
                     },
                     flusher.flush_config.clone(),
@@ -171,6 +173,7 @@ mod tests {
             object_store: Arc::new(object_store::memory::InMemory::new()),
             node_id: krabka_raft::NodeId(7),
             broker_id: 1,
+            metrics: crate::metrics::BrokerMetrics::new(),
             flush_config: crate::diskless::flusher::FlushConfig {
                 interval: std::time::Duration::from_millis(1),
                 index_projection_timeout: std::time::Duration::from_millis(50),
@@ -325,6 +328,7 @@ mod tests {
             object_store: Arc::new(object_store::memory::InMemory::new()),
             node_id: krabka_raft::NodeId(7),
             broker_id: 1,
+            metrics: crate::metrics::BrokerMetrics::new(),
             flush_config: crate::diskless::flusher::FlushConfig::default(),
             ready: Arc::new(AtomicBool::new(false)),
         };
