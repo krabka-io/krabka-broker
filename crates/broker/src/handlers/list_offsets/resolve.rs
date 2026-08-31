@@ -12,7 +12,10 @@
 //! `current_leader_epoch` against the live one, so a consumer holding stale
 //! metadata is told to refresh rather than handed an offset resolved against a
 //! leader it no longer believes in -- and then refused by the very next Fetch,
-//! which applies the same comparison.
+//! which applies the same comparison. The two APIs share the comparison but
+//! not the sentinel that skips it: only `-1` means "no epoch asserted" here,
+//! whereas Fetch reads every negative epoch that way. See
+//! `Partition::list_offsets_leader_epoch_fence`.
 
 use std::time::Duration;
 
@@ -61,7 +64,9 @@ pub(super) async fn resolve_partition(
     };
     // KIP-320. The `current_leader_epoch` field decodes from v4 up and holds
     // the `-1` sentinel below it, so a v1-v3 request never trips the fence.
-    if let Some((error_code, _)) = partition.leader_epoch_fence(request.current_leader_epoch) {
+    if let Some((error_code, _)) =
+        partition.list_offsets_leader_epoch_fence(request.current_leader_epoch)
+    {
         return error_response(index, error_code);
     }
     let (local_start, local_end, local_log_start, log_config) = {
@@ -280,12 +285,7 @@ mod tests {
             .produce_records_for_test(TOPIC, 0, RECORDS)
             .await
             .expect("produce");
-        broker
-            .broker_arc_for_test()
-            .partitions
-            .get(TOPIC, krabka_ids::PartitionIndex(0))
-            .expect("partition")
-            .test_set_leader_epoch(CURRENT_EPOCH);
+        broker.test_set_leader_epoch(TOPIC, 0, CURRENT_EPOCH);
 
         let resolved = ListOffsetsPartitionResponse {
             partition_index: 0,
@@ -320,6 +320,16 @@ mod tests {
                 fenced(codes::UNKNOWN_LEADER_EPOCH),
             ),
             ("the unknown-epoch sentinel", UNKNOWN_EPOCH, resolved),
+            // Kafka's `RequestUtils.getLeaderEpoch` reads only `-1` as "no
+            // epoch asserted", so a `ListOffsets` row carrying any other
+            // negative epoch is compared and fenced. Fetch does not: its
+            // `FetchRequest.optionalEpoch` reads every negative epoch that
+            // way. Confirmed on apache/kafka:4.3.1.
+            (
+                "a negative epoch that is not the sentinel",
+                UNKNOWN_EPOCH - 1,
+                fenced(codes::FENCED_LEADER_EPOCH),
+            ),
         ];
         for (name, request_epoch, expected) in cases {
             assert!(

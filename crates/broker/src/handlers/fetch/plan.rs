@@ -136,7 +136,7 @@ pub(super) fn apply_epoch_checks(
     output: &mut PartitionData,
 ) -> bool {
     if let Some((error_code, current_epoch)) =
-        partition.leader_epoch_fence(request.current_leader_epoch)
+        partition.fetch_leader_epoch_fence(request.current_leader_epoch)
     {
         output.error_code = error_code;
         output.current_leader = LeaderIdAndEpoch {
