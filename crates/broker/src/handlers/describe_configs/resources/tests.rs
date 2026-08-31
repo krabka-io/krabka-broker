@@ -162,8 +162,11 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".to_owned(),
                 configs: vec![
-                    // Set on the topic, so no cluster default and no chain
-                    // below it: krabka reads no broker-level `log.retention.ms`.
+                    // Set nowhere, and krabka reads no broker-level
+                    // `log.cleanup.policy`, so the key reports its built-in
+                    // default under an empty chain. `apache/kafka:4.3.1`
+                    // answers that same shape for a topic key it names no
+                    // broker config for, such as `remote.storage.enable`.
                     DescribeConfigsResourceResult {
                         name: config_keys::CLEANUP_POLICY.to_owned(),
                         value: Some("delete".to_owned()),
@@ -414,6 +417,159 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
 }
 
 #[test]
+fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
+    // An empty resource name is Kafka's cluster-wide default broker
+    // resource. It holds no per-node layer, and no node runs it, so the
+    // static `node.id` entry a numeric name carries has no place in it.
+    let image = image_with_broker_config(
+        DEFAULT_BROKER_CONFIG_NODE_ID,
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    let result = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
+
+    assert!(
+        result.configs
+            == vec![DescribeConfigsResourceResult {
+                name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_owned(),
+                value: Some("1024".to_owned()),
+                read_only: false,
+                config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                is_sensitive: false,
+                synonyms: vec![synonym(
+                    crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                    "1024",
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
+                )],
+                config_type: ConfigType::Long.wire(),
+                documentation: Some(
+                    registry::lookup(
+                        ConfigScope::Broker,
+                        crate::throttle::LEADER_THROTTLED_RATE_KEY
+                    )
+                    .expect("leader.replication.throttled.rate")
+                    .doc
+                    .to_owned()
+                ),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }]
+    );
+}
+
+#[test]
+fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
+    // `node.id` never reaches the metadata image, so a node with no dynamic
+    // override at all is the case where the static layer is the whole
+    // response. `apache/kafka:4.3.1` answers `node.id` the same way: value
+    // from the static configuration, `STATIC_BROKER_CONFIG`, read-only.
+    let result = describe(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "7",
+        None,
+        VALUES_ONLY,
+    );
+
+    assert!(
+        result.configs
+            == vec![DescribeConfigsResourceResult {
+                name: NODE_ID.to_owned(),
+                value: Some("7".to_owned()),
+                read_only: true,
+                config_source: CONFIG_SOURCE_STATIC_BROKER,
+                is_sensitive: false,
+                // The request asked for neither, so the entry carries
+                // neither, even though the registry has both.
+                synonyms: Vec::new(),
+                config_type: ConfigType::Int.wire(),
+                documentation: None,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }]
+    );
+}
+
+#[test]
+fn the_key_filter_decides_what_a_broker_resource_reports() {
+    let image = image_with_broker_config(
+        krabka_metadata::NodeId(2),
+        &[
+            (crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024"),
+            (crate::throttle::FOLLOWER_THROTTLED_RATE_KEY, "512"),
+        ],
+    );
+
+    for (label, filter, expected) in [
+        (
+            "no filter reports every stored key beside the static node id",
+            None,
+            vec![
+                crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+                crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                NODE_ID,
+            ],
+        ),
+        (
+            "a filter narrows the response to the keys it names",
+            Some(vec![crate::throttle::LEADER_THROTTLED_RATE_KEY]),
+            vec![crate::throttle::LEADER_THROTTLED_RATE_KEY],
+        ),
+        (
+            "a filter that names no key this broker holds reports nothing",
+            Some(vec!["no.such.key"]),
+            Vec::new(),
+        ),
+    ] {
+        let configuration_keys =
+            filter.map(|keys| keys.iter().map(|key| (*key).to_owned()).collect());
+        let result = describe(
+            &image,
+            RESOURCE_TYPE_BROKER,
+            "2",
+            configuration_keys,
+            VALUES_ONLY,
+        );
+        let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+
+        check!(names == expected, "{label}");
+    }
+}
+
+#[test]
+fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
+    // The registry's own hazard: a stored key with no row is a key the
+    // entry builder must not disclose, so it would come back null. Every
+    // key the alter path accepts therefore has to have a row, and the
+    // read-only rows are exactly the ones the alter path refuses.
+    use crate::handlers::incremental_alter_configs::is_known_broker_config;
+
+    for row in registry::keys_in(ConfigScope::Broker) {
+        check!(
+            is_known_broker_config(row.name) == !row.read_only,
+            "{} is alterable={} but read_only={}",
+            row.name,
+            is_known_broker_config(row.name),
+            row.read_only
+        );
+        if row.read_only {
+            continue;
+        }
+        let image = image_with_broker_config(krabka_metadata::NodeId(1), &[(row.name, "1")]);
+        let result = describe(
+            &image,
+            RESOURCE_TYPE_BROKER,
+            "1",
+            Some(vec![row.name.to_owned()]),
+            VALUES_ONLY,
+        );
+        let entry = entry_named(&result, row.name);
+
+        check!(entry.value == Some("1".to_owned()), "{}", row.name);
+        check!(!entry.is_sensitive, "{}", row.name);
+        check!(entry.config_type == row.config_type.wire(), "{}", row.name);
+    }
+}
+
+#[test]
 fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
     // The registry and `is_controller_managed_broker_config` have to agree:
     // the alter paths refuse the key by the second, and `kafka-configs` must
@@ -528,6 +684,36 @@ fn a_group_reports_its_override_above_the_streams_default() {
                 synonym(KEY_NUM_STANDBY_REPLICAS, &fallback, CONFIG_SOURCE_DEFAULT),
             ]
     );
+}
+
+#[test]
+fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
+    // The same hazard as the broker resource, over the two key sets the
+    // broker itself supplies: `StreamsGroupConfig` decides which group keys
+    // a response holds, and a key it names that the registry does not would
+    // come back untyped and with no value at all.
+    let image = MetadataImage::new(Uuid::nil());
+    let group = describe(&image, RESOURCE_TYPE_GROUP, "streams-1", None, EVERYTHING);
+    let subscription = describe(
+        &image,
+        RESOURCE_TYPE_CLIENT_METRICS,
+        "sub-1",
+        None,
+        EVERYTHING,
+    );
+
+    let defaults = crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
+        .group_config_values();
+    let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
+    let expected: Vec<&str> = defaults.keys().map(String::as_str).collect();
+
+    check!(reported == expected);
+    for entry in group.configs.iter().chain(&subscription.configs) {
+        check!(entry.config_type != 0i8, "{} is untyped", entry.name);
+        check!(!entry.is_sensitive, "{} is withheld", entry.name);
+        check!(entry.value.is_some(), "{} has no value", entry.name);
+        check!(entry.documentation.is_some(), "{} has no doc", entry.name);
+    }
 }
 
 #[test]
