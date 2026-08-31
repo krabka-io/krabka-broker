@@ -20,6 +20,19 @@ use crate::{broker::Broker, codes, error::BrokerError};
 
 type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
+/// Read every planned partition once, then long-poll and read them all again
+/// if the fetch did not reach `min_bytes`.
+///
+/// The loop is sequential, so the cost of getting one partition's blocking
+/// read off the reactor is paid once per partition before any bytes go out: a
+/// consumer subscribed to 200 partitions pays it 200 times. `do_read` makes
+/// that hand-off with `block_in_place` rather than a `spawn_blocking` per
+/// partition, which `bench_fetch_handoff` measured at a tenth of the cost;
+/// [`super::read::run_blocking_read`] carries the numbers and the trade.
+///
+/// The per-partition step stays a step, because the remote-tier and diskless
+/// fallbacks a partition falls through to are async and cannot run inside one
+/// blocking closure covering the whole pending set.
 pub(super) async fn execute_pending_reads(
     broker: &Broker,
     mut pending: Vec<PendingRead>,

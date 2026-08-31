@@ -2,7 +2,10 @@
 //! mutex, the blocking seek-and-read that serves it, and the response
 //! fields the served bytes fill in.
 
-use std::sync::Arc;
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{Arc, Mutex},
+};
 
 use krabka_log::{Log, Offset};
 use krabka_protocol::{
@@ -10,6 +13,7 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
+use tokio::runtime::{Handle, RuntimeFlavor};
 
 use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window};
 use crate::{codes, error::BrokerError, partition::Partition};
@@ -123,110 +127,19 @@ pub(super) async fn do_read(
             read_committed_aborts,
         } => {
             let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
-            // Run the blocking seek+read (and, for read_committed, the
-            // aborted-txn index scan) off the reactor thread. The lock is
-            // re-acquired inside the closure for the brief duration of the
-            // syscalls.
-            let log = part.log.clone();
-            let join = tokio::task::spawn_blocking(move || {
-                let log = log.lock().expect("log mutex poisoned");
-
-                // Zero-copy (Increments D + E): on a plaintext connection
-                // (SENDFILE alias: Linux + Apple + FreeBSD/DragonFly), describe
-                // the records run with a cheap header-only walk (`read_raw_desc`)
-                // instead of `pread`ing the payload. If the run is large enough
-                // to amortize the sendfile syscall, return file-backed regions
-                // for the `sendfile` drain; otherwise fall back to the byte-copy
-                // `read_raw` path (small/fragmented fetches stay on the vectored
-                // path). The descriptor is captured here under the log lock so
-                // retention can't truncate the region out from under the later
-                // async send (the `Arc<File>` pins the inode).
-                #[cfg(any(
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "tvos",
-                    target_os = "watchos",
-                    target_os = "freebsd",
-                    target_os = "dragonfly",
-                ))]
-                let records: RecordsPayload = {
-                    let mut chosen: Option<RecordsPayload> = None;
-                    // READ_COMMITTED responses also carry aborted-transaction
-                    // metadata and are consumed by ordinary Kafka clients as one
-                    // framed response. Keep those on the raw-byte encoder; the
-                    // file-region writer can otherwise detach the records payload
-                    // from the metadata frame and leave a fresh stable-topic reader
-                    // with HW/LSO but no decoded batches.
-                    if sendfile_capable && !read_committed_aborts {
-                        let desc = log.read_raw_desc(fetch_offset, limit_offset, read_max)?;
-                        if should_use_sendfile(
-                            desc.total,
-                            !desc.regions.is_empty(),
-                            sendfile_min_bytes,
-                        ) {
-                            chosen = Some(RecordsPayload::FileRegions(desc.regions));
-                        }
-                    }
-                    match chosen {
-                        Some(p) => p,
-                        None => RecordsPayload::Raw(
-                            log.read_raw(fetch_offset, limit_offset, read_max)?.bytes,
-                        ),
-                    }
-                };
-                // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
-                // `read_raw` + copy (the Increment C vectored path drains it).
-                #[cfg(not(any(
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "tvos",
-                    target_os = "watchos",
-                    target_os = "freebsd",
-                    target_os = "dragonfly",
-                )))]
-                let records: RecordsPayload = {
-                    // Both sendfile inputs are consumed only by the platform
-                    // branch above, so discard them here or `-D warnings` fails
-                    // the build on this target.
-                    let _ = (sendfile_capable, sendfile_min_bytes);
-                    RecordsPayload::Raw(log.read_raw(fetch_offset, limit_offset, read_max)?.bytes)
-                };
-
-                // read_committed does NO server-side batch filtering: verbatim
-                // bytes (including aborted/control batches) are returned and the
-                // consumer drops them client-side via `aborted_transactions`,
-                // matching Apache Kafka's behavior. Skip the Vec allocation
-                // entirely when there are no aborted txns in range.
-                let aborted = if read_committed_aborts {
-                    let mut it = log
-                        .aborted_in_range(fetch_offset, effective_lso)
-                        .into_iter();
-                    if let Some(first) = it.next() {
-                        let mut v = vec![AbortedTransaction {
-                            // Unwrap the log-layer `ProducerId` into the wire `i64` field.
-                            producer_id: first.producer_id.get(),
-                            // Unwrap the log-layer `Offset` into the wire `i64` field.
-                            first_offset: first.start_offset.0,
-                            ..Default::default()
-                        }];
-                        v.extend(it.map(|e| AbortedTransaction {
-                            producer_id: e.producer_id.get(),
-                            first_offset: e.start_offset.0,
-                            ..Default::default()
-                        }));
-                        v
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                };
-
-                Ok::<_, BrokerError>((records, aborted))
-            });
-            await_blocking_read(join).await?
+            run_blocking_read(
+                &part.log,
+                &BlockingRead {
+                    fetch_offset,
+                    limit_offset,
+                    effective_lso,
+                    read_max,
+                    read_committed_aborts,
+                    sendfile_capable,
+                    sendfile_min_bytes,
+                },
+            )
+            .await?
         }
     };
 
@@ -241,16 +154,182 @@ pub(super) async fn do_read(
     ))
 }
 
-async fn await_blocking_read(
-    join: tokio::task::JoinHandle<Result<(RecordsPayload, Vec<AbortedTransaction>), BrokerError>>,
+/// Everything the blocking half of one partition's read needs, decided by
+/// `plan_read` while it held the log mutex and carried across the point where
+/// that mutex was released.
+struct BlockingRead {
+    fetch_offset: Offset,
+    limit_offset: Offset,
+    effective_lso: Offset,
+    read_max: ByteSize,
+    read_committed_aborts: bool,
+    sendfile_capable: bool,
+    sendfile_min_bytes: usize,
+}
+
+/// Run the blocking seek-and-read away from normal async polling.
+///
+/// A fetch reads its partitions one after another, so whatever this hand-off
+/// costs, a consumer subscribed to 200 partitions pays 200 times before a
+/// single byte goes out. `bench_fetch_handoff` priced the three ways of making
+/// it (microseconds per fetch, one 1 KiB record per partition, fastest of five
+/// runs):
+///
+/// | partitions | per-partition `spawn_blocking` | one batched `spawn_blocking` | `block_in_place` |
+/// |-----------:|-------------------------------:|-----------------------------:|-----------------:|
+/// |          1 |                            7.9 |                          8.0 |              0.8 |
+/// |         16 |                          184.8 |                         24.1 |             11.8 |
+/// |        200 |                         1622.7 |                        135.2 |            149.0 |
+///
+/// A task allocation, a queue push, a pool wakeup and a `JoinHandle` await per
+/// partition dominate a warm read: dropping them is worth 10x at one partition
+/// and 11x at two hundred. Batching the whole pending set into one hand-off
+/// buys the same order of magnitude and no more -- it is ahead by a tenth at
+/// 200 partitions and behind everywhere narrower -- while costing the
+/// per-partition remote-tier and diskless fallbacks, which are async and
+/// cannot run inside one blocking closure. So the read side lands where the
+/// append side did in [`crate::partition_writer`]: `block_in_place`.
+///
+/// What it costs is a worker. `block_in_place` parks the one it runs on and
+/// hands that worker's other tasks to a replacement thread, so a fetch reading
+/// 200 partitions occupies a worker for the whole read rather than releasing
+/// it between partitions. The broker's `#[tokio::main]` is multi-threaded, so
+/// there is another worker to take the load. It is also flatly illegal on a
+/// current-thread runtime, where it panics rather than degrading, so the
+/// current-thread runtimes that `#[tokio::test]` builds keep the
+/// `spawn_blocking` path.
+async fn run_blocking_read(
+    log: &Arc<Mutex<Log>>,
+    read: &BlockingRead,
 ) -> Result<(Option<RecordsPayload>, Vec<AbortedTransaction>), BrokerError> {
-    let (records, aborted) = join.await.map_err(|error| {
-        BrokerError::Io(std::io::Error::other(format!(
-            "fetch read task panicked: {error}"
-        )))
-    })??;
+    let served = if Handle::current().runtime_flavor() == RuntimeFlavor::MultiThread {
+        catch_unwind(AssertUnwindSafe(|| {
+            tokio::task::block_in_place(|| read_records(log, read))
+        }))
+        .map_err(|_| read_task_panicked(&"block_in_place panic"))?
+    } else {
+        let log = Arc::clone(log);
+        let read = BlockingRead { ..*read };
+        tokio::task::spawn_blocking(move || read_records(&log, &read))
+            .await
+            .map_err(|error| read_task_panicked(&error))?
+    };
+    let (records, aborted) = served?;
     let records = (records.payload_len() > 0).then_some(records);
     Ok((records, aborted))
+}
+
+fn read_task_panicked(cause: &impl std::fmt::Display) -> BrokerError {
+    BrokerError::Io(std::io::Error::other(format!(
+        "fetch read task panicked: {cause}"
+    )))
+}
+
+/// The blocking body of one partition's read: take the log mutex, seek, and
+/// either describe or copy the records run out of it.
+fn read_records(
+    log: &Mutex<Log>,
+    read: &BlockingRead,
+) -> Result<(RecordsPayload, Vec<AbortedTransaction>), BrokerError> {
+    let &BlockingRead {
+        fetch_offset,
+        limit_offset,
+        effective_lso,
+        read_max,
+        read_committed_aborts,
+        sendfile_capable,
+        sendfile_min_bytes,
+    } = read;
+    let log = log.lock().expect("log mutex poisoned");
+
+    // Zero-copy (Increments D + E): on a plaintext connection
+    // (SENDFILE alias: Linux + Apple + FreeBSD/DragonFly), describe
+    // the records run with a cheap header-only walk (`read_raw_desc`)
+    // instead of `pread`ing the payload. If the run is large enough
+    // to amortize the sendfile syscall, return file-backed regions
+    // for the `sendfile` drain; otherwise fall back to the byte-copy
+    // `read_raw` path (small/fragmented fetches stay on the vectored
+    // path). The descriptor is captured here under the log lock so
+    // retention can't truncate the region out from under the later
+    // async send (the `Arc<File>` pins the inode).
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
+    let records: RecordsPayload = {
+        let mut chosen: Option<RecordsPayload> = None;
+        // READ_COMMITTED responses also carry aborted-transaction
+        // metadata and are consumed by ordinary Kafka clients as one
+        // framed response. Keep those on the raw-byte encoder; the
+        // file-region writer can otherwise detach the records payload
+        // from the metadata frame and leave a fresh stable-topic reader
+        // with HW/LSO but no decoded batches.
+        if sendfile_capable && !read_committed_aborts {
+            let desc = log.read_raw_desc(fetch_offset, limit_offset, read_max)?;
+            if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
+                chosen = Some(RecordsPayload::FileRegions(desc.regions));
+            }
+        }
+        match chosen {
+            Some(p) => p,
+            None => RecordsPayload::Raw(log.read_raw(fetch_offset, limit_offset, read_max)?.bytes),
+        }
+    };
+    // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
+    // `read_raw` + copy (the Increment C vectored path drains it).
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    )))]
+    let records: RecordsPayload = {
+        // Both sendfile inputs are consumed only by the platform
+        // branch above, so discard them here or `-D warnings` fails
+        // the build on this target.
+        let _ = (sendfile_capable, sendfile_min_bytes);
+        RecordsPayload::Raw(log.read_raw(fetch_offset, limit_offset, read_max)?.bytes)
+    };
+
+    // read_committed does NO server-side batch filtering: verbatim
+    // bytes (including aborted/control batches) are returned and the
+    // consumer drops them client-side via `aborted_transactions`,
+    // matching Apache Kafka's behavior. Skip the Vec allocation
+    // entirely when there are no aborted txns in range.
+    let aborted = if read_committed_aborts {
+        let mut it = log
+            .aborted_in_range(fetch_offset, effective_lso)
+            .into_iter();
+        if let Some(first) = it.next() {
+            let mut v = vec![AbortedTransaction {
+                // Unwrap the log-layer `ProducerId` into the wire `i64` field.
+                producer_id: first.producer_id.get(),
+                // Unwrap the log-layer `Offset` into the wire `i64` field.
+                first_offset: first.start_offset.0,
+                ..Default::default()
+            }];
+            v.extend(it.map(|e| AbortedTransaction {
+                producer_id: e.producer_id.get(),
+                first_offset: e.start_offset.0,
+                ..Default::default()
+            }));
+            v
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok::<_, BrokerError>((records, aborted))
 }
 
 fn finish_read(
@@ -370,9 +449,87 @@ fn should_use_sendfile(total_bytes: usize, has_regions: bool, minimum_bytes: usi
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use assert2::assert;
+    use bytes::Bytes;
     use krabka_log::{DeliveryPolicy, Log, LogConfig, Offset};
+    use krabka_protocol::records::{Record, RecordBatch, RecordsPayload};
+    use krabka_units::prelude::mebibytes;
     use qubit_clock::{Clock as _, SystemClock};
+
+    /// The read budget for the hand-off test: larger than the log it reads, so
+    /// the served bytes are the whole batch under either runtime flavor.
+    const UNBOUNDED: krabka_units::ByteSize = mebibytes(1);
+
+    /// [`super::run_blocking_read`] picks its hand-off from the runtime
+    /// flavor: `block_in_place` on the multi-threaded runtime the broker runs
+    /// on, and `spawn_blocking` on a current-thread runtime, where
+    /// `block_in_place` panics outright rather than degrading. Both arms have
+    /// to serve exactly the bytes a direct read serves.
+    #[test]
+    fn either_runtime_flavor_serves_the_same_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+        log.append(&mut RecordBatch {
+            last_offset_delta: 1,
+            records: vec![
+                Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"first")),
+                    ..Record::default()
+                },
+                Record {
+                    offset_delta: 1,
+                    value: Some(Bytes::from_static(b"second")),
+                    ..Record::default()
+                },
+            ],
+            ..RecordBatch::default()
+        })
+        .expect("append the batch under test");
+        let limit = log.log_end_offset();
+        let log = Arc::new(Mutex::new(log));
+        let read = super::BlockingRead {
+            fetch_offset: Offset(0),
+            limit_offset: limit,
+            effective_lso: limit,
+            read_max: UNBOUNDED,
+            read_committed_aborts: false,
+            sendfile_capable: false,
+            sendfile_min_bytes: 0,
+        };
+        let expected = (
+            Some(RecordsPayload::Raw(
+                log.lock()
+                    .expect("log mutex poisoned")
+                    .read_raw(Offset(0), limit, UNBOUNDED)
+                    .expect("the test log holds the range it is asked for")
+                    .bytes,
+            )),
+            Vec::new(),
+        );
+
+        let served = |runtime: tokio::runtime::Runtime| {
+            runtime
+                .block_on(super::run_blocking_read(&log, &read))
+                .expect("the blocking read succeeds")
+        };
+        let current_thread = served(
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("build a current-thread runtime"),
+        );
+        let multi_thread = served(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .build()
+                .expect("build a multi-threaded runtime"),
+        );
+
+        assert!(current_thread == expected);
+        assert!(multi_thread == expected);
+    }
 
     #[test]
     fn sendfile_eligibility_honors_nondefault_threshold() {
