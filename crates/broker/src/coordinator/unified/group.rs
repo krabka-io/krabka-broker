@@ -54,7 +54,10 @@ pub struct CoordinatorGroup {
     /// [`observe_membership`](Self::observe_membership), so no membership
     /// transition has to remember to maintain it. A group that has never had a
     /// member — the "simple consumer" that only commits offsets — is empty
-    /// from the moment its actor first runs.
+    /// from the moment its actor first runs, which is why the retention sweep
+    /// reads this stamp only for a classic group that carries a protocol type:
+    /// that is the one kind whose k2 snapshot persists the moment it emptied,
+    /// so the stamp means the same thing after a restart as before one.
     pub empty_since_ms: Option<i64>,
 }
 

@@ -46,17 +46,21 @@ impl OffsetEntry {
     ///
     /// A per-commit expiry wins outright, which is what Kafka's
     /// `OffsetExpirationConditionImpl.isOffsetExpired` does. Otherwise the
-    /// entry expires `retention_ms` after `base_timestamp_ms`, the later of
-    /// the moment the group lost its last member and the moment the offset was
-    /// committed. Taking the later of the two keeps a commit made against an
-    /// already-empty group — a simple consumer that never joins — for its full
+    /// entry expires `retention_ms` after a base timestamp, and
+    /// `empty_since_ms` says which one: it is Kafka's `currentStateTimestamp`,
+    /// so `None` falls back to the commit alone the way Kafka's
+    /// `currentStateTimestamp.orElse(commitTimestamp)` does, and a caller that
+    /// has one gets the later of it and the commit. Taking the later of the
+    /// two keeps a commit made against an already-empty group for its full
     /// retention rather than expiring it on the next sweep.
     #[must_use]
-    pub fn is_expired(&self, now_ms: i64, base_timestamp_ms: i64, retention_ms: i64) -> bool {
+    pub fn is_expired(&self, now_ms: i64, empty_since_ms: Option<i64>, retention_ms: i64) -> bool {
         if let Some(expire_timestamp_ms) = self.expire_timestamp_ms {
             return now_ms >= expire_timestamp_ms;
         }
-        let base = base_timestamp_ms.max(self.commit_timestamp_ms);
+        let base = empty_since_ms.map_or(self.commit_timestamp_ms, |empty_since_ms| {
+            empty_since_ms.max(self.commit_timestamp_ms)
+        });
         now_ms >= base.saturating_add(retention_ms)
     }
 }
@@ -84,23 +88,27 @@ mod offset_entry_tests {
         let cases = [
             // No per-commit expiry: the group emptied last, so retention runs
             // from there.
-            (0, None, 5_000, 5_999, false),
-            (0, None, 5_000, 6_000, true),
+            (0, None, Some(5_000), 5_999, false),
+            (0, None, Some(5_000), 6_000, true),
             // The commit came after the group emptied, so retention runs from
             // the commit. A fresh commit against a long-dead group survives.
-            (9_000, None, 0, 9_999, false),
-            (9_000, None, 0, 10_000, true),
+            (9_000, None, Some(0), 9_999, false),
+            (9_000, None, Some(0), 10_000, true),
+            // No group-empty clock at all: the commit alone decides, which is
+            // what Kafka does for a simple group and for a KIP-848 group.
+            (9_000, None, None, 9_999, false),
+            (9_000, None, None, 10_000, true),
             // A per-commit expiry wins outright, early...
-            (0, Some(10), 0, 9, false),
-            (0, Some(10), 0, 10, true),
+            (0, Some(10), Some(0), 9, false),
+            (0, Some(10), Some(0), 10, true),
             // ...and late, past the broker retention that would have expired it.
-            (0, Some(1_000_000), 0, 999_999, false),
+            (0, Some(1_000_000), Some(0), 999_999, false),
         ];
         for (commit_ts, expire_ts, empty_since, now, want) in cases {
             let entry = entry(commit_ts, expire_ts);
             check!(
                 entry.is_expired(now, empty_since, RETENTION_MS) == want,
-                "commit_ts={commit_ts} expire_ts={expire_ts:?} empty_since={empty_since} now={now}"
+                "commit_ts={commit_ts} expire_ts={expire_ts:?} empty_since={empty_since:?} now={now}"
             );
         }
     }

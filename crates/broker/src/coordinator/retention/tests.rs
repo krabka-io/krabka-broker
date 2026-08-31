@@ -31,7 +31,7 @@ use crate::{
         persistence::{Key, OffsetCommitValue, parse_key},
         unified::{
             actor::{GroupActorMessage, GroupKindTag},
-            classic_state::{ClassicGroup, GroupState, Member},
+            classic_state::{ClassicGroup, GroupState, Member, OffsetEntry},
             group::{CoordinatorGroup, GroupKind},
         },
     },
@@ -79,6 +79,39 @@ fn seed_group_with_member(broker: &Broker) {
             kind: GroupKind::Classic(state),
             committed_offsets: std::collections::HashMap::new(),
             empty_since_ms: None,
+        }),
+    );
+}
+
+/// Seed a group the way bootstrap replay leaves one after a restart: its
+/// committed offsets are back, its members are not, and `empty_since_ms` holds
+/// whatever moment the group's k2 snapshot carried — `None` for a group that
+/// never wrote one.
+fn seed_replayed_group(
+    broker: &Broker,
+    protocol_type: Option<&str>,
+    empty_since_ms: Option<i64>,
+    commit_timestamp_ms: i64,
+) {
+    let mut state = ClassicGroup::new(GROUP);
+    state.protocol_type = protocol_type.map(str::to_string);
+    broker.group_coordinator.seed_classic(
+        GROUP,
+        Box::new(CoordinatorGroup {
+            group_id: GROUP.into(),
+            kind: GroupKind::Classic(state),
+            committed_offsets: [(
+                (TOPIC.to_string(), 0),
+                OffsetEntry {
+                    offset: krabka_log::Offset(42),
+                    leader_epoch: -1,
+                    metadata: String::new(),
+                    commit_timestamp_ms,
+                    expire_timestamp_ms: None,
+                },
+            )]
+            .into(),
+            empty_since_ms,
         }),
     );
 }
@@ -374,4 +407,87 @@ async fn a_broker_with_no_groups_sweeps_nothing() {
     let swept = sweep(&broker.group_coordinator, |_| true, now_ms, RETENTION_MS).await;
 
     assert!(swept.is_empty());
+}
+
+/// A restart cannot restore a group-empty moment that was never written down.
+/// A simple group — one that only ever committed offsets, so it took no
+/// protocol type and wrote no k2 snapshot — measures its retention from the
+/// commit, which is what Kafka's `ClassicGroup.offsetExpirationCondition` does
+/// for it. Measuring from the moment this process happened to start the actor
+/// instead would hand the group a fresh `offsets.retention.minutes` on every
+/// restart, and a broker restarted more often than the retention would never
+/// reap it at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
+    let (broker_handle, _dir) = start().await;
+    let broker = broker_handle.broker_arc_for_test();
+    let restarted_at = crate::time_util::now_ms();
+    seed_replayed_group(&broker, None, None, restarted_at - RETENTION_MS * 10);
+
+    let swept = sweep(
+        &broker.group_coordinator,
+        |_| true,
+        restarted_at,
+        RETENTION_MS,
+    )
+    .await;
+
+    assert!(
+        swept
+            == vec![(
+                GROUP.to_string(),
+                super::ReapOutcome {
+                    reaped: vec![(TOPIC.to_string(), 0)],
+                    group_deleted: true,
+                },
+            )]
+    );
+    check!(broker.group_coordinator.find(GROUP).is_none());
+    check!(fetched_offset(&broker).await == -1);
+}
+
+/// The other half of that rule. A classic group some consumer joined carries a
+/// protocol type, and Kafka measures its retention from the moment it went
+/// empty — a moment its memberless k2 snapshot persists, so a restart does not
+/// move it. A commit far older than the retention therefore survives until the
+/// group itself has been empty that long.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_joined_group_expires_from_the_moment_it_emptied() {
+    let (broker_handle, _dir) = start().await;
+    let broker = broker_handle.broker_arc_for_test();
+    let emptied_at = crate::time_util::now_ms();
+    seed_replayed_group(
+        &broker,
+        Some("consumer"),
+        Some(emptied_at),
+        emptied_at - RETENTION_MS * 10,
+    );
+
+    let early = sweep(
+        &broker.group_coordinator,
+        |_| true,
+        emptied_at + RETENTION_MS - 1,
+        RETENTION_MS,
+    )
+    .await;
+    assert!(early.is_empty());
+    check!(fetched_offset(&broker).await == 42);
+
+    let late = sweep(
+        &broker.group_coordinator,
+        |_| true,
+        emptied_at + RETENTION_MS,
+        RETENTION_MS,
+    )
+    .await;
+    assert!(
+        late == vec![(
+            GROUP.to_string(),
+            super::ReapOutcome {
+                reaped: vec![(TOPIC.to_string(), 0)],
+                group_deleted: true,
+            },
+        )]
+    );
+    check!(fetched_offset(&broker).await == -1);
 }

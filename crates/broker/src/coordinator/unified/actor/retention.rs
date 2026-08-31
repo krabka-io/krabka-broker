@@ -15,10 +15,12 @@
 //!
 //! For an empty group each offset expires on its own clock, per
 //! [`OffsetEntry::is_expired`](crate::coordinator::unified::classic_state::OffsetEntry::is_expired):
-//! the per-commit `retention_time_ms` a v2-v4
-//! `OffsetCommit` asked for, or `offsets.retention.minutes` measured from the
-//! later of the moment the group emptied and the moment the offset was
-//! committed.
+//! the per-commit `retention_time_ms` a v2-v4 `OffsetCommit` asked for, or
+//! `offsets.retention.minutes` measured from the base
+//! [`group_empty_since_ms`] chooses — the moment the group emptied for a
+//! classic group a consumer has joined, and the commit itself for a simple
+//! group or a KIP-848 group, which is the split Kafka's
+//! `offsetExpirationCondition` makes.
 //!
 //! # What the batch carries
 //!
@@ -85,9 +87,7 @@ async fn reap_expired_offsets(
     if group.has_members() {
         return ReapOutcome::default();
     }
-    let Some(empty_since_ms) = group.empty_since_ms else {
-        return ReapOutcome::default();
-    };
+    let empty_since_ms = group_empty_since_ms(group);
     let mut expired: Vec<(String, i32)> = group
         .committed_offsets
         .iter()
@@ -128,6 +128,32 @@ async fn reap_expired_offsets(
     ReapOutcome {
         reaped: expired,
         group_deleted: delete_group,
+    }
+}
+
+/// The moment this group went empty, when that is the clock Kafka measures
+/// its retention from, and `None` when Kafka measures from each commit
+/// instead.
+///
+/// `ClassicGroup.offsetExpirationCondition` splits three ways. A classic group
+/// that carries a protocol type — one some consumer has joined — measures from
+/// `currentStateTimestamp`, the moment it went empty. A simple group, which
+/// only ever committed offsets and so never took a protocol type, measures
+/// from the commit; so does a KIP-848 group, per
+/// `ConsumerGroup.offsetExpirationCondition`.
+///
+/// Only the first of the three has a group-empty moment that survives a
+/// restart. A classic group writes the memberless k2 snapshot when its last
+/// member leaves, and replay reads `current_state_timestamp_ms` back out of
+/// it. The other two have nothing to read, so their
+/// [`empty_since_ms`](CoordinatorGroup::empty_since_ms) is only the moment
+/// this process first ran their actor — and measuring from that would hand
+/// every dead group another full `offsets.retention.minutes` on every broker
+/// restart, which is the leak this module exists to close.
+fn group_empty_since_ms(group: &CoordinatorGroup) -> Option<i64> {
+    match &group.kind {
+        GroupKind::Classic(state) if state.protocol_type.is_some() => group.empty_since_ms,
+        GroupKind::Classic(_) | GroupKind::Consumer(_) => None,
     }
 }
 
