@@ -297,17 +297,22 @@ fn response_correlation_id(frame: &BytesMut) -> i32 {
 /// which is what this pins down: the response has to beat a client timeout far
 /// shorter than the window, and the next request must go unserved until the
 /// window closes.
+///
+/// The bounds are deliberately loose. Answering the first request takes well
+/// under a millisecond, so `CLIENT_TIMEOUT` leaves two orders of magnitude of
+/// scheduling headroom on a loaded machine, and it is still four times shorter
+/// than the window the mute has to hold for.
 #[tokio::test]
 async fn throttled_connection_answers_first_and_mutes_afterwards() {
     /// The one `request_percentage` rate this test configures, as a percentage
     /// of one request-handler thread.
     const RATE: f64 = 0.0001;
     /// Stands in for a client `request.timeout.ms` well inside the window.
-    const CLIENT_TIMEOUT: Duration = Duration::from_millis(150);
+    const CLIENT_TIMEOUT: Duration = Duration::from_millis(250);
     /// Scheduling slack on the lower bound for the muted read.
     const SLACK: Duration = Duration::from_millis(50);
 
-    let mute_window = millis(600);
+    let mute_window = millis(1000);
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());

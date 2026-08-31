@@ -54,9 +54,14 @@ where
         return AfterResponse::Mute(response.throttle);
     }
     if entry.quota_policy() == crate::handlers::RequestQuotaPolicy::ApplyFallbackAccounting {
-        // A handler may already have charged a quota of its own — the KIP-599
-        // controller-mutation rate, say. Kafka mutes the channel once per
-        // request, for the longest window any quota asked for.
+        // Kafka mutes the channel once per request, for the longest window
+        // any quota asked for, so a handler-charged window is folded in with
+        // `max` rather than added. No handler reaches this branch with a
+        // window today: every `ApplyFallbackAccounting` entry is a
+        // `DispatchEntry::plain` dispatch, whose handler takes no
+        // `RequestContext` and so can charge nothing. Combining here keeps
+        // the rule in the one place that has both windows, should a
+        // context-taking api ever take fallback accounting.
         let handler_throttle = response.throttle;
         response = apply_request_quota(
             context.broker,
