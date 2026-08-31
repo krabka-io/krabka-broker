@@ -26,6 +26,7 @@ pub(super) async fn execute_pending_reads(
     min_bytes: i32,
     max_wait_ms: i32,
     sendfile_capable: bool,
+    phases: &crate::metrics::RequestPhases,
 ) -> Result<(Vec<FetchableTopicResponse>, Vec<Vec<u64>>), BrokerError> {
     let mut total_bytes = 0;
     for read in &mut pending {
@@ -51,6 +52,11 @@ pub(super) async fn execute_pending_reads(
         read.cpu_micros = read
             .cpu_micros
             .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        // The same interval, on the request's local phase. The two accounts
+        // differ in what they roll up to: `cpu_micros` is per partition and
+        // feeds the rebalancer, while the phase is per request and is the
+        // Fetch half of `request_local_duration_seconds`.
+        phases.add_local(started.elapsed());
         if read.out.error_code == codes::OFFSET_OUT_OF_RANGE {
             if let Some(remote_bytes) = try_remote_read(broker, read, &partition).await {
                 total_bytes += remote_bytes;
@@ -63,7 +69,7 @@ pub(super) async fn execute_pending_reads(
     }
     let wants_more = total_bytes < usize::try_from(min_bytes.max(0)).unwrap_or(0);
     if wants_more && max_wait_ms > 0 {
-        long_poll_then_reread(broker, &mut pending, max_wait_ms, sendfile_capable).await?;
+        long_poll_then_reread(broker, &mut pending, max_wait_ms, sendfile_capable, phases).await?;
     }
     Ok(group_into_topic_responses(pending))
 }
@@ -83,6 +89,7 @@ async fn long_poll_then_reread(
     pending: &mut [PendingRead],
     max_wait_ms: i32,
     sendfile_capable: bool,
+    phases: &crate::metrics::RequestPhases,
 ) -> Result<(), BrokerError> {
     let mut notifies: Vec<Arc<Notify>> = Vec::new();
     for p in pending.iter() {
@@ -116,7 +123,12 @@ async fn long_poll_then_reread(
         .map(|n| Box::pin(async move { n.notified().await }) as WaitFut)
         .collect();
     let max_wait = Duration::from_millis(u64::from(u32::try_from(max_wait_ms).unwrap_or(0)));
+    // The park is the Fetch remote phase: this broker has read everything it
+    // holds and is waiting for someone else to append, so the time belongs
+    // beside the Produce `acks=all` gate and not beside the local read.
+    let parked = std::time::Instant::now();
     let _ = tokio::time::timeout(max_wait, futures_util::future::select_all(waits)).await;
+    phases.add_remote(parked.elapsed());
 
     let image = broker.controller.current_image();
     for p in pending.iter_mut() {
@@ -166,6 +178,9 @@ async fn long_poll_then_reread(
         .await?;
         let micros = u64::try_from(read_start.elapsed().as_micros()).unwrap_or(u64::MAX);
         p.cpu_micros = p.cpu_micros.saturating_add(micros);
+        // The re-read is local work like the first pass, so it accumulates on
+        // the same phase.
+        phases.add_local(read_start.elapsed());
 
         // Re-attempt the remote-tier read on the re-read pass
         // so a long-poll that fires on a non-tiered partition doesn't
@@ -245,7 +260,8 @@ mod tests {
         .await
         .expect("append new-epoch record");
 
-        super::long_poll_then_reread(&broker, &mut pending, 0, false)
+        let phases = crate::metrics::RequestPhases::default();
+        super::long_poll_then_reread(&broker, &mut pending, 0, false, &phases)
             .await
             .expect("re-read");
 

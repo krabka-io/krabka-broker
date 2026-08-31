@@ -204,3 +204,54 @@ pub struct BreakGlassStateLabel {
 pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
 }
+
+/// The client quota that caused a throttle the broker applied.
+///
+/// Kafka splits its quotas the same way, and names them the same way in
+/// `kafka.server:type=*QuotaManager`. The three variants are the quotas whose
+/// delay this broker *sleeps* on: `producer_byte_rate` (KIP-13),
+/// `consumer_byte_rate` (KIP-13), and `request_percentage` (KIP-124). The
+/// KIP-599 `controller_mutation_rate` is deliberately absent, because the
+/// broker reports that delay in `ThrottleTimeMs` for the client to observe
+/// and never sleeps on it, so it applies no throttle to record.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum QuotaType {
+    /// KIP-13 `producer_byte_rate`, charged on the Produce path.
+    Produce,
+    /// KIP-13 `consumer_byte_rate`, charged on the Fetch path.
+    Fetch,
+    /// KIP-124 `request_percentage`, charged on every api by handler time.
+    Request,
+}
+
+impl QuotaType {
+    /// Every quota the broker applies a throttle for.
+    pub const ALL: [Self; 3] = [Self::Produce, Self::Fetch, Self::Request];
+
+    /// The `quota_type` label value this variant renders as. The spelling is
+    /// Kafka's own `QuotaType` name, so one dashboard query reads the same
+    /// against either broker.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Produce => "Produce",
+            Self::Fetch => "Fetch",
+            Self::Request => "Request",
+        }
+    }
+}
+
+impl EncodeLabelValue for QuotaType {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Applied-quota label set, paired with the `quota_throttle_duration_seconds`
+/// histogram family. Cardinality is bounded at three, because the field is the
+/// closed [`QuotaType`] enum: no principal, client id or topic reaches this
+/// label set, so no client can invent a series.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct QuotaTypeLabel {
+    pub quota_type: QuotaType,
+}

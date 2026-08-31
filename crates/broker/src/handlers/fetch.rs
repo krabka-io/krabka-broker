@@ -49,6 +49,11 @@ use crate::{
     handlers::cluster_action_denied,
 };
 
+/// This handler's own wire api key, for the `api_key` label the request-phase
+/// and throttle histograms carry. The dispatcher labels the total latency from
+/// the frame it parsed; the handler labels its phases from the same number.
+const FETCH_API_KEY: crate::handlers::ApiKeyCode = krabka_protocol::api_key::ApiKey::Fetch as i16;
+
 /// Handle a `Fetch` request and return the not-yet-encoded response
 /// **struct** with the negotiated `version`.
 ///
@@ -75,6 +80,12 @@ pub(crate) async fn handle(
     // start so the request throttle can be combined with the consumer
     // byte-rate throttle below (KIP-219).
     let handler_start = std::time::Instant::now();
+    // Phase accounting for `request_{local,remote}_duration_seconds`. The read
+    // loop charges every partition read to the local phase and the long poll
+    // to the remote one. The rejection arms below answer before any read
+    // happens and observe no phase at all, so a phase `_count` is at most the
+    // total's and the difference is the requests this handler refused.
+    let phases = crate::metrics::RequestPhases::default();
     let mut cur: &[u8] = req_bytes;
     let req: FetchRequest = if version < 4 {
         krabka_protocol::kafka_3_6_2::owned::fetch_request::FetchRequest::decode(&mut cur, version)?
@@ -140,8 +151,12 @@ pub(crate) async fn handle(
         req.min_bytes,
         req.max_wait_ms,
         ctx.sendfile_capable,
+        &phases,
     )
     .await?;
+    broker
+        .metrics
+        .observe_request_phases(FETCH_API_KEY, &phases);
 
     downconvert_legacy_responses(broker, version, &mut responses);
 
@@ -150,6 +165,12 @@ pub(crate) async fn handle(
     }
 
     let throttle_time_ms_val = if is_follower_fetch {
+        // An inter-broker fetch is charged no client quota, so it applies no
+        // throttle. Observing the zero anyway keeps the throttle phase's
+        // `_count` equal to the other two phases' for this api.
+        broker
+            .metrics
+            .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
         0
     } else {
         apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses).await

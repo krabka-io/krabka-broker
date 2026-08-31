@@ -82,6 +82,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
             },
             record_decompression_policy: RecordDecompressionPolicy::default(),
             metrics: &metrics,
+            phases: &crate::metrics::RequestPhases::default(),
         },
     )
     .await
@@ -177,6 +178,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
             },
             record_decompression_policy: RecordDecompressionPolicy::default(),
             metrics: &metrics,
+            phases: &crate::metrics::RequestPhases::default(),
         },
     )
     .await
