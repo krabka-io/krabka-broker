@@ -81,10 +81,13 @@ pub(crate) async fn handle(
     // byte-rate throttle below (KIP-219).
     let handler_start = std::time::Instant::now();
     // Phase accounting for `request_{local,remote}_duration_seconds`. The read
-    // loop charges every partition read to the local phase and the long poll
-    // to the remote one. The rejection arms below answer before any read
-    // happens and observe no phase at all, so a phase `_count` is at most the
-    // total's and the difference is the requests this handler refused.
+    // loop charges every partition read to the local phase, and the long poll
+    // and the cold-tier round trip to the remote one. Every path that reaches
+    // a read observes all three phases exactly once, the failed read and the
+    // routed KIP-595 answer included, so the three `_count`s stay equal to one
+    // another; the rejection arms below answer before any read happens and
+    // observe nothing, so the gap to `request_duration_seconds` is exactly the
+    // fetches this handler refused.
     let phases = crate::metrics::RequestPhases::default();
     let mut cur: &[u8] = req_bytes;
     let req: FetchRequest = if version < 4 {
@@ -126,11 +129,19 @@ pub(crate) async fn handle(
         else {
             return Ok((cluster_authorization_failed(), version));
         };
+        let routing_start = std::time::Instant::now();
         if denied_topics.is_empty()
             && let Some(response) = broker
                 .wal_shards
                 .route_fetch_request(&req, authenticated_node)
         {
+            // A routed WAL fetch is served straight out of this broker's own
+            // shard engine, so the round trip is local work like any other
+            // read. Charging and observing it here is what keeps ordinary
+            // internal WAL replication traffic from silently depressing all
+            // three phase counts below the total.
+            phases.add_local(routing_start.elapsed());
+            observe_unthrottled_fetch_phases(broker, &phases);
             return Ok((response?, version));
         }
     }
@@ -145,7 +156,7 @@ pub(crate) async fn handle(
     };
     let pending = build_pending_reads(&plan_context, &effective_topics).await;
 
-    let (mut responses, cpu_micros_by_idx) = execute_pending_reads(
+    let read = execute_pending_reads(
         broker,
         pending,
         req.min_bytes,
@@ -153,7 +164,18 @@ pub(crate) async fn handle(
         ctx.sendfile_capable,
         &phases,
     )
-    .await?;
+    .await;
+    let (mut responses, cpu_micros_by_idx) = match read {
+        Ok(read) => read,
+        Err(error) => {
+            // A read that failed still spent the time it had already charged,
+            // and a `?` here would throw that away on exactly the storage
+            // faults the phases exist to diagnose. The request never reached
+            // the quota, so its throttle is zero.
+            observe_unthrottled_fetch_phases(broker, &phases);
+            return Err(error);
+        }
+    };
     broker
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
@@ -195,6 +217,18 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     Ok((resp, version))
+}
+
+/// Observe all three phase families for a Fetch that ends before it reaches
+/// the quota: the routed KIP-595 answer, which is charged no client quota, and
+/// the read that failed, which never got that far. Neither applies a throttle,
+/// so the throttle phase takes an explicit zero and its `_count` stays equal
+/// to the local and remote counts for this api.
+fn observe_unthrottled_fetch_phases(broker: &Broker, phases: &crate::metrics::RequestPhases) {
+    broker.metrics.observe_request_phases(FETCH_API_KEY, phases);
+    broker
+        .metrics
+        .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
 }
 
 fn cluster_authorization_failed() -> FetchResponse {
@@ -351,17 +385,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn handle_routes_discriminated_wal_fetch_on_broker_listener() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+    /// Start a broker holding one routable diskless-WAL shard, so a KIP-595
+    /// Fetch addressed at it takes the routed branch of [`super::handle`].
+    /// Returns the handle and the shard's topic id.
+    async fn broker_with_routable_wal_shard(
+        dir: &std::path::Path,
+    ) -> (crate::BrokerHandle, uuid::Uuid) {
+        let broker_handle =
+            Broker::start(crate::config::BrokerConfig::for_tests(dir.to_path_buf()))
+                .await
+                .expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         let source = std::sync::Arc::new(Mutex::new(
-            Log::open(dir.path().join("wal-source"), LogConfig::default()).expect("open log"),
+            Log::open(dir.join("wal-source"), LogConfig::default()).expect("open log"),
         ));
         let mut batch = RecordBatch {
             records: vec![Record {
@@ -400,11 +436,24 @@ mod tests {
                 voters: vec![local_node_id, krabka_raft::NodeId(2)],
                 leader_epoch: 0,
             }});
-        let principal = Principal {
+        (broker_handle, topic_id)
+    }
+
+    /// The peer principal a routed WAL fetch authenticates as.
+    fn wal_peer_principal() -> Principal {
+        Principal {
             name: "broker-2".into(),
             auth_method: AuthMethod::SaslPlain,
             groups: Vec::new(),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_routes_discriminated_wal_fetch_on_broker_listener() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = wal_peer_principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
 
@@ -434,6 +483,78 @@ mod tests {
                 Some(RecordsPayload::Raw(ref records)) if !records.is_empty()
             ));
         }
+        broker_handle.shutdown().await;
+    }
+
+    /// The rendered value of `krabka_broker_<series>{api_key="Fetch"}` in
+    /// exposition text.
+    ///
+    /// It matches a whole line rather than searching for a substring, because
+    /// the rendering of zero is a prefix of the rendering of a small non-zero
+    /// value: a search for `0.0` finds `0.000045` and calls a charged phase
+    /// uncharged.
+    fn fetch_series_value<'a>(rendered: &'a str, series: &str) -> &'a str {
+        let prefix = format!("krabka_broker_{series}{{api_key=\"Fetch\"}} ");
+        rendered
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix.as_str()))
+            .unwrap_or_else(|| panic!("no {prefix} series in:\n{rendered}"))
+    }
+
+    /// A routed KIP-595 fetch is answered before the ordinary read loop, but
+    /// the dispatcher still counts it in `request_duration_seconds`. It has to
+    /// observe its phases too, or steady internal WAL replication traffic
+    /// permanently drags all three phase counts below the total and is
+    /// indistinguishable there from the fetches the handler refused.
+    #[tokio::test]
+    async fn routed_wal_fetch_observes_all_three_phases() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = wal_peer_principal();
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
+        let request = fetch_request(
+            QuorumGroup::diskless_wal(topic_id, PartitionIndex(0)),
+            krabka_raft::NodeId(2),
+            0,
+            -1,
+            0,
+            krabka_units::mebibytes(1),
+        );
+        let mut encoded = BytesMut::new();
+        request
+            .encode(&mut encoded, KIP_595_FETCH_VERSION)
+            .expect("encode WAL fetch");
+
+        let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
+            .await
+            .expect("route WAL fetch");
+        assert!(response.error_code == crate::codes::NONE);
+
+        let mut rendered = String::new();
+        {
+            let registry = broker.metrics.registry.lock().await;
+            prometheus_client::encoding::text::encode(&mut rendered, &registry)
+                .expect("encode registry");
+        }
+        for family in [
+            "request_local_duration_seconds",
+            "request_remote_duration_seconds",
+            "request_throttle_duration_seconds",
+        ] {
+            let count = fetch_series_value(&rendered, &format!("{family}_count"));
+            assert!(count == "1", "{family} was observed {count} times");
+        }
+        // The routed read is this broker's own shard engine, so it is local
+        // work; nothing waited on a peer and no client quota was charged.
+        let local = fetch_series_value(&rendered, "request_local_duration_seconds_sum");
+        assert!(
+            local.parse::<f64>().expect("a sum is a number") > 0.0,
+            "the routed read belongs to the local phase, which reads {local}"
+        );
+        assert!(fetch_series_value(&rendered, "request_remote_duration_seconds_sum") == "0.0");
+        assert!(fetch_series_value(&rendered, "request_throttle_duration_seconds_sum") == "0.0");
         broker_handle.shutdown().await;
     }
 
