@@ -209,3 +209,9 @@ criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 [[bench]]
 name = "produce"
 harness = false
+
+# The label a metric observation builds: the `String` copy per call that the
+# `Arc<str>` label sets replaced, against the `Arc` clone that replaced it.
+[[bench]]
+name = "metric_labels"
+harness = false
