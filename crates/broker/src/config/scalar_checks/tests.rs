@@ -9,7 +9,7 @@ use crate::config::test_support::{RuntimeInvalidator, assert_invalid_runtime, ba
 
 #[test]
 fn rejects_non_positive_runtime_scalars() {
-    let cases: [RuntimeInvalidator; 22] = [
+    let cases: [RuntimeInvalidator; 23] = [
         ("startup_leader_wait_timeout", |c| {
             c.startup_leader_wait_timeout = <Time as TimeExt>::ZERO;
         }),
@@ -24,6 +24,9 @@ fn rejects_non_positive_runtime_scalars() {
         }),
         ("diskless_wal_flush_max_size", |c| {
             c.diskless_wal_flush_max_size = <ByteSize as ByteSizeExt>::ZERO;
+        }),
+        ("diskless_wal_hot_tail_max_size", |c| {
+            c.diskless_wal_hot_tail_max_size = <ByteSize as ByteSizeExt>::ZERO;
         }),
         ("client_metrics_default_interval", |c| {
             c.client_metrics_default_interval = <Time as TimeExt>::ZERO;

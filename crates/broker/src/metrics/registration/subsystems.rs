@@ -249,4 +249,66 @@ impl BrokerMetrics {
             self.break_glass_bypassed.clone(),
         );
     }
+
+    pub(super) fn register_group_8(&self, registry: &mut Registry) {
+        for (name, help, metric) in [
+            (
+                "diskless_wal_durable_watermark",
+                "Quorum-durable offset for each diskless WAL shard led by this broker.",
+                self.diskless_wal_durable_watermark.clone(),
+            ),
+            (
+                "diskless_wal_index_projection_lag",
+                "Durable offsets not yet represented by the committed diskless WAL object index.",
+                self.diskless_wal_index_projection_lag.clone(),
+            ),
+            (
+                "diskless_wal_trim_frontier",
+                "Local log-start offset after trimming a diskless WAL shard.",
+                self.diskless_wal_trim_frontier.clone(),
+            ),
+        ] {
+            registry.register(name, help, metric);
+        }
+        registry.register(
+            "diskless_wal_voter_lag",
+            "Leader log-end offset minus each diskless WAL voter's durable offset.",
+            self.diskless_wal_voter_lag.clone(),
+        );
+        registry.register(
+            "diskless_wal_quorum_loss_events",
+            "Leader-side diskless WAL acknowledgements that failed to form a quorum.",
+            self.diskless_wal_quorum_loss_events_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_flush_attempts",
+            "Non-empty diskless WAL objects submitted to object storage.",
+            self.diskless_wal_flush_attempts_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_flush_bytes",
+            "Bytes successfully written as diskless WAL objects.",
+            self.diskless_wal_flush_bytes_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_flush_failures",
+            "Diskless WAL object flushes that failed after an attempt began.",
+            self.diskless_wal_flush_failures_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_cold_read_hits",
+            "Diskless WAL cold reads served from object storage.",
+            self.diskless_wal_cold_read_hits_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_cold_read_misses",
+            "Diskless WAL cold reads with no matching committed index entry.",
+            self.diskless_wal_cold_read_misses_total.clone(),
+        );
+        registry.register(
+            "diskless_wal_cold_read_errors",
+            "Diskless WAL cold reads that failed while reading object storage.",
+            self.diskless_wal_cold_read_errors_total.clone(),
+        );
+    }
 }
