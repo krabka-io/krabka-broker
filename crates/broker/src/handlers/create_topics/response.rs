@@ -1,6 +1,7 @@
 //! Response assembly for `CreateTopics`: the per-topic result rows, the
 //! response envelope around them, the admin audit event for the topics that
-//! were created, and the throttle sleep that precedes the encoded reply.
+//! were created, and the KIP-219 throttle window recorded on the request
+//! context for the connection loop to enforce after the reply is written.
 
 use bytes::Bytes;
 use krabka_protocol::{
