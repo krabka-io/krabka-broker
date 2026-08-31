@@ -19,27 +19,64 @@ import re
 import sys
 from pathlib import Path
 
-# The text of a Markdown heading that names a version: `## [0.3.8] - 2026-06-23`,
-# `## 1.0.0`, `### [v2.1]`. The link brackets and the `v` prefix are optional,
-# and the release date, if there is one, follows the version.
-VERSION_HEADING = re.compile(r"#{1,6}\s+\[?v?\d+(?:\.\d+)+\]?")
+# Markdown reads up to three leading spaces as part of a heading or a code
+# fence, and a fourth as the start of an indented code block. Both expressions
+# below carry that allowance, so an indented heading is still an offender and
+# an indented fence still opens a block.
+INDENT = r" {0,3}"
 
-FENCE = "```"
+# The text of a Markdown heading that names a version: `## [0.3.8] - 2026-06-23`,
+# `## 1.0.0`, `### [v2.1]`, ` ## [0.6.0]`. The link brackets and the `v` prefix
+# are optional, and the release date, if there is one, follows the version.
+VERSION_HEADING = re.compile(INDENT + r"#{1,6}\s+\[?v?\d+(?:\.\d+)+\]?")
+
+# A code fence: three or more backticks or tildes, and the info string that an
+# opening fence may carry.
+FENCE = re.compile(INDENT + r"(?P<delimiter>`{3,}|~{3,})(?P<info>.*)$")
+
+
+def opens(fence: re.Match[str]) -> bool:
+    """Whether a fence line opens a block.
+
+    A backtick fence's info string holds no backtick, which is what keeps a
+    line of inline code spans from opening one. A tilde fence takes any info
+    string.
+    """
+    return not (fence["delimiter"].startswith("`") and "`" in fence["info"])
+
+
+def closes(fence: re.Match[str], delimiter: str) -> bool:
+    """Whether a fence line closes the block that `delimiter` opened.
+
+    Only a run of the opening character, at least as long as the opening run,
+    and with nothing but whitespace after it.
+    """
+    return (
+        fence["delimiter"][0] == delimiter[0]
+        and len(fence["delimiter"]) >= len(delimiter)
+        and not fence["info"].strip()
+    )
 
 
 def version_headings(text: str) -> list[str]:
     """Return the version headings of one changelog, in file order.
 
     A heading inside a fenced code block is an example, not a release, so this
-    skips fenced blocks.
+    skips fenced blocks -- backtick and tilde alike, each closing only on its
+    own delimiter.
     """
     headings = []
-    fenced = False
+    opened = None
 
     for line in text.splitlines():
-        if line.lstrip().startswith(FENCE):
-            fenced = not fenced
-        elif not fenced and VERSION_HEADING.match(line):
+        fence = FENCE.match(line)
+
+        if opened is not None:
+            if fence is not None and closes(fence, opened):
+                opened = None
+        elif fence is not None and opens(fence):
+            opened = fence["delimiter"]
+        elif VERSION_HEADING.match(line):
             headings.append(line.strip())
 
     return headings

@@ -31,9 +31,19 @@ update `Cargo.lock`:
 ## 2. Prepare the changelog
 
 Move the `[Unreleased]` entries of [`CHANGELOG.md`](../CHANGELOG.md) under a new
-`## [X.Y.Z] - YYYY-MM-DD` heading, and add the link definition for the tag at
-the end of the file. Write what changed for a reader who runs the broker, not a
-list of commit subjects.
+`## [X.Y.Z] - YYYY-MM-DD` heading, and leave `[Unreleased]` empty above it.
+Write what changed for a reader who runs the broker, not a list of commit
+subjects.
+
+Then fix the link definitions at the end of the file. Add one for the new tag,
+and move the `[Unreleased]` comparison onto that tag as well: it names the
+previous one, so leaving it alone would keep listing everything this release
+just shipped as unreleased.
+
+```md
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/vX.Y.Z...HEAD
+[X.Y.Z]: https://github.com/krabka-io/krabka-broker/releases/tag/vX.Y.Z
+```
 
 Open a pull request with the version bump and the changelog entry together, and
 merge it. The tag names that merge commit.

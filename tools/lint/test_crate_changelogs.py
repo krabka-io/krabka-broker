@@ -20,6 +20,23 @@ CASES = [
     ("## 0.1.0\n", ["## 0.1.0"]),
     ("## [Unreleased]\n\n- The 1.2.3 wire format is unchanged.\n", []),
     ("## [Unreleased]\n\n```\n## [0.1.0]\n```\n", []),
+    # Markdown renders a heading under up to three leading spaces, so a heading
+    # that carries them is a release record like any other.
+    (" ## [0.6.0] - 2026-08-31\n", ["## [0.6.0] - 2026-08-31"]),
+    ("   ### 0.6.0\n", ["### 0.6.0"]),
+    # A fourth space makes an indented code block, which is an example.
+    ("## [Unreleased]\n\n    ## [0.1.0]\n", []),
+    # A fenced example is a fenced example whichever delimiter opens it.
+    ("## [Unreleased]\n\n~~~markdown\n## [0.1.0]\n~~~\n", []),
+    ("## [Unreleased]\n\n   ```\n## [0.1.0]\n   ```\n", []),
+    # A block closes on its own delimiter, at its own length, and on nothing
+    # else: the inner runs below leave the block open over the heading.
+    ("```\n~~~\n## [0.1.0]\n~~~\n```\n", []),
+    ("~~~\n```\n## [0.1.0]\n```\n~~~\n", []),
+    ("````\n```\n## [0.1.0]\n```\n````\n", []),
+    ("```\n``` still open\n## [0.1.0]\n```\n", []),
+    # A closed block stops covering what follows it.
+    ("~~~\n## [0.1.0]\n~~~\n\n## [0.2.0]\n", ["## [0.2.0]"]),
 ]
 
 for body, expected in CASES:
@@ -34,6 +51,7 @@ with tempfile.TemporaryDirectory() as directory:
     for crate, body in [
         ("truthful", "# Changelog\n\n## [Unreleased]\n"),
         ("extracted", "## [Unreleased]\n## [0.3.8] - 2026-06-23\n"),
+        ("indented", "## [Unreleased]\n\n  ## [0.6.0] - 2026-08-31\n"),
         ("nested/deeper", "## [0.1.0]\n"),
     ]:
         (root / "crates" / crate).mkdir(parents=True)
@@ -42,6 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     expected_offenders = [
         ("crates/extracted/CHANGELOG.md", "## [0.3.8] - 2026-06-23"),
+        ("crates/indented/CHANGELOG.md", "## [0.6.0] - 2026-08-31"),
         ("crates/nested/deeper/CHANGELOG.md", "## [0.1.0]"),
     ]
     actual_offenders = offenders(root)
@@ -55,6 +74,9 @@ with tempfile.TemporaryDirectory() as directory:
         sys.exit(f"expected a failure that names the offender, got {failure.stderr!r}")
 
     (root / "crates" / "extracted" / "CHANGELOG.md").write_text("## [Unreleased]\n")
+    (root / "crates" / "indented" / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n~~~markdown\n## [0.6.0] - 2026-08-31\n~~~\n"
+    )
     (root / "crates" / "nested" / "deeper" / "CHANGELOG.md").unlink()
 
     success = subprocess.run(check, capture_output=True, text=True)
