@@ -70,6 +70,13 @@ pub fn handle_authenticate_scram(
                 (scram_cred.clone(), None, None)
             } else if mech == SaslMechanism::ScramSha256 {
                 if let Some(token) = image.delegation_token_by_id(&username) {
+                    if !krabka_verified::token_is_active(
+                        crate::time_util::now_ms(),
+                        token.expiry_timestamp_ms,
+                        token.max_timestamp_ms,
+                    ) {
+                        return fail_authenticate("delegation token expired");
+                    }
                     let synth = synthesize_token_scram_credential(token);
                     let owner = Principal {
                         name: token.owner.name.clone(),
@@ -148,8 +155,13 @@ pub fn handle_authenticate_scram(
                 // `expires_at_ms` (the KIP-368 re-auth ceiling).
                 // For regular SCRAM, it's `None` and the
                 // session has no expiry.
-                let session_lifetime_ms =
-                    pending_token_expiry_ms.map_or(0, |e| (e - crate::time_util::now_ms()).max(0));
+                let now = crate::time_util::now_ms();
+                if pending_token_expiry_ms
+                    .is_some_and(|e| !krabka_verified::token_is_active(now, e, e))
+                {
+                    return fail_authenticate("delegation token expired");
+                }
+                let session_lifetime_ms = pending_token_expiry_ms.map_or(0, |e| e - now);
                 *auth = ConnectionAuth::Authenticated {
                     principal,
                     mechanism,

@@ -254,6 +254,32 @@ async fn invalid_lifetime_returns_invalid_request() {
     controller.cancel().await;
 }
 
+#[tokio::test]
+async fn overflowing_lifetime_returns_invalid_request_without_minting() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    let req = CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    };
+
+    let resp = handle(
+        &req,
+        &authed("alice"),
+        Some(&secret),
+        i64::MAX,
+        1,
+        &*controller,
+        &empty_super_users(),
+    )
+    .await;
+
+    assert!(resp.error_code == crate::codes::INVALID_REQUEST);
+    assert!(controller.current_image().all_delegation_tokens().count() == 0);
+    controller.cancel().await;
+}
+
 /// Spec §1.2 and §1.4: a super-user caller can create a token owned by a
 /// different principal, by setting `owner_principal_type` and
 /// `owner_principal_name`. The response names the owner *and* records the

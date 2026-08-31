@@ -3251,6 +3251,7 @@ dependencies = [
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
  "krabka-security",
+ "krabka-verified",
  "maplit",
  "object_store",
  "regex",
