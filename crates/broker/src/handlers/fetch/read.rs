@@ -177,18 +177,22 @@ struct BlockingRead {
 ///
 /// | partitions | per-partition `spawn_blocking` | one batched `spawn_blocking` | `block_in_place` |
 /// |-----------:|-------------------------------:|-----------------------------:|-----------------:|
-/// |          1 |                            7.9 |                          8.0 |              0.8 |
-/// |         16 |                          184.8 |                         24.1 |             11.8 |
-/// |        200 |                         1622.7 |                        135.2 |            149.0 |
+/// |          1 |                            6.7 |                          6.3 |              0.6 |
+/// |         16 |                          109.7 |                         16.1 |              9.9 |
+/// |        200 |                         1324.5 |                        120.2 |            115.9 |
 ///
 /// A task allocation, a queue push, a pool wakeup and a `JoinHandle` await per
-/// partition dominate a warm read: dropping them is worth 10x at one partition
+/// partition dominate a warm read: dropping them is worth 12x at one partition
 /// and 11x at two hundred. Batching the whole pending set into one hand-off
-/// buys the same order of magnitude and no more -- it is ahead by a tenth at
-/// 200 partitions and behind everywhere narrower -- while costing the
+/// buys the same order of magnitude and no more, and never beats keeping the
+/// read in place: it is 10x behind at one partition, 1.6x behind at sixteen
+/// and level at two hundred -- while it would additionally cost the
 /// per-partition remote-tier and diskless fallbacks, which are async and
 /// cannot run inside one blocking closure. So the read side lands where the
-/// append side did in [`crate::partition_writer`]: `block_in_place`.
+/// append side did in [`crate::partition_writer`]: `block_in_place`, called
+/// once per partition, which is what the arm above measures. The first call
+/// hands the worker's core to a replacement thread and the rest find no core
+/// left to hand over, so only the first pays for the swap.
 ///
 /// What it costs is a worker. `block_in_place` parks the one it runs on and
 /// hands that worker's other tasks to a replacement thread, so a fetch reading

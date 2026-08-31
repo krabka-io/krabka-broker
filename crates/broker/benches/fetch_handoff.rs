@@ -11,8 +11,9 @@
 //!     pool wakeup and a `JoinHandle` await, and the awaits serialize;
 //!   * `spawn_blocking_batched` — one `spawn_blocking` for the whole pending
 //!     set, which pays that cost once per fetch however wide it is;
-//!   * `block_in_place` — no hand-off at all: the reads run on the reactor
-//!     worker after tokio moves its other tasks to a fresh worker.
+//!   * `block_in_place` — no hand-off at all: one call per partition, as the
+//!     read loop makes it, and the reads run on the reactor worker after tokio
+//!     moves its other tasks to a fresh worker.
 //!
 //! The arms mirror `bench_append_handoff` in `krabka-log`'s suite, which
 //! settled the same question for the append side, so the two sets of numbers
@@ -117,7 +118,12 @@ enum Handoff {
     PerPartition,
     /// One `spawn_blocking` covering the whole pending set.
     Batched,
-    /// No hand-off: `block_in_place` on the reactor worker.
+    /// No hand-off: one `block_in_place` per partition on the reactor worker,
+    /// which is the shape the read loop actually has -- `do_read` is called
+    /// once per partition, so the choice this arm stands for is made once per
+    /// partition too. The first call hands the worker's core to a replacement
+    /// thread and the rest find no core left to hand over, so the per-call
+    /// cost after the first is a thread-local check.
     InPlace,
 }
 
@@ -152,7 +158,10 @@ async fn serve_fetch(handoff: Handoff, partitions: &Arc<Vec<BenchPartition>>) ->
                 .await
                 .expect("the read task does not panic")
         }
-        Handoff::InPlace => tokio::task::block_in_place(|| read_all(partitions)),
+        Handoff::InPlace => partitions
+            .iter()
+            .map(|partition| tokio::task::block_in_place(|| read_one(partition)))
+            .sum(),
     }
 }
 
