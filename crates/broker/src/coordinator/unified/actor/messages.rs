@@ -14,7 +14,7 @@ use krabka_protocol::owned::{
 };
 use tokio::sync::oneshot;
 
-use super::{ClassicView, DescribeView, ErrorCode};
+use super::{ClassicView, DescribeView, ErrorCode, ReapOutcome};
 use crate::{
     codes,
     coordinator::{
@@ -100,6 +100,17 @@ pub enum GroupActorMessage {
     RemoveCommitted {
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
+    },
+    /// KIP-211: tombstone every committed offset that has fallen out of
+    /// retention, and the group with them when it keeps none. The sweep in
+    /// `coordinator::retention` sends it to each group whose
+    /// `__consumer_offsets` partition this broker leads.
+    ReapExpiredOffsets {
+        /// The sweep's clock reading, shared by every group in one pass.
+        now_ms: i64,
+        /// `offsets.retention.minutes` in milliseconds.
+        retention_ms: i64,
+        reply: oneshot::Sender<ReapOutcome>,
     },
 
     // ── bootstrap / lifecycle ──

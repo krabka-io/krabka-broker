@@ -65,6 +65,12 @@ impl RuntimeFileConfig {
             cfg.offsets_topic_replication_factor =
                 positive_i16("offsets_topic_replication_factor", value)?;
         }
+        set_runtime_time_millis!(runtime, offsets_retention, cfg.offsets_retention);
+        set_runtime_time_millis!(
+            runtime,
+            offsets_retention_check_interval,
+            cfg.offsets_retention_check_interval
+        );
         set_runtime_i32!(
             runtime,
             transaction_state_num_partitions,

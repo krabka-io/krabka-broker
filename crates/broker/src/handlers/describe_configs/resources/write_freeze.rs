@@ -97,6 +97,10 @@ mod tests {
             },
             300_000,
             &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            crate::handlers::describe_configs::resources::StaticBrokerConfigs {
+                offsets_retention_minutes: 10_080,
+                offsets_retention_check_interval_ms: 600_000,
+            },
         )
     }
 

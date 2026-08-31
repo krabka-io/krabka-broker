@@ -161,6 +161,15 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
 
+/// KIP-211: default retention for a committed consumer-group offset after the
+/// group that owns it becomes empty. 7 days, matching Kafka's
+/// `offsets.retention.minutes` default of 10080.
+pub const DEFAULT_OFFSETS_RETENTION: Time = minutes(10_080);
+
+/// Default cadence of the background offset-retention sweep. 10 minutes,
+/// matching Kafka's `offsets.retention.check.interval.ms` default of 600000.
+pub const DEFAULT_OFFSETS_RETENTION_CHECK_INTERVAL: Time = minutes(10);
+
 /// Default ceiling on live entries in the topic write-freeze registry.
 ///
 /// A prefix-scoped lookup walks the registry in reverse from the topic name,

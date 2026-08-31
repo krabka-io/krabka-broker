@@ -15,6 +15,7 @@ use super::{
     commit_validation::validate_commit_message,
     heartbeat::handle_actor_heartbeat,
     messages::classic_leave_result,
+    retention::handle_reap_message,
     seed::apply_seed,
     views::{build_classic_view, build_describe, inspect_any},
 };
@@ -154,6 +155,21 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
+        GroupActorMessage::ReapExpiredOffsets {
+            now_ms,
+            retention_ms,
+            reply,
+        } => {
+            handle_reap_message(
+                group,
+                services.offsets_log,
+                services.coordinator,
+                now_ms,
+                retention_ms,
+                reply,
+            )
+            .await
+        }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {
                 apply_seed(state, seed);
@@ -204,6 +220,7 @@ mod tests {
             vec![("range".into(), bytes::Bytes::new())],
         ));
         let group = Box::new(CoordinatorGroup {
+            empty_since_ms: None,
             group_id: "g".into(),
             kind: GroupKind::Classic(cs),
             committed_offsets: [(
@@ -213,6 +230,7 @@ mod tests {
                     leader_epoch: 0,
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
                 },
             )]
             .into(),

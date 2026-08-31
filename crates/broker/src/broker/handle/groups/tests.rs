@@ -45,6 +45,7 @@ fn classic_group_with_member(
     );
     let _ = classic.add_member(member);
     Box::new(crate::coordinator::unified::group::CoordinatorGroup {
+        empty_since_ms: None,
         group_id: group_id.to_string(),
         kind: crate::coordinator::unified::group::GroupKind::Classic(classic),
         committed_offsets: std::collections::HashMap::new(),

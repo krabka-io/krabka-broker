@@ -3,6 +3,14 @@
 //! `__consumer_offsets` partition
 //! via the partition writer, then updates the group's committed offsets
 //! through its actor.
+//!
+//! KIP-211: a v2-v4 request may carry `retention_time_ms`, which overrides the
+//! broker's `offsets.retention.minutes` for the offsets in that one request.
+//! The handler turns it into the absolute `expire_timestamp_ms` that the
+//! record and the in-memory entry both carry, and
+//! `coordinator::retention` honours it. The field was removed at v5,
+//! where the decoder leaves it at its `-1` default, and `-1` at v2-v4 means
+//! the same thing: take the broker-wide retention.
 
 use std::sync::Arc;
 
@@ -107,6 +115,7 @@ pub(crate) async fn handle(
     };
 
     let now_ms = now_ms();
+    let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
     // Find the group's actor (a classic actor is created for an unknown id —
     // e.g. a "simple" consumer committing offsets without joining a group).
     // Offsets are protocol-agnostic, so an existing actor of either kind serves
@@ -155,8 +164,16 @@ pub(crate) async fn handle(
         // Only proceed with allowed topics (append + update).
         let allowed_req = allowed_request(&req, &topic_decisions);
         if !allowed_req.topics.is_empty() {
-            if let Err(code) =
-                append_batch(&allowed_req, &broker.partitions, offsets_partition, now_ms).await
+            if let Err(code) = append_batch(
+                &allowed_req,
+                &broker.partitions,
+                offsets_partition,
+                Commit {
+                    now_ms,
+                    expire_timestamp_ms,
+                },
+            )
+            .await
             {
                 // If append fails, overwrite allowed topics with the error code.
                 let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
@@ -167,7 +184,15 @@ pub(crate) async fn handle(
                 };
                 return finalize(version, resp, unknown_id_topics.clone());
             }
-            update_committed(&allowed_req, &handle, now_ms).await;
+            update_committed(
+                &allowed_req,
+                &handle,
+                Commit {
+                    now_ms,
+                    expire_timestamp_ms,
+                },
+            )
+            .await;
         }
 
         let resp = OffsetCommitResponse {
@@ -179,13 +204,17 @@ pub(crate) async fn handle(
     }
 
     // 2. Append a RecordBatch into this group's offsets partition.
-    if let Err(code) = append_batch(&req, &broker.partitions, offsets_partition, now_ms).await {
+    let commit = Commit {
+        now_ms,
+        expire_timestamp_ms,
+    };
+    if let Err(code) = append_batch(&req, &broker.partitions, offsets_partition, commit).await {
         let resp = build_response_all(&req, code);
         return finalize(version, resp, unknown_id_topics.clone());
     }
 
     // 3. Update in-memory state.
-    update_committed(&req, &handle, now_ms).await;
+    update_committed(&req, &handle, commit).await;
 
     // 4. Uniform per-(topic, partition) success.
     let resp = build_response_all(&req, codes::NONE);
@@ -294,6 +323,31 @@ fn finalize(
     encode(version, &resp)
 }
 
+/// The wire value of `retention_time_ms` that asks for the broker's own
+/// `offsets.retention.minutes`.
+const DEFAULT_RETENTION_TIME_MS: i64 = -1;
+
+/// The two clock values every record of one commit shares.
+#[derive(Debug, Clone, Copy)]
+struct Commit {
+    /// Commit time, stamped on the batch and on every `OffsetCommitValue`.
+    now_ms: i64,
+    /// The KIP-211 per-commit expiry, when the request asked for one.
+    expire_timestamp_ms: Option<i64>,
+}
+
+/// KIP-211: resolve the absolute expiry that this commit asked for.
+///
+/// `OffsetCommitRequest` carries `retention_time_ms` at v2-v4 only. The
+/// decoder leaves the field at its schema default of `-1` for every other
+/// version, and `-1` is also how a v2-v4 client says "use the broker's
+/// `offsets.retention.minutes`". This mirrors
+/// `OffsetMetadataManager.expireTimestampMs`.
+fn expire_timestamp_ms(retention_time_ms: i64, now_ms: i64) -> Option<i64> {
+    (retention_time_ms != DEFAULT_RETENTION_TIME_MS)
+        .then(|| now_ms.saturating_add(retention_time_ms))
+}
+
 fn now_ms() -> i64 {
     i64::try_from(
         std::time::SystemTime::now()
@@ -329,10 +383,10 @@ async fn append_batch(
     req: &OffsetCommitRequest,
     partitions: &Arc<PartitionRegistry>,
     offsets_partition: i32,
-    now_ms: i64,
+    commit: Commit,
 ) -> Result<(), i16> {
     let mut batch = RecordBatch {
-        max_timestamp: now_ms,
+        max_timestamp: commit.now_ms,
         ..RecordBatch::default()
     };
     let mut delta: i32 = 0;
@@ -342,7 +396,8 @@ async fn append_batch(
                 offset: krabka_log::Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
-                commit_timestamp_ms: now_ms,
+                commit_timestamp_ms: commit.now_ms,
+                expire_timestamp_ms: commit.expire_timestamp_ms,
             };
             batch.records.push(Record {
                 offset_delta: delta,
@@ -390,7 +445,11 @@ async fn append_batch(
     }
 }
 
-async fn update_committed(req: &OffsetCommitRequest, handle: &Arc<GroupActorHandle>, now_ms: i64) {
+async fn update_committed(
+    req: &OffsetCommitRequest,
+    handle: &Arc<GroupActorHandle>,
+    commit: Commit,
+) {
     let mut entries: Vec<((String, i32), OffsetEntry)> = Vec::new();
     for topic in &req.topics {
         for part in &topic.partitions {
@@ -400,7 +459,8 @@ async fn update_committed(req: &OffsetCommitRequest, handle: &Arc<GroupActorHand
                     offset: krabka_log::Offset(part.committed_offset),
                     leader_epoch: part.committed_leader_epoch,
                     metadata: part.committed_metadata.clone().unwrap_or_default(),
-                    commit_timestamp_ms: now_ms,
+                    commit_timestamp_ms: commit.now_ms,
+                    expire_timestamp_ms: commit.expire_timestamp_ms,
                 },
             ));
         }
@@ -444,4 +504,35 @@ fn build_response_all(req: &OffsetCommitRequest, code: i16) -> OffsetCommitRespo
 
 fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(resp, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    /// KIP-211: `-1` is the "use the broker's own retention" sentinel, and it
+    /// is also what the decoder leaves behind for a version that does not
+    /// carry the field at all. Every other value becomes an absolute deadline.
+    #[test]
+    fn per_commit_retention_becomes_an_absolute_deadline_unless_it_is_the_sentinel() {
+        let cases = [
+            (DEFAULT_RETENTION_TIME_MS, 1_000, None),
+            (0, 1_000, Some(1_000)),
+            (86_400_000, 1_000, Some(86_401_000)),
+            // A nonsense value still becomes a deadline rather than being read
+            // as the sentinel, which is what Kafka's `== DEFAULT_RETENTION_TIME`
+            // check does.
+            (-5, 1_000, Some(995)),
+            // Arithmetic that would overflow saturates rather than panicking.
+            (i64::MAX, 1_000, Some(i64::MAX)),
+        ];
+        for (retention_time_ms, now_ms, want) in cases {
+            check!(
+                expire_timestamp_ms(retention_time_ms, now_ms) == want,
+                "retention_time_ms={retention_time_ms} now_ms={now_ms}"
+            );
+        }
+    }
 }

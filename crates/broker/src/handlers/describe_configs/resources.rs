@@ -11,6 +11,7 @@
 use krabka_protocol::owned::describe_configs_response::{
     DescribeConfigsResourceResult, DescribeConfigsResult,
 };
+use krabka_units::convert::TimeExt as _;
 
 use super::wire::{
     CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
@@ -27,12 +28,62 @@ mod tests;
 
 use self::write_freeze::write_freeze_entry;
 
+/// The broker-scoped values that live in the process's static configuration
+/// rather than in the metadata image. `DescribeConfigs` synthesises one entry
+/// for each against `STATIC_BROKER_CONFIG`, the way it synthesises `node.id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct StaticBrokerConfigs {
+    /// `offsets.retention.minutes`, in whole minutes.
+    pub(super) offsets_retention_minutes: i64,
+    /// `offsets.retention.check.interval.ms`, in whole milliseconds.
+    pub(super) offsets_retention_check_interval_ms: i64,
+}
+
+impl StaticBrokerConfigs {
+    /// The `(key, value, source)` triples, in the order `DescribeConfigs`
+    /// emits them before the final sort.
+    fn entries(self) -> [(&'static str, String, i8); 2] {
+        [
+            (
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                self.offsets_retention_minutes.to_string(),
+                source_of(
+                    self.offsets_retention_minutes,
+                    crate::config::DEFAULT_OFFSETS_RETENTION.millis_i64() / 60_000,
+                ),
+            ),
+            (
+                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                self.offsets_retention_check_interval_ms.to_string(),
+                source_of(
+                    self.offsets_retention_check_interval_ms,
+                    crate::config::DEFAULT_OFFSETS_RETENTION_CHECK_INTERVAL.millis_i64(),
+                ),
+            ),
+        ]
+    }
+}
+
+/// The source Kafka reports for a static, non-reconfigurable broker config: an
+/// untouched knob reads `DEFAULT_CONFIG` and one the operator set reads
+/// `STATIC_BROKER_CONFIG`. Verified against `apache/kafka:4.3.1`, where
+/// `kafka-configs --describe --all` reports both retention keys as
+/// `DEFAULT_CONFIG` on a broker whose properties do not mention them.
+fn source_of(value: i64, default: i64) -> i8 {
+    if value == default {
+        CONFIG_SOURCE_DEFAULT
+    } else {
+        CONFIG_SOURCE_STATIC_BROKER
+    }
+}
+
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    static_broker: StaticBrokerConfigs,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -125,13 +176,27 @@ pub(super) fn describe_one(
                 entry
             })
             .collect();
-        if let Some(node_id) = node_id
-            && key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id"))
-        {
-            let mut entry =
-                make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
-            entry.read_only = true;
-            configs.push(entry);
+        if let Some(node_id) = node_id {
+            if key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id")) {
+                let mut entry =
+                    make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
+                entry.read_only = true;
+                configs.push(entry);
+            }
+            // The process reads both retention knobs once at startup, so an
+            // operator must see them the way it sees every other config no
+            // alter can change.
+            for (key, value, source) in static_broker.entries() {
+                if key_filter.is_none_or(|keys| keys.iter().any(|filter| filter == key)) {
+                    // Kafka refuses to reconfigure either key dynamically —
+                    // `kafka-configs --alter` answers "Cannot update these
+                    // configs dynamically" — so both report read-only whatever
+                    // their source.
+                    let mut entry = make_entry(key, &value, source);
+                    entry.read_only = true;
+                    configs.push(entry);
+                }
+            }
             configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
         }
         return ok(configs);

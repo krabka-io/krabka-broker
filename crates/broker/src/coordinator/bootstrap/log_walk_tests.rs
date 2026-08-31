@@ -56,6 +56,7 @@ async fn replay_records_walks_all_batches() {
                 leader_epoch: -1,
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
             }
             .encode_value(),
         ),
@@ -133,6 +134,7 @@ fn replay_applies_only_committed_transactional_offsets() {
                 leader_epoch: -1,
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
             }
             .encode_value(),
         ),
@@ -174,4 +176,107 @@ fn replay_applies_only_committed_transactional_offsets() {
     check!(committed[&("t".to_string(), 0)].offset == 111);
     check!(!committed.contains_key(&("t".to_string(), 1)));
     check!(!committed.contains_key(&("t".to_string(), 2)));
+}
+
+/// Replay honours the tombstones the offset-retention sweep and `OffsetDelete`
+/// write: a null-valued offset key drops that offset, and a null-valued group
+/// key drops the group without touching the offsets that outlive it. This is
+/// what `GroupMetadataManager.loadGroupsAndOffsets` does.
+#[test]
+fn replay_honours_offset_and_group_tombstones() {
+    use krabka_log::Offset;
+    use krabka_protocol::records::Record;
+
+    use crate::coordinator::{
+        persistence::GroupMetadataValue,
+        unified::{
+            GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
+        },
+    };
+
+    #[derive(Debug)]
+    struct EmptyMeta;
+    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
+        fn snapshot(&self) -> ReconcileInput {
+            ReconcileInput::default()
+        }
+    }
+
+    let coordinator = Arc::new(GroupCoordinator::new(
+        crate::coordinator::unified::config::NextGenConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        Arc::new(EmptyMeta),
+        Arc::new(InMemoryOffsetsLog::default()),
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    ));
+    let commit = |partition: i32, offset: i64| Record {
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        value: Some(
+            OffsetCommitValue {
+                offset: Offset(offset),
+                leader_epoch: -1,
+                metadata: String::new(),
+                commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
+            }
+            .encode_value(),
+        ),
+        ..Default::default()
+    };
+    let tombstone = |key: bytes::Bytes| Record {
+        key: Some(key),
+        value: None,
+        ..Default::default()
+    };
+    let group_metadata = Record {
+        key: Some(GroupMetadataValue::encode_key("g")),
+        value: Some(
+            GroupMetadataValue {
+                protocol_type: "consumer".into(),
+                generation: 3,
+                protocol_name: None,
+                leader: None,
+                current_state_timestamp_ms: 777,
+                members: Vec::new(),
+            }
+            .encode_value(),
+        ),
+        ..Default::default()
+    };
+
+    let dir = tempdir().unwrap();
+    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    for record in [
+        commit(0, 100),
+        commit(1, 101),
+        group_metadata,
+        tombstone(OffsetCommitValue::encode_key("g", "t", 0)),
+    ] {
+        let mut batch = RecordBatch {
+            records: vec![record],
+            ..RecordBatch::default()
+        };
+        log.append(&mut batch).unwrap();
+    }
+
+    let replayed = replay_records(&log, &coordinator).unwrap();
+    let committed = replayed.committed.get("g").expect("group g");
+    check!(!committed.contains_key(&("t".to_string(), 0)));
+    check!(committed[&("t".to_string(), 1)].offset == 101);
+    // The memberless snapshot records when the group emptied, which is where
+    // the offset-retention sweep measures from after a restart.
+    check!(replayed.empty_since.get("g") == Some(&777));
+    check!(replayed.classic.contains_key("g"));
+
+    // The group's own tombstone drops the group and its empty-since stamp, and
+    // leaves the surviving offset alone.
+    let mut batch = RecordBatch {
+        records: vec![tombstone(GroupMetadataValue::encode_key("g"))],
+        ..RecordBatch::default()
+    };
+    log.append(&mut batch).unwrap();
+    let replayed = replay_records(&log, &coordinator).unwrap();
+    check!(!replayed.classic.contains_key("g"));
+    check!(!replayed.empty_since.contains_key("g"));
+    check!(replayed.committed["g"][&("t".to_string(), 1)].offset == 101);
 }

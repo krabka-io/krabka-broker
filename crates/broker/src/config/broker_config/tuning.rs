@@ -165,6 +165,16 @@ macro_rules! tuning_fields {
             pub future_log_move_read_chunk: ByteSize,
             /// Partition count for the consumer-offsets internal topic.
             pub offsets_topic_num_partitions: i32,
+            /// KIP-211: how long a committed offset survives after the group
+            /// that owns it loses its last member. Kafka's
+            /// `offsets.retention.minutes`, default 10080 (7 days). The
+            /// retention sweep tombstones an empty group's offsets once this
+            /// much time has passed, and then tombstones the group itself.
+            pub offsets_retention: Time,
+            /// Cadence of the offset-retention sweep. Kafka's
+            /// `offsets.retention.check.interval.ms`, default 600000 (10
+            /// minutes).
+            pub offsets_retention_check_interval: Time,
             /// Desired replication factor for the consumer-offsets internal topic.
             pub offsets_topic_replication_factor: i16,
             /// Partition count for the transaction-state internal topic.

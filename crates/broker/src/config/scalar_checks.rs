@@ -14,7 +14,10 @@ use crate::{BrokerError, config::BrokerConfig};
 mod tests;
 
 impl BrokerConfig {
-    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+    /// The broker-wide time knobs. They sit in their own pass, apart from the
+    /// replication timings and the size and count limits, because one function
+    /// holding all three lists outgrows the length limit.
+    fn validate_positive_broker_times(&self) -> Result<(), BrokerError> {
         for (name, value) in [
             (
                 "startup_leader_wait_timeout",
@@ -146,9 +149,19 @@ impl BrokerConfig {
                 "delegation_token_default_renew_period",
                 self.delegation_token_default_renew_period,
             ),
+            ("offsets_retention", self.offsets_retention),
+            (
+                "offsets_retention_check_interval",
+                self.offsets_retention_check_interval,
+            ),
         ] {
             require_positive_time(name, value)?;
         }
+        Ok(())
+    }
+
+    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+        self.validate_positive_broker_times()?;
         for (name, value) in [
             (
                 "replication.fetch_max_wait",

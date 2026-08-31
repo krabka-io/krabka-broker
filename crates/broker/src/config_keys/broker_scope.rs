@@ -28,6 +28,15 @@ pub(crate) const BROKER_WITNESS: &str = "broker.witness";
 /// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
 pub(crate) const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
 
+/// KIP-211: how long a committed offset outlives the group that owns it, in
+/// whole minutes. The value is static for the life of the process, so
+/// `DescribeConfigs` reports it read-only against `STATIC_BROKER_CONFIG`.
+pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
+
+/// Cadence of the offset-retention sweep, in milliseconds. Static and
+/// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
+pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
+
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
 pub(crate) const WITNESS_TRUE: &str = "true";
 

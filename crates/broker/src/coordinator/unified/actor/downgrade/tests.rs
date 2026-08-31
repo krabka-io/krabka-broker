@@ -50,6 +50,7 @@ async fn last_consumer_member_leaving_downgrades_to_classic() {
         vec![("range".into(), subscription_blob(&["t"]))],
     ));
     let group = Box::new(CoordinatorGroup {
+        empty_since_ms: None,
         group_id: "g".into(),
         kind: GroupKind::Classic(cs),
         committed_offsets: HashMap::new(),
@@ -308,6 +309,7 @@ async fn committed_offsets_survive_a_flip() {
                     leader_epoch: 3,
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
                 },
             )],
             reply: tx,

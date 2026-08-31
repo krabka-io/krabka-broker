@@ -45,6 +45,17 @@ pub struct CoordinatorGroup {
     /// change, in slices C to E, can therefore carry the committed offsets
     /// through a conversion untouched.
     pub committed_offsets: HashMap<(String, i32), OffsetEntry>,
+    /// Wall-clock millisecond at which the group last lost its final member,
+    /// and `None` while it still has one.
+    ///
+    /// This is Kafka's `currentStateTimestamp` narrowed to the one question
+    /// the offset-retention sweep asks: how long has this group been empty?
+    /// The actor restamps it once per mailbox turn through
+    /// [`observe_membership`](Self::observe_membership), so no membership
+    /// transition has to remember to maintain it. A group that has never had a
+    /// member — the "simple consumer" that only commits offsets — is empty
+    /// from the moment its actor first runs.
+    pub empty_since_ms: Option<i64>,
 }
 
 impl CoordinatorGroup {
@@ -55,6 +66,7 @@ impl CoordinatorGroup {
             kind: GroupKind::Classic(ClassicState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            empty_since_ms: None,
         }
     }
 
@@ -65,6 +77,32 @@ impl CoordinatorGroup {
             kind: GroupKind::Consumer(ConsumerState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            empty_since_ms: None,
+        }
+    }
+
+    /// `true` while the group has at least one member, whichever protocol
+    /// they speak.
+    #[must_use]
+    pub fn has_members(&self) -> bool {
+        match &self.kind {
+            GroupKind::Classic(state) => !state.members.is_empty(),
+            GroupKind::Consumer(state) => !state.members.is_empty(),
+        }
+    }
+
+    /// Record whether the group has members as of `now_ms`.
+    ///
+    /// The actor calls this once per mailbox turn. A group that has members
+    /// clears [`empty_since_ms`](Self::empty_since_ms); a group that has none
+    /// stamps it, and a group that was already empty keeps the earlier stamp,
+    /// so the sweep measures from the moment the last member left rather than
+    /// from the most recent turn.
+    pub fn observe_membership(&mut self, now_ms: i64) {
+        if self.has_members() {
+            self.empty_since_ms = None;
+        } else if self.empty_since_ms.is_none() {
+            self.empty_since_ms = Some(now_ms);
         }
     }
 
@@ -129,6 +167,39 @@ mod tests {
         check!(g.as_consumer().is_none());
         check!(g.as_classic_mut().is_some());
         check!(g.group_id == "g");
+    }
+
+    #[test]
+    fn empty_since_stamps_once_and_clears_while_members_are_present() {
+        use std::time::Duration;
+
+        use crate::coordinator::unified::classic_state::Member;
+
+        let mut group = CoordinatorGroup::new_classic("g");
+        check!(!group.has_members());
+
+        // First observation of an empty group stamps it; later ones keep the
+        // first stamp, so the sweep measures from when it emptied.
+        group.observe_membership(100);
+        check!(group.empty_since_ms == Some(100));
+        group.observe_membership(500);
+        check!(group.empty_since_ms == Some(100));
+
+        group.as_classic_mut().unwrap().add_member(Member::new(
+            "m1",
+            "client",
+            "host",
+            Duration::from_secs(30),
+            Duration::from_mins(1),
+            vec![("range".into(), bytes::Bytes::new())],
+        ));
+        group.observe_membership(600);
+        check!(group.has_members());
+        check!(group.empty_since_ms == None);
+
+        group.as_classic_mut().unwrap().members.clear();
+        group.observe_membership(900);
+        check!(group.empty_since_ms == Some(900));
     }
 
     #[test]

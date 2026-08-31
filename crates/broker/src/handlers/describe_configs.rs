@@ -14,6 +14,15 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
+//! A numeric broker resource carries two more synthesised read-only keys, at
+//! `STATIC_BROKER_CONFIG` like `node.id`: KIP-211's
+//! [`offsets.retention.minutes`](crate::config_keys::OFFSETS_RETENTION_MINUTES)
+//! and
+//! [`offsets.retention.check.interval.ms`](crate::config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS).
+//! The process reads both once at startup, so no alter can change them and
+//! `kafka-configs` must say so. The cluster-default broker resource (an empty
+//! `resource_name`) reports dynamic defaults only, which is what Kafka does.
+//!
 //! One stored topic override is read-only too:
 //! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
 //! when it is opened, so both alter paths refuse to change it and
@@ -56,7 +65,7 @@ mod wire;
 
 use self::{
     authz::{denied_result, resource_authz_failure},
-    resources::describe_one,
+    resources::{StaticBrokerConfigs, describe_one},
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -81,6 +90,13 @@ pub(crate) fn handle(
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
         let image = controller.current_image();
+        let static_broker = StaticBrokerConfigs {
+            offsets_retention_minutes: broker.config.offsets_retention.millis_i64() / 60_000,
+            offsets_retention_check_interval_ms: broker
+                .config
+                .offsets_retention_check_interval
+                .millis_i64(),
+        };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
         // `Cluster("kafka-cluster")`. On Deny stamp the result entry with
@@ -105,6 +121,7 @@ pub(crate) fn handle(
                         r,
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
+                        static_broker,
                     )
                 }
             })
