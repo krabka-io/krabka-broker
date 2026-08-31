@@ -21,6 +21,16 @@
 //! same single entry, and bump the same `Counter`, so what separates them is
 //! the label's allocation and nothing else.
 //!
+//! One asymmetry is left in on purpose, and it runs against the measured win
+//! rather than for it: `owned_string` is defined in this file and inlines,
+//! while `shared_arc` is a call across the crate boundary into `krabka-broker`
+//! that nothing in this repository's profiles enables LTO for. The `Arc` side
+//! therefore pays a real call the `String` side does not, so the ratio below
+//! understates the difference rather than flattering it. Removing the
+//! asymmetry would mean either copying `record_replication_in` into the bench
+//! — measuring a reconstruction on both sides and the shipped recorder on
+//! neither — or turning on LTO for a comparison that is about an allocation.
+//!
 //! `bench_ratio` prints nanoseconds per observation for both, and the ratio,
 //! because criterion compares a benchmark against its own previous run and
 //! never against a sibling — the before-and-after number this suite exists for
