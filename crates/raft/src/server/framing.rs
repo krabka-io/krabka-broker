@@ -7,6 +7,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_ids::{ApiKey, ApiVersion};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::api_versions::table;
 use crate::{
     error::RaftError,
     wire::{API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
@@ -37,42 +38,29 @@ fn require_remaining(available: usize, required: usize) -> Result<(), RaftError>
     }
 }
 
+/// Whether a request frame for `api_key` at `version` carries tagged fields.
+///
+/// The minimum comes from the advertised API table, so an API the listener
+/// serves reads its own generated `FLEXIBLE_MIN` and nothing else. Note that
+/// this is asked of every version a peer may send, not only the advertised
+/// range: a request outside that range still has to have its header parsed
+/// before the handler can refuse it.
 fn request_is_flexible(
     api_key: i16,
     version: i16,
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
 ) -> bool {
-    use krabka_protocol::owned::{
-        add_raft_voter_request, api_versions_request, begin_quorum_epoch_request,
-        broker_heartbeat_request, broker_registration_request, controller_registration_request,
-        describe_cluster_request, describe_quorum_request, end_quorum_epoch_request, fetch_request,
-        fetch_snapshot_request, remove_raft_voter_request, update_raft_voter_request, vote_request,
-    };
-
     let flexible_min = match api_key {
-        api_versions_request::API_KEY => Some(api_versions_request::FLEXIBLE_MIN),
-        fetch_request::API_KEY => Some(fetch_request::FLEXIBLE_MIN),
-        vote_request::API_KEY => Some(vote_request::FLEXIBLE_MIN),
-        begin_quorum_epoch_request::API_KEY => Some(begin_quorum_epoch_request::FLEXIBLE_MIN),
-        end_quorum_epoch_request::API_KEY => Some(end_quorum_epoch_request::FLEXIBLE_MIN),
-        fetch_snapshot_request::API_KEY => Some(fetch_snapshot_request::FLEXIBLE_MIN),
-        describe_quorum_request::API_KEY => Some(describe_quorum_request::FLEXIBLE_MIN),
-        describe_cluster_request::API_KEY => Some(describe_cluster_request::FLEXIBLE_MIN),
-        broker_registration_request::API_KEY => Some(broker_registration_request::FLEXIBLE_MIN),
-        broker_heartbeat_request::API_KEY => Some(broker_heartbeat_request::FLEXIBLE_MIN),
-        controller_registration_request::API_KEY => {
-            Some(controller_registration_request::FLEXIBLE_MIN)
-        }
-        add_raft_voter_request::API_KEY => Some(add_raft_voter_request::FLEXIBLE_MIN),
-        remove_raft_voter_request::API_KEY => Some(remove_raft_voter_request::FLEXIBLE_MIN),
-        update_raft_voter_request::API_KEY => Some(update_raft_voter_request::FLEXIBLE_MIN),
+        // Krabka-private RPCs are always framed flexible, at every version.
         API_KEY_SUBMIT_CHANGE | API_KEY_METADATA_FETCH => Some(i16::MIN),
-        _ => admin_router.and_then(|router| {
-            router
-                .api_versions()
-                .iter()
-                .find(|api| api.api_key == api_key)
-                .map(|api| api.flexible_min)
+        _ => table::flexible_min(api_key).or_else(|| {
+            admin_router.and_then(|router| {
+                router
+                    .api_versions()
+                    .iter()
+                    .find(|api| api.api_key == api_key)
+                    .map(|api| api.flexible_min)
+            })
         }),
     };
     flexible_min.is_some_and(|minimum| version >= minimum)
