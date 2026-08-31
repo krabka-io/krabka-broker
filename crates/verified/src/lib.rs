@@ -22,9 +22,11 @@ pub mod producer;
 pub mod raft;
 pub mod remote_txn;
 pub mod restore;
+pub mod schema;
 pub mod stretch;
 pub mod throttle;
 pub mod transaction;
+pub mod vote;
 pub mod wal;
 
 pub use audit::{SpoolAppendDecision, spool_append_decision};
@@ -53,12 +55,17 @@ pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
 };
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
-pub use restore::restore_batch_step;
+pub use restore::{restore_batch_step, restore_record_coordinates};
+pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
 };
 pub use transaction::{
     TransactionCompletionDecision, TransactionIdentity, TransactionSnapshot,
     transaction_completion_decision,
+};
+pub use vote::{
+    VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,
+    vote_encode_decision, vote_wire_decision,
 };
 pub use wal::{WalFetchAdmission, wal_fetch_admission};

@@ -32,9 +32,12 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
         m.on_event(
             Event::ReceiveVoteRequest {
                 from: NodeId(2),
+                cluster_id: None,
                 voter_id: NodeId(1),
+                voter_directory_id: uuid::Uuid::nil(),
                 candidate_epoch: 3,
                 candidate: NodeId(2),
+                candidate_directory_id: uuid::Uuid::nil(),
                 candidate_log_end: LogEnd {
                     last_epoch: 1,
                     last_offset: 5,
