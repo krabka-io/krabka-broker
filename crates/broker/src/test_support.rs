@@ -526,5 +526,120 @@ impl MetadataSource for FakeMetadataSource {
         Err(unsupported())
     }
 
+    /// Finalizing `kraft.version` is a reconfiguration too, so it rejects with
+    /// the others rather than falling through to the trait's `NotLeader`,
+    /// which would send a caller down a leadership branch the fake never
+    /// models.
+    async fn finalize_kraft_version(&self, _version: u16) -> Result<ReconfigOutcome, RaftError> {
+        Err(unsupported())
+    }
+
     async fn cancel(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use assert2::assert;
+    use krabka_metadata::{KRaftVersionRange, MetadataRecord, Voter};
+    use krabka_raft::{
+        AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
+        SubmitChangeResult, UpdateVoter,
+    };
+
+    use super::FakeMetadataSource;
+    use crate::metadata_source::MetadataSource;
+
+    fn voter() -> Voter {
+        Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(1),
+            endpoints: Vec::new(),
+            kraft_version: KRaftVersionRange::default(),
+        }
+    }
+
+    /// Every reconfiguration path rejects the same way, `finalize_kraft_version`
+    /// included: the fake has no raft log to reconfigure, and a caller that
+    /// reached one should see that rather than a leadership error the fake
+    /// never models.
+    #[tokio::test]
+    async fn every_reconfiguration_path_rejects_as_unsupported() {
+        let source = FakeMetadataSource::builder().build();
+
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.change_membership(BTreeSet::from([NodeId(1)])).await);
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.add_learner(NodeId(1), Node::default()).await);
+        assert!(let Err(RaftError::Unsupported(_)) = source.trigger_snapshot().await);
+        assert!(let Err(RaftError::Unsupported(_)) = source
+            .add_voter(AddVoter {
+                voter: voter(),
+                ack_when_committed: true,
+            })
+            .await);
+        assert!(let Err(RaftError::Unsupported(_)) = source
+            .remove_voter(RemoveVoter {
+                id: NodeId(1),
+                directory_id: uuid::Uuid::from_u128(1),
+            })
+            .await);
+        assert!(let Err(RaftError::Unsupported(_)) =
+            source.update_voter(UpdateVoter { voter: voter() }).await);
+        assert!(let Err(RaftError::Unsupported(_)) = source.finalize_kraft_version(1).await);
+    }
+
+    /// The quorum has committed nothing and knows no voters, and its leader is
+    /// whatever the leader channel last published, so `watch_leader` and
+    /// `quorum_state` cannot disagree.
+    #[test]
+    fn quorum_state_reports_the_leader_channel_over_an_empty_quorum() {
+        let source = FakeMetadataSource::builder()
+            .leader(Some(NodeId(2)))
+            .build();
+
+        let QuorumState {
+            current_term,
+            last_applied_index,
+            current_leader,
+            voters,
+            voter_nodes,
+            per_voter_matched_index,
+        } = source.quorum_state();
+        assert!(current_term == 0);
+        assert!(last_applied_index == 0);
+        assert!(current_leader == Some(NodeId(2)));
+        assert!(voters.is_empty());
+        assert!(voter_nodes.is_empty());
+        assert!(per_voter_matched_index.is_empty());
+        assert!(source.current_metadata_offset() == -1);
+
+        source.set_leader(None);
+        assert!(source.quorum_state().current_leader.is_none());
+    }
+
+    /// The fake keeps no checkpoint to serve and has cast no vote.
+    #[test]
+    fn the_fake_serves_no_snapshot_and_records_no_vote() {
+        let source = FakeMetadataSource::builder().build();
+
+        assert!(matches!(
+            source.read_snapshot_range(0, 1024),
+            SnapshotRange::NoSnapshot
+        ));
+        assert!(source.voted_directory_id().is_none());
+    }
+
+    /// `cancel` has no background work to stop, and leaves the source serving.
+    #[tokio::test]
+    async fn cancel_leaves_the_source_serving() {
+        let source = FakeMetadataSource::builder().build();
+
+        source.cancel().await;
+
+        assert!(let Ok(result) = source.submit_change(Vec::new()).await);
+        assert!(result == SubmitChangeResult::default());
+        assert!(source.submitted() == vec![Vec::<MetadataRecord>::new()]);
+    }
 }

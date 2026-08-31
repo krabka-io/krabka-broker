@@ -17,7 +17,7 @@ use crate::{
         config::BarrierConfig,
         metrics::NoBarrierMetrics,
         state::GroupSpec,
-        test_support::{open_partition, topic_records},
+        test_support::{metadata_source, open_partition, topic_records},
     },
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
@@ -83,11 +83,7 @@ impl Fixture {
         Self {
             _dir: dir,
             registry,
-            source: Arc::new(
-                FakeMetadataSource::builder()
-                    .records(&cluster_records())
-                    .build(),
-            ),
+            source: Arc::new(metadata_source(&cluster_records())),
             config: config(),
         }
     }
