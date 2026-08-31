@@ -21,7 +21,7 @@
 //! see [`crate::metrics::lag`].
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, atomic::Ordering},
 };
 
@@ -64,6 +64,16 @@ type TopicPartition = (String, i32);
 /// stalled follower well inside a scrape window.
 pub(crate) const LAG_POLL_INTERVAL: Time = secs(30);
 
+/// How long one pass waits for any single answer it does not compute itself:
+/// one group actor's round trip, or one remote leader's watermark probe.
+///
+/// A pass has to end for the poller to return to its interval, and every
+/// gauge the pass has not reached yet is stale until it does. An answer that
+/// has not arrived well inside [`LAG_POLL_INTERVAL`] costs its own series this
+/// pass and the pass carries on with the rest, which is the same rule the
+/// samplers already follow for a watermark they cannot read.
+pub(crate) const SAMPLE_WAIT: Time = secs(5);
+
 /// The periodic sampler behind `replica_lag_records`,
 /// `replica_lag_max_records` and `consumer_group_lag_records`.
 pub(crate) struct LagPoller {
@@ -74,6 +84,11 @@ pub(crate) struct LagPoller {
     pub inter_broker: Arc<InterBrokerClient>,
     pub listener_protocol: ListenerProtocol,
     pub listener_name: String,
+    /// The TLS SNI and SASL server name every inter-broker connection this
+    /// broker opens is authenticated against, from
+    /// `BrokerConfig::inter_broker_server_name`. A probe that used anything
+    /// else would fail its handshake on a cluster that configures one.
+    pub inter_broker_server_name: String,
     pub period: Time,
     pub metrics: BrokerMetrics,
     pub shutdown: CancellationToken,
@@ -92,7 +107,17 @@ impl LagPoller {
             loop {
                 tokio::select! {
                     () = self.shutdown.cancelled() => break,
-                    _ = interval.tick() => self.sample().await,
+                    _ = interval.tick() => {
+                        // The pass itself is a cancellation branch, and not
+                        // only the wait between passes. A pass reads a group
+                        // actor and a remote leader, so it can be parked on an
+                        // answer when shutdown arrives, and dropping it there
+                        // is what lets the cleanup publishes below run at all.
+                        tokio::select! {
+                            () = self.shutdown.cancelled() => break,
+                            () = self.sample() => {}
+                        }
+                    }
                 }
             }
             self.metrics.publish_replica_lag(&HashMap::new());
@@ -101,10 +126,15 @@ impl LagPoller {
     }
 
     /// One pass over both families.
+    ///
+    /// Both halves read the same metadata image, so a partition that appears
+    /// or moves mid-pass cannot make the two families disagree about who leads
+    /// it.
     async fn sample(&self) {
-        self.metrics
-            .publish_replica_lag(&replica_lag_samples(&self.partitions, self.node_id).await);
         let image = self.metadata.current_image();
+        self.metrics.publish_replica_lag(
+            &replica_lag_samples(&self.partitions, self.node_id, &image).await,
+        );
         self.metrics
             .publish_consumer_group_lag(&self.consumer_group_lag_samples(&image).await);
     }
@@ -124,7 +154,7 @@ impl LagPoller {
             let Some(handle) = self.coordinator.find(&group_id) else {
                 continue;
             };
-            let offsets = committed_offsets(&handle).await;
+            let offsets = committed_offsets(&handle.tx).await;
             let mut group_offsets = HashMap::new();
             for ((topic, partition), entry) in offsets {
                 // A negative offset is the "no committed offset" sentinel the
@@ -209,6 +239,10 @@ impl LagPoller {
 
     /// One payload-free `Fetch` against `leader` covering every partition it
     /// leads in this pass.
+    ///
+    /// The exchange is bounded by [`SAMPLE_WAIT`]: an unreachable leader must
+    /// cost this pass its own series rather than the pass itself, because the
+    /// poller cannot resample any family until it returns.
     async fn probe_high_watermarks(
         &self,
         image: &MetadataImage,
@@ -226,41 +260,86 @@ impl LagPoller {
             || (broker.host.as_str(), broker.port),
             |endpoint| (endpoint.host.as_str(), endpoint.port),
         );
-        let mut topics: HashMap<&str, FetchTopic> = HashMap::new();
-        // Fetch v13 dropped the topic name from the response, so the reply is
-        // keyed by id alone and the names have to be carried across the probe.
-        let mut names: HashMap<WireUuid, &str> = HashMap::new();
-        for (topic, partition) in partitions {
-            let Some(record) = image.partition(topic, *partition) else {
-                continue;
-            };
-            let Some(topic_id) = image.topic(topic).map(|topic| topic.topic_id) else {
-                continue;
-            };
-            names.insert(WireUuid(*topic_id.as_bytes()), topic.as_str());
-            topics
-                .entry(topic.as_str())
-                .or_insert_with(|| FetchTopic {
-                    topic: topic.clone(),
-                    topic_id: WireUuid(*topic_id.as_bytes()),
-                    ..Default::default()
-                })
-                .partitions
-                .push(FetchPartition {
-                    partition: *partition,
-                    current_leader_epoch: record.leader_epoch.0,
-                    // A consumer Fetch reports the high watermark even when it
-                    // returns no records, so asking past the end keeps this
-                    // metadata probe payload-free.
-                    fetch_offset: i64::MAX,
-                    partition_max_bytes: 0,
-                    ..Default::default()
-                });
-        }
-        if topics.is_empty() {
+        let Some((request, names)) = probe_request(image, partitions) else {
             return Ok(HashMap::new());
-        }
-        let request = FetchRequest {
+        };
+        let options = ConnectionOptions {
+            client_id: format!("krabka-consumer-lag-{}", self.node_id),
+            ..ConnectionOptions::default()
+        };
+        let exchange = async {
+            let connection = self
+                .inter_broker
+                .connect_as_connection(
+                    host,
+                    port,
+                    self.listener_protocol,
+                    &self.inter_broker_server_name,
+                    options,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let response: FetchResponse = connection
+                .send(request)
+                .await
+                .map_err(|error| error.to_string())?;
+            connection.close();
+            Ok(probed_high_watermarks(&response, &names))
+        };
+        tokio::time::timeout(SAMPLE_WAIT.to_std(), exchange)
+            .await
+            .map_err(|_| format!("watermark probe to broker {leader} timed out"))?
+    }
+}
+
+/// The `Fetch` that asks one leader for the high watermark of each of
+/// `partitions`, and the topic names its reply has to be read back through.
+///
+/// `None` when the image names none of the partitions any more, which is the
+/// probe having nothing left to ask. The request is built apart from the
+/// sending because its shape is the part that has to be right: it asks past
+/// the end of every partition so that the reply carries watermarks and no
+/// records, and Fetch v13 dropped the topic name from the response, so the
+/// names it carries across are what make the reply readable at all. Topics go
+/// in name order so that one pass's request is the same bytes as the next.
+fn probe_request<'a>(
+    image: &MetadataImage,
+    partitions: &'a [TopicPartition],
+) -> Option<(FetchRequest, HashMap<WireUuid, &'a str>)> {
+    let mut topics: BTreeMap<&str, FetchTopic> = BTreeMap::new();
+    let mut names: HashMap<WireUuid, &str> = HashMap::new();
+    for (topic, partition) in partitions {
+        let Some(record) = image.partition(topic, *partition) else {
+            continue;
+        };
+        let Some(topic_id) = image.topic(topic).map(|topic| topic.topic_id) else {
+            continue;
+        };
+        names.insert(WireUuid(*topic_id.as_bytes()), topic.as_str());
+        topics
+            .entry(topic.as_str())
+            .or_insert_with(|| FetchTopic {
+                topic: topic.clone(),
+                topic_id: WireUuid(*topic_id.as_bytes()),
+                ..Default::default()
+            })
+            .partitions
+            .push(FetchPartition {
+                partition: *partition,
+                current_leader_epoch: record.leader_epoch.0,
+                // A consumer Fetch reports the high watermark even when it
+                // returns no records, so asking past the end keeps this
+                // metadata probe payload-free.
+                fetch_offset: i64::MAX,
+                partition_max_bytes: 0,
+                ..Default::default()
+            });
+    }
+    if topics.is_empty() {
+        return None;
+    }
+    Some((
+        FetchRequest {
             replica_id: -1,
             max_wait_ms: 0,
             min_bytes: 0,
@@ -268,23 +347,9 @@ impl LagPoller {
             isolation_level: 0,
             topics: topics.into_values().collect(),
             ..Default::default()
-        };
-        let options = ConnectionOptions {
-            client_id: format!("krabka-consumer-lag-{}", self.node_id),
-            ..ConnectionOptions::default()
-        };
-        let connection = self
-            .inter_broker
-            .connect_as_connection(host, port, self.listener_protocol, "localhost", options)
-            .await
-            .map_err(|error| error.to_string())?;
-        let response: FetchResponse = connection
-            .send(request)
-            .await
-            .map_err(|error| error.to_string())?;
-        connection.close();
-        Ok(probed_high_watermarks(&response, &names))
-    }
+        },
+        names,
+    ))
 }
 
 /// The high watermark of every partition row `response` reported without an
@@ -338,20 +403,26 @@ fn coordinates_group(image: &MetadataImage, node_id: NodeId, group_id: &str) -> 
 ///
 /// The offsets live on the protocol-agnostic `CoordinatorGroup`, so one message
 /// serves a classic group and a KIP-848 group alike. An actor that has gone
-/// away yields nothing, which is the same answer `OffsetFetch` gives.
+/// away yields nothing, which is the same answer `OffsetFetch` gives, and so
+/// does one that has not answered within [`SAMPLE_WAIT`]: a wedged actor costs
+/// its own group's series this pass rather than the pass, which every other
+/// group's series and both replica families would otherwise wait behind.
 async fn committed_offsets(
-    handle: &crate::coordinator::unified::actor::GroupActorHandle,
+    actor: &tokio::sync::mpsc::Sender<GroupActorMessage>,
 ) -> HashMap<TopicPartition, crate::coordinator::unified::classic_state::OffsetEntry> {
     let (reply, response) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::FetchCommitted { reply })
-        .await
-        .is_err()
-    {
+    let exchange = async {
+        actor
+            .send(GroupActorMessage::FetchCommitted { reply })
+            .await
+            .ok()?;
+        response.await.ok()
+    };
+    let Ok(offsets) = tokio::time::timeout(SAMPLE_WAIT.to_std(), exchange).await else {
+        tracing::debug!("a group actor did not answer the lag sampler in time");
         return HashMap::new();
-    }
-    response.await.unwrap_or_default()
+    };
+    offsets.unwrap_or_default()
 }
 
 /// Lag of every follower of every partition `node_id` currently leads.
@@ -361,25 +432,49 @@ async fn committed_offsets(
 /// the follower still owes. It is read per partition rather than accumulated,
 /// which is why a follower that stops fetching still shows a climbing value:
 /// its tracked offset stands still while the leader's moves.
+///
+/// The followers come from the image's replica assignment rather than from
+/// `ReplicaState::per_follower`. That map is fetch-driven — `install_isr`
+/// seeds only ISR members, deliberately, so that `isr_maintenance` cannot
+/// re-admit a replica on progress it never made — so a replica a reassignment
+/// has just added, or one that has not fetched since this broker took the
+/// leadership, has no entry in it. That is precisely the follower an operator
+/// needs to see, so a missing entry reads as no progress rather than as no
+/// series, and the gauge falls to the real lag on the follower's first fetch.
+/// A partition the image no longer names is skipped: there is no assignment
+/// left to justify a series.
 pub(crate) async fn replica_lag_samples(
     partitions: &PartitionRegistry,
     node_id: NodeId,
+    image: &MetadataImage,
 ) -> HashMap<ReplicaLagLabel, i64> {
     let mut samples = HashMap::new();
     for partition in partitions.arcs() {
         if partition.current_leader.load(Ordering::Acquire) != node_id.0 {
             continue;
         }
+        let index = partition.index.get();
+        let Some(record) = image.partition(&partition.topic, index) else {
+            continue;
+        };
         let leader_log_end = partition.log_end_offset().0;
         let state = partition.replica_state.lock().await;
-        for (follower, stats) in &state.per_follower {
+        for follower in record
+            .replicas
+            .iter()
+            .filter(|replica| **replica != node_id)
+        {
+            let follower_leo = state
+                .per_follower
+                .get(follower)
+                .map_or(0, |stats| stats.leo.0);
             samples.insert(
                 ReplicaLagLabel {
                     topic: partition.topic.clone(),
-                    partition: partition.index.get(),
+                    partition: index,
                     replica: follower.0,
                 },
-                (leader_log_end - stats.leo.0).max(0),
+                (leader_log_end - follower_leo).max(0),
             );
         }
     }

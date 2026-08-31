@@ -111,9 +111,35 @@ async fn follower_fetches_everything(partition: &Partition) {
     );
 }
 
+/// An image assigning both `TOPIC` partitions to `LEADER` and `FOLLOWER`, with
+/// `LEADER` leading. The assignment is what justifies a follower's series, so
+/// the sampler reads its followers from here rather than from the leader's
+/// fetch-driven progress map.
+fn replica_image() -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: TOPIC.into(),
+        topic_id: uuid::Uuid::from_u128(1),
+        partitions: 2,
+        replication_factor: 2,
+    }));
+    for partition in 0..2 {
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: TOPIC.into(),
+            partition,
+            leader: LEADER,
+            replicas: vec![LEADER, FOLLOWER],
+            isr: vec![LEADER, FOLLOWER],
+            leader_epoch: LeaderEpoch(1),
+            ..Default::default()
+        }));
+    }
+    image
+}
+
 /// Run one replica-lag pass and publish it, as the poller's tick does.
 async fn sample_replica_lag(partitions: &PartitionRegistry, metrics: &BrokerMetrics) {
-    metrics.publish_replica_lag(&replica_lag_samples(partitions, LEADER).await);
+    metrics.publish_replica_lag(&replica_lag_samples(partitions, LEADER, &replica_image()).await);
 }
 
 /// The published lag of `FOLLOWER` on `TOPIC`-`partition`, or `None` when the
@@ -208,6 +234,65 @@ async fn losing_leadership_releases_the_partitions_replica_lag_series() {
     check!(metrics.replica_lag_max.get() == 0);
 }
 
+/// A replica the assignment names but that has never fetched has no entry in
+/// the leader's fetch-driven progress map, because `install_isr` seeds only
+/// ISR members. It is the follower an operator most needs to see, so it
+/// reports the whole log rather than no series at all.
+#[tokio::test]
+async fn an_assigned_follower_that_has_never_fetched_reports_the_whole_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = PartitionRegistry::new();
+    let partition = led_partition(dir.path(), TOPIC, 0);
+    // The ISR holds the leader alone, which is what a replica added by a
+    // reassignment looks like until its first fetch lands.
+    partition.replica_state.lock().await.install_isr(
+        &[LEADER],
+        &[LEADER, FOLLOWER],
+        LEADER,
+        Instant::now(),
+    );
+    append_records(&partition, 12);
+    partitions.insert(TOPIC.into(), PartitionIndex(0), Arc::clone(&partition));
+    let metrics = BrokerMetrics::new();
+
+    sample_replica_lag(&partitions, &metrics).await;
+
+    assert!(published_replica_lag(&metrics, 0) == Some(12));
+    check!(metrics.replica_lag_max.get() == 12);
+
+    // Its first fetch takes the gauge to the real distance rather than
+    // creating the series.
+    follower_fetches_everything(&partition).await;
+    sample_replica_lag(&partitions, &metrics).await;
+    check!(published_replica_lag(&metrics, 0) == Some(0));
+}
+
+/// Evicting the partition whose follower was supplying the maximum takes the
+/// rollup down with it. Only the sampler's next pass would otherwise reset it,
+/// and a scrape in between would report a maximum no series carries.
+#[tokio::test]
+async fn evicting_the_worst_follower_lowers_the_max_rollup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = PartitionRegistry::new();
+    for (index, records) in [(0, 3), (1, 40)] {
+        let partition = led_partition(dir.path(), TOPIC, index);
+        install_isr(&partition).await;
+        append_records(&partition, records);
+        partitions.insert(TOPIC.into(), PartitionIndex(index), partition);
+    }
+    let metrics = BrokerMetrics::new();
+    sample_replica_lag(&partitions, &metrics).await;
+    assert!(metrics.replica_lag_max.get() == 40);
+
+    metrics.evict_partition_series(&crate::metrics::PartitionLabel {
+        topic: TOPIC.into(),
+        partition: 1,
+    });
+
+    check!(published_replica_lag(&metrics, 1) == None);
+    check!(metrics.replica_lag_max.get() == 3);
+}
+
 // ── consumer-group lag ───────────────────────────────────────────────────
 
 /// An image holding `TOPIC` with one partition led by `LEADER`, and a
@@ -264,6 +349,7 @@ fn poller(
         inter_broker: Arc::new(InterBrokerClient::new(None, None)),
         listener_protocol: ListenerProtocol::Plaintext,
         listener_name: "PLAINTEXT".into(),
+        inter_broker_server_name: "broker.internal".into(),
         period: LAG_POLL_INTERVAL,
         metrics,
         shutdown: CancellationToken::new(),
@@ -484,6 +570,135 @@ async fn an_uncommitted_partition_gets_no_series() {
     let poller = poller(coordinator, metadata, partitions, metrics.clone());
 
     poller.sample().await;
+
+    check!(published_group_lag(&metrics, "billing") == None);
+}
+
+/// The probe asks past the end of every partition it names, at the leader
+/// epoch the image holds, and carries the topic ids its reply has to be read
+/// back through. Nothing about the request may pull records: it is a metadata
+/// read that happens to travel as a `Fetch`.
+#[test]
+fn the_probe_asks_for_watermarks_and_no_records() {
+    let topic_id = WireUuid(*uuid::Uuid::from_u128(1).as_bytes());
+    let wanted = [(TOPIC.to_string(), 0)];
+    let expected = FetchRequest {
+        replica_id: -1,
+        max_wait_ms: 0,
+        min_bytes: 0,
+        max_bytes: 0,
+        isolation_level: 0,
+        topics: vec![FetchTopic {
+            topic: TOPIC.into(),
+            topic_id,
+            partitions: vec![FetchPartition {
+                partition: 0,
+                current_leader_epoch: 1,
+                fetch_offset: i64::MAX,
+                partition_max_bytes: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let (request, names) =
+        probe_request(&coordinator_image(), &wanted).expect("the image names the partition");
+
+    check!(request == expected);
+    check!(names == HashMap::from([(topic_id, TOPIC)]));
+}
+
+/// A partition the image has stopped naming leaves the probe nothing to ask,
+/// so no connection is opened for it at all.
+#[test]
+fn a_probe_for_a_partition_the_image_dropped_has_nothing_to_ask() {
+    let wanted = [("ghost".to_string(), 0)];
+
+    check!(probe_request(&coordinator_image(), &wanted).is_none());
+}
+
+/// A watermark this broker cannot read costs that partition its series for the
+/// pass and nothing else. Here the image leads the partition from a broker it
+/// carries no address for, which is the shape a probe failure takes.
+#[tokio::test]
+async fn a_watermark_this_broker_cannot_read_yields_no_series() {
+    let mut image = coordinator_image();
+    // The topic's partition moves to a broker the image holds no record for,
+    // so the probe cannot even be addressed.
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: TOPIC.into(),
+        partition: 0,
+        leader: OTHER_BROKER,
+        replicas: vec![OTHER_BROKER],
+        isr: vec![OTHER_BROKER],
+        leader_epoch: LeaderEpoch(2),
+        ..Default::default()
+    }));
+    let metadata: Arc<dyn MetadataSource> = Arc::new(
+        FakeMetadataSource::builder()
+            .image(image)
+            .leader(Some(LEADER))
+            .build(),
+    );
+    let coordinator = coordinator(Arc::clone(&metadata));
+    let handle = coordinator.get_or_create_classic("billing");
+    commit_offset(&handle, 7).await;
+    let metrics = BrokerMetrics::new();
+    let poller = poller(
+        coordinator,
+        metadata,
+        Arc::new(PartitionRegistry::new()),
+        metrics.clone(),
+    );
+
+    poller.sample().await;
+
+    check!(published_group_lag(&metrics, "billing") == None);
+}
+
+/// A group actor that never answers must not hold the pass open: every other
+/// group's series, and both replica families, wait behind it. The wait is
+/// bounded, and the group reads as having committed nothing this pass.
+#[tokio::test(start_paused = true)]
+async fn a_group_actor_that_never_answers_yields_no_offsets() {
+    let (actor, _mailbox) = tokio::sync::mpsc::channel(1);
+
+    let offsets = committed_offsets(&actor).await;
+
+    check!(offsets.is_empty());
+}
+
+/// The poller's own loop: a tick publishes what it can justify, and shutdown
+/// releases it rather than freezing the last numbers on the scrape endpoint,
+/// where an alert would keep reading them as current.
+#[tokio::test(start_paused = true)]
+async fn the_poller_publishes_on_a_tick_and_releases_everything_on_shutdown() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let metadata: Arc<dyn MetadataSource> = Arc::new(
+        FakeMetadataSource::builder()
+            .image(coordinator_image())
+            .leader(Some(LEADER))
+            .build(),
+    );
+    let partitions = partition_at_high_watermark(dir.path(), 40).await;
+    let coordinator = coordinator(Arc::clone(&metadata));
+    let handle = coordinator.get_or_create_classic("billing");
+    commit_offset(&handle, 7).await;
+    let metrics = BrokerMetrics::new();
+    let shutdown = CancellationToken::new();
+    let mut poller = poller(coordinator, metadata, partitions, metrics.clone());
+    poller.shutdown = shutdown.clone();
+
+    poller.spawn();
+    // A `tokio::time::interval` fires its first tick immediately, so one pass
+    // runs before the clock has to move at all.
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    assert!(published_group_lag(&metrics, "billing") == Some(33));
+
+    shutdown.cancel();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
 
     check!(published_group_lag(&metrics, "billing") == None);
 }

@@ -290,6 +290,7 @@ impl Broker {
             inter_broker: Arc::clone(&inter_broker_client),
             listener_protocol: runtime.inter_listener_protocol,
             listener_name: config.inter_broker_listener_name.clone(),
+            inter_broker_server_name: config.inter_broker_server_name.clone(),
             period: crate::lag::LAG_POLL_INTERVAL,
             metrics: runtime.metrics.clone(),
             shutdown: runtime.supervisor_shutdown.child_token(),

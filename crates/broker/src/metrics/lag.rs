@@ -134,6 +134,11 @@ impl BrokerMetrics {
 
     /// Keep the replica-lag series `keep` accepts, and remove the rest from
     /// both the family and the index.
+    ///
+    /// The max rollup follows, because eviction can take the very follower
+    /// that was supplying it. Only the sampler's pass would otherwise reset
+    /// it, and until the next one a scrape would report a maximum that no
+    /// remaining `replica_lag_records` series carries.
     fn retain_replica_lag(&self, keep: impl Fn(&ReplicaLagLabel) -> bool) {
         self.lag_series.replica.retain(|label| {
             let live = keep(label);
@@ -142,6 +147,14 @@ impl BrokerMetrics {
             }
             live
         });
+        let max = self
+            .lag_series
+            .replica
+            .iter()
+            .filter_map(|label| self.replica_lag.get(label.key()).map(|gauge| gauge.get()))
+            .max()
+            .unwrap_or(0);
+        self.replica_lag_max.set(max);
     }
 
     /// Keep the consumer-group-lag series `keep` accepts, and remove the rest
@@ -282,6 +295,17 @@ mod tests {
         check!(replica_lag_of(&metrics, &survivor) == Some(1));
         check!(group_lag_of(&metrics, &deleted_group) == None);
         check!(group_lag_of(&metrics, &surviving_group) == Some(1));
+    }
+
+    /// The bundle prints opaquely. It is one registry and some seventy metric
+    /// handles, and a `GroupCoordinator` holds one so that it can release a
+    /// deleted group's series — a dump of every handle would swamp any log
+    /// line that prints the coordinator.
+    #[test]
+    fn the_metric_bundle_prints_opaquely() {
+        let printed = format!("{:?}", BrokerMetrics::new());
+
+        check!(printed == "BrokerMetrics { .. }");
     }
 
     /// Eviction takes the index with the family, so a later pass that names
