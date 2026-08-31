@@ -206,6 +206,36 @@ pub(crate) async fn handle(
             continue;
         }
 
+        if diskless {
+            let required = broker.config.diskless_wal_local_replica_count;
+            let unavailable = assignments
+                .iter()
+                .enumerate()
+                .find_map(|(partition, assignment)| {
+                    let leader = *assignment.first()?;
+                    let available = crate::wal::quorum::placement::select_voters(
+                        image.brokers().cloned(),
+                        leader,
+                        required,
+                    )
+                    .len();
+                    (available != required).then_some((partition, leader, available))
+                });
+            if let Some((partition, leader, available)) = unavailable {
+                results.push(topic_error_result(
+                    name,
+                    codes::INVALID_CONFIG,
+                    Some(format!(
+                        "diskless WAL partition {partition} leader {} has {available} eligible \
+                         rack-distinct voters, but {required} are required; configure \
+                         `broker.rack` on every voter and provide at least {required} distinct racks",
+                        leader.0
+                    )),
+                ));
+                continue;
+            }
+        }
+
         let topic_id = Uuid::new_v4();
 
         // Build the batch: one TopicRecord + N PartitionRecords.
