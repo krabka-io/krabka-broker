@@ -10,13 +10,27 @@ The monorepo builds the equivalent with apko from Wolfi. This layers the
 Bazel-built binary onto a digest-pinned distroless base instead: same shape --
 glibc, ca-certificates, nonroot -- without a second package manager inside the
 build, and reproducible from the digest in //MODULE.bazel.
+
+The operator tools ride in the same image rather than a sibling one. The base
+has no shell, so nothing can be fetched, unpacked or run inside a running
+container that the image did not already carry -- and the one mandatory pre-boot
+step, `krabka-format`, has to write the very log directory the broker then opens.
+A separate `krabka-tools` image would leave that step to an init container with a
+matching image tag, a shared volume mount and a second artifact to keep in
+lockstep with the broker, all to save a few tens of megabytes on an image that
+already carries a broker.
 """
 
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
+
+# What `oci_load` tags the image with locally, and what the Docker-driven test
+# then runs. A push supplies its own tags; see `remote_tags` below.
+IMAGE_TAG = "krabka-io/krabka-broker:dev"
 
 pkg_tar(
     name = "broker_layer",
@@ -24,20 +38,89 @@ pkg_tar(
     package_dir = "/usr/bin",
 )
 
+# Every operator-facing tool the repository ships, in a layer of its own: the
+# broker binary changes on nearly every commit and these rarely do, so keeping
+# them apart is a registry push and a `docker pull` that reuse the tools blob.
+pkg_tar(
+    name = "tools_layer",
+    srcs = [
+        "//crates/audit:krabka-audit",
+        "//crates/barrier-cli:krabka-barrier",
+        "//crates/format:krabka-format",
+        "//crates/guard-cli:krabka-guard",
+        "//crates/remote-storage:krabka-worm-verify",
+        "//crates/restore:krabka-restore",
+    ],
+    package_dir = "/usr/bin",
+)
+
 oci_image(
     name = "image",
     base = "@distroless_cc",
     entrypoint = ["/usr/bin/krabka-broker"],
-    tars = [":broker_layer"],
+    tars = [
+        ":broker_layer",
+        ":tools_layer",
+    ],
     # 65532 is distroless' `nonroot`. The broker needs no privilege: it binds
     # 9092/9093, both above 1024, and writes only its data directory.
     user = "65532:65532",
 )
 
+# What the image carries under /usr/bin, asserted against the built layers and
+# against the image that references them. The equivalent by hand is
+# `bazel run //packaging:image_load` and a `docker run --entrypoint` per binary;
+# this needs no daemon, so it runs in `bazel test //...` on every commit.
+sh_test(
+    name = "image_binaries_test",
+    size = "small",
+    srcs = ["image_binaries_test.sh"],
+    args = [
+        "$(rootpath :image)",
+        "$(rootpath :broker_layer)",
+        "$(rootpath :tools_layer)",
+    ],
+    data = [
+        ":broker_layer",
+        ":image",
+        ":tools_layer",
+    ],
+)
+
 oci_load(
     name = "image_load",
     image = ":image",
-    repo_tags = ["krabka-io/krabka-broker:dev"],
+    repo_tags = [IMAGE_TAG],
+)
+
+# The same binaries, run through a Docker daemon under the base image's own
+# loader and libc. Tagged `docker`, like every other suite that needs one, so
+# `bazel test //...` skips it and `bazel test --config=docker //packaging:all`
+# runs it; it also materializes the image as one several-hundred-megabyte
+# tarball, which is the other reason the everyday check is `image_binaries_test`.
+sh_test(
+    name = "image_docker_test",
+    size = "medium",
+    srcs = ["image_docker_test.sh"],
+    args = [
+        "$(rootpath :image_load)",
+        IMAGE_TAG,
+        "$(rootpath :broker_layer)",
+        "$(rootpath :tools_layer)",
+    ],
+    data = [
+        ":broker_layer",
+        ":image_load",
+        ":tools_layer",
+    ],
+    # The daemon is the one input Bazel cannot own: `no-sandbox` for its socket,
+    # `external` so a pass is never cached against inputs that do not describe
+    # the daemon's state.
+    tags = [
+        "docker",
+        "external",
+        "no-sandbox",
+    ],
 )
 
 # `remote_tags` takes a file rather than a list. CI supplies every tag on the

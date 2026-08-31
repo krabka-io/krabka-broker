@@ -183,6 +183,23 @@ package manager inside the build. `aspect delivery` pushes only when the built
 output actually changed, which for a commit touching one crate is usually not at
 all.
 
+A second layer carries the operator tools — `krabka-format`, `krabka-audit`,
+`krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore` —
+beside the broker under `/usr/bin`. The base has no shell, so a tool that is not
+in the image cannot be run in a container at all, and `krabka-format` has to run
+against the log directory before the broker will boot:
+
+```
+docker run --rm -v krabka-data:/var/lib/krabka \
+    --entrypoint /usr/bin/krabka-format krabka-io/krabka-broker:dev \
+    --log-dir /var/lib/krabka --standalone ...
+```
+
+`//packaging:image_binaries_test` asserts what those layers carry and that each
+binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
+`bazel test --config=docker //packaging:image_docker_test` repeats the check
+against a loaded image through Docker.
+
 ## Mutation testing
 
 Mutation sweeps run through
