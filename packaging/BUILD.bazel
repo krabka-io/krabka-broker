@@ -28,6 +28,14 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
 
+# The reference Kubernetes manifests are plain files that no rule consumes: the
+# image does not carry them and no test reads them. They are declared anyway
+# because CI's container-suite selection feeds every changed path under
+# `packaging/` to `bazel query "... set(<paths>)"`, and `set()` fails the whole
+# query on a path that is not a target -- which would take the suite selection
+# down with it, rather than selecting nothing, on a manifest-only change.
+exports_files(glob(["k8s/*.yaml"]))
+
 # What `oci_load` tags the image with locally, and what the Docker-driven test
 # then runs. A push supplies its own tags; see `remote_tags` below.
 IMAGE_TAG = "krabka-io/krabka-broker:dev"

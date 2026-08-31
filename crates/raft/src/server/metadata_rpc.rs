@@ -117,6 +117,7 @@ pub(super) async fn dispatch_metadata_fetch(
         leader_hint,
         log_start_offset: slice.log_start_offset,
         high_watermark: slice.high_watermark,
+        quorum_high_watermark: slice.quorum_high_watermark,
         records: slice.records,
     };
     let mut out = Vec::new();

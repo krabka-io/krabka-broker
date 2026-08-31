@@ -128,6 +128,13 @@ pub struct MetadataFetchSlice {
     pub records: bytes::Bytes,
     pub log_start_offset: i64,
     pub high_watermark: i64,
+    /// Highest offset the quorum has committed, as this node last heard it.
+    ///
+    /// This node's own `high_watermark` bounds what it can serve; this says
+    /// how much more there is. They differ whenever the node answering the
+    /// fetch is itself a follower that is still catching up, and an observer
+    /// measures its own lag against this one.
+    pub quorum_high_watermark: i64,
 }
 
 /// Which timer fired. The loop interprets the tick against the current role

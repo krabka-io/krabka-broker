@@ -50,9 +50,11 @@ pub(super) async fn run_loop(
                 i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
                 Ordering::Release,
             );
-            // The controller's high watermark counts committed *records*; the
+            // The quorum's high watermark counts committed *records*; the
             // offset convention here is one-past-the-last, so the last
             // committed offset is one below it, matching `metadata_offset`.
+            // It is the quorum's and not the responder's: the voter this loop
+            // picked may itself be a follower that is behind.
             observer.quorum_committed_offset.store(
                 outcome.quorum_high_watermark.saturating_sub(1),
                 Ordering::Release,
@@ -97,6 +99,20 @@ mod tests {
     use super::*;
     use crate::metadata_observer::test_support::TEST_MAX_FETCH_BYTES;
 
+    /// A write side for an `ObserverSource` built only to read offsets
+    /// through: readiness never submits anything.
+    struct NoWrites;
+
+    #[async_trait::async_trait]
+    impl crate::metadata_source::MetadataWriter for NoWrites {
+        async fn submit_change(
+            &self,
+            _records: Vec<krabka_metadata::MetadataRecord>,
+        ) -> Result<krabka_raft::SubmitChangeResult, krabka_raft::RaftError> {
+            unreachable!("readiness reads offsets, it never writes")
+        }
+    }
+
     #[derive(Clone)]
     struct CountingDialer {
         dial_count: Arc<AtomicUsize>,
@@ -133,13 +149,21 @@ mod tests {
         buf.to_vec()
     }
 
-    fn metadata_fetch_response_body(records: Bytes) -> Vec<u8> {
+    /// `high_watermark` is what the responder itself has committed and
+    /// `quorum_high_watermark` is what the quorum has: they differ whenever
+    /// the controller that answered is a follower still catching up.
+    fn metadata_fetch_response_body(
+        records: Bytes,
+        high_watermark: i64,
+        quorum_high_watermark: i64,
+    ) -> Vec<u8> {
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 1,
             log_start_offset: 0,
-            high_watermark: 0,
+            high_watermark,
+            quorum_high_watermark,
             records,
         }
         .encode_v0(&mut out)
@@ -182,7 +206,7 @@ mod tests {
                 }
                 if api_key == krabka_raft::API_KEY_METADATA_FETCH {
                     fetches_for_mock.fetch_add(1, Ordering::SeqCst);
-                    return Some(metadata_fetch_response_body(Bytes::new()));
+                    return Some(metadata_fetch_response_body(Bytes::new(), 0, 0));
                 }
                 None
             })
@@ -238,6 +262,73 @@ mod tests {
 
         assert!(fetches.load(Ordering::SeqCst) == after_first_fetch);
         assert!(dial_count.load(Ordering::SeqCst) == after_first_fetch);
+
+        observer.cancel().await;
+        mock.stop();
+    }
+
+    /// The observer records the *quorum's* committed offset, not the watermark
+    /// of whichever controller answered.
+    ///
+    /// Every controller serves `MetadataFetch`, and the loop keeps whichever
+    /// voter responds, so the responder can be a follower whose own watermark
+    /// is clamped to a log end far below what the quorum has committed. An
+    /// observer that read that value would draw level with the lagging
+    /// follower and report zero readiness lag against a quorum thousands of
+    /// records ahead.
+    #[tokio::test]
+    async fn the_quorums_committed_offset_is_read_past_a_lagging_responder() {
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    // A follower holding 5 of the quorum's 10 000 records.
+                    return Some(metadata_fetch_response_body(Bytes::new(), 5, 10_000));
+                }
+                None
+            })
+            .await;
+        let observer = MetadataObserver::start(ObserverConfig {
+            client_dispatch_queue_capacity:
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],
+            dialer: Arc::new(krabka_raft::PlaintextDialer),
+            client_id: "lag-test".into(),
+            cluster_id: Uuid::nil(),
+            max_bytes: TEST_MAX_FETCH_BYTES,
+            poll_interval: millis(250),
+            sleeper: Arc::new(MockSleeper::new()),
+        });
+
+        // The fetch is real loopback I/O, so drive the executor until the
+        // first successful round trip has published its offsets.
+        let mut recorded = -1;
+        for _ in 0..100_000 {
+            recorded = observer.quorum_committed_offset();
+            if recorded != -1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        // 10 000 committed records is offsets 0..=9_999.
+        assert!(recorded == 9_999);
+        assert!(observer.current_metadata_offset() == -1);
+
+        // The readiness probe reads these two offsets through
+        // `health::metadata_progress`, and this is the only fixture where they
+        // differ -- so it is where the mapping is pinned. Swapped, or both
+        // taken from one side, a node 10 000 records behind would report no
+        // lag at all and `/readyz` would answer 200 for it.
+        let source = Arc::new(crate::metadata_source::ObserverSource::new(
+            observer.clone(),
+            Arc::new(NoWrites),
+        ));
+        let progress = crate::health::metadata_progress(source);
+        assert!(progress.node_metadata_offset() == -1);
+        assert!(progress.quorum_committed_offset() == 9_999);
 
         observer.cancel().await;
         mock.stop();

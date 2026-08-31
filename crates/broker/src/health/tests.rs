@@ -153,3 +153,74 @@ fn metadata_progress_is_installed_once() {
             })
     );
 }
+
+/// One HTTP/1.1 GET against a served socket, returned as `(status, body)`.
+async fn scrape(addr: std::net::SocketAddr, path: &str) -> (String, String) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req =
+        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).await.unwrap();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+    (
+        head.lines().next().unwrap_or_default().to_string(),
+        body.to_string(),
+    )
+}
+
+/// `serve` answers on the socket it reports, and stops when its token is
+/// cancelled.
+///
+/// The binary calls this before it starts the broker, so the probes have to be
+/// live from the socket alone -- an orchestrator polling a port that binds only
+/// once the broker is up learns nothing that a TCP probe on 9092 did not
+/// already tell it. Port 0 is why the bound address comes back at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_answers_on_the_reported_port_until_it_is_cancelled() {
+    let shutdown = CancellationToken::new();
+    let state = HealthState::new(100);
+    let bound = serve(
+        "127.0.0.1:0".parse().unwrap(),
+        state.clone(),
+        shutdown.clone(),
+    )
+    .await
+    .expect("bind the health listener");
+    assert!(bound.port() != 0);
+
+    // Nothing has started, so this is the state a kubelet meets first.
+    let (status, body) = scrape(bound, "/healthz").await;
+    assert!(status.contains("200 OK"), "{status}");
+    assert!(body == "ok\n");
+    let (status, body) = scrape(bound, "/readyz").await;
+    assert!(status.contains("503 Service Unavailable"), "{status}");
+    assert!(body.starts_with("not ready: log_dir_recovery: "), "{body}");
+
+    // The same server reflects the state as the broker marks its phases: it
+    // holds the caller's clone, not a copy taken at bind time.
+    state.mark_log_dir_recovery_complete();
+    state.mark_listeners_bound();
+    state.install_metadata_progress(Arc::new(StubProgress {
+        node: 1000,
+        quorum: 1000,
+    }));
+    let (status, body) = scrape(bound, "/readyz").await;
+    assert!(status.contains("200 OK"), "{status}");
+    assert!(body == "ready\n");
+
+    shutdown.cancel();
+    // The graceful shutdown closes the listener, so a later connect finds
+    // nothing there. Retry briefly: the accept loop stops on its own task.
+    let mut refused = false;
+    for _ in 0..200 {
+        if tokio::net::TcpStream::connect(bound).await.is_err() {
+            refused = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(refused, "the health server should stop when cancelled");
+}

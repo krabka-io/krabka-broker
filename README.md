@@ -241,7 +241,11 @@ Three parts of them carry the design, not only the wiring:
   readiness, and that is what stops a restart from running ahead of the quorum.
 * **`minAvailable: 2` is the majority of three.** A drain that evicted two of
   these pods costs the metadata quorum its majority. Scale the StatefulSet and
-  the budget has to move with it.
+  the budget has to move with it. The budget also keeps the default
+  `unhealthyPodEvictionPolicy`: a krabka pod that fails `/readyz` is usually
+  still a voter, because the controller joins the quorum before log-dir
+  recovery runs, so `AlwaysAllow` would let a drain take a second voter out
+  while the budget was already unmet.
 
 ## Mutation testing
 

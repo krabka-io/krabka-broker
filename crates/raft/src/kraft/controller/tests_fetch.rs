@@ -444,3 +444,30 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
     assert!(snapshot.high_watermark == 0);
     assert!(snapshot.quorum_high_watermark == 20_000);
 }
+
+/// Every controller serves an observer's metadata fetch, not only the leader,
+/// so the slice says both how far this node has committed -- which bounds the
+/// records it can hand over -- and how far the quorum has. A follower that is
+/// itself catching up would otherwise report its own clamped watermark as the
+/// quorum's, and an observer that drew level with it would call itself ready.
+#[tokio::test]
+async fn a_lagging_follower_serves_the_quorums_committed_offset() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+
+    engine.on_fetch_response(
+        NodeId(2),
+        &wire::PeerResponse::Fetch {
+            leader_id: NodeId(2),
+            leader_epoch: 3,
+            diverging: None,
+            snapshot_id: None,
+            hwm: 10_000,
+            records: bytes::Bytes::new(),
+        }
+        .encode(),
+    );
+
+    let slice = engine.metadata_fetch_slice(0, DEFAULT_METADATA_RAFT_FETCH_MAX);
+    assert!(slice.high_watermark == 0);
+    assert!(slice.quorum_high_watermark == 10_000);
+}

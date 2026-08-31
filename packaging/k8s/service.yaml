@@ -6,6 +6,24 @@
 # balance. `publishNotReadyAddresses` keeps those names resolving while a node
 # is still catching up -- the quorum has to be able to reach a peer that is not
 # ready yet, which is how it stops being not ready.
+#
+# That flag is why one Service serves both purposes, and it is worth being
+# plain about what it costs: an unready broker's advertised name keeps
+# resolving, so a client that already holds metadata naming this pod can
+# reconnect to it while `/readyz` is 503 and get `Metadata` from a stale
+# image. The split the flag seems to invite is not available -- Kubernetes
+# creates `krabka-0.<service>` records only for the StatefulSet's governing
+# Service (the EndpointSlice hostname is set only where a pod's `subdomain`
+# matches the Service name), and a pod has one subdomain, so there is no
+# second headless Service that can serve these same names with readiness
+# gating. What bounds the exposure instead is the protocol: a broker whose
+# `current_metadata_offset` is behind its registration is fenced by the
+# controller, so it leads no partition and ready brokers do not route clients
+# to it, and `krabka-bootstrap` below keeps it out of the first `Metadata`
+# request. If you need the DNS gate as well, give each pod its own
+# readiness-gated ClusterIP Service (selector
+# `statefulset.kubernetes.io/pod-name: krabka-<n>`) and advertise that name --
+# one Service per replica, which is why it is not the reference layout here.
 apiVersion: v1
 kind: Service
 metadata:

@@ -18,15 +18,21 @@ use super::ObserverConfig;
 pub(super) struct FetchOutcome {
     /// Offset to fetch from next: one past the last batch applied.
     pub(super) next_fetch_offset: u64,
-    /// The controller's high watermark, which is the quorum's committed
-    /// offset. The observer trails it by whatever the response did not carry,
-    /// so it is the only value that says how far behind this node is.
+    /// The quorum's committed offset, as the controller that answered last
+    /// heard it. The observer trails it by whatever the response did not
+    /// carry, so it is the only value that says how far behind this node is.
+    ///
+    /// This is the response's `quorum_high_watermark` and not its
+    /// `high_watermark`: every controller serves this fetch, so the responder
+    /// may be a follower whose own watermark is clamped to a log end far below
+    /// what the quorum has committed. Reading that one would let an observer
+    /// that had drawn level with a lagging follower call itself caught up.
     pub(super) quorum_high_watermark: i64,
 }
 
 /// Runs one iteration: it fetches from `addr` at `fetch_offset`, decodes and
 /// applies the records, and returns the new fetch offset together with the
-/// controller's high watermark. It returns `None` on a transport error, so
+/// quorum's committed offset. It returns `None` on a transport error, so
 /// that the caller fails over.
 pub(super) async fn fetch_once(
     config: &ObserverConfig,
@@ -86,7 +92,7 @@ pub(super) async fn fetch_once(
 
     Some(FetchOutcome {
         next_fetch_offset: apply_fetch_records(fetch_offset, &resp.records, image_tx),
-        quorum_high_watermark: resp.high_watermark,
+        quorum_high_watermark: resp.quorum_high_watermark,
     })
 }
 

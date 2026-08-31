@@ -24,6 +24,7 @@ impl ControllerHandle {
                 records: bytes::Bytes::new(),
                 log_start_offset: 0,
                 high_watermark: 0,
+                quorum_high_watermark: 0,
             },
         )
     }

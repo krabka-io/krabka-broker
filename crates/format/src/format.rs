@@ -125,7 +125,11 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
     // no-op the flag promises, not an error: it is the second and every later
     // boot of a pod that keeps its volume. `meta.properties.json` is the
     // marker because it is the file the broker itself reads the directory id
-    // back out of, so its presence is exactly "this directory was formatted".
+    // back out of, and it is written last (see the end of this function), so
+    // its presence is exactly "a format ran here and completed". A directory
+    // left half-written by a failed run has no marker: it is refused as a
+    // dirty log dir on the next run, rather than silently accepted as one a
+    // broker can boot from.
     if args.ignore_formatted && args.log_dir.join(META_PROPERTIES).is_file() {
         println!(
             "krabka format: {} is already formatted; leaving it alone",
@@ -192,10 +196,6 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
     };
     if args.directory_id.is_some() && directory_id != generated_directory_id {
         eprintln!("krabka format: --directory-id must match the local --initial-controllers entry");
-        return EXIT_BOOTSTRAP_FAIL;
-    }
-    if let Err(e) = write_meta_properties(&args.log_dir, cluster_id, directory_id) {
-        eprintln!("krabka format: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
 
@@ -288,6 +288,20 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
 
     if let Err(e) = write_bootstrap_files(&args.log_dir, cluster_id, &records) {
         eprintln!("krabka format: bootstrap failed: {e}");
+        return EXIT_BOOTSTRAP_FAIL;
+    }
+
+    // `meta.properties.json` is written last, after every other output has
+    // landed, because it is the marker `--ignore-formatted` reads: its
+    // presence has to mean "this format ran to completion", not "a format
+    // started here". Written first, a run that failed after it -- an
+    // unwritable checkpoint, a rejected `--add-scram`, a killed process --
+    // would leave a directory that the next unconditional init-container run
+    // exits 0 on and never repairs, and the broker would then boot with no
+    // seed checkpoint, no voter set, and no bootstrap records. Written last,
+    // that directory still looks unformatted and the next run redoes it.
+    if let Err(e) = write_meta_properties(&args.log_dir, cluster_id, directory_id) {
+        eprintln!("krabka format: {e}");
         return EXIT_BOOTSTRAP_FAIL;
     }
 

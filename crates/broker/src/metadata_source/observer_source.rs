@@ -171,6 +171,12 @@ mod tests {
 
         assert2::assert!((source.current_image().cluster_id()) == (cluster_id));
         assert2::assert!((source.current_metadata_offset()) == (-1));
+        // An observer that has reached no controller reports the quorum's
+        // committed offset as unknown rather than as caught up: the readiness
+        // probe must not read "no lag" out of "no contact". Where the two
+        // offsets part company -- a responder behind the quorum -- is covered
+        // in `metadata_observer::serve_loop`.
+        assert2::assert!((source.quorum_committed_offset()) == (-1));
         source
             .submit_change(vec![topic_record("forwarded-topic")])
             .await
