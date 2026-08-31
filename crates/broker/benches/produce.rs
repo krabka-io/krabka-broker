@@ -23,11 +23,12 @@
 
 use std::time::{Duration, Instant};
 
+use assert2::assert;
 use bytes::{Bytes, BytesMut};
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use krabka_broker::{
     metrics::BrokerMetrics,
-    produce_hot_path::{HotPathSettings, PathChoice, append_one_batch},
+    produce_hot_path::{HotPathSettings, PathChoice, ProducePath, append_one_batch},
 };
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_log::{Log, LogConfig};
@@ -53,6 +54,16 @@ const LOG_BUDGET: usize = 256 * 1024 * 1024;
 
 /// The leader epoch the verbatim writer stamps into the batch header.
 const LEADER_EPOCH: i32 = 3;
+
+/// Untimed appends run before the measured ones, against the same log.
+///
+/// The first append into a fresh log pays for the temp directory, the segment
+/// file and its first page faults. Criterion amortizes that over a large
+/// `iters`, but [`bench_ratio`]'s short run does not, and it lands entirely on
+/// whichever path a shape measures first — the verbatim one, which is the
+/// denominator of both ratios. A handful of untimed appends move it out of the
+/// measurement.
+const WARMUP: u64 = 8;
 
 fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
     HotPathSettings {
@@ -134,38 +145,70 @@ impl BoundedLog {
     }
 }
 
-/// Append `records` `iters` times, returning only the time the appends took.
+/// Append `records` once, returning only the time the append took.
 ///
 /// The log rotation and the `Bytes` clone sit outside the timer. The clone is
 /// a refcount bump, and the produce pipeline hands the hot path an equivalent
 /// zero-copy view of the request frame.
-fn timed_appends(records: &Bytes, choice: PathChoice, iters: u64) -> Duration {
+///
+/// The path assertion is what keeps a ratio meaningful. Were a change to the
+/// verbatim predicate to send the `verbatim` case down the fallback, the two
+/// columns would converge and the table would report the fallback as free.
+/// This fails the run instead.
+fn append_once(
+    store: &mut BoundedLog,
+    records: &Bytes,
+    choice: PathChoice,
+    expected: ProducePath,
+    settings: &HotPathSettings<'_>,
+) -> Duration {
+    store.rotate_if_full(records.len());
+    let payload = records.clone();
+    let start = Instant::now();
+    let path = append_one_batch(payload, choice, settings, &mut store.log)
+        .expect("the bench shapes are all valid produce payloads");
+    let elapsed = start.elapsed();
+    assert!(path == expected, "{choice:?} took the {path:?} path");
+    elapsed
+}
+
+/// Append `records` `iters` times, returning only the time the appends took.
+fn timed_appends(
+    records: &Bytes,
+    choice: PathChoice,
+    expected: ProducePath,
+    iters: u64,
+) -> Duration {
     let metrics = BrokerMetrics::new();
     let settings = settings(&metrics);
     let mut store = BoundedLog::new();
+    for _ in 0..WARMUP {
+        append_once(&mut store, records, choice, expected, &settings);
+    }
     let mut elapsed = Duration::ZERO;
     for _ in 0..iters {
-        store.rotate_if_full(records.len());
-        let payload = records.clone();
-        let start = Instant::now();
-        let path = append_one_batch(payload, choice, &settings, &mut store.log)
-            .expect("the bench shapes are all valid produce payloads");
-        elapsed += start.elapsed();
-        black_box(path);
+        elapsed += append_once(&mut store, records, choice, expected, &settings);
     }
     elapsed
 }
 
-/// The three paths a shape is measured on, in report order.
-fn paths(records: i32, payload: usize) -> [(&'static str, Bytes, PathChoice); 3] {
+/// The three paths a shape is measured on, in report order, each paired with
+/// the path through `prepare_batch` that its case has to actually take.
+fn paths(records: i32, payload: usize) -> [(&'static str, Bytes, PathChoice, ProducePath); 3] {
     let v2 = v2_records(records, payload);
     [
-        ("verbatim", v2.clone(), PathChoice::Dispatch),
-        ("owned", v2, PathChoice::ForceOwned),
+        (
+            "verbatim",
+            v2.clone(),
+            PathChoice::Dispatch,
+            ProducePath::Verbatim,
+        ),
+        ("owned", v2, PathChoice::ForceOwned, ProducePath::Owned),
         (
             "legacy_v1",
             legacy_v1_records(records, payload),
             PathChoice::Dispatch,
+            ProducePath::Owned,
         ),
     ]
 }
@@ -174,10 +217,10 @@ fn bench_produce_hot_path(c: &mut Criterion) {
     let mut group = c.benchmark_group("broker/produce");
 
     for (shape, records, payload) in SHAPES {
-        for (path, wire, choice) in paths(records, payload) {
+        for (path, wire, choice, expected) in paths(records, payload) {
             group.throughput(Throughput::Bytes(wire.len() as u64));
             group.bench_function(format!("{shape}/{path}"), |b| {
-                b.iter_custom(|iters| timed_appends(&wire, choice, iters));
+                b.iter_custom(|iters| timed_appends(&wire, choice, expected, iters));
             });
         }
     }
@@ -191,10 +234,19 @@ fn bench_produce_hot_path(c: &mut Criterion) {
 /// sibling, so the one number this suite exists for — what the fallback costs
 /// against the pass-through — has to be computed here.
 fn bench_ratio(_c: &mut Criterion) {
-    /// Enough repetitions for a stable mean without adding minutes to a run.
-    const SAMPLES: u32 = 200;
+    /// Appends per measurement run.
+    const SAMPLES: u32 = 100;
+    /// Measurement runs per case, of which the fastest is the one reported.
+    ///
+    /// A single run is noise-dominated on a machine that is doing anything
+    /// else — enough, observed, to invert a ratio and report the fallback as
+    /// cheaper than the pass-through. Interference only ever adds time, so the
+    /// minimum over a few runs is the estimator it cannot pull the wrong way.
+    const RUNS: u32 = 5;
 
-    println!("\nbroker/produce — nanoseconds per batch, and the cost of the fallback");
+    println!(
+        "\nbroker/produce — nanoseconds per batch (fastest of {RUNS} runs), and the cost of the fallback"
+    );
     println!(
         "{:<14} {:>12} {:>12} {:>12} {:>16} {:>16}",
         "shape", "verbatim", "owned", "legacy_v1", "owned/verbatim", "legacy/verbatim"
@@ -202,8 +254,15 @@ fn bench_ratio(_c: &mut Criterion) {
     for (shape, records, payload) in SHAPES {
         let means: Vec<f64> = paths(records, payload)
             .into_iter()
-            .map(|(_, wire, choice)| timed_appends(&wire, choice, u64::from(SAMPLES)).as_secs_f64())
-            .map(|secs| secs * 1e9 / f64::from(SAMPLES))
+            .map(|(_, wire, choice, expected)| {
+                (0..RUNS)
+                    .map(|_| {
+                        timed_appends(&wire, choice, expected, u64::from(SAMPLES)).as_secs_f64()
+                            * 1e9
+                            / f64::from(SAMPLES)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
             .collect();
         let (verbatim, owned, legacy) = (means[0], means[1], means[2]);
         println!(
