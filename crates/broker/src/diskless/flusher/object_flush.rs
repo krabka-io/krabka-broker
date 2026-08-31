@@ -3,8 +3,6 @@
 //! the diskless index log, wait for the projection to catch up, and trim the
 //! local logs behind the durable frontier.
 
-#[cfg(any(test, feature = "test-helpers"))]
-use std::collections::HashMap;
 use std::{sync::Arc, time::Duration};
 
 use krabka_log::Offset;
@@ -21,23 +19,10 @@ use crate::diskless::{
     wal_object::WalObjectBuilder,
 };
 
-#[cfg(any(test, feature = "test-helpers"))]
-static PUT_FAILURES: std::sync::LazyLock<std::sync::Mutex<HashMap<i32, u64>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-
-#[cfg(any(test, feature = "test-helpers"))]
-#[must_use]
-pub(crate) fn put_failure_count(broker_id: i32) -> u64 {
-    *PUT_FAILURES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&broker_id)
-        .unwrap_or(&0)
-}
-
 pub(crate) async fn flush_once(
     object_store: Arc<dyn ObjectStore>,
     broker_id: i32,
+    metrics: &crate::metrics::BrokerMetrics,
     index_log: &DisklessIndexLog,
     cache: Arc<AsyncMutex<WalIndexCache>>,
     partitions: &[FlushPartition],
@@ -63,6 +48,11 @@ pub(crate) async fn flush_once(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let start = start.unwrap_or_else(|| log.log_start_offset().0);
+            metrics.record_diskless_wal_projection_lag(
+                partition.topic_id,
+                partition.handle.index,
+                partition.high_watermark.0.saturating_sub(start),
+            );
             log.read_raw(
                 Offset(start),
                 partition.high_watermark,
@@ -85,6 +75,7 @@ pub(crate) async fn flush_once(
     if builder.is_empty() {
         return Ok(None);
     }
+    metrics.diskless_wal_flush_attempts_total.inc();
     let object_key = format!("diskless-wal/{broker_id}/{}.ckwl", Uuid::new_v4());
     let object = builder.finish();
     if let Err(error) = object_store
@@ -94,17 +85,14 @@ pub(crate) async fn flush_once(
         )
         .await
     {
-        #[cfg(any(test, feature = "test-helpers"))]
-        {
-            let mut failures = PUT_FAILURES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *failures.entry(broker_id).or_default() += 1;
-        }
+        metrics.diskless_wal_flush_failures_total.inc();
         return Err(crate::error::BrokerError::Txn(format!(
             "diskless wal put: {error}"
         )));
     }
+    metrics
+        .diskless_wal_flush_bytes_total
+        .inc_by(u64::try_from(object.len()).unwrap_or(u64::MAX));
 
     let entries = batch_index_entries(&object)?;
     let record = WalFlushRecord {
@@ -112,16 +100,29 @@ pub(crate) async fn flush_once(
         format_version: 1,
         entries,
     };
-    index_log.publish_flush(&record).await?;
-    wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await?;
+    if let Err(error) = index_log.publish_flush(&record).await {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(error);
+    }
+    if let Err(error) =
+        wait_for_committed_projection(index_log, &record, config.index_projection_timeout).await
+    {
+        metrics.diskless_wal_flush_failures_total.inc();
+        return Err(error);
+    }
 
-    if let Some(lag) = config.trim_safety_lag {
-        for partition in partitions {
-            if let Some(frontier) = cache
-                .lock()
-                .await
-                .flushed_frontier(partition.topic_id, partition.handle.index.get())
-            {
+    for partition in partitions {
+        if let Some(frontier) = cache
+            .lock()
+            .await
+            .flushed_frontier(partition.topic_id, partition.handle.index.get())
+        {
+            metrics.record_diskless_wal_projection_lag(
+                partition.topic_id,
+                partition.handle.index,
+                partition.high_watermark.0.saturating_sub(frontier),
+            );
+            if let Some(lag) = config.trim_safety_lag {
                 let hw_trim_floor = partition.high_watermark.0.saturating_sub(lag.max(0));
                 let trim_to = frontier.min(hw_trim_floor);
                 let current_start = partition
@@ -131,9 +132,22 @@ pub(crate) async fn flush_once(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .log_start_offset()
                     .0;
-                if trim_to > current_start {
-                    partition.handle.trim_to_offset(Offset(trim_to)).await?;
-                }
+                let trim_frontier = if trim_to > current_start {
+                    match partition.handle.trim_to_offset(Offset(trim_to)).await {
+                        Ok(offset) => offset.0,
+                        Err(error) => {
+                            metrics.diskless_wal_flush_failures_total.inc();
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    current_start
+                };
+                metrics.record_diskless_wal_trim_frontier(
+                    partition.topic_id,
+                    partition.handle.index,
+                    trim_frontier,
+                );
             }
         }
     }
@@ -249,6 +263,7 @@ mod tests {
         let record = flush_once(
             store.clone(),
             7,
+            &crate::metrics::BrokerMetrics::new(),
             &index,
             cache.clone(),
             &[FlushPartition {
@@ -267,6 +282,46 @@ mod tests {
         assert!(cache.lock().await.flushed_frontier(topic_id, 0) == Some(3));
         assert!(store.head(&Path::from(record.object_key)).await.is_ok());
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+    }
+
+    #[tokio::test]
+    async fn put_failure_is_exported_by_the_real_metric() {
+        let dir = tempdir().unwrap();
+        let store_root = dir.path().join("store");
+        std::fs::create_dir(&store_root).unwrap();
+        let store = object_store::local::LocalFileSystem::new_with_prefix(&store_root).unwrap();
+        std::fs::remove_dir(&store_root).unwrap();
+        std::fs::write(&store_root, b"not a directory").unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(store);
+        let handle = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let index = DisklessIndexLog::start(
+            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+        )
+        .await
+        .unwrap();
+        let metrics = crate::metrics::BrokerMetrics::new();
+
+        let error = flush_once(
+            store,
+            7,
+            &metrics,
+            &index,
+            index.cache(),
+            &[FlushPartition {
+                topic_id: Uuid::from_u128(11),
+                handle,
+                high_watermark: Offset(3),
+            }],
+            &FlushConfig::default(),
+        )
+        .await
+        .expect_err("the object-store root became a file");
+        assert!(error.to_string().contains("diskless wal put"));
+
+        let mut body = String::new();
+        let registry = metrics.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
     }
 
     #[tokio::test]
@@ -293,6 +348,7 @@ mod tests {
         let record = flush_once(
             store,
             7,
+            &crate::metrics::BrokerMetrics::new(),
             &index,
             cache,
             &[FlushPartition {
@@ -367,6 +423,7 @@ mod tests {
         let record = flush_once(
             store,
             7,
+            &crate::metrics::BrokerMetrics::new(),
             &index,
             cache,
             &[

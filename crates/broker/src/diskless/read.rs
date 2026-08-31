@@ -107,8 +107,12 @@ pub(crate) async fn try_diskless_read(
         .await
     {
         Ok(Some(records)) => records,
-        Ok(None) => return None,
+        Ok(None) => {
+            broker.metrics.diskless_wal_cold_read_misses_total.inc();
+            return None;
+        }
         Err(error) => {
+            broker.metrics.diskless_wal_cold_read_errors_total.inc();
             tracing::warn!(
                 topic = %p.topic_name,
                 partition = p.partition_index,
@@ -121,6 +125,7 @@ pub(crate) async fn try_diskless_read(
             return Some(0);
         }
     };
+    broker.metrics.diskless_wal_cold_read_hits_total.inc();
     let bytes_est = records.len();
     p.out.error_code = codes::NONE;
     if p.read_committed && !p.is_follower_fetch {
@@ -414,6 +419,7 @@ mod tests {
         };
 
         assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(first.len()));
+        assert!(broker.metrics.diskless_wal_cold_read_hits_total.get() == 1);
         assert!(
             round_trip_partition(wire_topic_id, pending.out.clone())
                 == PartitionData {
@@ -424,6 +430,16 @@ mod tests {
                     ..Default::default()
                 }
         );
+
+        pending.fetch_offset = 99;
+        pending.out.error_code = codes::OFFSET_OUT_OF_RANGE;
+        assert!(
+            try_diskless_read(&broker, &mut pending, &part)
+                .await
+                .is_none()
+        );
+        assert!(broker.metrics.diskless_wal_cold_read_misses_total.get() == 1);
+        pending.fetch_offset = 0;
 
         read_handle
             .index
@@ -448,6 +464,7 @@ mod tests {
             ..Default::default()
         };
         assert!(try_diskless_read(&broker, &mut pending, &part).await == Some(0));
+        assert!(broker.metrics.diskless_wal_cold_read_errors_total.get() == 1);
         assert!(
             round_trip_partition(wire_topic_id, pending.out)
                 == PartitionData {

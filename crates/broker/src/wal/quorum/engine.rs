@@ -10,7 +10,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicI64, Ordering},
     },
 };
@@ -35,7 +35,11 @@ pub(super) use self::{
     batches::{read_batches_exact, read_log_batches_exact, split_batches},
     replica_io::sync_replica,
 };
-use crate::{error::BrokerError, wal::quorum::log_view::ShardLog};
+use crate::{
+    error::BrokerError,
+    metrics::BrokerMetrics,
+    wal::quorum::{log_view::ShardLog, registry::ShardId},
+};
 
 /// A single durable member of a WAL quorum.
 #[derive(Debug)]
@@ -83,6 +87,7 @@ pub(crate) struct WalShardEngine {
     distributed_required: AtomicBool,
     distributed: Mutex<Option<DistributedQuorum>>,
     durable_advanced: Notify,
+    observability: OnceLock<(ShardId, BrokerMetrics)>,
 }
 
 #[derive(Debug)]
@@ -137,6 +142,7 @@ impl WalShardEngine {
             distributed_required: AtomicBool::new(false),
             distributed: Mutex::new(None),
             durable_advanced: Notify::new(),
+            observability: OnceLock::new(),
         })
     }
 
@@ -170,6 +176,7 @@ impl WalShardEngine {
             distributed_required: AtomicBool::new(false),
             distributed: Mutex::new(None),
             durable_advanced: Notify::new(),
+            observability: OnceLock::new(),
         })
     }
 
@@ -186,6 +193,93 @@ impl WalShardEngine {
     #[must_use]
     pub(crate) fn durable_watermark(&self) -> Offset {
         Offset(self.durable_watermark.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn attach_observability(&self, shard: ShardId, metrics: BrokerMetrics) {
+        let _ = self.observability.set((shard, metrics));
+        self.record_observability();
+    }
+
+    fn record_observability(&self) {
+        let Some((shard, metrics)) = self.observability.get() else {
+            return;
+        };
+        let Some(source) = self.replicas.first() else {
+            return;
+        };
+        let leader_end = source.log.lock().log_end_offset();
+        let distributed = self
+            .distributed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(quorum) = distributed.as_ref() {
+            metrics.record_diskless_wal_watermark(
+                shard.topic_id,
+                shard.partition,
+                self.durable_watermark().0,
+            );
+            let log_start = source.log.lock().log_start_offset();
+            for voter in &quorum.voters {
+                let durable = quorum
+                    .durable_offsets
+                    .get(voter)
+                    .copied()
+                    .unwrap_or(log_start);
+                metrics.record_diskless_wal_voter_lag(
+                    shard.topic_id,
+                    shard.partition,
+                    *voter,
+                    leader_end.0.saturating_sub(durable.0),
+                );
+            }
+        }
+    }
+
+    fn remove_voter_observability(&self, voters: &[NodeId]) {
+        if let Some((shard, metrics)) = self.observability.get() {
+            metrics.remove_diskless_wal_voters(shard.topic_id, shard.partition, voters);
+        }
+    }
+
+    pub(crate) fn clear_observability(&self) {
+        let voters = self
+            .distributed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map_or_else(Vec::new, |quorum| quorum.voters.clone());
+        if let Some((shard, metrics)) = self.observability.get() {
+            metrics.remove_diskless_wal_shard(shard.topic_id, shard.partition, &voters);
+        }
+    }
+
+    fn record_quorum_loss(&self, target: Offset, error: &BrokerError) {
+        let Some((shard, metrics)) = self.observability.get() else {
+            return;
+        };
+        metrics.diskless_wal_quorum_loss_events_total.inc();
+        tracing::warn!(
+            topic_id = %shard.topic_id,
+            partition = shard.partition.0,
+            target = target.0,
+            durable_watermark = self.durable_watermark().0,
+            %error,
+            "diskless WAL leader failed to reach quorum"
+        );
+    }
+
+    fn warn_quorum_not_reached(&self, from: NodeId, offset: Offset) {
+        let Some((shard, _)) = self.observability.get() else {
+            return;
+        };
+        tracing::warn!(
+            topic_id = %shard.topic_id,
+            partition = shard.partition.0,
+            voter = from.0,
+            offset = offset.0,
+            durable_watermark = self.durable_watermark().0,
+            "diskless WAL voter acknowledgement did not reach quorum"
+        );
     }
 
     pub(crate) async fn wait_for_durable_advance(&self, after: Offset) -> Offset {
@@ -244,21 +338,29 @@ impl WalShardEngine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_some();
             if !configured {
-                return Err(BrokerError::Replication(
+                let error = BrokerError::Replication(
                     "diskless WAL broker placement is not available".into(),
-                ));
+                );
+                self.record_quorum_loss(target, &error);
+                return Err(error);
             }
-            sync_replica(source.clone(), &[]).await?;
+            if let Err(error) = sync_replica(source.clone(), &[]).await {
+                self.record_quorum_loss(target, &error);
+                return Err(error);
+            }
             self.local_durable.fetch_max(target.0, Ordering::AcqRel);
-            let me = self
+            let Some(me) = self
                 .distributed
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
                 .map(|quorum| quorum.me)
-                .ok_or_else(|| {
-                    BrokerError::Replication("diskless WAL broker placement disappeared".into())
-                })?;
+            else {
+                let error =
+                    BrokerError::Replication("diskless WAL broker placement disappeared".into());
+                self.record_quorum_loss(target, &error);
+                return Err(error);
+            };
             let log_start = source.lock().log_start_offset();
             self.record_durable_offset(me, target, log_start, source_end);
             loop {
@@ -275,9 +377,11 @@ impl WalShardEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .is_none()
                 {
-                    return Err(BrokerError::Replication(
+                    let error = BrokerError::Replication(
                         "diskless WAL broker placement disappeared".into(),
-                    ));
+                    );
+                    self.record_quorum_loss(target, &error);
+                    return Err(error);
                 }
                 advanced.await;
             }
@@ -298,11 +402,14 @@ impl WalShardEngine {
         }
         let required = strict_majority(self.expected_voters);
         if synced < required {
-            return Err(BrokerError::Replication(format!(
+            let error = BrokerError::Replication(format!(
                 "wal quorum has {synced} synced replicas, needs {required}"
-            )));
+            ));
+            self.record_quorum_loss(target, &error);
+            return Err(error);
         }
         self.durable_watermark.store(target.0, Ordering::Release);
+        self.record_observability();
         Ok(target)
     }
 
