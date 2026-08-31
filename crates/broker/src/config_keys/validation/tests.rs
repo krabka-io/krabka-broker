@@ -2,7 +2,14 @@
 
 use assert2::assert;
 
-use super::*;
+use super::{
+    super::{
+        DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS,
+        REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
+        delivery::DELIVERY_MODE_IMMEDIATE,
+    },
+    *,
+};
 
 #[test]
 fn validate_retention_ms_boundary_cases() {

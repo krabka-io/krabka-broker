@@ -53,6 +53,14 @@
 //! it by name. See [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 //!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
+//!
+//! [`registry`] is the one table all of that reads from. A row states a key's
+//! name, the `ConfigDef` type byte the JVM `AdminClient` parses its value
+//! with, its default, its documentation, whether the broker may disclose the
+//! value, and the value check [`validate_topic_config`] applies. The generated
+//! reference page in [`docs`] and the typed metadata `DescribeConfigs` reports
+//! are both projections of it, so an operator cannot be told one thing by
+//! `kafka-configs --describe` and another by an alter refusal.
 
 mod broker_scope;
 mod delivery;
@@ -61,6 +69,7 @@ mod docs;
 mod log_config;
 mod qos;
 mod recovery;
+pub(crate) mod registry;
 mod schema;
 mod topic_scope;
 mod validation;
