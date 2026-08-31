@@ -1,8 +1,12 @@
 //! Diskless WAL object-store flusher.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use futures_util::TryStreamExt as _;
@@ -23,6 +27,12 @@ mod test_support;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) use self::object_flush::put_failure_count;
 pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
+
+/// Every broker sweeps the shared prefix, so objects from removed brokers are
+/// covered too. The observation grace lets independent index consumers apply
+/// replacements before any broker deletes the old object.
+const RECLAIM_INTERVAL: Duration = Duration::from_secs(30);
+const RECLAIM_GRACE: Duration = Duration::from_mins(5);
 
 pub(crate) struct FlushPartition {
     pub(crate) topic_id: Uuid,
@@ -84,23 +94,31 @@ pub(crate) async fn run(
         );
         return FlusherExit::ReplayStalled;
     }
-    reclaim_unreferenced_objects(&context).await;
+    let mut reclaimer = Reclaimer::new(RECLAIM_GRACE);
+    reclaimer.sweep(&context).await;
     context.ready.store(true, Ordering::Release);
     let mut ticker = tokio::time::interval(config.interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut reclaim_ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + RECLAIM_INTERVAL,
+        RECLAIM_INTERVAL,
+    );
+    reclaim_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut rotation = 0usize;
     loop {
         tokio::select! {
-            _ = ticker.tick() => {}
+            _ = ticker.tick() => {
+                if let Err(error) = flush_tick(&context, &config, rotation).await {
+                    tracing::warn!(%error, "diskless WAL flush failed; retrying");
+                }
+                rotation = rotation.wrapping_add(1);
+            }
+            _ = reclaim_ticker.tick() => reclaimer.sweep(&context).await,
             () = shutdown.cancelled() => {
                 tracing::debug!("diskless WAL flusher shutting down");
                 return FlusherExit::ShutDown;
             }
         }
-        if let Err(error) = flush_tick(&context, &config, rotation).await {
-            tracing::warn!(%error, "diskless WAL flush failed; retrying");
-        }
-        rotation = rotation.wrapping_add(1);
     }
 }
 
@@ -110,13 +128,13 @@ async fn flush_tick(
     rotation: usize,
 ) -> Result<Option<WalFlushRecord>, crate::error::BrokerError> {
     let image = context.image_rx.borrow().clone();
-    let deleted = tombstone_deleted_topics(context, &image).await?;
+    tombstone_deleted_topics(context, &image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
     }
-    let result = flush_once(
+    flush_once(
         Arc::clone(&context.object_store),
         context.broker_id,
         &context.index_log,
@@ -124,53 +142,77 @@ async fn flush_tick(
         &partitions,
         config,
     )
-    .await;
-    if deleted || result.as_ref().is_ok_and(Option::is_some) {
-        reclaim_unreferenced_objects(context).await;
-    }
-    result
+    .await
 }
 
 async fn tombstone_deleted_topics(
     context: &FlusherContext,
     image: &MetadataImage,
-) -> Result<bool, crate::error::BrokerError> {
+) -> Result<(), crate::error::BrokerError> {
     let topic_ids = context.index_log.cache().lock().await.topic_ids();
-    let mut deleted = false;
     for topic_id in topic_ids {
         if image.topic_by_id(&topic_id).is_none() {
             context.index_log.tombstone_topic(topic_id).await?;
-            deleted = true;
         }
     }
-    Ok(deleted)
+    Ok(())
 }
 
-async fn reclaim_unreferenced_objects(context: &FlusherContext) {
-    let referenced = context.index_log.cache().lock().await.referenced_objects();
-    let prefix = object_store::path::Path::from(format!("diskless-wal/{}", context.broker_id));
-    let objects = match context
-        .object_store
-        .list(Some(&prefix))
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        Ok(objects) => objects,
-        Err(error) => {
-            tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
-            return;
+struct Reclaimer {
+    first_seen: HashMap<String, Instant>,
+    grace: Duration,
+}
+
+impl Reclaimer {
+    fn new(grace: Duration) -> Self {
+        Self {
+            first_seen: HashMap::new(),
+            grace,
         }
-    };
-    for object in objects {
-        let object_key = object.location.to_string();
-        if referenced.contains(&object_key) {
-            continue;
-        }
-        if let Err(error) = context.object_store.delete(&object.location).await
-            && !matches!(error, object_store::Error::NotFound { .. })
+    }
+
+    async fn sweep(&mut self, context: &FlusherContext) {
+        self.sweep_at(context, Instant::now()).await;
+    }
+
+    async fn sweep_at(&mut self, context: &FlusherContext, now: Instant) {
+        let referenced = context.index_log.cache().lock().await.referenced_objects();
+        let prefix = object_store::path::Path::from("diskless-wal");
+        let objects = match context
+            .object_store
+            .list(Some(&prefix))
+            .try_collect::<Vec<_>>()
+            .await
         {
-            tracing::warn!(%object_key, %error, "diskless WAL reclaim failed; retrying");
+            Ok(objects) => objects,
+            Err(error) => {
+                tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
+                return;
+            }
+        };
+        let mut unreferenced = HashSet::new();
+        for object in objects {
+            let object_key = object.location.to_string();
+            if referenced.contains(&object_key) {
+                self.first_seen.remove(&object_key);
+                continue;
+            }
+            unreferenced.insert(object_key.clone());
+            let first_seen = *self.first_seen.entry(object_key.clone()).or_insert(now);
+            if now.duration_since(first_seen) < self.grace {
+                continue;
+            }
+            match context.object_store.delete(&object.location).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {
+                    self.first_seen.remove(&object_key);
+                }
+                Err(error) => {
+                    tracing::warn!(%object_key, %error, "diskless WAL reclaim failed; retrying");
+                }
+            }
         }
+        self.first_seen
+            .retain(|object_key, _| unreferenced.contains(object_key));
     }
 }
 
@@ -367,10 +409,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reclaim_deletes_a_superseded_object() {
+    async fn reclaim_grace_then_deletes_a_superseded_object_from_another_broker() {
         let topic_id = Uuid::from_u128(11);
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        for key in ["diskless-wal/7/old.ckwl", "diskless-wal/7/new.ckwl"] {
+        for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
             store
                 .put(&Path::from(key), PutPayload::from_static(b"object"))
                 .await
@@ -382,7 +424,7 @@ mod tests {
         .await
         .unwrap();
         let cache = index.cache();
-        for key in ["diskless-wal/7/old.ckwl", "diskless-wal/7/new.ckwl"] {
+        for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
             index
                 .publish_flush(&WalFlushRecord {
                     object_key: key.into(),
@@ -411,11 +453,23 @@ mod tests {
             ready: Arc::new(AtomicBool::new(false)),
         };
 
-        reclaim_unreferenced_objects(&context).await;
+        let mut reclaimer = Reclaimer::new(Duration::from_secs(60));
+        let observed = Instant::now();
+        reclaimer.sweep_at(&context, observed).await;
+        assert!(
+            store
+                .head(&Path::from("diskless-wal/9/old.ckwl"))
+                .await
+                .is_ok(),
+            "the grace period protects lagging projections"
+        );
+        reclaimer
+            .sweep_at(&context, observed + Duration::from_secs(60))
+            .await;
 
         assert!(
             store
-                .head(&Path::from("diskless-wal/7/old.ckwl"))
+                .head(&Path::from("diskless-wal/9/old.ckwl"))
                 .await
                 .is_err()
         );
@@ -470,8 +524,8 @@ mod tests {
             ready: Arc::new(AtomicBool::new(false)),
         };
 
-        assert!(tombstone_deleted_topics(&context, &image).await.unwrap());
-        reclaim_unreferenced_objects(&context).await;
+        tombstone_deleted_topics(&context, &image).await.unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(&context).await;
 
         assert!(cache.lock().await.lookup(topic_id, 0, 0).is_none());
         assert!(store.head(&Path::from(object_key)).await.is_err());

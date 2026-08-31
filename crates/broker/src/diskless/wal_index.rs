@@ -93,24 +93,51 @@ impl WalFlushRecord {
 #[derive(Default)]
 pub struct WalIndexCache {
     by_topic_partition: HashMap<(Uuid, i32), BTreeMap<i64, (String, WalIndexEntry)>>,
+    keyed_ranges: HashSet<WalIndexKey>,
+    replay_tombstones: HashSet<WalIndexKey>,
+    legacy_replay_finished: bool,
 }
 
 impl WalIndexCache {
-    /// Apply one committed flush record to the projection.
+    /// Apply one legacy, unkeyed flush record to the projection.
     pub fn apply(&mut self, record: &WalFlushRecord) {
         for entry in &record.entries {
-            self.by_topic_partition
-                .entry((entry.topic_id, entry.partition))
-                .or_default()
-                .insert(
-                    entry.first_offset,
-                    (record.object_key.clone(), entry.clone()),
-                );
+            let key = WalIndexKey::from(entry);
+            if self.keyed_ranges.contains(&key) || self.replay_tombstones.contains(&key) {
+                continue;
+            }
+            self.insert(record, entry);
         }
+    }
+
+    /// Apply a keyed record, which remains authoritative over legacy replay
+    /// regardless of cross-partition delivery order during upgrades.
+    pub(crate) fn apply_keyed(&mut self, key: WalIndexKey, record: &WalFlushRecord) {
+        self.keyed_ranges.insert(key);
+        self.replay_tombstones.remove(&key);
+        for entry in &record.entries {
+            if WalIndexKey::from(entry) == key {
+                self.insert(record, entry);
+            }
+        }
+    }
+
+    fn insert(&mut self, record: &WalFlushRecord, entry: &WalIndexEntry) {
+        self.by_topic_partition
+            .entry((entry.topic_id, entry.partition))
+            .or_default()
+            .insert(
+                entry.first_offset,
+                (record.object_key.clone(), entry.clone()),
+            );
     }
 
     /// Remove one compacted range after its Kafka tombstone is committed.
     pub(crate) fn remove(&mut self, key: WalIndexKey) {
+        self.keyed_ranges.remove(&key);
+        if !self.legacy_replay_finished {
+            self.replay_tombstones.insert(key);
+        }
         let partition = (key.topic_id, key.partition);
         let mut empty = false;
         if let Some(entries) = self.by_topic_partition.get_mut(&partition) {
@@ -120,6 +147,13 @@ impl WalIndexCache {
         if empty {
             self.by_topic_partition.remove(&partition);
         }
+    }
+
+    /// Cross-partition legacy records cannot arrive before the replay fences
+    /// anymore, so tombstone migration guards no longer need heap space.
+    pub(crate) fn finish_legacy_replay(&mut self) {
+        self.replay_tombstones.clear();
+        self.legacy_replay_finished = true;
     }
 
     /// Keys currently held for a topic, used to publish compaction tombstones
@@ -395,5 +429,42 @@ mod tests {
             first_offset: 0,
         });
         assert!(cache.referenced_objects() == ["new".into()].into());
+    }
+
+    #[test]
+    fn keyed_value_wins_over_late_legacy_replay() {
+        let mut cache = WalIndexCache::default();
+        let entry = entry(0, 0, 4);
+        let key = WalIndexKey::from(&entry);
+        cache.apply_keyed(
+            key,
+            &WalFlushRecord {
+                object_key: "new".into(),
+                format_version: 1,
+                entries: vec![entry.clone()],
+            },
+        );
+        cache.apply(&WalFlushRecord {
+            object_key: "legacy".into(),
+            format_version: 1,
+            entries: vec![entry],
+        });
+
+        assert!(cache.lookup(Uuid::from_u128(1), 0, 0).unwrap().0 == "new");
+    }
+
+    #[test]
+    fn keyed_tombstone_prevents_legacy_resurrection() {
+        let mut cache = WalIndexCache::default();
+        let entry = entry(0, 0, 4);
+        let key = WalIndexKey::from(&entry);
+        cache.remove(key);
+        cache.apply(&WalFlushRecord {
+            object_key: "legacy".into(),
+            format_version: 1,
+            entries: vec![entry],
+        });
+
+        assert!(cache.lookup(Uuid::from_u128(1), 0, 0).is_none());
     }
 }

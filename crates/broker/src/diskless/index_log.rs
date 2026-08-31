@@ -108,7 +108,16 @@ impl DisklessIndexLog {
                         pump_cache.lock().await.remove(key);
                     }
                 } else if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
-                    pump_cache.lock().await.apply(&record);
+                    let mut cache = pump_cache.lock().await;
+                    match event.key.as_deref() {
+                        Some(bytes) => {
+                            if let Some(key) = WalIndexKey::from_bytes(bytes) {
+                                cache.apply_keyed(key, &record);
+                            }
+                        }
+                        None => cache.apply(&record),
+                    }
+                    drop(cache);
                     applied_tx.send_modify(|generation| {
                         *generation = generation.wrapping_add(1);
                     });
@@ -156,7 +165,9 @@ impl DisklessIndexLog {
     pub(crate) async fn wait_until_caught_up(&self, stall_timeout: Duration) -> bool {
         let mut progress = self.progress.clone();
         loop {
-            if progress.borrow_and_update().caught_up {
+            let caught_up = progress.borrow_and_update().caught_up;
+            if caught_up {
+                self.cache.lock().await.finish_legacy_replay();
                 return true;
             }
             match tokio::time::timeout(stall_timeout, progress.changed()).await {
