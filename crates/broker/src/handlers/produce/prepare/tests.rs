@@ -1,5 +1,7 @@
 //! Tests for the verbatim-versus-owned prepare decision.
 
+use std::sync::Arc;
+
 use assert2::assert;
 use bytes::BytesMut;
 use krabka_compression::CompressionType;
@@ -9,6 +11,12 @@ use krabka_units::{bytes, fraction};
 
 use super::*;
 use crate::handlers::produce::test_support::encode_batch;
+
+/// The topic name these cases record under, as the shared handle the metric
+/// label sets clone.
+fn topic() -> Arc<str> {
+    Arc::from("t")
+}
 
 #[test]
 fn record_decompression_policy_limits_owned_and_verbatim_produce() {
@@ -27,7 +35,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
     let error = prepare_batch(
         PartitionPayload::Slice(wire.clone()),
         None,
-        "t",
+        &topic(),
         &metrics,
         policy,
     )
@@ -37,7 +45,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
     let error = prepare_batch(
         PartitionPayload::Slice(wire.clone()),
         Some(CompressionType::Zstd),
-        "t",
+        &topic(),
         &metrics,
         policy,
     )
@@ -47,7 +55,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         prepare_batch(
             PartitionPayload::Slice(wire),
             Some(CompressionType::Zstd),
-            "t",
+            &topic(),
             &metrics,
             RecordDecompressionPolicy::default(),
         )
@@ -70,7 +78,7 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
     .unwrap();
     let error = decode_owned_batch(
         RecordsPayload::Legacy(legacy.freeze()),
-        "t",
+        &topic(),
         &metrics,
         policy,
     )

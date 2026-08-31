@@ -85,11 +85,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
         .expect("partition log mutex poisoned")
         .tierable_segments()
         .len();
-    partitions.insert(
-        "orders".to_string(),
-        PartitionIndex(0),
-        Arc::clone(&partition),
-    );
+    partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
     let controller = FixedMetadataSource::new(image);
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));

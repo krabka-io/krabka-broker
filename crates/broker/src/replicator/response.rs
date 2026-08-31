@@ -236,7 +236,7 @@ fn find_partition_response<'a>(
         .responses
         .iter_mut()
         .find(|topic| {
-            topic.topic == cfg.topic
+            topic.topic.as_str() == &*cfg.topic
                 || (cfg.topic_id != WireUuid::ZERO && topic.topic_id == cfg.topic_id)
         })?
         .partitions

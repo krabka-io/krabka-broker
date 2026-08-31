@@ -45,7 +45,11 @@ pub(super) struct PartitionInput<'a> {
     /// `None` is "neither `schema.validation.key` nor
     /// `schema.validation.value` is set", and skips the check entirely.
     pub(super) schema: Option<SchemaGate>,
-    pub(super) topic_name: String,
+    /// The topic name, as the `Arc<str>` the metric label sets clone. The
+    /// registry owns the one copy — see `PartitionRegistry::shared_topic_name`
+    /// — so passing it down here is what keeps the per-partition accounting
+    /// free of allocations.
+    pub(super) topic_name: Arc<str>,
     pub(super) topic_denied: bool,
     /// The topic's KFC-9 write-freeze entry, resolved once per topic. `None`
     /// is a topic that accepts writes, and skips the freeze gate entirely.
@@ -89,7 +93,11 @@ pub(super) async fn process_partition(
         acks,
         timeout,
     } = input;
-    let topic_name = topic_name.as_str();
+    // `shared_topic` is the owned handle the metric labels clone;
+    // `topic_name` stays the borrowed view every gate and image lookup below
+    // already takes.
+    let shared_topic = topic_name;
+    let topic_name: &str = &shared_topic;
     let PartitionServices {
         partitions,
         txn_coordinator,
@@ -148,7 +156,7 @@ pub(super) async fn process_partition(
     let prepared = match prepare_batch(
         part_data.payload,
         topic_compression,
-        topic_name,
+        &shared_topic,
         metrics,
         record_decompression_policy,
     ) {

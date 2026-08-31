@@ -258,7 +258,7 @@ mod tests {
         part.current_leader_epoch.store(11, Ordering::Release);
         broker
             .partitions
-            .insert("orders".to_string(), krabka_ids::PartitionIndex(0), part);
+            .insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
         let version = get_replica_log_info_request::MAX_VERSION;
         let req = GetReplicaLogInfoRequest {

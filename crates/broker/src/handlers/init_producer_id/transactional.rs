@@ -213,7 +213,7 @@ mod tests {
             false,
         );
         assert!(part.log_end_offset() == 0);
-        partitions.insert("orders".to_string(), PartitionIndex(0), Arc::clone(&part));
+        partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&part));
 
         // Build a txn entry that names this partition.
         let mut entry = TxnEntry::new_empty("tx-1".to_string(), ProducerId(1000), 3, 60_000, 0);

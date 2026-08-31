@@ -10,7 +10,7 @@
 //! native v2 `RecordBatch`. The handler fully supports clients that send a
 //! single v2 batch per partition, which is the typical modern case.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
@@ -150,14 +150,20 @@ pub(crate) async fn handle(
         // every partition row; a mismatched name+id returns
         // INCONSISTENT_TOPIC_ID (103). Only name-only misses fall through
         // to the legacy UNKNOWN_TOPIC_OR_PARTITION path.
-        let topic_name = match crate::topic_resolve::resolve(&image, &topic.name, topic.topic_id) {
-            Ok(rec) => rec.name.clone(),
-            Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => topic.name.clone(),
-            Err(code) => {
-                topic_results.push(build_topic_error_response(&topic, code));
-                continue;
-            }
-        };
+        // The metric label sets hold an `Arc<str>`, and this loop body builds
+        // one per partition, so take the registry's own copy of the name: for
+        // a topic this broker hosts — which is every topic that gets past the
+        // gates below — the per-partition accounting is then a refcount bump
+        // and no allocation at all.
+        let topic_name: Arc<str> =
+            match crate::topic_resolve::resolve(&image, &topic.name, topic.topic_id) {
+                Ok(rec) => partitions.shared_topic_name(&rec.name),
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => partitions.shared_topic_name(&topic.name),
+                Err(code) => {
+                    topic_results.push(build_topic_error_response(&topic, code));
+                    continue;
+                }
+            };
 
         // Account for the topic in Prometheus before
         // consuming `partition_data`. Sum the per-partition records-field
@@ -197,7 +203,7 @@ pub(crate) async fn handle(
         // unknown topic_id) maps to "" in the denied set if and only if
         // its authorize result was Deny; the no-ACL compat shim returns
         // Allow uniformly, so existing tests are unaffected.
-        let topic_denied = denied_topics.contains(&topic_name);
+        let topic_denied = denied_topics.contains(&*topic_name);
 
         // Resolve the topic's broker-side `compression.type` once. `None`
         // means Kafka's `producer` pass-through (no recompression). A
@@ -283,7 +289,7 @@ pub(crate) async fn handle(
         }
 
         topic_results.push(TopicProduceResponse {
-            name: topic_name,
+            name: topic_name.to_string(),
             topic_id: topic.topic_id,
             partition_responses: partition_results,
             ..Default::default()

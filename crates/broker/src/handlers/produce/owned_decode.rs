@@ -2,6 +2,8 @@
 //! `RecordsPayload` into exactly one owned v2 record batch, up-converting a
 //! v0/v1 `MessageSet` on the way.
 
+use std::sync::Arc;
+
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{RecordBatch, RecordsPayload};
 
@@ -15,7 +17,7 @@ use crate::codes;
 /// a failed up-conversion.
 pub(super) fn decode_owned_batch(
     payload: RecordsPayload,
-    topic_name: &str,
+    topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
 ) -> Result<RecordBatch, i16> {
@@ -83,6 +85,8 @@ fn exactly_one_v2_batch(mut batches: Vec<RecordBatch>) -> Result<RecordBatch, i1
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::{assert, check};
     use bytes::{Bytes, BytesMut};
     use krabka_ids::Offset;
@@ -116,7 +120,7 @@ mod tests {
         };
         let decoded = decode_owned_batch(
             RecordsPayload::V2(vec![batch]),
-            "orders",
+            &Arc::from("orders"),
             &crate::metrics::BrokerMetrics::new(),
             RecordDecompressionPolicy::default(),
         )
@@ -136,7 +140,7 @@ mod tests {
     fn decode_owned_batch_rejects_empty_v2_payload() {
         let err = decode_owned_batch(
             RecordsPayload::V2(Vec::new()),
-            "orders",
+            &Arc::from("orders"),
             &crate::metrics::BrokerMetrics::new(),
             RecordDecompressionPolicy::default(),
         )
@@ -170,7 +174,7 @@ mod tests {
         let prepared = prepare_batch(
             PartitionPayload::Owned(RecordsPayload::Legacy(legacy.freeze())),
             None,
-            "orders",
+            &Arc::from("orders"),
             &crate::metrics::BrokerMetrics::new(),
             RecordDecompressionPolicy::default(),
         )

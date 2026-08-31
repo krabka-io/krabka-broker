@@ -148,11 +148,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
         let partition = fixture_partition(dir.path(), "__audit", 0);
-        partitions.insert(
-            "__audit".to_string(),
-            PartitionIndex(0),
-            Arc::clone(&partition),
-        );
+        partitions.insert("__audit".into(), PartitionIndex(0), Arc::clone(&partition));
         let sink = KafkaTopicAuditSink::new(
             partitions,
             "__audit".to_string(),
@@ -199,11 +195,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
         let partition = fixture_partition(dir.path(), "__audit", 0);
-        partitions.insert(
-            "__audit".to_string(),
-            PartitionIndex(0),
-            Arc::clone(&partition),
-        );
+        partitions.insert("__audit".into(), PartitionIndex(0), Arc::clone(&partition));
         partition.install_leader_change(1, 1).await;
         let sink = KafkaTopicAuditSink::new(
             partitions,

@@ -23,7 +23,7 @@ async fn run_ticks_until_shutdown() {
     );
     let before = record_count(&partition);
     registry.insert(
-        "run-compact".to_string(),
+        "run-compact".into(),
         PartitionIndex(0),
         Arc::clone(&partition),
     );

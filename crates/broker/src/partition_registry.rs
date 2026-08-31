@@ -1,6 +1,6 @@
 //! Concurrent registry of locally-hosted partitions.
 //!
-//! The registry uses a nested `DashMap<String, DashMap<i32, Arc<Partition>>>`,
+//! The registry uses a nested `DashMap<Arc<str>, DashMap<i32, Arc<Partition>>>`,
 //! so a lookup runs with a borrowed `&str` topic name and allocates nothing.
 //!
 //! A flat `Arc<DashMap<(String, i32), Arc<Partition>>>` would force every
@@ -8,6 +8,13 @@
 //! `partitions.get(&(topic.to_string(), idx))`. On the produce and fetch hot
 //! path one request can resolve hundreds of partitions, which would make that
 //! an O(partitions) burst of allocations.
+//!
+//! The outer key is an `Arc<str>` rather than a `String` for the same reason
+//! read from the other side: the registry already owns one copy of every
+//! hosted topic name, so a data-path caller that needs an *owned* name —
+//! a metric label above all — can take a refcount bump off
+//! [`PartitionRegistry::shared_topic_name`] instead of allocating and copying
+//! its own.
 
 use std::sync::Arc;
 
@@ -19,13 +26,13 @@ use crate::partition::Partition;
 /// Concurrent registry of locally-hosted partitions, keyed by
 /// (topic, partition).
 ///
-/// A nested `DashMap<String, DashMap<PartitionIndex, Arc<Partition>>>` backs
+/// A nested `DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>` backs
 /// it, so a lookup runs with a borrowed `&str` topic name and allocates no
 /// `String`. That matters on the produce and fetch hot path, where one request
 /// can resolve hundreds of partitions.
 #[derive(Debug, Default)]
 pub(crate) struct PartitionRegistry {
-    inner: DashMap<String, DashMap<PartitionIndex, Arc<Partition>>>,
+    inner: DashMap<Arc<str>, DashMap<PartitionIndex, Arc<Partition>>>,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 }
 
@@ -62,6 +69,28 @@ impl PartitionRegistry {
             .and_then(|m| m.get(&partition).map(|p| Arc::clone(&p)))
     }
 
+    /// The registry's own copy of `topic`, as a cheap `Arc` clone.
+    ///
+    /// The outer map is keyed by `Arc<str>`, so a caller that needs an owned
+    /// topic name pays one refcount bump rather than an allocation and a
+    /// copy of the bytes. The metric label sets are the caller that matters:
+    /// [`crate::metrics::PartitionLabel`] and
+    /// [`crate::metrics::TopicLabel`] hold an `Arc<str>`, and the produce,
+    /// fetch and replication paths build one of them per partition per
+    /// request.
+    ///
+    /// A topic this broker hosts no partition of has no shared copy to give,
+    /// and the name is allocated instead. That is the cold path by
+    /// construction: the data path reaches a metric only for a topic it just
+    /// resolved a local partition of, and everything else here is a
+    /// once-per-request miss.
+    #[must_use]
+    pub(crate) fn shared_topic_name(&self, topic: &str) -> Arc<str> {
+        self.inner
+            .get(topic)
+            .map_or_else(|| Arc::from(topic), |e| Arc::clone(e.key()))
+    }
+
     /// Returns `true` if the given (topic, partition) is hosted locally.
     #[must_use]
     pub(crate) fn contains(&self, topic: &str, partition: PartitionIndex) -> bool {
@@ -74,7 +103,7 @@ impl PartitionRegistry {
     /// previous value, if there was one.
     pub(crate) fn insert(
         &self,
-        topic: String,
+        topic: Arc<str>,
         partition: PartitionIndex,
         part: Arc<Partition>,
     ) -> Option<Arc<Partition>> {
@@ -107,7 +136,7 @@ impl PartitionRegistry {
         build: impl FnOnce() -> Result<Arc<Partition>, E>,
     ) -> Result<(), E> {
         use dashmap::mapref::entry::Entry;
-        let inner = self.inner.entry(topic.to_string()).or_default();
+        let inner = self.inner.entry(Arc::from(topic)).or_default();
         match inner.entry(partition) {
             Entry::Occupied(_) => Ok(()),
             Entry::Vacant(slot) => {
@@ -187,7 +216,7 @@ mod tests {
 
         let p = fixture_partition(dir.path(), "t", PartitionIndex(0));
         check!(
-            reg.insert("t".to_string(), PartitionIndex(0), Arc::clone(&p))
+            reg.insert("t".into(), PartitionIndex(0), Arc::clone(&p))
                 .is_none()
         );
         check!(reg.contains("t", PartitionIndex(0)));
@@ -200,7 +229,7 @@ mod tests {
         // Replace returns previous.
         let p2 = fixture_partition(dir.path(), "t", PartitionIndex(0));
         let prev = reg
-            .insert("t".to_string(), PartitionIndex(0), Arc::clone(&p2))
+            .insert("t".into(), PartitionIndex(0), Arc::clone(&p2))
             .expect("prev");
         assert!(Arc::ptr_eq(&prev, &p));
         assert!(reg.arcs().len() == 1);
@@ -220,17 +249,17 @@ mod tests {
         assert!(reg.len() == 0);
 
         reg.insert(
-            "a".to_string(),
+            "a".into(),
             PartitionIndex(2),
             fixture_partition(dir.path(), "a", PartitionIndex(2)),
         );
         reg.insert(
-            "a".to_string(),
+            "a".into(),
             PartitionIndex(4),
             fixture_partition(dir.path(), "a", PartitionIndex(4)),
         );
         reg.insert(
-            "b".to_string(),
+            "b".into(),
             PartitionIndex(7),
             fixture_partition(dir.path(), "b", PartitionIndex(7)),
         );
@@ -282,17 +311,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let reg = PartitionRegistry::new();
         reg.insert(
-            "a".to_string(),
+            "a".into(),
             PartitionIndex(0),
             fixture_partition(dir.path(), "a", PartitionIndex(0)),
         );
         reg.insert(
-            "a".to_string(),
+            "a".into(),
             PartitionIndex(1),
             fixture_partition(dir.path(), "a", PartitionIndex(1)),
         );
         reg.insert(
-            "b".to_string(),
+            "b".into(),
             PartitionIndex(0),
             fixture_partition(dir.path(), "b", PartitionIndex(0)),
         );

@@ -1,6 +1,8 @@
 //! Assembly of the wire response: the resolved reads are grouped back into
 //! per-topic entries, down-converted for a v0-v3 fetcher, and metered.
 
+use std::sync::Arc;
+
 use krabka_protocol::{
     owned::fetch_response::{FetchableTopicResponse, PartitionData},
     primitives::uuid::Uuid as WireUuid,
@@ -71,7 +73,9 @@ pub(super) fn downconvert_legacy_responses(
                         partition.records = Some(converted);
                     }
                     if !topic.topic.is_empty() {
-                        broker.metrics.record_fetch_message_conversion(&topic.topic);
+                        broker
+                            .metrics
+                            .record_fetch_message_conversion(&Arc::from(topic.topic.as_str()));
                     }
                 }
                 Ok(None) => {}
@@ -91,6 +95,13 @@ pub(super) fn record_fetch_metrics(
         if topic.topic.is_empty() {
             continue;
         }
+        // Resolve the owned topic name once for the whole topic: the wire
+        // response carries a `String`, but the label sets hold an `Arc<str>`
+        // and the loop below builds up to four of them per partition. The
+        // registry hands back the copy it already keys the topic by, so a
+        // locally hosted topic — every topic a `Fetch` reads from — costs
+        // nothing here.
+        let topic_name = broker.partitions.shared_topic_name(&topic.topic);
         let mut topic_bytes = 0;
         for (partition_index, partition) in topic.partitions.iter().enumerate() {
             let bytes = partition
@@ -99,13 +110,13 @@ pub(super) fn record_fetch_metrics(
                 .map_or(0, RecordsPayload::payload_len) as u64;
             broker
                 .metrics
-                .record_partition_fetch(&topic.topic, partition.partition_index, bytes);
+                .record_partition_fetch(&topic_name, partition.partition_index, bytes);
             if partition.error_code != 0 {
-                broker.metrics.record_failed_fetch(&topic.topic);
+                broker.metrics.record_failed_fetch(&topic_name);
             }
             if is_follower_fetch {
                 broker.metrics.record_replication_out(
-                    &topic.topic,
+                    &topic_name,
                     partition.partition_index,
                     bytes,
                 );
@@ -115,13 +126,13 @@ pub(super) fn record_fetch_metrics(
                 .and_then(|partitions| partitions.get(partition_index))
             {
                 broker.metrics.record_partition_cpu_micros(
-                    &topic.topic,
+                    &topic_name,
                     partition.partition_index,
                     *micros,
                 );
             }
             topic_bytes += bytes;
         }
-        broker.metrics.record_fetch(&topic.topic, topic_bytes);
+        broker.metrics.record_fetch(&topic_name, topic_bytes);
     }
 }

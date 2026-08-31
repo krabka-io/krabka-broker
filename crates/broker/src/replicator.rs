@@ -34,7 +34,14 @@ use crate::{
 /// Configuration handed to a single replicator task.
 pub(crate) struct Config {
     pub node_id: NodeId,
-    pub topic: String,
+    /// The topic this task follows, as the `Arc<str>` the partition registry
+    /// keys it by.
+    ///
+    /// The task records `replication_bytes_in` once per replicated record
+    /// batch, and the metric's label set holds an `Arc<str>`, so sharing the
+    /// registry's copy makes that record a hash and a refcount bump instead of
+    /// a `String` allocation per batch.
+    pub topic: Arc<str>,
     /// Wire-format `topic_id` for the partition.
     ///
     /// The `Fetch` request needs this value to fill the v13+ wire field. At
@@ -140,7 +147,7 @@ fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
                 .expect("placed partition dir always has a parent log.dir")
                 .to_path_buf();
             Ok(spawn_partition_with_replication_target(
-                cfg.topic.clone(),
+                cfg.topic.to_string(),
                 task_replication_target(cfg),
                 cfg.partition,
                 owning_dir,

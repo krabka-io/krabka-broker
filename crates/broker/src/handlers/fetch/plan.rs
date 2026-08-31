@@ -369,7 +369,7 @@ mod tests {
         let part_dir = dir.path().join(format!("{TOPIC}-0"));
         std::fs::create_dir_all(&part_dir).expect("partition dir");
         broker.partitions.insert(
-            TOPIC.to_string(),
+            TOPIC.into(),
             PartitionIndex(0),
             crate::broker::spawn_partition(
                 TOPIC.to_string(),

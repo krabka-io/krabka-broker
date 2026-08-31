@@ -3,6 +3,8 @@
 //! owned-decode fallback, plus the client-origin batch-header invariants that
 //! both paths apply.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
@@ -99,7 +101,7 @@ impl PreparedBatch {
 pub(super) fn prepare_batch(
     payload: PartitionPayload,
     topic_compression: Option<krabka_compression::CompressionType>,
-    topic_name: &str,
+    topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
 ) -> Result<PreparedBatch, i16> {
@@ -149,7 +151,7 @@ pub(super) fn prepare_batch(
 /// message-format clients) and surfaces `INVALID_RECORD` on malformed bytes.
 pub(super) fn owned_fallback(
     bytes: Bytes,
-    topic_name: &str,
+    topic_name: &Arc<str>,
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
 ) -> Result<PreparedBatch, i16> {

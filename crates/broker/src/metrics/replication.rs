@@ -2,18 +2,22 @@
 //! byte counters of a replica fetch, and the unclean-election counter that
 //! records when an out-of-ISR replica took leadership.
 
+use std::sync::Arc;
+
 use super::{BrokerMetrics, PartitionLabel};
 
 impl BrokerMetrics {
     /// Account bytes this broker received from the partition
     /// leader as a follower (inter-broker `Fetch` round-trip, follower
-    /// side). Called from the replicator after a successful append.
-    pub fn record_replication_in(&self, topic: &str, partition: i32, bytes: u64) {
+    /// side). Called from the replicator after a successful append, once per
+    /// record batch, so `topic` is the replicator task's own `Arc<str>` and
+    /// the label costs a refcount bump rather than an allocation.
+    pub fn record_replication_in(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
         if bytes == 0 {
             return;
         }
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
             partition,
         };
         self.replication_bytes_in.get_or_create(&lbl).inc_by(bytes);
@@ -28,13 +32,14 @@ impl BrokerMetrics {
 
     /// Account bytes this broker served to a follower as the
     /// partition leader (inter-broker `Fetch` round-trip, leader side).
-    /// Called from the `Fetch` handler when `replica_id >= 0`.
-    pub fn record_replication_out(&self, topic: &str, partition: i32, bytes: u64) {
+    /// Called from the `Fetch` handler when `replica_id >= 0`, once per
+    /// partition row of the response.
+    pub fn record_replication_out(&self, topic: &Arc<str>, partition: i32, bytes: u64) {
         if bytes == 0 {
             return;
         }
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::clone(topic),
             partition,
         };
         self.replication_bytes_out.get_or_create(&lbl).inc_by(bytes);
@@ -50,14 +55,15 @@ mod tests {
     #[test]
     fn replication_helpers_accumulate_per_partition() {
         let m = BrokerMetrics::new();
+        let orders: Arc<str> = Arc::from("orders");
         // Two appends from the same leader partition.
-        m.record_replication_in("orders", 3, 1_500);
-        m.record_replication_in("orders", 3, 2_500);
+        m.record_replication_in(&orders, 3, 1_500);
+        m.record_replication_in(&orders, 3, 2_500);
         // Different partition stays independent.
-        m.record_replication_in("orders", 4, 100);
+        m.record_replication_in(&orders, 4, 100);
         // Outbound side: bytes this broker served to its followers.
-        m.record_replication_out("orders", 3, 4_000);
-        m.record_replication_out("orders", 4, 0); // no-op
+        m.record_replication_out(&orders, 3, 4_000);
+        m.record_replication_out(&orders, 4, 0); // no-op
 
         let lbl3 = PartitionLabel {
             topic: "orders".into(),

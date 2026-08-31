@@ -166,7 +166,7 @@ impl ReplicatorSupervisor {
                 leader_epoch: part.leader_epoch,
             };
             let config =
-                self.replicator_config(k.clone(), &topic_rec, &part, &broker, token.clone());
+                self.replicator_config(&k, &topic_rec, &part, &broker, token.clone());
             let handle = tokio::spawn(replicator::run(config));
             self.tasks.insert(
                 k,

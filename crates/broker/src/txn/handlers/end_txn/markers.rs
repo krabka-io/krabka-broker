@@ -194,7 +194,7 @@ mod tests {
             false,
         );
         part.current_leader.store(2, Ordering::Release);
-        partitions.insert("t".to_string(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), part.clone());
         let mut entry = marker_entry();
         entry.partitions.insert(tps().remove(0));
 

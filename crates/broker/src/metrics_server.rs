@@ -74,6 +74,8 @@ async fn metrics(State(registry): State<SharedRegistry>) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::assert;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt as _;
@@ -84,7 +86,7 @@ mod tests {
     #[tokio::test]
     async fn metrics_route_returns_openmetrics() {
         let m = BrokerMetrics::new();
-        m.record_produce("t", 42);
+        m.record_produce(&Arc::from("t"), 42);
         let app = router(
             m.registry,
             krabka_telemetry::profiling::ProfilingConfig::default(),

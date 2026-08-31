@@ -56,11 +56,7 @@ pub(crate) mod test_support {
             Arc::new(crate::producer_state::ProducerState::new()),
             false,
         );
-        registry.insert(
-            bootstrap::TOPIC.to_string(),
-            PartitionIndex(partition),
-            part,
-        );
+        registry.insert(bootstrap::TOPIC.into(), PartitionIndex(partition), part);
     }
 
     pub(crate) fn open_all_state_partitions(

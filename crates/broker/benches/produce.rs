@@ -21,7 +21,10 @@
 //! ratios per shape, so a run answers "what does the fallback cost" without
 //! reading the criterion report.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use assert2::assert;
 use bytes::{Bytes, BytesMut};
@@ -67,7 +70,7 @@ const WARMUP: u64 = 8;
 
 fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
     HotPathSettings {
-        topic_name: "bench-topic",
+        topic_name: Arc::from("bench-topic"),
         // Producer pass-through: the topic asks for no recompression, which is
         // the configuration the verbatim path needs.
         topic_compression: None,

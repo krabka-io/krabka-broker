@@ -175,7 +175,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .append(&mut seed_batch())
             .expect("seed the partition");
-        partitions.insert(topic.to_string(), krabka_ids::PartitionIndex(0), part);
+        partitions.insert(topic.into(), krabka_ids::PartitionIndex(0), part);
     }
 
     let refused = |scope: &str| PartitionProduceResponse {
@@ -267,7 +267,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         metrics
             .topic_freeze_rejections
             .get_or_create(&crate::metrics::TopicLabel {
-                topic: topic.to_string(),
+                topic: topic.into(),
             })
             .get()
     };

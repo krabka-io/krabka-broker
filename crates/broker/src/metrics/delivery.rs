@@ -2,6 +2,8 @@
 //! pending-record gauges the delivery scheduler publishes after it recomputes
 //! a partition.
 
+use std::sync::Arc;
+
 use super::{BrokerMetrics, PartitionLabel};
 
 impl BrokerMetrics {
@@ -18,7 +20,7 @@ impl BrokerMetrics {
         pending: i64,
     ) {
         let lbl = PartitionLabel {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
             partition,
         };
         self.delivery_watermark.get_or_create(&lbl).set(watermark);
