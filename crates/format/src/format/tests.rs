@@ -373,3 +373,63 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
     let len = std::fs::metadata(&checkpoint).map_or(0, |m| m.len());
     check!(len > 0, "offset-zero checkpoint should carry the voter set");
 }
+
+/// `--ignore-formatted` is what lets a Kubernetes init container run the
+/// formatter unconditionally: the second run is a no-op that exits 0 and
+/// leaves the first run's identity in place, while the same directory without
+/// the flag is still refused.
+#[tokio::test]
+async fn ignore_formatted_makes_a_second_format_a_no_op() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+    let dir = log_dir.display().to_string();
+    let argv = |extra: &[&str]| {
+        let mut argv = vec![
+            "krabka-format".to_string(),
+            "--log-dir".to_string(),
+            dir.clone(),
+            "--standalone".to_string(),
+            "--node-id".to_string(),
+            "1".to_string(),
+            "--controller-listener".to_string(),
+            "controller-1:9093".to_string(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        argv
+    };
+
+    check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
+    let formatted = std::fs::read(log_dir.join(super::META_PROPERTIES)).expect("meta properties");
+
+    // Without the flag the same directory is still a dirty log dir.
+    check!(crate::run_from_args(argv(&[])).await == EXIT_DIRTY_LOG_DIR);
+
+    // With it the run succeeds and rewrites nothing: a regenerated cluster or
+    // directory id would strand the node's replicated identity.
+    check!(crate::run_from_args(argv(&["--ignore-formatted"])).await == EXIT_OK);
+    let after = std::fs::read(log_dir.join(super::META_PROPERTIES)).expect("meta properties");
+    check!(after == formatted);
+}
+
+/// An unformatted directory is formatted normally under the flag: it means
+/// "ignore an existing format", not "skip formatting".
+#[tokio::test]
+async fn ignore_formatted_still_formats_a_fresh_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let log_dir = tmp.path().join("data");
+
+    let code = crate::run_from_args([
+        "krabka-format",
+        "--log-dir",
+        &log_dir.display().to_string(),
+        "--standalone",
+        "--node-id",
+        "1",
+        "--controller-listener",
+        "controller-1:9093",
+        "--ignore-formatted",
+    ])
+    .await;
+    check!(code == EXIT_OK);
+    check!(log_dir.join(super::META_PROPERTIES).is_file());
+}

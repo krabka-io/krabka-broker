@@ -1,0 +1,52 @@
+# Two Services, because a Kafka client needs two different things from DNS.
+#
+# `krabka` is headless: it exists so `krabka-0.krabka.<ns>.svc.cluster.local`
+# resolves to one pod. That is the name each broker advertises, and the name
+# the controller quorum dials, so it has to name a single node and never load
+# balance. `publishNotReadyAddresses` keeps those names resolving while a node
+# is still catching up -- the quorum has to be able to reach a peer that is not
+# ready yet, which is how it stops being not ready.
+apiVersion: v1
+kind: Service
+metadata:
+  name: krabka
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: krabka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+    - name: controller
+      port: 9093
+      targetPort: controller
+    - name: metrics
+      port: 9404
+      targetPort: metrics
+    - name: health
+      port: 9405
+      targetPort: health
+---
+# `krabka-bootstrap` is what a client's `bootstrap.servers` points at. It load
+# balances the first Metadata request across whichever brokers are ready, and
+# the client then talks to the advertised per-pod names for everything else.
+# This one honours readiness: a node that is behind the quorum must not be the
+# node that answers a client's first Metadata request.
+apiVersion: v1
+kind: Service
+metadata:
+  name: krabka-bootstrap
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: krabka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka

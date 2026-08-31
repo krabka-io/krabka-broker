@@ -208,6 +208,39 @@ binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
 `bazel test --config=docker //packaging:image_docker_test` repeats the check
 against a loaded image through Docker.
 
+## Kubernetes
+
+`packaging/k8s/` holds a reference deployment of that image: a three-node
+StatefulSet, a headless Service plus a bootstrap Service, and a
+PodDisruptionBudget. They are a starting point to read and adapt, not a chart.
+Set the image tag, the storage class and size, and above all the seed directory
+ids in `KRABKA_INITIAL_CONTROLLERS`, before you apply them.
+
+```
+kubectl apply -f packaging/k8s/
+```
+
+Three parts of them carry the design, not only the wiring:
+
+* **The format step is an init container on the same image.** The tools ride
+  beside the broker, so there is no second image to keep in step with it and no
+  volume to share between two pods. `krabka-format --ignore-formatted`, the same
+  flag Kafka's `kafka-storage.sh format` carries, makes the step a no-op on the
+  second and every later boot of a pod that keeps its volume. Without that flag
+  the init container fails every restart after the first, because the image has
+  no shell to test the directory with first.
+* **The two probes answer different questions.** `/healthz` says the process is
+  up. It stays green through log-dir recovery and through metadata catch-up, so
+  the kubelet cannot kill a node partway through a recovery. `/readyz` says the
+  node can serve a client: log dirs recovered, listeners bound, and its
+  `__cluster_metadata` offset within `--readiness-max-metadata-lag` records of
+  the quorum's committed offset. A 503 names the condition that failed, so
+  `kubectl describe pod` reports which one. The rolling update waits on
+  readiness, and that is what stops a restart from running ahead of the quorum.
+* **`minAvailable: 2` is the majority of three.** A drain that evicted two of
+  these pods costs the metadata quorum its majority. Scale the StatefulSet and
+  the budget has to move with it.
+
 ## Mutation testing
 
 Mutation sweeps run through

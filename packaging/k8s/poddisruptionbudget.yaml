@@ -1,0 +1,23 @@
+# Voluntary disruption, such as a node drain, a cluster upgrade, or a
+# descheduler, does not know that these three pods form a Raft quorum. Without
+# a budget it evicts two of them at once, and the metadata quorum loses its
+# majority: no leader, no metadata writes, and no leader election for the
+# partitions whose brokers went with them.
+#
+# `minAvailable: 2` is the majority of three. Scale the StatefulSet and this
+# has to move with it: the budget is the floor of half the replicas, plus one,
+# and not a constant. `unhealthyPodEvictionPolicy: AlwaysAllow` stops the
+# budget from blocking a drain on a pod that is already broken. An unready pod
+# is not one of the healthy replicas the quorum depends on.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: krabka
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  minAvailable: 2
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: krabka

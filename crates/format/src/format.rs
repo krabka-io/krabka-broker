@@ -46,6 +46,9 @@ use crate::ids::{ClusterId, DirectoryId};
 /// - 3: `log_dir` non-empty
 /// - 4: bootstrap write failure
 const EXIT_OK: i32 = 0;
+/// The file a formatted directory is recognised by: the broker reads the
+/// cluster and directory ids back out of it on every boot.
+const META_PROPERTIES: &str = "meta.properties.json";
 const EXIT_LOW_ITERATIONS: i32 = 2;
 const EXIT_DIRTY_LOG_DIR: i32 = 3;
 const EXIT_BOOTSTRAP_FAIL: i32 = 4;
@@ -117,6 +120,19 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
             return EXIT_INVALID_FEATURE;
         }
     };
+
+    // An already-formatted directory under `--ignore-formatted` is the
+    // no-op the flag promises, not an error: it is the second and every later
+    // boot of a pod that keeps its volume. `meta.properties.json` is the
+    // marker because it is the file the broker itself reads the directory id
+    // back out of, so its presence is exactly "this directory was formatted".
+    if args.ignore_formatted && args.log_dir.join(META_PROPERTIES).is_file() {
+        println!(
+            "krabka format: {} is already formatted; leaving it alone",
+            args.log_dir.display(),
+        );
+        return EXIT_OK;
+    }
 
     // Refuse to overwrite a non-empty directory. We treat "exists with
     // any entry" as non-empty; an empty dir or missing path is OK.
