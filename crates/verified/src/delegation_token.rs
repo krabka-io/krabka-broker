@@ -5,6 +5,53 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Delegation-token API whose admission policy is being evaluated.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TokenApi {
+    Create,
+    Renew,
+    Expire,
+    Describe,
+}
+
+/// Whether a connection may invoke a delegation-token API.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TokenApiAdmission {
+    Reject,
+    Allow,
+}
+
+/// Admit delegation-token APIs only for a securely authenticated identity.
+///
+/// A delegation-token-authenticated identity may describe its own tokens, but
+/// may not create, renew, or expire tokens. The host adapter is responsible
+/// for treating an anonymous listener principal as unauthenticated.
+#[ensures((result == TokenApiAdmission::Allow) == (
+    has_authenticated_identity
+        && (!authenticated_via_token || api == TokenApi::Describe)
+))]
+#[ensures((result == TokenApiAdmission::Reject) == (
+    !has_authenticated_identity
+        || (authenticated_via_token && api != TokenApi::Describe)
+))]
+#[must_use]
+pub fn token_api_admission(
+    has_authenticated_identity: bool,
+    authenticated_via_token: bool,
+    api: TokenApi,
+) -> TokenApiAdmission {
+    if !has_authenticated_identity {
+        return TokenApiAdmission::Reject;
+    }
+
+    match (authenticated_via_token, api) {
+        (true, TokenApi::Create | TokenApi::Renew | TokenApi::Expire) => TokenApiAdmission::Reject,
+        _ => TokenApiAdmission::Allow,
+    }
+}
+
 /// Absolute deadlines stored on a freshly created delegation token.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -246,6 +293,25 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn token_api_admission_requires_identity_and_blocks_token_mutations() {
+        for api in [
+            TokenApi::Create,
+            TokenApi::Renew,
+            TokenApi::Expire,
+            TokenApi::Describe,
+        ] {
+            check!(token_api_admission(false, false, api) == TokenApiAdmission::Reject);
+            check!(token_api_admission(false, true, api) == TokenApiAdmission::Reject);
+            check!(token_api_admission(true, false, api) == TokenApiAdmission::Allow);
+        }
+
+        for api in [TokenApi::Create, TokenApi::Renew, TokenApi::Expire] {
+            check!(token_api_admission(true, true, api) == TokenApiAdmission::Reject);
+        }
+        check!(token_api_admission(true, true, TokenApi::Describe) == TokenApiAdmission::Allow);
+    }
 
     #[test]
     fn create_clamps_and_rejects_invalid_or_overflowing_deadlines() {

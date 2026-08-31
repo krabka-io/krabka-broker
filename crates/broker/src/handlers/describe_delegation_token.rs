@@ -35,6 +35,7 @@ use krabka_protocol::owned::{
     describe_delegation_token_response::DescribeDelegationTokenResponse,
 };
 use krabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
 
 mod response;
 
@@ -66,13 +67,16 @@ pub(crate) fn handle(
     if secret_key.is_none() {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     }
+    if auth.token_api_admission(TokenApi::Describe) == TokenApiAdmission::Reject {
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    }
     let ConnectionAuth::Authenticated {
         principal,
         authenticated_via_token,
         ..
     } = auth
     else {
-        return err_response(crate::codes::INVALID_REQUEST);
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     };
     let caller = principal.to_kafka();
 

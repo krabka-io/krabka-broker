@@ -51,9 +51,13 @@ pub(crate) fn local_retention_target(
             break;
         }
         let age = Time::from_millis(now_ms.saturating_sub(ex.max_timestamp));
-        let by_time = matches!(effective_local, Some(retention) if age > retention);
+        let time_expired = matches!(effective_local, Some(retention) if age > retention);
         let by_size = deletable_size_remaining > NO_BYTES;
-        if !(by_time || by_size) {
+        if !krabka_verified::compaction::retention_segment_evict(
+            ex.max_timestamp != -1,
+            time_expired,
+            by_size,
+        ) {
             break;
         }
         delete_through_last = Some(ex.last_offset.0);
@@ -147,6 +151,34 @@ mod tests {
         let finished: HashSet<i64> = HashSet::new();
         // Big enough time-pressure to delete everything, but nothing is finished.
         assert!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+    }
+
+    #[test]
+    fn unknown_timestamp_needs_size_pressure_for_local_eviction() {
+        let exports = vec![synth_export(0, 9, -1, 100)];
+        let finished = maplit::hashset! {0};
+
+        check!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+        check!(
+            local_retention_target(&exports, &finished, Some(millis(1)), Some(bytes(0)), 10_000,)
+                == Some(10)
+        );
+    }
+
+    #[test]
+    fn maximum_retention_window_keeps_the_host_time_comparison() {
+        let exports = vec![synth_export(0, 9, 0, 100)];
+        let finished = maplit::hashset! {0};
+
+        check!(
+            local_retention_target(
+                &exports,
+                &finished,
+                Some(Time::from_millis(i64::MAX)),
+                None,
+                i64::MAX,
+            ) == None
+        );
     }
 
     #[test]

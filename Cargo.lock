@@ -3220,6 +3220,7 @@ dependencies = [
  "krabka-remote-storage",
  "krabka-security",
  "krabka-units",
+ "krabka-verified",
  "maplit",
  "mutants",
  "refined_type",

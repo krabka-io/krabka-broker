@@ -22,7 +22,11 @@ use krabka_protocol::owned::{
     renew_delegation_token_response::RenewDelegationTokenResponse,
 };
 use krabka_security::SecretBytes;
-use krabka_verified::{TokenRenewDecision, renew_token_expiry};
+use krabka_verified::{
+    TokenRenewDecision,
+    delegation_token::{TokenApi, TokenApiAdmission},
+    renew_token_expiry,
+};
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
@@ -43,8 +47,11 @@ pub(crate) async fn handle<S: BuildHasher>(
     if secret_key.is_none() {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     }
+    if auth.token_api_admission(TokenApi::Renew) == TokenApiAdmission::Reject {
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    }
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return err_response(crate::codes::INVALID_REQUEST);
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     };
     let caller = principal.to_kafka();
 
@@ -160,7 +167,7 @@ mod tests {
         handle
     }
 
-    fn authed(name: &str) -> ConnectionAuth {
+    fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
         ConnectionAuth::Authenticated {
             principal: Principal {
                 name: name.into(),
@@ -169,8 +176,12 @@ mod tests {
             },
             mechanism: SaslMechanism::ScramSha256,
             expires_at_ms: None,
-            authenticated_via_token: false,
+            authenticated_via_token: via_token,
         }
+    }
+
+    fn authed(name: &str) -> ConnectionAuth {
+        authed_with_token(name, false)
     }
 
     fn kp(name: &str) -> KafkaPrincipal {
@@ -214,6 +225,52 @@ mod tests {
         let controller = test_controller(dir.path().into()).await;
         let resp = handle(&req, &auth, None, 1_000, &*controller, &empty_super_users()).await;
         assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+        controller.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn token_authenticated_caller_is_rejected_before_lookup_or_mutation() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        let hmac = vec![0xAB; 32];
+        let now = now_ms();
+        let original_expiry = now + 60_000;
+        seed_token(
+            (&controller, "tok-token-auth"),
+            hmac.clone(),
+            kp("alice"),
+            vec![],
+            now - 1_000,
+            original_expiry,
+            now + 120_000,
+        )
+        .await;
+        let req = RenewDelegationTokenRequest {
+            hmac: hmac.into(),
+            renew_period_ms: 90_000,
+            ..Default::default()
+        };
+
+        let resp = handle(
+            &req,
+            &authed_with_token("alice", true),
+            Some(&secret),
+            1_000,
+            &*controller,
+            &empty_super_users(),
+        )
+        .await;
+
+        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+        assert!(
+            controller
+                .current_image()
+                .delegation_token_by_id("tok-token-auth")
+                .unwrap()
+                .expiry_timestamp_ms
+                == original_expiry
+        );
         controller.cancel().await;
     }
 

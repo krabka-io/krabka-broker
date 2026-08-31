@@ -56,10 +56,15 @@ pub(crate) fn remote_retention_eviction_set(
         retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
     let mut out = Vec::new();
     for md in finished {
-        let age = Time::from_millis(now_ms.saturating_sub(md.max_timestamp_ms()));
-        let by_time = matches!(retention, Some(window) if age > window);
+        let max_timestamp_ms = md.max_timestamp_ms();
+        let age = Time::from_millis(now_ms.saturating_sub(max_timestamp_ms));
+        let time_expired = matches!(retention, Some(window) if age > window);
         let by_size = size_to_reclaim > NO_BYTES;
-        if !(by_time || by_size) {
+        if !krabka_verified::compaction::retention_segment_evict(
+            max_timestamp_ms != -1,
+            time_expired,
+            by_size,
+        ) {
             break;
         }
         if by_size {
