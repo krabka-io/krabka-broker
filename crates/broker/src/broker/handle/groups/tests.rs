@@ -44,12 +44,13 @@ fn classic_group_with_member(
         vec![("range".to_string(), bytes::Bytes::from_static(b"metadata"))],
     );
     let _ = classic.add_member(member);
-    Box::new(crate::coordinator::unified::group::CoordinatorGroup {
-        empty_since_ms: None,
-        group_id: group_id.to_string(),
-        kind: crate::coordinator::unified::group::GroupKind::Classic(classic),
-        committed_offsets: std::collections::HashMap::new(),
-    })
+    Box::new(
+        crate::coordinator::unified::group::CoordinatorGroup::seeded(
+            group_id,
+            crate::coordinator::unified::group::GroupKind::Classic(classic),
+            std::collections::HashMap::new(),
+        ),
+    )
 }
 
 fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGroupSeed {
