@@ -70,10 +70,10 @@ pub(super) fn finish_produce_response(
         elapsed_micros,
         broker.config.quota_throttle_max,
     );
-    // KIP-219: the request sleeps for the larger of the two delays. Resolving
-    // it through the metric records the throttle phase and the quota that
-    // caused it, and hands back the delay that the response reports and the
-    // sleep below honors.
+    // KIP-219: the connection is muted for the larger of the two delays.
+    // Resolving it through the metric records the throttle phase and the quota
+    // that caused it, and hands back the delay the response reports and the
+    // mute below honors.
     let delay = broker.metrics.record_applied_throttle(
         super::PRODUCE_API_KEY,
         &[
