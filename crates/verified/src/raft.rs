@@ -38,6 +38,36 @@ pub const fn frontier_reaches(frontier: i64, target: i64) -> bool {
     frontier >= target
 }
 
+/// Compute one record's contiguous offset delta and its batch's final delta.
+///
+/// Empty batches, out-of-bounds indexes, and record counts that cannot be
+/// represented by Kafka's signed offset-delta field fail closed.
+#[must_use]
+#[cfg_attr(creusot, ensures(match result {
+    Some((offset_delta, last_offset_delta)) => record_count@ > 0
+        && record_index@ < record_count@
+        && record_count@ <= i32::MAX@ + 1
+        && offset_delta@ == record_index@
+        && last_offset_delta@ == record_count@ - 1,
+    None => record_count@ == 0
+        || record_index@ >= record_count@
+        || record_count@ > i32::MAX@ + 1,
+}))]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "the kernel rejects values outside i32 before conversion"
+)]
+pub fn metadata_record_coordinates(record_count: usize, record_index: usize) -> Option<(i32, i32)> {
+    let max_records = i32::MAX as usize + 1;
+    if record_count == 0 || record_index >= record_count || record_count > max_records {
+        None
+    } else {
+        Some((record_index as i32, (record_count - 1) as i32))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -61,5 +91,16 @@ mod tests {
         assert!(!in_half_open_window(8, 5, 8));
         assert!(!frontier_reaches(4, 5));
         assert!(frontier_reaches(5, 5));
+    }
+
+    #[test]
+    fn metadata_coordinates_are_contiguous_and_fail_closed() {
+        assert!(metadata_record_coordinates(1, 0) == Some((0, 0)));
+        assert!(metadata_record_coordinates(3, 0) == Some((0, 2)));
+        assert!(metadata_record_coordinates(3, 1) == Some((1, 2)));
+        assert!(metadata_record_coordinates(3, 2) == Some((2, 2)));
+        assert!(metadata_record_coordinates(0, 0) == None);
+        assert!(metadata_record_coordinates(3, 3) == None);
+        assert!(metadata_record_coordinates(i32::MAX as usize + 2, 0) == None);
     }
 }
