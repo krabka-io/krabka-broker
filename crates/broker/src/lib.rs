@@ -190,6 +190,7 @@ pub mod disk_scanner;
 mod diskless;
 #[cfg(test)]
 mod diskless_crash_model;
+pub(crate) mod elr;
 mod envelope;
 mod error;
 mod features;

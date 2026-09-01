@@ -15,8 +15,8 @@
 //! encodes a byte-faithful `VoteResponse` and the core infers the round itself
 //! (KIP-996).
 //!
-//! The shared constants and integer conversions live in [`codec`], the request
-//! bodies in [`request`], and the response bodies in [`response`].
+//! The shared constants and integer conversions live in `codec`, the request
+//! bodies in `request`, and the response bodies in `response`.
 
 mod codec;
 mod request;
