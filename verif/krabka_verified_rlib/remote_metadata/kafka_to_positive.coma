@@ -1,0 +1,44 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 120 0 120 38 *)
+
+let%span sremote_metadata = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 121 12 121 23
+let%span sremote_metadata'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 121 4 121 24
+let%span sremote_metadata'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 113 28 113 68
+let%span sremote_metadata'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 114 10 114 22
+let%span sremote_metadata'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 115 10 115 30
+let%span sremote_metadata'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 110 16 110 37
+
+use creusot.int.UInt32
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+function kafka_to_positive_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 109 0 109 44] (hash: UInt32.t) : int
+ = [%#sremote_metadata'4] ComputerDivision.mod (UInt32.t'int hash) 2147483648
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let kafka_to_positive [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 120 0 120 38]
+  (hash: UInt32.t) (return (x: Int32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_8 <- ([%#sremote_metadata] (2147483648: UInt32.t)) = ([%#sremote_metadata'0] (0: UInt32.t)) ] s1
+    | s1 = {[@expl:remainder by zero] [%#sremote_metadata'0] not _8} s2
+    | s2 = UInt32.rem [%#sremote_metadata'0] {hash} {[%#sremote_metadata] (2147483648: UInt32.t)}
+        (fun (_x: UInt32.t) -> [ &_6 <- _x ] s3)
+    | s3 = [ &_ret <- Int32.of_int (UInt32.t'int _6) ] s4
+    | s4 = return {_ret} ] ]
+  [ & _ret: Int32.t = Any.any_l ()
+  | & hash: UInt32.t = hash
+  | & _6: UInt32.t = Any.any_l ()
+  | & _8: bool = Any.any_l () ])
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:kafka_to_positive ensures] ([@stop_split] [@expl:kafka_to_positive ensures #0] [%#sremote_metadata'1] Int32.to_int result
+      = kafka_to_positive_model hash)
+    /\ ([@stop_split] [@expl:kafka_to_positive ensures #1] [%#sremote_metadata'2] 0 <= Int32.to_int result)
+    /\ ([@stop_split] [@expl:kafka_to_positive ensures #2] [%#sremote_metadata'3] Int32.to_int result
+    <= Int32.to_int const_MAX)}
+    (! return {result}) ]

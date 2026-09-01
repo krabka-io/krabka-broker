@@ -29,7 +29,7 @@ async fn handle_preserves_resource_identity_for_unsupported_type() {
     let expected = AlterConfigsResponse {
         throttle_time_ms: 0,
         responses: vec![AlterConfigsResourceResponse {
-            error_code: codes::INVALID_RESOURCE_TYPE,
+            error_code: codes::INVALID_REQUEST,
             error_message: Some("resource_type=77 not supported".to_string()),
             resource_type: 77,
             resource_name: "mystery".to_string(),
