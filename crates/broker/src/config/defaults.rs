@@ -203,6 +203,7 @@ impl Default for BrokerConfig {
             // `transaction.remove.expired.transaction.cleanup.interval.ms`).
             txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
             txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),

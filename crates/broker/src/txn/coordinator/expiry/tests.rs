@@ -355,6 +355,59 @@ async fn a_transaction_that_begins_while_the_sweep_waits_is_not_expired() {
     check!(records.len() == 1, "{records:?}");
 }
 
+/// Replaying a tombstone reclaims the producer-id reverse index too.
+///
+/// Compaction has not run yet on a broker that restarts right after a sweep,
+/// so recovery reads the expired id's value record and then its tombstone. A
+/// replay that dropped the state entry alone would rebuild `pid_to_tid` for
+/// every transactional id ever expired, and the reverse index -- with the
+/// broker-start footprint it is part of -- would keep growing with the
+/// historical id count, which is the leak the sweep exists to close.
+#[tokio::test]
+async fn replaying_a_tombstone_reclaims_the_producer_id_index() {
+    let (coordinator, _dir) = seeded_coordinator(complete_commit_entry(0), NodeId(1)).await;
+    let expired = coordinator
+        .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
+        .await;
+    assert!(expired == vec![TID.to_string()]);
+
+    // The broker restarts and replays the log: the value record, then the
+    // tombstone that follows it.
+    coordinator
+        .recover(&image_with_leader(NodeId(1)))
+        .await
+        .expect("replay __transaction_state");
+
+    check!(coordinator.get(TID).is_none());
+    check!(coordinator.snapshot().await.is_empty());
+    check!(coordinator.tid_for_pid(ProducerId(1000)).is_none());
+}
+
+/// A pid the coordinator has since handed to another transactional id belongs
+/// to that id, so replaying the first id's tombstone must leave it alone.
+#[tokio::test]
+async fn replaying_a_tombstone_keeps_a_pid_that_now_names_another_id() {
+    let (coordinator, _dir) = seeded_coordinator(complete_commit_entry(0), NodeId(1)).await;
+    coordinator
+        .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
+        .await;
+    // Producer id 1000 is reissued to a different transactional id before the
+    // replay reaches the first id's tombstone.
+    let mut reissued = TxnEntry::new_empty("tid-other".to_owned(), ProducerId(1000), 0, 60_000, 0);
+    reissued.last_update_ms = 0;
+    coordinator
+        .put(reissued, TxnVersion::Verified)
+        .await
+        .expect("persist the reissued id");
+
+    coordinator
+        .recover(&image_with_leader(NodeId(1)))
+        .await
+        .expect("replay __transaction_state");
+
+    check!(coordinator.tid_for_pid(ProducerId(1000)) == Some("tid-other".to_owned()));
+}
+
 /// A `__transaction_state` partition that moved to another broker belongs to
 /// that broker's sweep, not this one's.
 #[tokio::test]

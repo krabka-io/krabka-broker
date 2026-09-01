@@ -215,6 +215,7 @@ impl BrokerConfig {
             // disabled, like the abort reaper above.
             txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
             txn_id_expiration_cleanup_interval: <Time as TimeExt>::ZERO,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),

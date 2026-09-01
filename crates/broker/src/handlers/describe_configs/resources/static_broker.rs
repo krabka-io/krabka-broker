@@ -23,6 +23,21 @@
 //!             DEFAULT_CONFIG:transactional.id.expiration.ms=604800000}
 //! ```
 //!
+//! Provenance, not a value comparison, is what puts it there. The same image
+//! started with `KAFKA_TRANSACTIONAL_ID_EXPIRATION_MS=604800000` -- the
+//! built-in default, written out -- still answers
+//!
+//! ```text
+//! transactional.id.expiration.ms=604800000 sensitive=false
+//!   synonyms={STATIC_BROKER_CONFIG:transactional.id.expiration.ms=604800000,
+//!             DEFAULT_CONFIG:transactional.id.expiration.ms=604800000}
+//! ```
+//!
+//! while the key it was not given keeps the one-synonym default chain above.
+//! Kafka reads that from `KafkaConfig.originals`, the properties the operator
+//! wrote; krabka records it as [`crate::config::StaticConfigOrigins`] while it
+//! loads the configuration.
+//!
 //! Altering either one on the same broker answers
 //! `Cannot update these configs dynamically: [transactional.id.expiration.ms]`,
 //! which is why the registry marks both rows read-only. The cluster-default
@@ -47,32 +62,54 @@ use crate::config_keys::{
     registry::{self, ConfigScope},
 };
 
-/// The effective values this node runs with for the static broker configs it
-/// reports. The handler fills it from [`crate::config::BrokerConfig`].
+/// One static broker setting as this node holds it: the value it runs with,
+/// and whether its own configuration named the key.
 ///
-/// Both keys are `ConfigDef.Type::INT` in Kafka, so both are milliseconds in
+/// The key is `ConfigDef.Type::INT` in Kafka, so the value is milliseconds in
 /// an `i32`: the broker's own config validation refuses a wider value, and a
 /// typed client could not parse one back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::handlers::describe_configs) struct StaticBrokerSetting {
+    /// The effective value, in milliseconds.
+    pub(in crate::handlers::describe_configs) value_ms: i32,
+    /// Whether the operator supplied the key. See
+    /// [`crate::config::StaticConfigOrigins`]: a config source is provenance,
+    /// so a supplied setting heads the chain even when it equals the built-in
+    /// default.
+    pub(in crate::handlers::describe_configs) supplied: bool,
+}
+
+/// The static broker configs this node reports. The handler fills it from
+/// [`crate::config::BrokerConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs {
     /// `transactional.id.expiration.ms`.
-    pub(in crate::handlers::describe_configs) txn_id_expiration_ms: i32,
+    pub(in crate::handlers::describe_configs) txn_id_expiration: StaticBrokerSetting,
     /// `transaction.remove.expired.transaction.cleanup.interval.ms`.
-    pub(in crate::handlers::describe_configs) txn_id_expiration_cleanup_interval_ms: i32,
+    pub(in crate::handlers::describe_configs) txn_id_expiration_cleanup_interval:
+        StaticBrokerSetting,
 }
 
 /// One static broker entry.
 ///
-/// The value the node runs with sits at `STATIC_BROKER_CONFIG` when the
-/// operator moved it off Kafka's built-in default, with the registry default
-/// underneath it as the `DEFAULT_CONFIG` synonym. A node still on the default
-/// reports that default alone, which is the first of the two Kafka outputs
-/// quoted above.
-fn static_entry(key: &str, value: i32, options: EntryOptions) -> DescribeConfigsResourceResult {
+/// The value the node runs with sits at `STATIC_BROKER_CONFIG`, with the
+/// registry default underneath it as the `DEFAULT_CONFIG` synonym, whenever
+/// the value did not reach the node through that default alone. That is the
+/// case in either of two ways: the operator named the key -- provenance,
+/// which is what Kafka reads out of `KafkaConfig.originals` and reports even
+/// for a value identical to the default -- or the node runs something the
+/// built-in default does not supply, which is how krabka's own test profile
+/// moves the sweep cadence. A node inheriting the default reports it alone,
+/// which is the first of the two Kafka outputs quoted above.
+fn static_entry(
+    key: &str,
+    setting: StaticBrokerSetting,
+    options: EntryOptions,
+) -> DescribeConfigsResourceResult {
     let row = registry::lookup(ConfigScope::Broker, key);
     let default = row.and_then(|row| row.default);
-    let rendered = value.to_string();
-    let layers: Vec<Layer<'_>> = (default != Some(rendered.as_str()))
+    let rendered = setting.value_ms.to_string();
+    let layers: Vec<Layer<'_>> = (setting.supplied || default != Some(rendered.as_str()))
         .then_some(Layer {
             source: CONFIG_SOURCE_STATIC_BROKER,
             name: key,
@@ -102,16 +139,16 @@ pub(super) fn static_broker_entries(
     [
         (
             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-            configs.txn_id_expiration_ms,
+            configs.txn_id_expiration,
         ),
         (
             config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-            configs.txn_id_expiration_cleanup_interval_ms,
+            configs.txn_id_expiration_cleanup_interval,
         ),
     ]
     .into_iter()
     .filter(|(key, _)| wanted(key))
-    .map(|(key, value)| static_entry(key, value, options))
+    .map(|(key, setting)| static_entry(key, setting, options))
     .collect()
 }
 
@@ -121,8 +158,14 @@ pub(super) fn static_broker_entries(
 #[cfg(test)]
 pub(in crate::handlers::describe_configs) fn kafka_default_static_broker() -> StaticBrokerConfigs {
     StaticBrokerConfigs {
-        txn_id_expiration_ms: 604_800_000,
-        txn_id_expiration_cleanup_interval_ms: 3_600_000,
+        txn_id_expiration: StaticBrokerSetting {
+            value_ms: 604_800_000,
+            supplied: false,
+        },
+        txn_id_expiration_cleanup_interval: StaticBrokerSetting {
+            value_ms: 3_600_000,
+            supplied: false,
+        },
     }
 }
 

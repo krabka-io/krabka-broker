@@ -90,12 +90,18 @@ impl RuntimeFileConfig {
         // `DescribeConfigs` reports them as such, so neither may hold a value
         // wider than an `i32` of milliseconds. The expiry itself must run, as
         // Kafka's `atLeast(1)` says; zero on the sweep cadence disables it.
+        // Both are static broker configs `DescribeConfigs` reports, so the
+        // fact that the operator named them is recorded beside the value: a
+        // supplied setting heads the synonym chain at `STATIC_BROKER_CONFIG`
+        // even when it happens to equal the built-in default.
         if let Some(value) = runtime.txn_id_expiration {
             cfg.txn_id_expiration = whole_millis_i32_time("txn_id_expiration", value)?;
+            cfg.static_config_origins.txn_id_expiration = true;
         }
         if let Some(value) = runtime.txn_id_expiration_cleanup_interval {
             cfg.txn_id_expiration_cleanup_interval =
                 disableable_millis_i32_time("txn_id_expiration_cleanup_interval", value)?;
+            cfg.static_config_origins.txn_id_expiration_cleanup_interval = true;
         }
         set_runtime_time_secs!(
             runtime,

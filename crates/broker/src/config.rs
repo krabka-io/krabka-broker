@@ -20,6 +20,7 @@ mod record_decompression;
 mod replication;
 mod roles;
 mod scalar_checks;
+mod static_origins;
 mod stretch;
 mod test_defaults;
 #[cfg(test)]
@@ -35,6 +36,7 @@ pub use self::{
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
+    static_origins::StaticConfigOrigins,
     stretch::StretchProfile,
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };

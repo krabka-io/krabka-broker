@@ -7,9 +7,14 @@
 //!   broker config supplies reports `DYNAMIC_DEFAULT_BROKER_CONFIG (3)`; the
 //!   rest report `DEFAULT_CONFIG (5)`.
 //! - `resource_type=4` (BROKER): a numeric name returns the effective dynamic
-//!   per-broker and cluster-default overrides. An empty name returns the
-//!   cluster-wide defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)`
-//!   from `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`.
+//!   per-broker and cluster-default overrides, plus the settings read from
+//!   the serving process itself. An empty name returns the cluster-wide
+//!   defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)` from
+//!   `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`. A
+//!   numeric name that is not this node is refused with `INVALID_REQUEST`,
+//!   which is what `ConfigHelper` in the pinned image does; the JVM
+//!   `AdminClient` never sends one, because it routes a broker resource to
+//!   the node it names.
 //! - `resource_type=16` (`CLIENT_METRICS`) and `resource_type=32` (GROUP) report
 //!   their own effective values the same way.
 //! - Every other resource type receives an empty configs list and no error.
@@ -71,7 +76,7 @@ mod wire;
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
-    resources::{StaticBrokerConfigs, describe_one},
+    resources::{StaticBrokerConfigs, StaticBrokerSetting, describe_one},
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -101,12 +106,24 @@ pub(crate) fn handle(
         // reports beside its dynamic overrides. Both are `ConfigDef.Type::INT`
         // in Kafka, and the broker's config validation already refused a value
         // wider than that.
+        // The node answering the request. Kafka refuses a broker resource
+        // that names any other node, because everything a broker resource
+        // reports beyond the dynamic overrides is read out of the serving
+        // process.
+        let serving_node = krabka_metadata::NodeId(broker.config.node_id.0);
+        let origins = broker.config.static_config_origins;
         let static_broker = StaticBrokerConfigs {
-            txn_id_expiration_ms: broker.config.txn_id_expiration.millis_i32(),
-            txn_id_expiration_cleanup_interval_ms: broker
-                .config
-                .txn_id_expiration_cleanup_interval
-                .millis_i32(),
+            txn_id_expiration: StaticBrokerSetting {
+                value_ms: broker.config.txn_id_expiration.millis_i32(),
+                supplied: origins.txn_id_expiration,
+            },
+            txn_id_expiration_cleanup_interval: StaticBrokerSetting {
+                value_ms: broker
+                    .config
+                    .txn_id_expiration_cleanup_interval
+                    .millis_i32(),
+                supplied: origins.txn_id_expiration_cleanup_interval,
+            },
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
@@ -130,6 +147,7 @@ pub(crate) fn handle(
                     describe_one(
                         &image,
                         r,
+                        serving_node,
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
                         static_broker,

@@ -315,6 +315,48 @@ mod tests {
         }
     }
 
+    /// The loader records *that* the operator supplied each expiry knob, not
+    /// only the value, because `DescribeConfigs` reports a config source and a
+    /// source is provenance. Supplying Kafka's own default is the case that
+    /// separates the two: `apache/kafka:4.3.1` still reports
+    /// `STATIC_BROKER_CONFIG` for it, so krabka has to know the key was named.
+    #[test]
+    fn runtime_file_config_records_which_expiry_knobs_the_operator_supplied() {
+        for (label, source, expected) in [
+            (
+                "nothing supplied",
+                "[runtime]\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                },
+            ),
+            (
+                "the expiry supplied, at Kafka's own default value",
+                "[runtime]\ntxn_id_expiration = \"604800000ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: true,
+                    txn_id_expiration_cleanup_interval: false,
+                },
+            ),
+            (
+                "both supplied",
+                "[runtime]\ntxn_id_expiration = \"120000ms\"\n\
+                 txn_id_expiration_cleanup_interval = \"60000ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: true,
+                    txn_id_expiration_cleanup_interval: true,
+                },
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).expect("apply runtime config");
+
+            check!(cfg.static_config_origins == expected, "{label}");
+        }
+    }
+
     #[test]
     fn runtime_file_config_rejects_invalid_dimensioned_sizes_and_ratios() {
         for field in [

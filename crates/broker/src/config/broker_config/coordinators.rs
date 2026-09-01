@@ -41,6 +41,13 @@ macro_rules! coordinators_fields {
             /// `TxnCoordinator::expire_transactional_ids` against an injected clock.
             pub txn_id_expiration_cleanup_interval: Time,
 
+            /// Which static broker settings above this node's configuration
+            /// named explicitly. `DescribeConfigs` reports a supplied value at
+            /// `STATIC_BROKER_CONFIG` even when it equals the built-in
+            /// default, because a config source is provenance and not a value
+            /// comparison. See [`crate::config::StaticConfigOrigins`].
+            pub static_config_origins: crate::config::StaticConfigOrigins,
+
             /// KIP-848 next-gen consumer group protocol configuration. It controls
             /// which rebalance protocols the broker advertises, the session and
             /// heartbeat timeout bounds, and the set of enabled server-side

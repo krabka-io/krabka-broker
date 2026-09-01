@@ -103,10 +103,20 @@ impl TxnCoordinator {
     /// **held across the tombstone append**. Every path that revives a known
     /// tid -- `InitProducerId` above all -- mutates the entry under the same
     /// lock, so no revival can slip between the decision and the append and
-    /// leave a tombstone sitting after the reviving record in the log. A tid
-    /// whose `__transaction_state` partition moved away is skipped: the broker
-    /// that leads it now owns the decision. An append failure leaves the entry
-    /// in place for the next tick.
+    /// leave a tombstone sitting after the reviving record in the log.
+    ///
+    /// Under that same lock the entry is first marked [`TxnState::Dead`],
+    /// which is Kafka's `TransactionMetadata.prepareDead()`. Holding the lock
+    /// is not on its own enough: a caller already parked on it holds an `Arc`
+    /// that outlives the map removal, and reviving through that detached
+    /// handle while a second caller takes the fresh-id path would persist two
+    /// competing producer identities for one transactional id. The `Dead`
+    /// mark is what the parked caller wakes to, and `InitProducerId` refuses
+    /// it.
+    ///
+    /// A tid whose `__transaction_state` partition moved away is skipped: the
+    /// broker that leads it now owns the decision. An append failure restores
+    /// the state it found and leaves the entry in place for the next tick.
     // cargo-mutants: I/O orchestration over live DashMap / partition state
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
@@ -135,7 +145,7 @@ impl TxnCoordinator {
                 continue;
             };
             // The lock stays held across the append: see the method doc.
-            let entry = handle.lock().await;
+            let mut entry = handle.lock().await;
             if !should_expire_transactional_id(
                 entry.state,
                 entry.last_update_ms,
@@ -144,12 +154,27 @@ impl TxnCoordinator {
             ) {
                 continue;
             }
+            // Kafka's `TransactionMetadata.prepareDead()`: the entry is
+            // marked dead under its own lock, before the append. A caller
+            // that was already waiting on this lock when the sweep took it
+            // holds an `Arc` the sweep is about to unpublish, so it wakes to
+            // a `Dead` entry rather than to a live one it could revive from.
+            // `InitProducerId` refuses that entry with
+            // `CONCURRENT_TRANSACTIONS`, exactly as Kafka answers a
+            // metadata object with a pending transition, and the client's
+            // retry takes the fresh-id path -- the only path that may
+            // re-create the id once its tombstone is in the log.
+            let before_expiry = entry.state;
+            entry.state = TxnState::Dead;
             match self.tombstone(&entry).await {
                 Ok(()) => {
                     info!(tid, "txn id expiry: tombstoned expired transactional id");
                     expired.push(tid);
                 }
                 Err(error) => {
+                    // The id is still live: nothing was appended and nothing
+                    // was unpublished, so it must not read as dead.
+                    entry.state = before_expiry;
                     warn!(tid, %error, "txn id expiry: tombstone append failed; will retry");
                 }
             }

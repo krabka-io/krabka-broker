@@ -41,7 +41,12 @@ const VALUES_ONLY: EntryOptions = EntryOptions {
     include_documentation: false,
 };
 
-fn describe(
+/// The node that serves a request no test routes anywhere in particular.
+const SERVING_NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
+
+/// Describe one resource, served by `serving_node`.
+fn describe_at(
+    serving_node: krabka_metadata::NodeId,
     image: &MetadataImage,
     resource_type: i8,
     resource_name: &str,
@@ -56,9 +61,39 @@ fn describe(
             configuration_keys,
             ..Default::default()
         },
+        serving_node,
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         super::static_broker::kafka_default_static_broker(),
+        options,
+    )
+}
+
+/// Describe one resource the way a client reaches it.
+///
+/// A broker resource is served by the node it names: the JVM `AdminClient`
+/// routes it there, and the broker refuses to answer for anyone else. The
+/// one test that probes that refusal drives [`describe_at`] instead.
+fn describe(
+    image: &MetadataImage,
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    options: EntryOptions,
+) -> DescribeConfigsResult {
+    let serving_node = if resource_type == RESOURCE_TYPE_BROKER {
+        resource_name
+            .parse::<u64>()
+            .map_or(SERVING_NODE, krabka_metadata::NodeId)
+    } else {
+        SERVING_NODE
+    };
+    describe_at(
+        serving_node,
+        image,
+        resource_type,
+        resource_name,
+        configuration_keys,
         options,
     )
 }
@@ -659,6 +694,68 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
             "{key}"
         );
     }
+}
+
+/// Kafka answers a broker resource that names another node with
+/// `InvalidRequestException`, not with that node's configuration:
+/// `ConfigHelper` in the pinned image's `kafka_2.13-4.3.1.jar` carries the
+/// message "Unexpected broker id, expected <id> or empty string, but received
+/// <name>". It has to, because everything a named broker resource reports
+/// beyond the dynamic overrides -- `node.id` and the static expiry settings --
+/// is read out of the serving process. Answering would label one broker's
+/// static configuration as another broker's.
+#[test]
+fn a_broker_resource_that_names_another_node_is_refused() {
+    let image = image_with_broker_config(
+        krabka_metadata::NodeId(2),
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    let result = describe_at(
+        krabka_metadata::NodeId(1),
+        &image,
+        RESOURCE_TYPE_BROKER,
+        "2",
+        None,
+        EVERYTHING,
+    );
+
+    assert!(
+        result
+            == DescribeConfigsResult {
+                error_code: crate::codes::INVALID_REQUEST,
+                error_message: Some(
+                    "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
+                ),
+                resource_type: RESOURCE_TYPE_BROKER,
+                resource_name: "2".to_owned(),
+                configs: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+}
+
+/// The cluster-default resource has no node in it, so the serving node never
+/// refuses it.
+#[test]
+fn the_cluster_default_broker_resource_is_served_by_any_node() {
+    let image = image_with_broker_config(
+        DEFAULT_BROKER_CONFIG_NODE_ID,
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    let result = describe_at(
+        krabka_metadata::NodeId(9),
+        &image,
+        RESOURCE_TYPE_BROKER,
+        "",
+        None,
+        VALUES_ONLY,
+    );
+
+    check!(result.error_code == crate::codes::NONE);
+    let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+    check!(names == vec![crate::throttle::LEADER_THROTTLED_RATE_KEY]);
 }
 
 #[test]

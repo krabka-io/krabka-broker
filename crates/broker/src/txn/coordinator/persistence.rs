@@ -132,15 +132,7 @@ impl TxnCoordinator {
         part.produce_batch(batch).await?;
 
         self.state.remove(tid);
-        for pid in [
-            entry.producer_id,
-            entry.prev_producer_id,
-            entry.next_producer_id,
-        ] {
-            if !pid.is_none() {
-                self.pid_to_tid.remove(&pid);
-            }
-        }
+        Self::evict_entry_pids(&self.pid_to_tid, entry);
         Ok(())
     }
 
@@ -218,8 +210,16 @@ impl TxnCoordinator {
                             }
                         };
                         let Some(value_bytes) = rec.value.as_ref() else {
-                            // Tombstone (null value) deletes txn state for this tid.
-                            self.state.remove(&tid);
+                            // Tombstone (null value) deletes txn state for this
+                            // tid, and with it every producer-id mapping the
+                            // value records before it built. Dropping the state
+                            // entry alone would leave the reverse index -- and
+                            // so this broker's start-up footprint -- growing
+                            // with every transactional id ever expired.
+                            if let Some((_, handle)) = self.state.remove(&tid) {
+                                let entry = handle.lock().await;
+                                Self::evict_entry_pids(&self.pid_to_tid, &entry);
+                            }
                             continue;
                         };
                         let entry = match crate::txn::log_record::decode_value(value_bytes, tid) {
