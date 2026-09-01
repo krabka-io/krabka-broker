@@ -64,8 +64,6 @@ pub async fn write_segment(
         topic: partition.topic.clone(),
         partition: partition.partition,
     };
-    let bound = predicates.offset_bound(&partition_ref);
-
     let mut outcome = SegmentOutcome {
         segment_id: segment.facts.segment_id,
         base_offset: segment.facts.base_offset,
@@ -81,7 +79,7 @@ pub async fn write_segment(
     // Every batch in this segment starts past the keep bound: an earlier
     // segment already ended the partition's restored history, so nothing
     // here survives and the target log is never opened for it.
-    if bound.is_some_and(|b| segment.facts.base_offset > b) {
+    if predicates.batch_past_offset_bound(&partition_ref, segment.facts.base_offset) {
         return Ok(outcome);
     }
 
@@ -112,7 +110,7 @@ pub async fn write_segment(
         let header = batch.header();
         let batch_base_offset = Offset(header.base_offset.get());
 
-        if bound.is_some_and(|b| batch_base_offset > b) {
+        if predicates.batch_past_offset_bound(&partition_ref, batch_base_offset) {
             break;
         }
 

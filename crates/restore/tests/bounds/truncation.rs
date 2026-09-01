@@ -37,6 +37,29 @@ async fn to_offset_bound_is_inclusive_and_truncates_the_tail() {
     check!(read.batches == fixture[..=5].to_vec());
 }
 
+#[tokio::test]
+async fn to_offset_filters_records_past_a_bound_inside_one_batch() {
+    let mut fixture = vec![plain_batch(vec![
+        value_record(0, "v0"),
+        value_record(1, "v1"),
+        value_record(2, "v2"),
+        value_record(3, "v3"),
+    ])];
+    let archive = build_archive("orders", 0, &mut fixture);
+
+    let (_target, target_dir) = run_restore(archive.path(), &["--to-offset", "orders:0=2"]).await;
+
+    let log = reopen(&target_dir, "orders", 0);
+    let read = log
+        .read(Offset(0), LogConfig::default().segment_size)
+        .expect("read back");
+    let expected = vec![RecordBatch {
+        records: fixture[0].records[..=2].to_vec(),
+        ..fixture[0].clone()
+    }];
+    check!(read.batches == expected);
+}
+
 // ---------------------------------------------------------------------
 // Scenario 2: --to-timestamp keeps only records strictly before the bound.
 // ---------------------------------------------------------------------

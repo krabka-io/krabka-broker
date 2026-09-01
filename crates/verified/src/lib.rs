@@ -133,8 +133,9 @@ pub use remote_read::{
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{
     RESTORE_SNAPSHOT_DELETE_FINISHED, RESTORE_SNAPSHOT_DELETE_STARTED, RESTORE_SNAPSHOT_LIVE,
-    RESTORE_SNAPSHOT_MISSING, restore_archive_reconcile, restore_batch_step,
-    restore_record_coordinates,
+    RESTORE_SNAPSHOT_MISSING, RestoreFilterDecision, restore_archive_reconcile,
+    restore_batch_filter_decision, restore_batch_past_offset_bound, restore_batch_step,
+    restore_record_coordinates, restore_record_selected,
 };
 pub use retention::{
     RetentionPrefix, barrier_cut_expired, local_retention_prefix, retention_delete_target,

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_restore_batch_past_offset_bound": {
+        "prover": "alt-ergo",
+        "time": 0.007
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+(* #"/proof-work-244/crates/verified/src/restore.rs" 80 0 84 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span srestore = "/proof-work-244/crates/verified/src/restore.rs" 85 4 85 53
+let%span srestore'0 = "/proof-work-244/crates/verified/src/restore.rs" 78 10 78 73
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_batch_past_offset_bound [#"/proof-work-244/crates/verified/src/restore.rs" 80 0 84 9] (batch_base: Int64.t)
+  (offset_bound_applies: bool) (offset_bound: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {offset_bound_applies = false} (! bb2) | br1 -> {offset_bound_applies} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Int64.gt batch_base offset_bound ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#srestore] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & batch_base: Int64.t = batch_base
+  | & offset_bound_applies: bool = offset_bound_applies
+  | & offset_bound: Int64.t = offset_bound ])
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_batch_past_offset_bound ensures] [%#srestore'0] result
+    = (offset_bound_applies /\ gt_log_Int (Int64.to_int batch_base) (Int64.to_int offset_bound))}
+    (! return {result}) ]

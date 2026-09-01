@@ -1,11 +1,89 @@
 //! Batch-offset continuity for offline restore verification.
 
+#[cfg(creusot)]
+use std::clone::Clone;
+
 use creusot_std::prelude::*;
 
 pub const RESTORE_SNAPSHOT_MISSING: u8 = 0;
 pub const RESTORE_SNAPSHOT_LIVE: u8 = 1;
 pub const RESTORE_SNAPSHOT_DELETE_STARTED: u8 = 2;
 pub const RESTORE_SNAPSHOT_DELETE_FINISHED: u8 = 3;
+
+/// Batch fate after folding the exact per-record selection results.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum RestoreFilterDecision {
+    Keep,
+    Empty,
+    Filter,
+}
+
+/// Keep one record exactly when it is inside both bounds and no exclusion
+/// predicate matches. Offset bounds are inclusive; timestamp bounds are
+/// exclusive.
+#[ensures(result == (
+    (!offset_bound_applies || offset@ <= offset_bound@)
+        && (!timestamp_bound_applies || timestamp@ < timestamp_bound@)
+        && !producer_excluded
+        && !offset_excluded
+        && !key_excluded
+        && !header_excluded
+))]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    clippy::too_many_arguments,
+    reason = "each boolean is one independently computed restore predicate"
+)]
+#[must_use]
+pub fn restore_record_selected(
+    offset: i64,
+    offset_bound_applies: bool,
+    offset_bound: i64,
+    timestamp: i64,
+    timestamp_bound_applies: bool,
+    timestamp_bound: i64,
+    producer_excluded: bool,
+    offset_excluded: bool,
+    key_excluded: bool,
+    header_excluded: bool,
+) -> bool {
+    (!offset_bound_applies || offset <= offset_bound)
+        && (!timestamp_bound_applies || timestamp < timestamp_bound)
+        && !producer_excluded
+        && !offset_excluded
+        && !key_excluded
+        && !header_excluded
+}
+
+/// Fold whether the record walk saw at least one keep and one drop.
+#[ensures(match result {
+    RestoreFilterDecision::Keep => !saw_drop,
+    RestoreFilterDecision::Empty => saw_drop && !saw_keep,
+    RestoreFilterDecision::Filter => saw_keep && saw_drop,
+})]
+#[must_use]
+pub fn restore_batch_filter_decision(saw_keep: bool, saw_drop: bool) -> RestoreFilterDecision {
+    if saw_keep && saw_drop {
+        RestoreFilterDecision::Filter
+    } else if saw_drop {
+        RestoreFilterDecision::Empty
+    } else {
+        RestoreFilterDecision::Keep
+    }
+}
+
+/// A sorted batch stream may stop exactly when the next batch base is past an
+/// applicable inclusive offset bound.
+#[ensures(result == (offset_bound_applies && batch_base@ > offset_bound@))]
+#[must_use]
+pub fn restore_batch_past_offset_bound(
+    batch_base: i64,
+    offset_bound_applies: bool,
+    offset_bound: i64,
+) -> bool {
+    offset_bound_applies && batch_base > offset_bound
+}
 
 /// Reconcile one archive-scan observation with one snapshot lifecycle state.
 /// `Some(true)` keeps scanned bytes, `Some(false)` excludes absent or deleting
@@ -176,5 +254,44 @@ mod tests {
         check!(
             restore_record_coordinates(i64::MIN, 0, i64::MIN, 0, 0) == Some((i64::MIN, i64::MIN))
         );
+    }
+
+    #[test]
+    fn record_selection_uses_inclusive_offset_and_exclusive_time_bounds() {
+        let selected = |offset, timestamp| {
+            restore_record_selected(
+                offset, true, 10, timestamp, true, 100, false, false, false, false,
+            )
+        };
+        check!(selected(10, 99));
+        check!(!selected(11, 99));
+        check!(!selected(10, 100));
+        check!(!restore_record_selected(
+            10, true, 10, 99, true, 100, true, false, false, false
+        ));
+        check!(restore_record_selected(
+            i64::MIN,
+            false,
+            i64::MIN,
+            i64::MAX,
+            false,
+            i64::MAX,
+            false,
+            false,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn batch_fold_and_skip_are_exact_and_repeatable() {
+        check!(restore_batch_filter_decision(false, false) == RestoreFilterDecision::Keep);
+        check!(restore_batch_filter_decision(true, false) == RestoreFilterDecision::Keep);
+        check!(restore_batch_filter_decision(false, true) == RestoreFilterDecision::Empty);
+        check!(restore_batch_filter_decision(true, true) == RestoreFilterDecision::Filter);
+        check!(!restore_batch_past_offset_bound(10, true, 10));
+        check!(restore_batch_past_offset_bound(11, true, 10));
+        check!(!restore_batch_past_offset_bound(i64::MAX, false, i64::MIN));
+        check!(restore_batch_past_offset_bound(11, true, 10));
     }
 }
