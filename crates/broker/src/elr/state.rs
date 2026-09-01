@@ -110,6 +110,15 @@ impl TopicElr {
             .join(";")
     }
 
+    /// Every partition this value carries state for, in partition order.
+    ///
+    /// The caller gets an owned list because the walks that use it -- taking
+    /// one replica out of a whole topic's ELR, for one -- edit the value as
+    /// they go.
+    pub(crate) fn partitions(&self) -> Vec<i32> {
+        self.0.keys().copied().collect()
+    }
+
     /// The ELR state of one partition. Absent partitions project as two empty
     /// lists, which is the "no ELR" answer Kafka gives.
     pub(crate) fn partition(&self, partition: i32) -> PartitionElr {
