@@ -10,23 +10,35 @@
 //!
 //! ## The model
 //!
-//! [`LogLevelController`] owns one [`EnvFilter`] behind a lock and the
-//! *model* it was rendered from: a root level, a per-target level map, and
-//! the directives the model cannot express (a span or field directive such as
-//! `[my_span{field=1}]=debug`), which pass through untouched. Every level
-//! change re-renders the model into a fresh `EnvFilter`, swaps it in, and
-//! rebuilds the callsite interest cache so a level *raise* takes effect at
-//! callsites `tracing` had already cached as disabled.
+//! [`LogLevelController`] owns one editable [`EnvFilter`] behind a lock and
+//! the *model* it was rendered from: a root level and a per-target level map.
+//! Every level change mutates the model, re-renders it into a fresh
+//! `EnvFilter`, swaps it in, and rebuilds the callsite interest cache so a
+//! level *raise* takes effect at callsites `tracing` had already cached as
+//! disabled. Mutation, render and swap happen under one lock, so a describe
+//! never reports a level the live filter does not yet carry, and two
+//! concurrent alterations cannot install their filters in the opposite order
+//! from their model edits.
+//!
+//! The directives the model cannot express — a span or field directive such
+//! as `[my_span{field=1}]=debug` — go into a second `EnvFilter` that is built
+//! once and never replaced. `EnvFilter` keeps the state of the spans a
+//! dynamic directive matches inside itself, and that state cannot be
+//! transplanted into a new filter, so a rebuild would silence the events
+//! inside a span that was already open. A callsite is enabled when either
+//! filter enables it, which is exactly how one `EnvFilter` combines its
+//! dynamic and static directives.
 //!
 //! [`LogLevelFilter`] is the [`Filter`] side of the same state. It delegates
-//! to whichever `EnvFilter` is current and records the target of every
-//! callsite it is asked about, which is how the controller learns that a
-//! logger exists. `tracing` offers a new callsite to every registered
-//! subscriber, so the recorded set covers the whole process and not only the
-//! layer this filter is attached to. Together with the targets the starting
-//! spec names, it answers to log4j2's `LoggerContext.getLoggers()` plus the
-//! loggers a `log4j2.properties` declares: a name stays a logger once it is
-//! known, whatever its level is later set to or cleared back to.
+//! to the carried filter and to whichever editable `EnvFilter` is current,
+//! and records the target of every callsite it is asked about, which is how
+//! the controller learns that a logger exists. `tracing` offers a new
+//! callsite to every registered subscriber, so the recorded set covers the
+//! whole process and not only the layer this filter is attached to. Together
+//! with the targets the starting spec names, it answers to log4j2's
+//! `LoggerContext.getLoggers()` plus the loggers a `log4j2.properties`
+//! declares: a name stays a logger once it is known, whatever its level is
+//! later set to or cleared back to.
 //!
 //! ## Levels
 //!
@@ -125,9 +137,30 @@ impl LogLevel {
         }
     }
 
-    /// Parse one `EnvFilter` level, which is case-insensitive and names `off`
-    /// where Kafka names `FATAL`.
+    /// Parse one `EnvFilter` level.
+    ///
+    /// `EnvFilter` hands the level of a directive to `LevelFilter`'s
+    /// `FromStr`, which takes a case-insensitive name *or* a number from `0`
+    /// to `5`, so `foo=4` is `foo=debug` and a bare `3` is the root at
+    /// `INFO`. The empty level of a `foo=` directive never reaches it: the
+    /// directive parser reads that as `TRACE` itself, which is not what
+    /// `FromStr` would say. The name `EnvFilter` gives the level Kafka calls
+    /// `FATAL` is `off`.
     fn from_directive(value: &str) -> Option<Self> {
+        if value.is_empty() {
+            return Some(Self::Trace);
+        }
+        if let Ok(number) = value.parse::<usize>() {
+            return match number {
+                0 => Some(Self::Fatal),
+                1 => Some(Self::Error),
+                2 => Some(Self::Warn),
+                3 => Some(Self::Info),
+                4 => Some(Self::Debug),
+                5 => Some(Self::Trace),
+                _ => None,
+            };
+        }
         match value.to_ascii_lowercase().as_str() {
             "off" => Some(Self::Fatal),
             "error" => Some(Self::Error),
@@ -152,32 +185,33 @@ struct Model {
     /// way. A target drops out of here when its level is cleared; it stays a
     /// logger, because [`Shared::known`] remembers the name.
     targets: BTreeMap<String, LogLevel>,
-    /// Directives the model does not describe, kept verbatim. A span or field
-    /// directive lands here: it is neither listed as a logger nor altered.
-    opaque: Vec<String>,
 }
 
 impl Model {
     /// Split an `EnvFilter` spec into the parts this module edits and the
     /// ones it only carries.
-    fn parse(spec: &str) -> Self {
+    ///
+    /// A carried directive is a span or field directive, which is not a
+    /// logger, or text `EnvFilter` itself rejects, which it drops with a
+    /// warning either way.
+    fn parse(spec: &str) -> (Self, Vec<String>) {
         let mut model = Self {
             root: LogLevel::Fatal,
             targets: BTreeMap::new(),
-            opaque: Vec::new(),
         };
+        let mut carried = Vec::new();
         for directive in spec.split(',').map(str::trim).filter(|d| !d.is_empty()) {
-            model.absorb(directive);
+            model.absorb(directive, &mut carried);
         }
-        model
+        (model, carried)
     }
 
-    /// Fold one directive into the model, or keep it verbatim.
-    fn absorb(&mut self, directive: &str) {
+    /// Fold one directive into the model, or hand it to `carried` verbatim.
+    fn absorb(&mut self, directive: &str, carried: &mut Vec<String>) {
         // A span directive (`[name{field}]=level`) or a field directive is
-        // not a logger, so it stays opaque.
+        // not a logger, so the model only carries it.
         if directive.contains('[') {
-            self.opaque.push(directive.to_owned());
+            carried.push(directive.to_owned());
             return;
         }
         match directive.split_once('=') {
@@ -185,7 +219,7 @@ impl Model {
                 Some(level) if !target.is_empty() => {
                     self.targets.insert(target.to_owned(), level);
                 }
-                _ => self.opaque.push(directive.to_owned()),
+                _ => carried.push(directive.to_owned()),
             },
             // A bare word is a level when it names one and a target held at
             // `TRACE` otherwise, which is how `EnvFilter` reads it.
@@ -200,14 +234,13 @@ impl Model {
 
     /// Render the model back into an `EnvFilter` spec.
     fn render(&self) -> String {
-        let mut parts = Vec::with_capacity(self.targets.len() + self.opaque.len() + 1);
+        let mut parts = Vec::with_capacity(self.targets.len() + 1);
         parts.push(self.root.directive().to_owned());
         parts.extend(
             self.targets
                 .iter()
                 .map(|(target, level)| format!("{target}={}", level.directive())),
         );
-        parts.extend(self.opaque.iter().cloned());
         parts.join(",")
     }
 
@@ -225,9 +258,14 @@ impl Model {
 /// The state a [`LogLevelController`] and its [`LogLevelFilter`]s share.
 #[derive(Debug)]
 struct Shared {
-    /// The filter every attached layer delegates to. Replaced wholesale on a
-    /// level change.
+    /// The editable filter. Replaced wholesale on a level change.
     filter: RwLock<EnvFilter>,
+    /// The span and field directives the starting spec carried, in a filter
+    /// of their own that no level change replaces. `EnvFilter` holds the
+    /// state of the spans its dynamic directives match, and a replacement
+    /// would start with none of it, so the events inside a span that was
+    /// already open would stop matching.
+    carried: EnvFilter,
     /// The parts [`Shared::filter`] was rendered from.
     model: RwLock<Model>,
     /// Every logger name this node has: the targets the starting spec named
@@ -288,10 +326,14 @@ impl LogLevelController {
     /// are listed before anything has logged through them.
     #[must_use]
     pub fn new(spec: &str) -> (Self, LogLevelFilter) {
-        let model = Model::parse(spec);
+        let (model, carried) = Model::parse(spec);
         let known = model.targets.keys().cloned().collect();
         let shared = Arc::new(Shared {
             filter: RwLock::new(EnvFilter::new(model.render())),
+            // The builder and not `EnvFilter::new`: an empty carried spec
+            // must enable nothing, and `EnvFilter::new` would read it as the
+            // default `ERROR` directive and enable everything at that level.
+            carried: EnvFilter::builder().parse_lossy(carried.join(",")),
             model: RwLock::new(model),
             known: RwLock::new(known),
         });
@@ -387,47 +429,84 @@ impl LogLevelController {
     /// the old filter disabled and never consults the filter for it again
     /// until the cache is dropped.
     fn edit(&self, mutate: impl FnOnce(&mut Model)) {
-        let spec = {
+        {
+            // The model lock is held across the install, so one alteration
+            // at a time mutates, renders and swaps. Two that overlapped
+            // could otherwise render `A` and `A+B` and install them in the
+            // opposite order, leaving the filter at `A` while every describe
+            // reported `A+B`.
             let mut model = write(&self.shared.model);
             mutate(&mut model);
-            model.render()
-        };
-        *write(&self.shared.filter) = EnvFilter::new(spec);
+            let spec = model.render();
+            *write(&self.shared.filter) = EnvFilter::new(spec);
+        }
+        // Outside the locks: the rebuild calls back into
+        // `LogLevelFilter::callsite_enabled`, which reads them.
         callsite::rebuild_interest_cache();
+    }
+}
+
+/// The interest of a callsite either filter may enable.
+///
+/// `tracing` caches an `always` and never asks again, which is right only
+/// when a filter admits the callsite unconditionally; it drops a `never`
+/// callsite outright, which is right only when neither filter can admit it.
+/// Everything in between is `sometimes`, and [`Filter::enabled`] settles it
+/// per event.
+fn either(a: &Interest, b: &Interest) -> Interest {
+    if a.is_always() || b.is_always() {
+        Interest::always()
+    } else if a.is_never() && b.is_never() {
+        Interest::never()
+    } else {
+        Interest::sometimes()
     }
 }
 
 impl<S> Filter<S> for LogLevelFilter {
     fn enabled(&self, meta: &Metadata<'_>, cx: &Context<'_, S>) -> bool {
-        Filter::<S>::enabled(&*read(&self.shared.filter), meta, cx)
+        Filter::<S>::enabled(&self.shared.carried, meta, cx)
+            || Filter::<S>::enabled(&*read(&self.shared.filter), meta, cx)
     }
 
     fn callsite_enabled(&self, meta: &'static Metadata<'static>) -> Interest {
         remember(&self.shared, meta.target());
-        Filter::<S>::callsite_enabled(&*read(&self.shared.filter), meta)
+        either(
+            &Filter::<S>::callsite_enabled(&self.shared.carried, meta),
+            &Filter::<S>::callsite_enabled(&*read(&self.shared.filter), meta),
+        )
     }
 
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        Filter::<S>::max_level_hint(&*read(&self.shared.filter))
+        // `None` is `EnvFilter` declining to bound the level, so it wins
+        // over any bound the other filter offers.
+        let carried = Filter::<S>::max_level_hint(&self.shared.carried)?;
+        let editable = Filter::<S>::max_level_hint(&*read(&self.shared.filter))?;
+        Some(carried.max(editable))
     }
 
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, cx: Context<'_, S>) {
+        Filter::<S>::on_new_span(&self.shared.carried, attrs, id, cx.clone());
         Filter::<S>::on_new_span(&*read(&self.shared.filter), attrs, id, cx);
     }
 
     fn on_record(&self, id: &span::Id, values: &span::Record<'_>, cx: Context<'_, S>) {
+        Filter::<S>::on_record(&self.shared.carried, id, values, cx.clone());
         Filter::<S>::on_record(&*read(&self.shared.filter), id, values, cx);
     }
 
     fn on_enter(&self, id: &span::Id, cx: Context<'_, S>) {
+        Filter::<S>::on_enter(&self.shared.carried, id, cx.clone());
         Filter::<S>::on_enter(&*read(&self.shared.filter), id, cx);
     }
 
     fn on_exit(&self, id: &span::Id, cx: Context<'_, S>) {
+        Filter::<S>::on_exit(&self.shared.carried, id, cx.clone());
         Filter::<S>::on_exit(&*read(&self.shared.filter), id, cx);
     }
 
     fn on_close(&self, id: span::Id, cx: Context<'_, S>) {
+        Filter::<S>::on_close(&self.shared.carried, id.clone(), cx.clone());
         Filter::<S>::on_close(&*read(&self.shared.filter), id, cx);
     }
 }

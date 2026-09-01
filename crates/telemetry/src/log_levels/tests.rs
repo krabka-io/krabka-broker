@@ -1,7 +1,10 @@
 //! Behavior of the live log filter: what it lists, what it retargets, and
 //! what a retarget does to the events a subscriber actually sees.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use assert2::{assert, check};
 use tracing::{Event, Subscriber};
@@ -197,4 +200,121 @@ fn a_span_directive_survives_a_level_change() {
         tracing::debug!(target: "inside_span_target", "still on");
     });
     assert!(drain(&captured).contains(&"inside_span_target:DEBUG".to_string()));
+}
+
+#[test]
+fn a_span_open_before_a_level_change_keeps_its_directive() {
+    // A dynamic directive matches through the state `EnvFilter` builds when
+    // the span opens. A level change must not throw that state away, or the
+    // events inside a span that is already open go quiet.
+    let (controller, _filter) = LogLevelController::new("off,[open_span]=debug");
+    let (dispatch, captured) = capturing_dispatch(&controller);
+
+    tracing::dispatcher::with_default(&dispatch, || {
+        let span = tracing::info_span!("open_span");
+        let _entered = span.enter();
+        tracing::debug!(target: "inside_open_span", "before");
+        controller.set_level("unrelated_target", LogLevel::Warn);
+        tracing::debug!(target: "inside_open_span", "after");
+    });
+
+    assert!(drain(&captured) == vec!["inside_open_span:DEBUG".to_string(); 2]);
+}
+
+#[test]
+fn every_level_syntax_env_filter_takes_is_an_editable_level() {
+    // `EnvFilter` hands a directive's level to `LevelFilter`'s `FromStr`,
+    // which reads a number from 0 to 5 as well as a name. The empty level of
+    // a `target=` directive it reads itself, as TRACE.
+    let cases = [
+        ("numeric=0", LogLevel::Fatal),
+        ("numeric=1", LogLevel::Error),
+        ("numeric=2", LogLevel::Warn),
+        ("numeric=3", LogLevel::Info),
+        ("numeric=4", LogLevel::Debug),
+        ("numeric=5", LogLevel::Trace),
+        ("numeric=DEBUG", LogLevel::Debug),
+        ("numeric=", LogLevel::Trace),
+    ];
+    for (directive, expected) in cases {
+        let (controller, _filter) = LogLevelController::new(&format!("info,{directive}"));
+        check!(
+            controller.loggers().get("numeric") == Some(&expected),
+            "{directive}"
+        );
+    }
+
+    // A bare number is the root level, the same as a bare name.
+    let (controller, _filter) = LogLevelController::new("4");
+    check!(controller.level(ROOT_LOGGER) == Some(LogLevel::Debug));
+    check!(controller.contains("4") == false);
+}
+
+#[test]
+fn a_numeric_directive_does_not_outrank_a_later_alteration() {
+    // `RUST_LOG=info,lower_target=4` is `lower_target` at DEBUG. Lowering it
+    // to WARN has to silence its DEBUG events and read back as WARN.
+    let (controller, _filter) = LogLevelController::new("info,lower_target=4");
+    let (dispatch, captured) = capturing_dispatch(&controller);
+
+    tracing::dispatcher::with_default(&dispatch, || {
+        tracing::debug!(target: "lower_target", "before");
+    });
+    assert!(drain(&captured) == vec!["lower_target:DEBUG".to_string()]);
+    assert!(controller.level("lower_target") == Some(LogLevel::Debug));
+
+    controller.set_level("lower_target", LogLevel::Warn);
+
+    tracing::dispatcher::with_default(&dispatch, || {
+        tracing::debug!(target: "lower_target", "after");
+    });
+    assert!(drain(&captured) == Vec::<String>::new());
+    assert!(controller.level("lower_target") == Some(LogLevel::Warn));
+}
+
+#[test]
+fn a_level_change_is_one_update_of_the_model_and_the_filter() {
+    // Two alterations that overlapped could render `A` and `A+B` and install
+    // them in the opposite order, leaving the live filter at `A` while every
+    // describe reported `A+B`. Blocking the install proves the two halves
+    // are one update: while no filter can be installed, no describe may
+    // report the level that install would carry.
+    let (controller, _filter) = LogLevelController::new("info");
+    let install_blocked = super::write(&controller.shared.filter);
+
+    let altering = std::thread::spawn({
+        let controller = controller.clone();
+        move || controller.set_level("serialized_target", LogLevel::Debug)
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let (reported, observed) = std::sync::mpsc::channel();
+    let describing = std::thread::spawn({
+        let controller = controller.clone();
+        let stop = Arc::clone(&stop);
+        move || {
+            // Only the altered level counts. `set_level` records the name as
+            // a logger before it touches the model, so a describe that lands
+            // in that window reads the root level, which is not the level
+            // this install would carry.
+            while !stop.load(Ordering::Relaxed) {
+                if controller.level("serialized_target") == Some(LogLevel::Debug) {
+                    let _ = reported.send(());
+                    return;
+                }
+                std::thread::yield_now();
+            }
+        }
+    });
+
+    let seen = observed.recv_timeout(std::time::Duration::from_secs(2));
+    check!(
+        seen == Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "a describe reported DEBUG while the filter carrying it could not be installed"
+    );
+
+    drop(install_blocked);
+    stop.store(true, Ordering::Relaxed);
+    altering.join().expect("the altering thread panicked");
+    describing.join().expect("the describing thread panicked");
+    assert!(controller.level("serialized_target") == Some(LogLevel::Debug));
 }
