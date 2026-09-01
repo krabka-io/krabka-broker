@@ -25,6 +25,16 @@ use crate::{
 };
 
 impl TxnCoordinator {
+    pub(super) async fn lock_state_partition_for(
+        &self,
+        tid: &str,
+    ) -> tokio::sync::MutexGuard<'_, ()> {
+        let partition = self.partition_for(tid);
+        let index = usize::try_from(partition.get())
+            .expect("transaction state partition index must be nonnegative");
+        self.state_partition_writes[index].lock().await
+    }
+
     /// Persists `entry` to the matching `__transaction_state` partition log,
     /// then updates the in-memory map. The partition's writer task appends the
     /// batch, in order with all other produce appends.
@@ -45,6 +55,18 @@ impl TxnCoordinator {
         err,
     )]
     pub(crate) async fn put(
+        &self,
+        entry: TxnEntry,
+        txnv: crate::txn::version::TxnVersion,
+    ) -> Result<(), BrokerError> {
+        let _state_partition_write = self.lock_state_partition_for(&entry.transactional_id).await;
+        self.put_under_state_partition_lock(entry, txnv).await
+    }
+
+    /// Persists one entry while the caller holds its state-partition write
+    /// lock. The reaper uses this form to make its exact recheck and append one
+    /// serialized operation.
+    pub(super) async fn put_under_state_partition_lock(
         &self,
         entry: TxnEntry,
         txnv: crate::txn::version::TxnVersion,

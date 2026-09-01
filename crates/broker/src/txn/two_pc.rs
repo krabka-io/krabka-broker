@@ -30,8 +30,7 @@ use krabka_verified::transaction::{
 
 use super::state::TxnState;
 
-/// Test alias for the persisted 2PC timeout sentinel.
-#[cfg(test)]
+/// Persisted 2PC timeout sentinel.
 pub(crate) const NO_TIMEOUT_MS: i32 = krabka_verified::transaction::NO_TRANSACTION_TIMEOUT_MS;
 
 /// Resolve the `TransactionTimeoutMs` to persist for an `InitProducerId`.

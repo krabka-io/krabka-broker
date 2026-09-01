@@ -6,8 +6,11 @@
 //! phases against the in-memory state map, the `__transaction_state` log, the
 //! partition leaders, and the producer-id allocator.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use krabka_log::ProducerId;
+use krabka_verified::transaction::TransactionReaperCompletionDecision as CompletionDecision;
 use tracing::{info, warn};
 
 use super::TxnCoordinator;
@@ -15,7 +18,7 @@ use crate::txn::{
     handlers::end_txn::{completion_producer_identity, prepare_completion_identities},
     marker::MarkerType,
     state::{TxnEntry, TxnState},
-    two_pc::should_abort_idle_txn,
+    two_pc::{NO_TIMEOUT_MS, should_abort_idle_txn},
     version::TxnVersion,
 };
 
@@ -43,7 +46,7 @@ mod tests;
 /// overwritten. They return the resulting persisted snapshot, or `None` when
 /// the guard failed because the caller lost a race or the entry is no longer
 /// present. The pure helpers [`apply_prepare_abort`], [`apply_complete_abort`],
-/// and [`complete_abort_guard_ok`] compute the transitions. The backend owns
+/// and [`complete_abort_decision`] compute the transitions. The backend owns
 /// only the compare-and-swap and the persistence, which is the irreducible
 /// part.
 #[cfg_attr(test, mockall::automock)]
@@ -108,15 +111,35 @@ fn apply_complete_abort(entry: &mut TxnEntry, new_pid: ProducerId, new_epoch: i1
     entry.last_update_ms = now_ms;
 }
 
-/// Reports whether the re-acquired `entry` still matches the `prepared`
-/// snapshot this reaper wrote in phase 1, so that it is safe to finalise to
-/// `CompleteAbort`. The guard protects against a concurrent `EndTxn` or
-/// `InitProducerId` that advanced the entry. The function is pure, so a unit
-/// test can kill the guard.
-fn complete_abort_guard_ok(entry: &TxnEntry, prepared: &TxnEntry) -> bool {
-    entry.producer_id == prepared.producer_id
-        && entry.producer_epoch == prepared.producer_epoch
-        && entry.state == TxnState::PrepareAbort
+/// Recheck the complete prepared snapshot after marker dispatch. Comparing
+/// every persisted field prevents a concurrent registration, recovery-identity
+/// change, timeout change, or generation change from being overwritten.
+fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionDecision {
+    let (completion_pid, completion_epoch) = completion_producer_identity(prepared);
+    krabka_verified::transaction_reaper_completion_decision(
+        entry.producer_id.get(),
+        entry.producer_epoch,
+        entry.state.to_kafka_status(),
+        prepared.producer_id.get(),
+        prepared.producer_epoch,
+        completion_pid.get(),
+        completion_epoch,
+        TxnState::PrepareAbort.to_kafka_status(),
+        TxnState::CompleteAbort.to_kafka_status(),
+        entry == prepared,
+    )
+}
+
+/// A coordinator persist replaces the map value with a fresh `Arc`. A caller
+/// that queued on the prior entry lock must not publish from that stale value.
+fn handle_is_current(
+    coordinator: &TxnCoordinator,
+    tid: &str,
+    handle: &Arc<tokio::sync::Mutex<TxnEntry>>,
+) -> bool {
+    coordinator
+        .get(tid)
+        .is_some_and(|current| Arc::ptr_eq(&current, handle))
 }
 
 /// Runs the reaper orchestration loop.
@@ -217,25 +240,34 @@ impl ReaperBackend for TxnCoordinator {
     // cargo-mutants: I/O over live entry locks + raft persistence
     #[cfg_attr(test, mutants::skip)]
     async fn prepare_abort(&self, tid: &str, now_ms: i64, txnv: TxnVersion) -> Option<TxnEntry> {
+        let _state_partition_write = self.lock_state_partition_for(tid).await;
         let handle = self.get(tid)?;
-        let prepared = {
-            let mut entry = handle.lock().await;
-            if entry.state == TxnState::PrepareAbort {
-                return Some(entry.clone());
-            }
-            if !should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
-                return None;
-            }
-            apply_prepare_abort(&mut entry, now_ms);
-            if let Err(error) =
-                prepare_completion_identities(&mut entry, txnv, &self.producer_ids).await
-            {
-                warn!(tid, %error, "txn reaper: failed to allocate completion identity");
-                return None;
-            }
-            entry.clone()
-        };
-        if let Err(e) = self.put(prepared.clone(), txnv).await {
+        let entry = handle.lock().await;
+        if !handle_is_current(self, tid, &handle) {
+            return None;
+        }
+        if entry.state == TxnState::PrepareAbort {
+            // A prepared 2PC transaction remains under its external
+            // coordinator's control, including after recovery.
+            return (entry.txn_timeout_ms != NO_TIMEOUT_MS).then(|| entry.clone());
+        }
+        if !should_abort_idle_txn(entry.state, entry.txn_timeout_ms, entry.start_ms, now_ms) {
+            return None;
+        }
+        // Stage on a clone. Allocation or persistence failure must leave the
+        // live entry exactly as it was before this sweep.
+        let mut prepared = entry.clone();
+        apply_prepare_abort(&mut prepared, now_ms);
+        if let Err(error) =
+            prepare_completion_identities(&mut prepared, txnv, &self.producer_ids).await
+        {
+            warn!(tid, %error, "txn reaper: failed to allocate completion identity");
+            return None;
+        }
+        if let Err(e) = self
+            .put_under_state_partition_lock(prepared.clone(), txnv)
+            .await
+        {
             warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
             return None;
         }
@@ -270,18 +302,28 @@ impl ReaperBackend for TxnCoordinator {
         txnv: TxnVersion,
     ) -> Option<TxnEntry> {
         let tid = prepared.transactional_id.as_str();
+        let _state_partition_write = self.lock_state_partition_for(tid).await;
         let handle = self.get(tid)?;
-        let complete = {
-            let mut entry = handle.lock().await;
-            if !complete_abort_guard_ok(&entry, prepared) {
-                // Someone advanced the entry underneath us; don't finalize.
-                return None;
-            }
-            let (new_pid, new_epoch) = completion_producer_identity(&entry);
-            apply_complete_abort(&mut entry, new_pid, new_epoch, now_ms);
-            entry.clone()
-        };
-        if let Err(e) = self.put(complete.clone(), txnv).await {
+        let entry = handle.lock().await;
+        if !handle_is_current(self, tid, &handle) {
+            return None;
+        }
+        match complete_abort_decision(&entry, prepared) {
+            CompletionDecision::AlreadyComplete => return Some(entry.clone()),
+            CompletionDecision::Proceed => {}
+            CompletionDecision::RejectMalformed
+            | CompletionDecision::RejectStaleIdentity
+            | CompletionDecision::RejectChangedPreparedState => return None,
+        }
+        // Keep the current entry unchanged unless its complete record reaches
+        // durable persistence and publication.
+        let mut complete = entry.clone();
+        let (new_pid, new_epoch) = completion_producer_identity(&complete);
+        apply_complete_abort(&mut complete, new_pid, new_epoch, now_ms);
+        if let Err(e) = self
+            .put_under_state_partition_lock(complete.clone(), txnv)
+            .await
+        {
             warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");
             return None;
         }

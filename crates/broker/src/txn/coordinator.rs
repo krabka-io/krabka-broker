@@ -48,6 +48,10 @@ pub(crate) struct TxnCoordinator {
     recovery_read_max: ByteSize,
     /// Live in-memory state: `transactional_id` → locked `TxnEntry`.
     state: DashMap<String, Arc<Mutex<TxnEntry>>>,
+    /// Serializes durable state writes by `__transaction_state` partition.
+    /// The reaper holds the matching lock across its post-marker recheck and
+    /// completion append so no staged writer can slip between them.
+    state_partition_writes: Vec<Mutex<()>>,
     /// Set of `__transaction_state` partition indices this broker leads.
     leader_partitions: RwLock<HashSet<PartitionIndex>>,
     /// Reverse lookup: `producer_id` → `transactional_id`. The Produce
@@ -79,6 +83,8 @@ impl TxnCoordinator {
         num_partitions: i32,
         recovery_read_max: ByteSize,
     ) -> Self {
+        let state_partition_count = usize::try_from(num_partitions)
+            .expect("transaction state partition count must be nonnegative");
         Self {
             node_id,
             partitions,
@@ -86,6 +92,7 @@ impl TxnCoordinator {
             num_partitions,
             recovery_read_max,
             state: DashMap::new(),
+            state_partition_writes: (0..state_partition_count).map(|_| Mutex::new(())).collect(),
             leader_partitions: RwLock::new(HashSet::new()),
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),

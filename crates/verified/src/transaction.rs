@@ -28,6 +28,96 @@ pub enum TransactionMarkerMaterializationDecision {
     AppendAndPublishOffsets,
 }
 
+/// Whether the idle reaper may publish one prepared abort completion.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TransactionReaperCompletionDecision {
+    RejectMalformed,
+    RejectStaleIdentity,
+    RejectChangedPreparedState,
+    AlreadyComplete,
+    Proceed,
+}
+
+/// Recheck the exact prepared snapshot after abort-marker dispatch.
+///
+/// `exact_prepared_snapshot` is supplied by the host from equality over the
+/// complete persisted transaction entry, including its staged identity,
+/// partition set, timeout, and timestamps.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the proof compares current, prepared, and completion identities"
+)]
+#[ensures((result == TransactionReaperCompletionDecision::RejectMalformed)
+    == (current_pid@ < 0
+        || current_epoch@ < 0
+        || prepared_pid@ < 0
+        || prepared_epoch@ < 0
+        || completion_pid@ < 0
+        || completion_epoch@ < 0
+        || prepare_state == complete_state))]
+#[ensures((result == TransactionReaperCompletionDecision::AlreadyComplete)
+    == (current_pid@ >= 0
+        && current_epoch@ >= 0
+        && prepared_pid@ >= 0
+        && prepared_epoch@ >= 0
+        && completion_pid@ >= 0
+        && completion_epoch@ >= 0
+        && prepare_state != complete_state
+        && current_pid@ == completion_pid@
+        && current_epoch@ == completion_epoch@
+        && current_state == complete_state))]
+#[ensures((result == TransactionReaperCompletionDecision::Proceed)
+    == (current_pid@ >= 0
+        && current_epoch@ >= 0
+        && prepared_pid@ >= 0
+        && prepared_epoch@ >= 0
+        && completion_pid@ >= 0
+        && completion_epoch@ >= 0
+        && prepare_state != complete_state
+        && !(current_pid@ == completion_pid@
+            && current_epoch@ == completion_epoch@
+            && current_state == complete_state)
+        && current_pid@ == prepared_pid@
+        && current_epoch@ == prepared_epoch@
+        && current_state == prepare_state
+        && exact_prepared_snapshot))]
+#[must_use]
+pub fn transaction_reaper_completion_decision(
+    current_pid: i64,
+    current_epoch: i16,
+    current_state: i8,
+    prepared_pid: i64,
+    prepared_epoch: i16,
+    completion_pid: i64,
+    completion_epoch: i16,
+    prepare_state: i8,
+    complete_state: i8,
+    exact_prepared_snapshot: bool,
+) -> TransactionReaperCompletionDecision {
+    if current_pid < 0
+        || current_epoch < 0
+        || prepared_pid < 0
+        || prepared_epoch < 0
+        || completion_pid < 0
+        || completion_epoch < 0
+        || prepare_state == complete_state
+    {
+        TransactionReaperCompletionDecision::RejectMalformed
+    } else if current_pid == completion_pid
+        && current_epoch == completion_epoch
+        && current_state == complete_state
+    {
+        TransactionReaperCompletionDecision::AlreadyComplete
+    } else if current_pid != prepared_pid || current_epoch != prepared_epoch {
+        TransactionReaperCompletionDecision::RejectStaleIdentity
+    } else if current_state != prepare_state || !exact_prepared_snapshot {
+        TransactionReaperCompletionDecision::RejectChangedPreparedState
+    } else {
+        TransactionReaperCompletionDecision::Proceed
+    }
+}
+
 /// Fence a transaction marker against the partition's latest producer and
 /// coordinator generations, suppress an exact completed retry, and publish
 /// offsets only for a pending commit on `__consumer_offsets`.
@@ -712,6 +802,32 @@ mod tests {
         assert!(
             transaction_marker_materialization_decision(1, 4, 9, 3, 8, false, true, true)
                 == AppendWithoutOffsetPublication
+        );
+    }
+
+    #[test]
+    fn reaper_completion_requires_the_exact_prepared_snapshot() {
+        use TransactionReaperCompletionDecision::{
+            AlreadyComplete, Proceed, RejectChangedPreparedState, RejectMalformed,
+            RejectStaleIdentity,
+        };
+
+        assert!(transaction_reaper_completion_decision(7, 3, 3, 7, 3, 7, 4, 3, 5, true) == Proceed);
+        assert!(
+            transaction_reaper_completion_decision(7, 3, 3, 7, 3, 7, 4, 3, 5, false)
+                == RejectChangedPreparedState
+        );
+        assert!(
+            transaction_reaper_completion_decision(7, 4, 3, 7, 3, 7, 4, 3, 5, false)
+                == RejectStaleIdentity
+        );
+        assert!(
+            transaction_reaper_completion_decision(7, 4, 5, 7, 3, 7, 4, 3, 5, false)
+                == AlreadyComplete
+        );
+        assert!(
+            transaction_reaper_completion_decision(-1, 0, 3, 7, 3, 7, 4, 3, 5, false)
+                == RejectMalformed
         );
     }
 
