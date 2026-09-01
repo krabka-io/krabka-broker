@@ -27,6 +27,13 @@ use crate::{
 
 // Seed a committed offset for (group, topic, partition) directly on the
 // group actor via UpdateCommitted.
+//
+// The commit is stamped now, not at the epoch. These groups are memberless
+// and carry no protocol type, so KIP-211 retention measures each offset from
+// its own commit; a 1970 stamp is already past `offsets.retention.minutes`
+// and the sweep that runs at broker start would tombstone the offsets — and
+// the group with them — out from under a test that is asking about
+// `require_stable`.
 async fn seed_committed_offset(
     broker: &Broker,
     group: &str,
@@ -45,7 +52,7 @@ async fn seed_committed_offset(
                 offset: Offset(offset),
                 leader_epoch: 5,
                 metadata: String::new(),
-                commit_timestamp_ms: 0,
+                commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
             },
         )],
@@ -263,7 +270,7 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
                 offset: Offset(77),
                 leader_epoch: 5,
                 metadata: String::new(),
-                commit_timestamp_ms: 0,
+                commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
             },
         )],
@@ -368,7 +375,7 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
                 offset: Offset(77),
                 leader_epoch: 5,
                 metadata: String::new(),
-                commit_timestamp_ms: 0,
+                commit_timestamp_ms: crate::time_util::now_ms(),
                 expire_timestamp_ms: None,
             },
         )],
