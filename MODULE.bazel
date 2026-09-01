@@ -10,15 +10,28 @@ module(
     version = "0.5.2",
 )
 
+# `tools/creusot` constrains its container layers with `@platforms//os:linux`.
+# That label resolved transitively until the rules_img work reshaped the module
+# graph; naming it here makes the visibility explicit rather than incidental.
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.107")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
 # rules_rs 0.0.107 treats unknown cfg keys as false, so a dependency guarded by
 # `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
+#
+# It also pins the zlib1g .deb its rustc toolchain links against by exact pool
+# URL. Ubuntu superseded 3.1ubuntu2.1 with 3.1ubuntu2.2 and drops superseded
+# builds from the pool, so both arches now 404 and every Rust toolchain fetch
+# fails during analysis. The second patch repoints that pin at the build the
+# pool actually serves; drop it once rules_rs carries a URL that does not rot.
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
-    patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
+    patches = [
+        "//bazel/patches:rules-rs-target-has-atomic.patch",
+        "//bazel/patches:rules_rs_zlib_url.patch",
+    ],
     version = "0.0.107",
 )
 

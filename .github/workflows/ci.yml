@@ -172,8 +172,13 @@ jobs:
           disk-cache: ${{ github.workflow }}-images
           repository-cache: true
 
+      # `--verbose_failures`: the toolchain layer is built by a genrule that
+      # shells out to Docker, and when it fails Bazel otherwise reports only
+      # "Target //tools/creusot:image_load failed to build" with no command and
+      # no output. The flag is what makes that action's failure diagnosable
+      # from the log alone.
       - name: load the pinned proof image
-        run: bazel run //tools/creusot:image_load
+        run: bazel run --verbose_failures //tools/creusot:image_load
 
       # The runner supplies only the Docker kernel boundary and the checkout.
       # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
@@ -255,7 +260,23 @@ jobs:
       # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
-      - run: bazel test --config=docker ${{ matrix.suite.target }}
+      # `aspect container-suites` selects by touched path, so the matrix can
+      # name a container target that is not a test rule -- the KDC fixture's
+      # `image` and `seed_layer` are built, not run. `bazel test` exits 4 on a
+      # label with no test targets ("No test targets were found, yet testing was
+      # requested"), which failed every suite in the matrix regardless of the
+      # code under review. Dispatch on the rule kind instead.
+      - run: |
+          set -euo pipefail
+          target='${{ matrix.suite.target }}'
+          kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
+          case "${kind}" in
+            # `--config=docker` is defined for `test` only (it swaps the
+            # `--test_tag_filters` set), so passing it to `build` fails with
+            # "Config value 'docker' is not defined in any .rc file".
+            *_test) bazel test --config=docker "${target}" ;;
+            *) bazel build "${target}" ;;
+          esac
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
   # Kerberos acceptance cases visible in their own scheduled lane instead of

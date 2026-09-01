@@ -230,6 +230,11 @@ pub(super) async fn handle_actor_message(
             *group = CoordinatorGroup::new_consumer(group.group_id.clone());
             true
         }
+        #[cfg(test)]
+        GroupActorMessage::TestEmptySinceMs { reply } => {
+            let _ = reply.send(group.empty_since_ms);
+            true
+        }
     }
 }
 
