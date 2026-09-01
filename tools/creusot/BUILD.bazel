@@ -1,8 +1,19 @@
 """The hermetic Creusot proof image.
 
 The expensive Creusot installation is a Bazel output whose inputs are only the
-locked apko base, the pinned Creusot release, and the installer. The shared CI
-cache therefore reuses it for ordinary source changes.
+locked apko base, the pinned Creusot release, and the installer.
+
+Building it takes about eleven minutes, and CI kept paying that on trees that
+changed none of those inputs. The Bazel disk cache did not spare it: that cache
+lives in the GitHub Actions cache, where this gigabyte-scale toolchain layer
+competes for one 10 GB repository-wide quota with every other namespace.
+
+The registry is the durable cache instead. `image-tag.sh` digests exactly the
+inputs above into a tag, CI pulls that tag when the registry already holds it,
+and only a tree that changes what the image contains builds and publishes one.
+
+    bazel run //tools/creusot:image_load                          # local daemon
+    bazel run //tools/creusot:push -- --tag "$(tools/creusot/image-tag.sh)"
 """
 
 load("@rules_apko//apko:defs.bzl", "apko_image")
@@ -11,6 +22,7 @@ load("@rules_img//img:image.bzl", "image_manifest")
 load("@rules_img//img:layer.bzl", "file_metadata", "image_layer", "layer_from_tar")
 load("@rules_img//img:load.bzl", "image_load")
 load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
+load("@rules_img//img:push.bzl", "image_push")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -115,5 +127,15 @@ image_load(
     name = "image_load",
     image = ":image",
     tag = "docker.io/krabka-io/creusot:0.13.0",
+    tags = ["manual"],
+)
+
+# The content-addressed cache CI pulls from. The tag is never written here: it
+# is a digest of this package's inputs, which only `image-tag.sh` can compute.
+image_push(
+    name = "push",
+    image = ":image",
+    registry = "ghcr.io",
+    repository = "krabka-io/creusot",
     tags = ["manual"],
 )
