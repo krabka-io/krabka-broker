@@ -141,12 +141,10 @@ pub(crate) async fn handle(
         },
     );
 
-    // controller_id: the current Raft leader, or -1 when unknown.
-    let controller_id: i32 = controller
-        .watch_leader()
-        .borrow()
-        .and_then(|id| i32::try_from(id.0).ok())
-        .unwrap_or(-1);
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
 
     // KIP-430: the cluster-level field only exists on the wire for v8-10;
     // the codegen drops it on other versions. Compute when the opt-in
