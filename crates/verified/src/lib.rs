@@ -19,13 +19,16 @@ pub mod isr;
 pub mod leader_epoch;
 pub mod log_index;
 pub mod offset_allocator;
+pub mod produce;
 pub mod producer;
 pub mod raft;
 pub mod reassignment;
+pub mod recovery;
 pub mod remote_metadata;
 pub mod remote_read;
 pub mod remote_txn;
 pub mod restore;
+pub mod retention;
 pub mod schema;
 pub mod storage;
 pub mod stretch;
@@ -57,14 +60,20 @@ pub use diskless::{DisklessTrimDecision, diskless_trim_decision};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
+pub use produce::{ProduceBatchAdmission, produce_batch_admission};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
 };
 pub use reassignment::{ReassignmentAction, reassignment_action};
+pub use recovery::{
+    ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
+    should_capture_first_downgrade,
+};
 pub use remote_metadata::remote_metadata_partition;
 pub use remote_read::remote_read_relative_offset;
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{restore_batch_step, restore_record_coordinates};
+pub use retention::{RetentionPrefix, retention_delete_target, retention_prefix};
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
 pub use storage::future_log_swap_admission;
 pub use stretch::{

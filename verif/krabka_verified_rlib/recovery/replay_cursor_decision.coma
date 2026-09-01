@@ -1,0 +1,56 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 70 0 70 85 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span srecovery = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 61 10 68 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_ReplayCursorDecision = Advance Int64.t | Stop
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let replay_cursor_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 70 0 70 85]
+  (cursor: Int64.t) (next: t_Option_i64) (return (x: t_ReplayCursorDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {next = None} (! bb3) | br1 (x0: Int64.t) -> {next = Some x0} (! bb4) ]
+  | bb4 = s0
+    [ s0 = elim_Some {next} (fun (r0: Int64.t) -> [ &next_offset'0 <- r0 ] s1)
+    | s1 = [ &_10 <- Int64.gt next_offset'0 cursor ] s2
+    | s2 = any [ br0 -> {_10 = false} (! bb3) | br1 -> {_10} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = elim_Some {next} (fun (r0: Int64.t) -> [ &next_offset <- r0 ] s1)
+    | s1 = [ &_ret <- Advance next_offset ] s2
+    | s2 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplayCursorDecision = Any.any_l ()
+  | & cursor: Int64.t = cursor
+  | & next: t_Option_i64 = next
+  | & next_offset: Int64.t = Any.any_l ()
+  | & next_offset'0: Int64.t = Any.any_l ()
+  | & _10: bool = Any.any_l () ])
+  [ return (result: t_ReplayCursorDecision) ->
+  {[@stop_split] [@expl:replay_cursor_decision ensures] [%#srecovery] match result with
+      | Advance next_offset -> next = Some next_offset /\ gt_log_Int (Int64.to_int next_offset) (Int64.to_int cursor)
+      | Stop -> match next with
+        | None -> true
+        | Some next_offset -> Int64.to_int next_offset <= Int64.to_int cursor
+        end
+      end}
+    (! return {result}) ]
