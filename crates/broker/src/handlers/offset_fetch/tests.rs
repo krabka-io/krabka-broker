@@ -264,6 +264,7 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
                 leader_epoch: 5,
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
             },
         )],
     )
@@ -368,6 +369,7 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
                 leader_epoch: 5,
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
             },
         )],
     )

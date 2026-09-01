@@ -335,6 +335,7 @@ mod tests {
                         leader_epoch: 3,
                         metadata: "txn".into(),
                         commit_timestamp_ms: 123,
+                        expire_timestamp_ms: None,
                     }
                     .encode_value(),
                 ),
@@ -455,6 +456,7 @@ mod tests {
                     leader_epoch: 3,
                     metadata: "txn".into(),
                     commit_timestamp_ms: 123,
+                    expire_timestamp_ms: None,
                 }
                 .encode_value(),
             ),
