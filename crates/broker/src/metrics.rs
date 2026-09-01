@@ -162,6 +162,19 @@ pub struct BrokerMetrics {
     /// on `rate(controller_leader_changes_total[5m]) > 0` for sustained
     /// periods to spot flapping raft leadership.
     pub controller_leader_changes_total: Counter,
+    /// Cumulative count of completed broker-fencing publication passes run
+    /// by this broker while it holds the controller leadership — one
+    /// increment per liveness tick that ran
+    /// `heartbeat::fencing::publish_fencing_changes` to completion, whether
+    /// or not that pass had a difference to write.
+    ///
+    /// The pass awaits its own `submit_change`, so an increment means any
+    /// fencing record that pass decided on is committed and applied rather
+    /// than still in flight. That is what lets a test tell "nobody is fenced"
+    /// apart from "a `broker.fenced=true` is on its way", which the image
+    /// alone cannot distinguish. Mirrors the intent of
+    /// [`Self::log_cleaner_runs_total`].
+    pub controller_fencing_publications_total: Counter,
     pub isr_shrinks_total: Counter,
     pub isr_expands_total: Counter,
     /// KIP-227: current count of live incremental-fetch sessions across the
