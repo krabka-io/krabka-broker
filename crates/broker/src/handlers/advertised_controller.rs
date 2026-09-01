@@ -26,6 +26,28 @@
 //! each API returned `controller_id` 2 or 3, in no fixed order, and never 1.
 //! `4.3.1` is the tag `MODULE.bazel` pins for the JVM suites.
 //!
+//! Liveness is the other half of that choice, and it has to hold on every
+//! node, not just the controller. `getRandomAliveBrokerId` draws from the
+//! metadata cache's *alive* brokers, and a `KRaft` broker knows who is fenced
+//! because `BrokerRegistration.fenced` is replicated to it. Krabka replicates
+//! the same bit as the [`BROKER_FENCED`](crate::config_keys::BROKER_FENCED)
+//! broker config, so both call sites narrow their candidates with
+//! [`crate::handlers::offline_replicas::unavailable_brokers`], which reads it
+//! back out of the image. A follower therefore skips a dead broker for the
+//! same reason the controller does, rather than advertising an id that
+//! resolves to an endpoint nobody answers on.
+//!
+//! What the advertised id does *not* decide is where a KIP-853 voter RPC
+//! lands. `KafkaAdminClient.addRaftVoter` and `removeRaftVoter` are built on
+//! the `LeastLoadedBrokerOrActiveKController` node provider, whose `provide()`
+//! returns `client.leastLoadedNode(...)` under `--bootstrap-server` and only
+//! consults the controller under `--bootstrap-controller`, where the node
+//! comes from a `DescribeCluster` with `endpoint_type=CONTROLLERS` on the
+//! controller listener. Neither path reads `controller_id`. Reaching the
+//! quorum from a broker listener is `KafkaApis`' job instead: it answers
+//! `ADD_RAFT_VOTER` and `REMOVE_RAFT_VOTER` with `forwardToController`, the
+//! KIP-590 Envelope hop krabka tracks separately.
+//!
 //! [`ControllerIdRotation`] makes the same choice and rotates over the
 //! eligible brokers rather than drawing at random. The client-visible contract
 //! is the one Kafka offers -- an id that resolves to a broker row in the same
