@@ -8,7 +8,7 @@ use super::*;
 use crate::kraft::controller::{
     checkpoint::{
         checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-        load_latest_checkpoint, retain_latest_checkpoint, write_checkpoint,
+        load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint, write_checkpoint,
     },
     test_support::{
         await_leader, build_engine_only, build_with_snapshot_interval, elect_single_voter_engine,
@@ -33,6 +33,23 @@ fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replace
         ("equal checkpoint", (10, 9), (10, 9), false),
     ] {
         assert2::assert!(checkpoint_id_is_newer(candidate, current) == want);
+    }
+}
+
+#[test]
+fn checkpoint_names_must_use_the_canonical_fixed_width_encoding() {
+    assert2::assert!(
+        parse_checkpoint_name("00000000000000000010-0000000002.checkpoint") == Some((10, 2))
+    );
+    for malformed in [
+        "10-2.checkpoint",
+        "00000000000000000010-0000000002",
+        "00000000000000000010-0000000002.checkpoint.tmp",
+        "-0000000000000000001-0000000002.checkpoint",
+        "00000000000000000010--000000001.checkpoint",
+        "not-a-checkpoint",
+    ] {
+        assert2::assert!(parse_checkpoint_name(malformed).is_none(), "{malformed}");
     }
 }
 

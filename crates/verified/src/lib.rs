@@ -11,6 +11,7 @@ pub mod authz;
 pub mod break_glass;
 pub mod broker;
 pub mod chain;
+pub mod checkpoint;
 pub mod compaction;
 pub mod consensus;
 pub mod delegation_token;
@@ -53,6 +54,7 @@ pub use broker::{
     effective_share_backlog, fetch_visibility, unclean_recovery_commit_admission,
 };
 pub use chain::{ChainStep, chain_step, select_chain_tip};
+pub use checkpoint::{checkpoint_id_newer, checkpoint_id_retained, latest_checkpoint_index};
 pub use compaction::{
     BatchMeta, RecordMeta, RetainDecision, TxnDataState, compute_horizon, retain_decision,
 };
