@@ -11,6 +11,7 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::metrics::ShareGroupLabel;
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -30,6 +31,13 @@ use crate::{
 
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
+
+fn share_coordinator_key(group: &str, topic_id: uuid::Uuid, partition: i32) -> String {
+    format!(
+        "{group}:{}:{partition}",
+        URL_SAFE_NO_PAD.encode(topic_id.as_bytes())
+    )
+}
 
 fn java_hash(value: &str) -> i32 {
     value.encode_utf16().fold(0_i32, |hash, unit| {
@@ -97,7 +105,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         let response = admin
             .send(FindCoordinatorRequest {
                 key_type: 2,
-                coordinator_keys: vec![format!("backlog-rf3-bootstrap:{topic_id}:0")],
+                coordinator_keys: vec![share_coordinator_key("backlog-rf3-bootstrap", topic_id, 0)],
                 ..Default::default()
             })
             .await
@@ -185,7 +193,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     let share_coordinator = coordinator_client
         .send(FindCoordinatorRequest {
             key_type: 2,
-            coordinator_keys: vec![format!("{group_id}:{topic_id}:{data_partition}")],
+            coordinator_keys: vec![share_coordinator_key(&group_id, topic_id, data_partition)],
             ..Default::default()
         })
         .await

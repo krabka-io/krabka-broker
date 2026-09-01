@@ -57,7 +57,9 @@ pub fn first_batch_at_or_after(data: &[u8], floor: LogOffset) -> Option<RecordBa
         let Ok(batch) = RecordBatch::decode(&mut cur) else {
             break;
         };
-        let last_offset = batch.base_offset + i64::from(batch.last_offset_delta);
+        let last_offset = batch
+            .base_offset
+            .checked_add(i64::from(batch.last_offset_delta))?;
         if last_offset >= floor {
             return Some(batch);
         }
@@ -151,6 +153,12 @@ mod tests {
             first_batch_at_or_after(&bytes, 7).is_none(),
             "batch 3..6 must not cover floor 7"
         );
+    }
+
+    #[test]
+    fn first_batch_at_or_after_rejects_offset_overflow() {
+        let bytes = encoded(&[test_batch_at(i64::MAX, 2, b'z')]);
+        assert!(first_batch_at_or_after(&bytes, i64::MAX).is_none());
     }
 
     #[test]

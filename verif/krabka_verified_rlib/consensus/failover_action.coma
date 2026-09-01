@@ -1,0 +1,55 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 70 0 78 19 *)
+
+let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 48 10 68 1
+
+use creusot.prelude.Any
+
+type t_FailoverRecovery = None | Balanced | Aggressive
+
+type t_FailoverAction = ElectClean | Recover t_FailoverRecovery | ElectUnclean | Unavailable | ShrinkIsr | NoChange
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let failover_action [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 70 0 78 19]
+  (leader_dead: bool) (has_electable_isr: bool) (alive_isr_empty: bool) (recovery: t_FailoverRecovery)
+  (unclean_enabled: bool) (has_unclean_candidate: bool) (isr_shrunk: bool) (return (x: t_FailoverAction)) = (! bb0
+  [ bb0 = any [ br0 -> {leader_dead = false} (! bb1) | br1 -> {leader_dead} (! bb5) ]
+  | bb5 = any [ br0 -> {has_electable_isr = false} (! bb7) | br1 -> {has_electable_isr} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- ElectClean ] s1 | s1 = return {_ret} ]
+  | bb7 = any [ br0 -> {alive_isr_empty = false} (! bb9) | br1 -> {alive_isr_empty} (! bb8) ]
+  | bb8 = any
+    [ br0 -> {recovery = None} (! bb14)
+    | br1 -> {recovery = Balanced} (! bb15)
+    | br2 -> {recovery = Aggressive} (! bb15) ]
+  | bb15 = s0 [ s0 = [ &_ret <- Recover recovery ] s1 | s1 = return {_ret} ]
+  | bb14 = any [ br0 -> {unclean_enabled = false} (! bb12) | br1 -> {unclean_enabled} (! bb16) ]
+  | bb16 = any [ br0 -> {has_unclean_candidate = false} (! bb12) | br1 -> {has_unclean_candidate} (! bb17) ]
+  | bb17 = s0 [ s0 = [ &_ret <- ElectUnclean ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- Unavailable ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Unavailable ] s1 | s1 = return {_ret} ]
+  | bb1 = any [ br0 -> {isr_shrunk = false} (! bb3) | br1 -> {isr_shrunk} (! bb2) ]
+  | bb2 = s0 [ s0 = [ &_ret <- ShrinkIsr ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- NoChange ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FailoverAction = Any.any_l ()
+  | & leader_dead: bool = leader_dead
+  | & has_electable_isr: bool = has_electable_isr
+  | & alive_isr_empty: bool = alive_isr_empty
+  | & recovery: t_FailoverRecovery = recovery
+  | & unclean_enabled: bool = unclean_enabled
+  | & has_unclean_candidate: bool = has_unclean_candidate
+  | & isr_shrunk: bool = isr_shrunk ])
+  [ return (result: t_FailoverAction) -> {[@stop_split] [@expl:failover_action ensures] [%#sconsensus] match result with
+      | ElectClean -> leader_dead /\ has_electable_isr
+      | Recover selected -> leader_dead
+      /\ not has_electable_isr /\ alive_isr_empty /\ recovery <> None /\ selected = recovery
+      | ElectUnclean -> leader_dead
+      /\ not has_electable_isr /\ alive_isr_empty /\ recovery = None /\ unclean_enabled /\ has_unclean_candidate
+      | Unavailable -> leader_dead
+      /\ not has_electable_isr
+      /\ (not alive_isr_empty \/ recovery = None /\ (not unclean_enabled \/ not has_unclean_candidate))
+      | ShrinkIsr -> not leader_dead /\ isr_shrunk
+      | NoChange -> not leader_dead /\ not isr_shrunk
+      end}
+    (! return {result}) ]

@@ -320,6 +320,7 @@ kafka_codes! {
     DELEGATION_TOKEN_OWNER_MISMATCH = 63;
     DELEGATION_TOKEN_REQUEST_NOT_ALLOWED = 64;
     DELEGATION_TOKEN_AUTHORIZATION_FAILED = 65;
+    DELEGATION_TOKEN_EXPIRED = 66;
 
     // KIP-630 FetchSnapshot (api_key 59) codes.
     /// `SNAPSHOT_NOT_FOUND` (98): the requested `__cluster_metadata` snapshot

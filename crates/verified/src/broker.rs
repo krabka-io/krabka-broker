@@ -174,6 +174,148 @@ pub fn effective_share_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
     if difference > 0 { difference } else { 0 }
 }
 
+/// The complete per-key admission outcome for `FindCoordinator`.
+///
+/// The allow variants preserve the key type for the host adapter. Denials carry
+/// the Kafka authorization domain, while malformed SHARE keys and unknown wire
+/// discriminants fail closed as invalid requests.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FindCoordinatorAdmission {
+    AllowGroup,
+    AllowTransaction,
+    AllowShare,
+    DenyGroup,
+    DenyTransaction,
+    DenyCluster,
+    InvalidRequest,
+}
+
+/// Decide whether one `FindCoordinator` key may proceed to coordinator lookup.
+///
+/// Kafka key types are GROUP=0, TRANSACTION=1, and SHARE=2. SHARE was added in
+/// API version 6, uses `ClusterAction` authorization, and carries a composite key
+/// that the host validates before calling this kernel. `share_key_valid` is
+/// ignored for the two non-SHARE key types. Unknown key types never inherit an
+/// allow result.
+#[ensures(key_type@ == 0 ==> result == if acl_allowed {
+    FindCoordinatorAdmission::AllowGroup
+} else {
+    FindCoordinatorAdmission::DenyGroup
+})]
+#[ensures(key_type@ == 1 ==> result == if acl_allowed {
+    FindCoordinatorAdmission::AllowTransaction
+} else {
+    FindCoordinatorAdmission::DenyTransaction
+})]
+#[ensures(key_type@ == 2 ==> result == if api_version@ < 6 || !share_key_valid {
+    FindCoordinatorAdmission::InvalidRequest
+} else if acl_allowed {
+    FindCoordinatorAdmission::AllowShare
+} else {
+    FindCoordinatorAdmission::DenyCluster
+})]
+#[ensures(key_type@ < 0 || key_type@ > 2
+    ==> result == FindCoordinatorAdmission::InvalidRequest)]
+#[must_use]
+pub fn find_coordinator_admission(
+    api_version: i16,
+    key_type: i8,
+    acl_allowed: bool,
+    share_key_valid: bool,
+) -> FindCoordinatorAdmission {
+    match key_type {
+        0 if acl_allowed => FindCoordinatorAdmission::AllowGroup,
+        0 => FindCoordinatorAdmission::DenyGroup,
+        1 if acl_allowed => FindCoordinatorAdmission::AllowTransaction,
+        1 => FindCoordinatorAdmission::DenyTransaction,
+        2 if api_version < 6 || !share_key_valid => FindCoordinatorAdmission::InvalidRequest,
+        2 if acl_allowed => FindCoordinatorAdmission::AllowShare,
+        2 => FindCoordinatorAdmission::DenyCluster,
+        _ => FindCoordinatorAdmission::InvalidRequest,
+    }
+}
+
+/// Java `String.hashCode` over the first `limit` UTF-16 code units.
+#[cfg(creusot)]
+#[logic]
+#[requires(0 <= limit && limit <= units.len())]
+#[variant(limit)]
+pub fn java_string_hash_prefix_model(units: Seq<u16>, limit: Int) -> i32 {
+    pearlite! {
+        if limit <= 0 {
+            0i32
+        } else {
+            java_string_hash_prefix_model(units, limit - 1) * 31i32
+                + units[limit - 1] as i32
+        }
+    }
+}
+
+#[cfg(creusot)]
+#[logic]
+fn java_string_abs_model(hash: i32) -> i32 {
+    pearlite! {
+        if hash == i32::MIN {
+            0i32
+        } else if hash < 0i32 {
+            -hash
+        } else {
+            hash
+        }
+    }
+}
+
+#[cfg(creusot)]
+#[logic]
+#[requires(partition_count@ > 0)]
+fn java_string_hash_partition_model(units: Seq<u16>, partition_count: i32) -> Int {
+    pearlite! {
+        java_string_abs_model(java_string_hash_prefix_model(units, units.len()))@
+            % partition_count@
+    }
+}
+
+/// Java `String.hashCode` over UTF-16 code units, followed by Kafka's
+/// `Utils.abs(hash) % partition_count` coordinator selection.
+///
+/// The host supplies `str::encode_utf16()` output so non-ASCII group ids use
+/// the same surrogate-pair semantics as the JVM. Java's `Integer.MIN_VALUE`
+/// absolute-value corner maps to zero, matching `Utils.abs`.
+#[cfg_attr(
+    creusot,
+    ensures(partition_count@ > 0 ==>
+        exists<partition: i32> result == Some(partition)
+            && partition@ == java_string_hash_partition_model(units@, partition_count))
+)]
+#[ensures(result == None ==> partition_count@ <= 0)]
+#[ensures(partition_count@ <= 0 ==> result == None)]
+#[ensures(forall<partition: i32> result == Some(partition) ==>
+    0 <= partition@ && partition@ < partition_count@)]
+#[must_use]
+pub fn java_string_hash_partition(units: &[u16], partition_count: i32) -> Option<i32> {
+    if partition_count <= 0 {
+        return None;
+    }
+
+    let mut hash = 0_i32;
+    let mut index = 0_usize;
+    #[invariant(index@ <= units@.len())]
+    #[cfg_attr(creusot, invariant(hash == java_string_hash_prefix_model(units@, index@)))]
+    while index < units.len() {
+        hash = hash.wrapping_mul(31).wrapping_add(i32::from(units[index]));
+        index += 1;
+    }
+    let positive = if hash == i32::MIN {
+        0
+    } else if hash < 0 {
+        -hash
+    } else {
+        hash
+    };
+    Some(positive % partition_count)
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -359,6 +501,57 @@ mod tests {
         assert!(effective_share_backlog(12, -1, 4) == 8);
         assert!(effective_share_backlog(5, 9, 4) == 0);
         assert!(effective_share_backlog(i64::MAX, i64::MIN, i64::MIN) == i64::MAX);
+    }
+
+    #[test]
+    fn find_coordinator_admission_is_exhaustive_and_fail_closed() {
+        use FindCoordinatorAdmission::{
+            AllowGroup, AllowShare, AllowTransaction, DenyCluster, DenyGroup, DenyTransaction,
+            InvalidRequest,
+        };
+
+        for share_key_valid in [false, true] {
+            assert!(find_coordinator_admission(0, 0, false, share_key_valid) == DenyGroup);
+            assert!(find_coordinator_admission(0, 0, true, share_key_valid) == AllowGroup);
+            assert!(find_coordinator_admission(0, 1, false, share_key_valid) == DenyTransaction);
+            assert!(find_coordinator_admission(0, 1, true, share_key_valid) == AllowTransaction);
+        }
+        for version in [i16::MIN, 0, 5] {
+            assert!(find_coordinator_admission(version, 2, false, true) == InvalidRequest);
+            assert!(find_coordinator_admission(version, 2, true, true) == InvalidRequest);
+        }
+        assert!(find_coordinator_admission(6, 2, false, false) == InvalidRequest);
+        assert!(find_coordinator_admission(6, 2, true, false) == InvalidRequest);
+        assert!(find_coordinator_admission(6, 2, false, true) == DenyCluster);
+        assert!(find_coordinator_admission(6, 2, true, true) == AllowShare);
+
+        for unknown in [i8::MIN, -1, 3, i8::MAX] {
+            for acl_allowed in [false, true] {
+                for share_key_valid in [false, true] {
+                    assert!(
+                        find_coordinator_admission(6, unknown, acl_allowed, share_key_valid)
+                            == InvalidRequest
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn java_string_hash_partition_matches_jvm_goldens() {
+        for (key, partitions, expected) in [
+            ("g:BQUFBQUFBQUFBQUFBQUFBQ:0", 50, 2),
+            ("consumer-group", 50, 38),
+            ("🦀:BQUFBQUFBQUFBQUFBQUFBQ:7", 17, 8),
+            // This is the canonical Java String whose hashCode is
+            // Integer.MIN_VALUE. Kafka Utils.abs maps that corner to zero.
+            ("polygenelubricants", 50, 0),
+        ] {
+            let units: Vec<u16> = key.encode_utf16().collect();
+            assert!(java_string_hash_partition(&units, partitions) == Some(expected));
+        }
+        assert!(java_string_hash_partition(&[], 0) == None);
+        assert!(java_string_hash_partition(&[], -1) == None);
     }
 
     #[test]

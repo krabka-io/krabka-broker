@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_clone_FindCoordinatorAdmission": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      }
+    }
+  }
+}

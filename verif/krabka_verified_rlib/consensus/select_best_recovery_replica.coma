@@ -1,0 +1,183 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 120 0 120 84 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 121 7 121 23
+let%span sconsensus'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 121 27 121 28
+let%span sconsensus'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 124 19 124 25
+let%span sconsensus'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 125 16 125 22
+let%span sconsensus'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 137 14 137 36
+let%span sconsensus'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 138 14 138 30
+let%span sconsensus'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 133 16 136 50
+let%span sconsensus'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 130 16 132 50
+let%span sconsensus'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 128 16 129 50
+let%span sconsensus'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 127 16 127 26
+let%span sconsensus'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 126 16 126 50
+let%span sconsensus'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 139 24 139 37
+let%span sconsensus'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 140 22 140 38
+let%span sconsensus'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 147 13 147 14
+let%span sconsensus'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 147 8 147 14
+let%span sconsensus'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 105 10 105 54
+let%span sconsensus'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 106 10 118 1
+
+use creusot.slice.Slice64
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+type tup3_i32_i64_u64 = { f0: Int32.t; f1: Int64.t; f2: UInt64.t }
+
+let len_tup3_i32_i64_u64 (self_: Slice64.slice tup3_i32_i64_u64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_best_recovery_replica [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 120 0 120 84]
+  (candidates: Slice64.slice tup3_i32_i64_u64) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0
+    [ s0 = len_tup3_i32_i64_u64 [%#sconsensus] {candidates} (fun (_x: UInt64.t) -> [ &_8 <- _x ] s1)
+    | s1 = [ &_7 <- _8 = ([%#sconsensus'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_7 = false} (! bb3) | br1 -> {_7} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = [ &best <- [%#sconsensus'1] (0: UInt64.t) ] s1
+    | s1 = [ &i <- [%#sconsensus'2] (1: UInt64.t) ] s2
+    | s2 = bb4 ]
+  | bb4 = bb4invariant
+    [ bb4 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#sconsensus'3] Seq.length (Slice64.view candidates)
+      - UInt64.t'int i)}
+      bb4invariant
+    | bb4invariant = {[@expl:loop invariant #0] [%#sconsensus'9] 1 <= UInt64.t'int i
+      /\ UInt64.t'int i <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#sconsensus'8] UInt64.t'int best < UInt64.t'int i}
+      {[@expl:loop invariant #2] [%#sconsensus'7] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+        <= Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0}
+      {[@expl:loop invariant #3] [%#sconsensus'6] forall j: int. 0 <= j
+          /\ j < UInt64.t'int i
+          /\ Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+          = Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0
+        -> Int64.to_int (Seq.get (Slice64.view candidates) j).f1
+        <= Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f1}
+      {[@expl:loop invariant #4] [%#sconsensus'5] forall j: int. 0 <= j
+          /\ j < UInt64.t'int i
+          /\ Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+            = Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0
+          /\ Int64.to_int (Seq.get (Slice64.view candidates) j).f1
+          = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f1
+        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f2
+        <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f2}
+      (! [ &variant_old_bb4 <- [%#sconsensus'3] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = len_tup3_i32_i64_u64 [%#sconsensus'4] {candidates} (fun (_x: UInt64.t) -> [ &_39 <- _x ] s1)
+      | s1 = [ &_37 <- UInt64.lt i _39 ] s2
+      | s2 = any [ br0 -> {_37 = false} (! bb26) | br1 -> {_37} (! bb7) ] ]
+      [ bb7 = s0
+        [ s0 = [ &_42 <- i ] s1
+        | s1 = [ &_43 <- Slice64.length candidates ] s2
+        | s2 = [ &_44 <- UInt64.lt _42 _43 ] s3
+        | s3 = {[@expl:index in bounds] [%#sconsensus'10] _44} s4
+        | s4 = Slice64.get [%#sconsensus'10] <tup3_i32_i64_u64> {candidates} {_42}
+            (fun (r: tup3_i32_i64_u64) -> [ &candidate <- r ] s5)
+        | s5 = [ &_46 <- best ] s6
+        | s6 = [ &_47 <- Slice64.length candidates ] s7
+        | s7 = [ &_48 <- UInt64.lt _46 _47 ] s8
+        | s8 = {[@expl:index in bounds] [%#sconsensus'11] _48} s9
+        | s9 = Slice64.get [%#sconsensus'11] <tup3_i32_i64_u64> {candidates} {_46}
+            (fun (r: tup3_i32_i64_u64) -> [ &current' <- r ] s10)
+        | s10 = [ &_50 <- Int32.gt candidate.f0 current'.f0 ] s11
+        | s11 = any [ br0 -> {_50 = false} (! bb11) | br1 -> {_50} (! bb20) ] ]
+      | bb11 = s0
+        [ s0 = [ &_53 <- candidate.f0 = current'.f0 ] s1
+        | s1 = any [ br0 -> {_53 = false} (! bb16) | br1 -> {_53} (! bb12) ] ]
+      | bb12 = s0
+        [ s0 = [ &_56 <- Int64.gt candidate.f1 current'.f1 ] s1
+        | s1 = any [ br0 -> {_56 = false} (! bb16) | br1 -> {_56} (! bb20) ] ]
+      | bb16 = s0
+        [ s0 = [ &_59 <- candidate.f0 = current'.f0 ] s1
+        | s1 = any [ br0 -> {_59 = false} (! bb25) | br1 -> {_59} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = [ &_62 <- candidate.f1 = current'.f1 ] s1
+        | s1 = any [ br0 -> {_62 = false} (! bb25) | br1 -> {_62} (! bb18) ] ]
+      | bb18 = s0
+        [ s0 = [ &_65 <- UInt64.lt candidate.f2 current'.f2 ] s1
+        | s1 = any [ br0 -> {_65 = false} (! bb25) | br1 -> {_65} (! bb20) ] ]
+      | bb20 = s0 [ s0 = [ &best <- i ] s1 | s1 = bb25 ]
+      | bb25 = s0
+        [ s0 = UInt64.add [%#sconsensus'13] {i} {[%#sconsensus'12] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb4 ] ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- Some best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice tup3_i32_i64_u64 = candidates
+  | & _7: bool = Any.any_l ()
+  | & _8: UInt64.t = Any.any_l ()
+  | & best: UInt64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & candidate: tup3_i32_i64_u64 = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & current': tup3_i32_i64_u64 = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & variant_old_bb4: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_best_recovery_replica ensures] ([@stop_split] [@expl:select_best_recovery_replica ensures #0] [%#sconsensus'14] (result
+        = None)
+      = (Seq.length (Slice64.view candidates) = 0))
+    /\ ([@stop_split] [@expl:select_best_recovery_replica ensures #1] [%#sconsensus'15] match result with
+      | None -> true
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
+      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view candidates)
+          -> Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+          <= Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0)
+      /\ (forall j: int. 0 <= j
+            /\ j < Seq.length (Slice64.view candidates)
+            /\ Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+            = Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          -> Int64.to_int (Seq.get (Slice64.view candidates) j).f1
+          <= Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+      /\ (forall j: int. 0 <= j
+          /\ j < Seq.length (Slice64.view candidates)
+          /\ Int32.to_int (Seq.get (Slice64.view candidates) j).f0
+            = Int32.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          /\ Int64.to_int (Seq.get (Slice64.view candidates) j).f1
+          = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
+        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
+        <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f2)
+      end)}
+    (! return {result}) ]

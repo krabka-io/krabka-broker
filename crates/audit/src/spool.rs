@@ -24,6 +24,7 @@ use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _},
 };
+use krabka_verified::spool_append_decision;
 
 use self::codec::{decode_record, encode_frame};
 use crate::{
@@ -469,8 +470,15 @@ impl Spool {
 
     fn append_inner(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
         let frame = encode_frame(record);
-        let frame_len = SpoolBytes(u64::try_from(frame.len()).unwrap_or(u64::MAX));
-        if (self.bytes + frame_len).0 > self.max_bytes.0 {
+        let frame_len = u64::try_from(frame.len()).unwrap_or(u64::MAX);
+        let decision = spool_append_decision(
+            self.bytes.0,
+            frame_len,
+            self.max_bytes.0,
+            self.unsynced,
+            self.sync_every.get(),
+        );
+        if !decision.accepted {
             return Ok(false);
         }
         let old_len = self.file.metadata().map_err(io)?.len();
@@ -478,19 +486,14 @@ impl Spool {
         if let Err(error) = self.file.write_all(&frame) {
             return Err(self.rollback_append(old_len, error));
         }
-        let unsynced = self.unsynced.saturating_add(1);
-        if unsynced >= self.sync_every.get()
+        if decision.sync
             && let Err(error) = self.file.sync_all()
         {
             return Err(self.rollback_append(old_len, error));
         }
-        self.unsynced = if unsynced >= self.sync_every.get() {
-            0
-        } else {
-            unsynced
-        };
-        self.bytes += frame_len;
-        self.count.0 += 1;
+        self.unsynced = decision.next_unsynced;
+        self.bytes = SpoolBytes(decision.new_bytes);
+        self.count.0 = self.count.0.saturating_add(1);
         Ok(true)
     }
 
@@ -740,6 +743,26 @@ mod tests {
     }
 
     #[test]
+    fn append_rejects_size_overflow_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ByteSize::from_bytes(u64::MAX)).unwrap();
+        spool.bytes = SpoolBytes(u64::MAX);
+
+        check!(
+            !spool
+                .append(&chained_record(0, &GENESIS_HEAD, b"x"))
+                .unwrap()
+        );
+        check!((spool.bytes.0, spool.count.0) == (u64::MAX, 0));
+        check!(
+            std::fs::metadata(dir.path().join(SPOOL_FILE))
+                .unwrap()
+                .len()
+                == 0
+        );
+    }
+
+    #[test]
     fn replay_cursor_keeps_only_unacknowledged_records_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
@@ -870,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_sync_finishes_a_batched_cadence() {
+    fn cadence_and_explicit_sync_reset_the_unsynced_counter() {
         let dir = tempfile::tempdir().unwrap();
         let mut spool =
             Spool::open_with_sync_every(dir.path(), ROOMY_CAP, NonZeroU64::new(2).unwrap())
@@ -878,6 +901,18 @@ mod tests {
         check!(
             spool
                 .append(&chained_record(0, &GENESIS_HEAD, b"a"))
+                .unwrap()
+        );
+        check!(spool.unsynced == 1);
+        check!(
+            spool
+                .append(&chained_record(1, &GENESIS_HEAD, b"b"))
+                .unwrap()
+        );
+        check!(spool.unsynced == 0);
+        check!(
+            spool
+                .append(&chained_record(2, &GENESIS_HEAD, b"c"))
                 .unwrap()
         );
         check!(spool.unsynced == 1);

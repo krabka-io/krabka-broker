@@ -108,17 +108,29 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 use_repo(
     oci,
     "apache_kafka_4_0_0",
+    "apache_kafka_4_0_0_linux_amd64",
     "apache_kafka_4_1_0",
+    "apache_kafka_4_1_0_linux_amd64",
     "apache_kafka_4_3_1",
+    "apache_kafka_4_3_1_linux_amd64",
     "cp_kafka_3_1_2",
+    "cp_kafka_3_1_2_linux_amd64",
     "cp_kafka_6_1_1",
+    "cp_kafka_6_1_1_linux_amd64",
     "cp_kafka_7_4_0",
+    "cp_kafka_7_4_0_linux_amd64",
     "cp_kafka_7_5_0",
+    "cp_kafka_7_5_0_linux_amd64",
     "cp_kafka_7_8_8",
+    "cp_kafka_7_8_8_linux_amd64",
     "distroless_cc",
+    "distroless_cc_linux_amd64",
     "kcat_1_7_1",
+    "kcat_1_7_1_linux_amd64",
     "minio",
+    "minio_linux_amd64",
     "minio_mc",
+    "minio_mc_linux_amd64",
 )
 
 # ---------------------------------------------------------------------------
@@ -173,7 +185,7 @@ toolchains.toolchain(
     # dependency source of truth" arrangement exists to avoid.
     version = "1.97.1",
 )
-use_repo(toolchains, "krabka_rust_toolchains")
+use_repo(toolchains, "default_rust_toolchains", "krabka_rust_toolchains")
 
 register_toolchains("@krabka_rust_toolchains//...")
 
