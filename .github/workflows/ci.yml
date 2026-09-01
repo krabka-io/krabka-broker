@@ -172,8 +172,13 @@ jobs:
           disk-cache: ${{ github.workflow }}-images
           repository-cache: true
 
+      # `--verbose_failures`: the toolchain layer is built by a genrule that
+      # shells out to Docker, and when it fails Bazel otherwise reports only
+      # "Target //tools/creusot:image_load failed to build" with no command and
+      # no output. The flag is what makes that action's failure diagnosable
+      # from the log alone.
       - name: load the pinned proof image
-        run: bazel run //tools/creusot:image_load
+        run: bazel run --verbose_failures //tools/creusot:image_load
 
       # The runner supplies only the Docker kernel boundary and the checkout.
       # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
