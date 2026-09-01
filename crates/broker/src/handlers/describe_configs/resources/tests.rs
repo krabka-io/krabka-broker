@@ -82,14 +82,16 @@ fn describe_at(
             configuration_keys,
             ..Default::default()
         },
-        serving_node,
+        ServingBroker {
+            node: serving_node,
+            static_broker: untuned(),
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+        },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        BrokerLoggers {
-            node_id: 1,
-            levels: &levels,
-        },
-        untuned(),
         options,
     )
 }
@@ -133,11 +135,13 @@ fn describe_with_loggers(
             configuration_keys,
             ..Default::default()
         },
-        serving_node_for(resource_type, resource_name),
+        ServingBroker {
+            node: serving_node_for(resource_type, resource_name),
+            static_broker: untuned(),
+            loggers,
+        },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        loggers,
-        untuned(),
         options,
     )
 }
@@ -161,14 +165,16 @@ fn describe_with_static(
             configuration_keys,
             ..Default::default()
         },
-        serving_node_for(resource_type, resource_name),
+        ServingBroker {
+            node: serving_node_for(resource_type, resource_name),
+            static_broker,
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+        },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        BrokerLoggers {
-            node_id: 1,
-            levels: &levels,
-        },
-        static_broker,
         options,
     )
 }

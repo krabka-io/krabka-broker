@@ -96,7 +96,9 @@ mod wire;
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
-    resources::{BrokerLoggers, StaticBrokerConfigs, StaticBrokerSetting, describe_one},
+    resources::{
+        BrokerLoggers, ServingBroker, StaticBrokerConfigs, StaticBrokerSetting, describe_one,
+    },
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -174,14 +176,16 @@ pub(crate) fn handle(
                     describe_one(
                         &image,
                         r,
-                        serving_node,
+                        ServingBroker {
+                            node: serving_node,
+                            static_broker,
+                            loggers: BrokerLoggers {
+                                node_id: broker.config.broker_id,
+                                levels: &broker.config.log_levels,
+                            },
+                        },
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
-                        BrokerLoggers {
-                            node_id: broker.config.broker_id,
-                            levels: &broker.config.log_levels,
-                        },
-                        static_broker,
                         options,
                     )
                 }
