@@ -43,6 +43,7 @@ pub mod snapshot;
 pub mod storage;
 pub mod stretch;
 pub mod throttle;
+pub mod timestamp;
 pub mod transaction;
 pub mod vote;
 pub mod voter_set;
@@ -136,6 +137,10 @@ pub use storage::{
 };
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
+};
+pub use timestamp::{
+    earliest_max_timestamp_index, first_timestamp_index, timestamp_record_coordinates,
+    timestamp_scan_next, timestamp_scan_window,
 };
 pub use transaction::{
     IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS, TransactionCompletionDecision,
