@@ -20,6 +20,22 @@ use crate::kraft::controller::{
 };
 use crate::kraft::types::LogOffsetMetadata;
 
+#[test]
+fn snapshot_install_admission_rejects_malformed_stale_and_pending_cases() {
+    use krabka_verified::{SnapshotInstallDecision, snapshot_install_decision};
+
+    for (pending, end, epoch, log_end, expected) in [
+        (false, 11, 3, 10, SnapshotInstallDecision::Install),
+        (false, 10, 3, 10, SnapshotInstallDecision::Stale),
+        (false, 9, 3, 10, SnapshotInstallDecision::Stale),
+        (true, 11, 3, 10, SnapshotInstallDecision::Reject),
+        (false, -1, 3, 10, SnapshotInstallDecision::Reject),
+        (false, 11, -1, 10, SnapshotInstallDecision::Reject),
+    ] {
+        assert2::assert!(snapshot_install_decision(pending, end, epoch, log_end) == expected);
+    }
+}
+
 fn become_follower(engine: &mut Engine, leader_id: NodeId, leader_epoch: Epoch) {
     engine.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id,

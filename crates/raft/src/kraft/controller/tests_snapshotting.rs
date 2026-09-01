@@ -17,6 +17,14 @@ use crate::kraft::controller::{
 };
 
 #[test]
+fn snapshot_pruning_stays_at_or_below_the_committed_frontier() {
+    assert2::assert!(krabka_verified::snapshot_prune_admission(10, 10));
+    assert2::assert!(krabka_verified::snapshot_prune_admission(9, 10));
+    assert2::assert!(!krabka_verified::snapshot_prune_admission(11, 10));
+    assert2::assert!(!krabka_verified::snapshot_prune_admission(-1, 10));
+}
+
+#[test]
 fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replacement() {
     for (_case, candidate, current, want) in [
         ("higher offset", (11, 1), (10, 9), true),

@@ -101,7 +101,10 @@ pub use retention::{
 };
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
 pub use share::share_prune_frontier;
-pub use snapshot::{SnapshotChunkDecision, snapshot_chunk_admission};
+pub use snapshot::{
+    SnapshotChunkDecision, SnapshotInstallDecision, snapshot_chunk_admission,
+    snapshot_install_decision, snapshot_prune_admission,
+};
 pub use storage::{
     future_log_swap_admission, remote_partition_delete_transition, remote_segment_transition,
 };

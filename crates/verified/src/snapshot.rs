@@ -14,6 +14,55 @@ pub enum SnapshotChunkDecision {
     Complete,
 }
 
+/// Admission result for a fully assembled snapshot at the controller boundary.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum SnapshotInstallDecision {
+    Reject,
+    Stale,
+    Install,
+}
+
+/// Classify a decoded, fully assembled snapshot against live controller state.
+#[ensures(match result {
+    SnapshotInstallDecision::Reject => downgrade_pending
+        || snapshot_end@ < 0
+        || snapshot_epoch@ < 0
+        || log_end@ < 0,
+    SnapshotInstallDecision::Stale => !downgrade_pending
+        && snapshot_end@ >= 0
+        && snapshot_epoch@ >= 0
+        && log_end@ >= 0
+        && snapshot_end@ <= log_end@,
+    SnapshotInstallDecision::Install => !downgrade_pending
+        && snapshot_end@ >= 0
+        && snapshot_epoch@ >= 0
+        && log_end@ >= 0
+        && snapshot_end@ > log_end@,
+})]
+#[must_use]
+pub fn snapshot_install_decision(
+    downgrade_pending: bool,
+    snapshot_end: i64,
+    snapshot_epoch: i32,
+    log_end: i64,
+) -> SnapshotInstallDecision {
+    if downgrade_pending || snapshot_end < 0 || snapshot_epoch < 0 || log_end < 0 {
+        SnapshotInstallDecision::Reject
+    } else if snapshot_end <= log_end {
+        SnapshotInstallDecision::Stale
+    } else {
+        SnapshotInstallDecision::Install
+    }
+}
+
+/// A checkpoint may prune only a nonnegative boundary already committed.
+#[ensures(result == (snapshot_end@ >= 0 && snapshot_end@ <= committed_end@))]
+#[must_use]
+pub fn snapshot_prune_admission(snapshot_end: i64, committed_end: i64) -> bool {
+    snapshot_end >= 0 && snapshot_end <= committed_end
+}
+
 /// Admit exactly the next bounded chunk for one fixed snapshot identity and size.
 #[allow(
     clippy::comparison_chain,
@@ -100,6 +149,31 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn install_admission_rejects_malformed_and_separates_stale_from_future() {
+        use SnapshotInstallDecision::{Install, Reject, Stale};
+
+        for (pending, end, epoch, log_end, expected) in [
+            (false, 11, 3, 10, Install),
+            (false, 10, 3, 10, Stale),
+            (false, 9, 3, 10, Stale),
+            (true, 11, 3, 10, Reject),
+            (false, -1, 3, 10, Reject),
+            (false, 11, -1, 10, Reject),
+            (false, 11, 3, -1, Reject),
+        ] {
+            check!(snapshot_install_decision(pending, end, epoch, log_end) == expected);
+        }
+    }
+
+    #[test]
+    fn prune_admission_never_crosses_the_committed_frontier() {
+        check!(snapshot_prune_admission(10, 10));
+        check!(snapshot_prune_admission(9, 10));
+        check!(!snapshot_prune_admission(11, 10));
+        check!(!snapshot_prune_admission(-1, 10));
+    }
 
     #[test]
     fn chunk_admission_covers_retries_order_bounds_and_completion() {

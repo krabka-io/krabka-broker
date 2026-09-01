@@ -6,7 +6,11 @@ use std::sync::Arc;
 
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
-use krabka_verified::raft::{FetchResponseMutation, fetch_response_mutation};
+use krabka_verified::{
+    SnapshotInstallDecision,
+    raft::{FetchResponseMutation, fetch_response_mutation},
+    snapshot_install_decision,
+};
 
 use super::{
     Engine, KraftControlState, Role,
@@ -288,18 +292,24 @@ impl Engine {
         id: (i64, i32),
         bytes: &[u8],
     ) -> Result<(), RaftError> {
-        if self.downgrade_snapshot_pending.is_some() {
-            return Err(RaftError::ChangeRejected(
-                "mandatory metadata downgrade snapshot is pending".into(),
-            ));
-        }
         // `end_offset` is the snapshot id's raw offset (wire / checkpoint-filename
         // boundary); wrap into the log offset domain where it addresses the log.
         let (end_offset, epoch) = id;
         let end_offset_pos = Offset(end_offset);
+        let install = snapshot_install_decision(
+            self.downgrade_snapshot_pending.is_some(),
+            end_offset,
+            epoch,
+            self.log.log_end_offset().0,
+        );
+        if install == SnapshotInstallDecision::Reject {
+            return Err(RaftError::ChangeRejected(
+                "invalid snapshot identity or mandatory metadata downgrade snapshot pending".into(),
+            ));
+        }
         // Validate the bytes decode before mutating any durable state.
         let contents = crate::snapshot::SnapshotReader::read(bytes)?;
-        if end_offset_pos <= self.log.log_end_offset() {
+        if install == SnapshotInstallDecision::Stale {
             return Ok(()); // stale; we already advanced past this snapshot
         }
         let cluster_id = self.image.cluster_id();
@@ -327,7 +337,9 @@ impl Engine {
         }
         self.log.install_snapshot(end_offset_pos)?;
         self.last_snapshot_end_offset = end_offset_pos;
-        self.installed_snapshot_epoch = Some(u32::try_from(epoch).unwrap_or(0));
+        self.installed_snapshot_epoch = Some(
+            u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
+        );
         let _ = self.image_tx.send(Arc::new(self.image.clone()));
         retain_latest_checkpoint(&checkpoint_dir(&self.data_dir));
         Ok(())
