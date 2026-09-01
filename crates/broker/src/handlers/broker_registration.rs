@@ -103,17 +103,56 @@ pub(crate) async fn handle(
         features,
     };
     // KIP-966: a broker that cannot prove it stopped gracefully may have lost
-    // an unflushed log tail, so it is no longer known to hold every committed
-    // record and its ELR membership goes. Kafka appends the same withdrawals
-    // ahead of the `RegisterBrokerRecord`, so this batch is in that order too.
-    let mut changes = if clean_restart {
-        Vec::new()
+    // an unflushed log tail, so nothing the cluster still believes about that
+    // log holds -- not its ELR membership, and not its ISR seat either.
+    // `ClusterControlManager.registerBroker` calls
+    // `handleBrokerShutdown(id, isCleanShutdown, records)` before it appends
+    // the `RegisterBrokerRecord`, and the branch that boolean picks is the
+    // whole difference: `isElrFeatureEnabled() && !isCleanShutdown` runs two
+    // `generateLeaderAndIsrUpdates` calls, which is what
+    // `compute_unclean_restart_changes` is. A restart that proves itself
+    // clean takes none of that.
+    let restart = if clean_restart {
+        crate::leader_election::FailoverPlan::default()
     } else {
-        crate::elr::withdraw_elr_membership(&image, node_id)
+        crate::leader_election::compute_unclean_restart_changes(
+            &image,
+            node_id,
+            &broker.liveness,
+            &broker.metrics,
+        )
+        .await
     };
-    changes.push(MetadataRecord::V1BrokerRegistration(record));
-    if let Err(error) = broker.controller.submit_change(changes).await {
+    for (topic, partition) in &restart.unavailable {
+        tracing::warn!(
+            %topic, partition, node_id = node_id.0,
+            "returning broker led this partition and no live ISR replica can take it; partition unavailable"
+        );
+    }
+    if let Err(error) = broker
+        .controller
+        .submit_change(registration_records(restart.changes, record))
+        .await
+    {
         return response(version, raft_error_code(&error), -1);
+    }
+    // KIP-966: a partition whose topic opted into an offset-aware recovery
+    // strategy is handed to the Unclean Recovery Manager, the same way the
+    // dead-broker failover hands one over. Fire and forget.
+    for (topic, partition, strategy) in restart.recoveries {
+        broker
+            .unclean_recovery
+            .enqueue(crate::unclean_recovery::RecoveryJob {
+                topic,
+                partition,
+                strategy,
+                reply: None,
+                // Nobody asked for this recovery, so there is no proposal to
+                // name and nobody to refuse; `break_glass` decides whether the
+                // URM runs it.
+                proposal: None,
+            })
+            .await;
     }
 
     let epoch = broker
@@ -130,6 +169,22 @@ pub(crate) async fn handle(
         },
         epoch,
     )
+}
+
+/// The records one accepted registration writes, in the order they apply.
+///
+/// `restart` is what a restart that could not prove itself clean costs, empty
+/// for one that did: the ELR withdrawals and ISR removals
+/// [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+/// decided. They go ahead of the registration, so a replay that stops between
+/// the two has already stopped trusting the returning log rather than not yet
+/// started.
+fn registration_records(
+    mut restart: Vec<MetadataRecord>,
+    record: BrokerRegistrationRecord,
+) -> Vec<MetadataRecord> {
+    restart.push(MetadataRecord::V1BrokerRegistration(record));
+    restart
 }
 
 /// Whether this registration proves the broker stopped gracefully last time.
@@ -334,9 +389,20 @@ mod wire_tests {
         ids.iter().copied().map(NodeId).collect()
     }
 
-    /// Node 2 registered at [`HELD_EPOCH`], and one partition whose ELR names
-    /// it.
-    fn seed_records() -> Vec<MetadataRecord> {
+    /// Node 2 registered, and one partition of `TOPIC` holding `isr` under
+    /// `min_isr`, published with `elr`.
+    ///
+    /// All three are fixture knobs because the halves of the restart rule read
+    /// different columns: the ELR withdrawal fires on a partition node 2 has
+    /// already left, and the ISR removal only on one it is still in.
+    fn seed_records(isr: &[u64], min_isr: &str, elr: Option<&str>) -> Vec<MetadataRecord> {
+        let mut overrides: std::collections::BTreeMap<String, String> =
+            [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
+                .into_iter()
+                .collect();
+        if let Some(elr) = elr {
+            overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), elr.to_string());
+        }
         vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 node_id: REGISTERED,
@@ -367,7 +433,7 @@ mod wire_tests {
                 partition: 0,
                 leader: NodeId(1),
                 replicas: nodes(&[1, 2, 3]),
-                isr: nodes(&[1]),
+                isr: nodes(isr),
                 leader_epoch: LeaderEpoch(7),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
@@ -376,21 +442,32 @@ mod wire_tests {
             }),
             MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: TOPIC.into(),
-                overrides: [
-                    (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
-                    (ELIGIBLE_LEADER_REPLICAS.to_string(), "0:2,3:".to_string()),
-                ]
-                .into_iter()
-                .collect(),
+                overrides,
             }),
         ]
     }
 
-    /// Re-register node 2 from a fresh process -- a new incarnation id, the
-    /// way a JVM broker generates one per boot -- offering
-    /// `previous_broker_epoch` as its proof, and return the published ELR that
-    /// results.
+    /// The partition of `TOPIC` as it stands after a restart: the two columns
+    /// the restart rule can move.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Restarted {
+        isr: Vec<NodeId>,
+        elr: PartitionElr,
+    }
+
+    /// [`restart`] against the seed the ELR tests use: node 2 already out of
+    /// the ISR, and published as eligible.
     async fn reregister(version: i16, offer: Offer) -> PartitionElr {
+        restart(version, offer, seed_records(&[1], "2", Some("0:2,3:")))
+            .await
+            .elr
+    }
+
+    /// Re-register node 2 from a fresh process -- a new incarnation id, the
+    /// way a JVM broker generates one per boot -- against `seed`, offering
+    /// `previous_broker_epoch` as its proof, and return what the partition
+    /// looks like afterwards.
+    async fn restart(version: i16, offer: Offer, seed: Vec<MetadataRecord>) -> Restarted {
         let (broker_handle, _dir) =
             start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
@@ -402,11 +479,7 @@ mod wire_tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
-        broker
-            .controller
-            .submit_change(seed_records())
-            .await
-            .expect("seed");
+        broker.controller.submit_change(seed).await.expect("seed");
 
         let image = broker.controller.current_image();
         let previous_broker_epoch = match offer {
@@ -466,10 +539,19 @@ mod wire_tests {
             "registration was refused: {response:?}"
         );
 
-        let elr = TopicElr::of_topic(&broker.controller.current_image(), TOPIC).partition(0);
+        let image = broker.controller.current_image();
+        let restarted = Restarted {
+            isr: image
+                .partition(TOPIC, 0)
+                .expect("seeded partition")
+                .isr
+                .clone(),
+            elr: TopicElr::of_topic(&image, TOPIC).partition(0),
+        };
+        drop(image);
         drop(broker);
         broker_handle.shutdown().await;
-        elr
+        restarted
     }
 
     /// A broker offering the epoch the cluster still holds for it restarted
@@ -510,6 +592,57 @@ mod wire_tests {
                 == PartitionElr {
                     eligible_leader_replicas: vec![3],
                     last_known_elr: vec![2],
+                }
+        );
+    }
+
+    /// The seed the ISR half needs: node 2 in a healthy ISR that sits exactly
+    /// at `min.insync.replicas`, and nothing published about it.
+    ///
+    /// This is the case an ELR withdrawal on its own cannot see. There is no
+    /// membership to withdraw, and yet the next eligibility is derived from
+    /// `old_isr`, which still names node 2 -- so whether node 2 stays in that
+    /// ISR is the whole of the difference between the two branches.
+    fn healthy_isr_seed() -> Vec<MetadataRecord> {
+        seed_records(&[1, 2, 3], "3", None)
+    }
+
+    /// A restart that cannot prove itself clean loses its ISR seat as well as
+    /// its eligibility, and the batch that takes the seat away does not hand
+    /// eligibility back on the way out.
+    ///
+    /// Dropping node 2 leaves the ISR under `min.insync.replicas`, so the
+    /// recompute that rides the same batch has an ELR to publish and
+    /// `old_isr ∪ eligible_before` still names node 2. Kafka's
+    /// `uncleanShutdownReplicas` is what keeps it out of the eligible column
+    /// and lands it in the last-known one instead.
+    #[tokio::test]
+    async fn an_unproven_restart_loses_its_isr_seat_without_regaining_eligibility() {
+        assert!(
+            restart(V3, Offer::Unproven, healthy_isr_seed()).await
+                == Restarted {
+                    isr: nodes(&[1, 3]),
+                    elr: PartitionElr {
+                        eligible_leader_replicas: vec![],
+                        last_known_elr: vec![2],
+                    },
+                }
+        );
+    }
+
+    /// A restart that proves itself clean keeps the seat, from the same seed.
+    ///
+    /// Kafka's `handleBrokerShutdown` reaches the two-call unclean path only
+    /// under `isElrFeatureEnabled() && !isCleanShutdown`, so the proof is what
+    /// decides, and a broker that stopped gracefully still holds the log its
+    /// ISR membership claims. Nothing moves: same ISR, still no ELR.
+    #[tokio::test]
+    async fn a_proven_clean_restart_keeps_its_isr_seat() {
+        assert!(
+            restart(V3, Offer::HeldEpoch, healthy_isr_seed()).await
+                == Restarted {
+                    isr: nodes(&[1, 2, 3]),
+                    elr: PartitionElr::default(),
                 }
         );
     }

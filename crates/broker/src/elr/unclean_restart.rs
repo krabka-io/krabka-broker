@@ -43,8 +43,27 @@
 //! ELR: the controller stops offering it as a safe election and keeps
 //! reporting it as the last replica known to have been complete, which is what
 //! an operator falls back to when the partition has no leader at all. This
-//! module produces exactly that move. The ISR half of the same rule is not
-//! here.
+//! module produces exactly that move.
+//!
+//! ## The ISR half
+//!
+//! The unclean branch above makes two calls, and the first one -- over
+//! `partitionsWithBrokerInIsr` -- matters for a reason the withdrawal alone
+//! cannot cover. [`next_partition_elr`](super::maintain) derives the next
+//! eligible set from `old_isr ∪ eligible_before`, and this module clears only
+//! the second term, so an image whose ISR still names the returning broker
+//! would re-derive the very membership withdrawn here the next time that ISR
+//! fell below `min.insync.replicas` -- and a partition whose ISR is healthy at
+//! registration publishes no ELR to withdraw at all, yet feeds the same
+//! `old_isr` into the same derivation later.
+//!
+//! [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+//! is that first call, and it wraps this one: it seeds its batch with these
+//! records, removes the broker from every ISR naming it, and finishes with
+//! [`ElrPublisher::after_unclean_shutdown`](super::maintain::ElrPublisher::after_unclean_shutdown)
+//! so the batch's own recompute cannot re-add what it just removed. The
+//! registration handler calls that, not this, whenever the clean-shutdown
+//! proof fails.
 //!
 //! Kafka gates the whole thing on `isElrFeatureEnabled`. krabka has no such
 //! feature to finalize -- see [`crate::elr::maintain`] -- so the withdrawal is
@@ -80,6 +99,7 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
 fn topic_record(image: &MetadataImage, topic: &str, node: i32) -> Option<MetadataRecord> {
     let before = image.topic_config(topic)?;
     let mut elr = TopicElr::parse(before.get(ELIGIBLE_LEADER_REPLICAS)?);
+
     if !elr.demote_node(node) {
         return None;
     }

@@ -11,6 +11,7 @@ use crate::config_keys::RecoveryStrategy;
 
 /// Output of a failover scan: immediate metadata changes plus partitions
 /// that need asynchronous offset-aware recovery through the URM.
+#[derive(Default)]
 pub(crate) struct FailoverPlan {
     pub changes: Vec<MetadataRecord>,
     pub recoveries: Vec<(String, i32, RecoveryStrategy)>,
@@ -130,6 +131,49 @@ pub(crate) fn failover_one(
         }
         FailoverAction::ShrinkIsr => FailoverDecision::ShrinkIsr { isr: alive_isr },
         FailoverAction::NoChange => FailoverDecision::NoChange,
+    }
+}
+
+/// Decide what one partition needs when `returning` re-registers under a new
+/// incarnation id, which is a broker that stopped and came back without the
+/// controller being able to prove the stop was clean.
+///
+/// Apache Kafka answers the same event in
+/// `ReplicationControlManager.handleBrokerShutdown`, whose unclean branch --
+/// read out of `kafka-metadata-4.3.1.jar` -- runs
+/// `generateLeaderAndIsrUpdates("handleBrokerUncleanShutdown", -1, -1,
+/// brokerId, records, brokersToIsrs.partitionsWithBrokerInIsr(brokerId))`.
+/// That call sets `targetIsr` to `Replicas.copyWithout(partition.isr, {-1,
+/// brokerId})`, so it removes exactly the returning broker and leaves every
+/// other ISR member alone, however the controller currently rates its
+/// liveness. This does the same, which is why it is not
+/// [`failover_one`]: a returning broker is one event about one broker, not a
+/// reason to re-decide the whole ISR against a liveness registry that a
+/// controller which has just been elected may not have populated yet.
+///
+/// The one case that does need the full policy is the partition the returning
+/// broker is still recorded as leading. A bare ISR rewrite there would leave a
+/// leader that is not in its own ISR, so that case is handed to
+/// [`failover_one`] unchanged: the broker is dead as far as liveness is
+/// concerned -- that is the precondition the registration was accepted under
+/// -- so it is the same question the dead-broker scan asks, and it deserves
+/// the same answer, up to and including an offset-aware recovery.
+pub(crate) fn unclean_restart_one(
+    pr: &PartitionRecord,
+    returning: NodeId,
+    alive: &std::collections::HashSet<NodeId>,
+    witnesses: &std::collections::HashSet<NodeId>,
+    strategy: RecoveryStrategy,
+    unclean_enabled: bool,
+) -> FailoverDecision {
+    if pr.leader == returning {
+        return failover_one(pr, returning, alive, witnesses, strategy, unclean_enabled);
+    }
+    if !pr.isr.contains(&returning) {
+        return FailoverDecision::NoChange;
+    }
+    FailoverDecision::ShrinkIsr {
+        isr: pr.isr.iter().copied().filter(|n| *n != returning).collect(),
     }
 }
 
@@ -289,6 +333,107 @@ mod tests {
                     isr: vec![NodeId(1), NodeId(2)],
                 }
         );
+    }
+
+    /// The full unclean-restart decision for one partition.
+    fn restart_decide(
+        pr: &PartitionRecord,
+        returning: u64,
+        alive: &[u64],
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+    ) -> super::FailoverDecision {
+        let alive: std::collections::HashSet<NodeId> = alive.iter().copied().map(NodeId).collect();
+        unclean_restart_one(
+            pr,
+            NodeId(returning),
+            &alive,
+            &witnesses(&[]),
+            strategy,
+            unclean_enabled,
+        )
+    }
+
+    /// A returning broker is one event about one broker. The follower case
+    /// takes that broker out of the ISR and leaves every other member where
+    /// it is, however the controller currently rates its liveness, which is
+    /// Kafka's `Replicas.copyWithout(partition.isr, {-1, brokerId})`.
+    ///
+    /// The second half is why this is not [`failover_one`]: a registration is
+    /// answered whenever liveness says the broker is dead, and a controller
+    /// that has just been elected has an empty liveness registry, so the
+    /// dead-broker policy would answer the same event by emptying the ISR.
+    #[test]
+    fn an_unclean_restart_removes_only_the_returning_broker_from_the_isr() {
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+
+        let decision = restart_decide(
+            &pr,
+            /*returning*/ 3,
+            /*alive*/ &[],
+            RecoveryStrategy::None,
+            false,
+        );
+
+        assert!(
+            decision
+                == super::FailoverDecision::ShrinkIsr {
+                    isr: vec![NodeId(1), NodeId(2)],
+                }
+        );
+        assert!(
+            decide(
+                &pr,
+                /*dead*/ 3,
+                /*alive*/ &[],
+                &[],
+                RecoveryStrategy::None,
+                false
+            ) == super::FailoverDecision::ShrinkIsr { isr: vec![] }
+        );
+    }
+
+    /// A partition the returning broker is still recorded as leading cannot
+    /// take a bare ISR rewrite: it would leave a leader that is not in its own
+    /// ISR. That case is the dead-broker policy, unchanged, because the broker
+    /// is dead as far as liveness is concerned.
+    #[test]
+    fn an_unclean_restart_of_a_leader_takes_the_failover_policy() {
+        let pr = partition_record(/*leader*/ 3, &[1, 2, 3], &[1, 2, 3]);
+
+        let decision = restart_decide(
+            &pr,
+            /*returning*/ 3,
+            /*alive*/ &[1, 2],
+            RecoveryStrategy::None,
+            false,
+        );
+
+        assert!(
+            decision
+                == super::FailoverDecision::Elect {
+                    leader: NodeId(1),
+                    isr: vec![NodeId(1), NodeId(2)],
+                    unclean: false,
+                }
+        );
+    }
+
+    /// A partition the returning broker neither leads nor is in the ISR of has
+    /// nothing to withdraw, even when it is still one of the replicas.
+    #[test]
+    fn an_unclean_restart_leaves_a_partition_it_is_not_in_the_isr_of_alone() {
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2]);
+
+        let decision = restart_decide(
+            &pr,
+            /*returning*/ 3,
+            /*alive*/ &[1, 2],
+            RecoveryStrategy::None,
+            false,
+        );
+
+        assert!(decision == super::FailoverDecision::NoChange);
     }
 
     /// One row of the no-witness regression table.

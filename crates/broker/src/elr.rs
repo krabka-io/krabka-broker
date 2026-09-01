@@ -45,11 +45,18 @@
 //! record.
 //!
 //! That is also why the state has to be withdrawn when it stops being true.
-//! [`unclean_restart`] withdraws the published half of it for the one event
-//! that ends a membership without any partition changing: a broker rejoining
-//! without proving it stopped gracefully, whose current log need not be the
-//! log that made it eligible. A broker that *can* prove it -- the
-//! clean-shutdown record [`crate::clean_shutdown`] keeps, offered back as
+//! The one event that ends a membership without any partition changing is a
+//! broker coming back from a stop it cannot prove was clean, whose current log
+//! need not be the log that made it eligible. [`unclean_restart`] holds that
+//! rule and withdraws the published half of it. The published half is not the
+//! whole of it, though: the next eligibility is derived from the ISRs the
+//! image still holds, so
+//! [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+//! -- what the registration handler calls once the proof fails -- wraps the
+//! withdrawal with the matching ISR removals and runs [`ElrPublisher`] over
+//! the whole batch with the broker excluded, so the batch cannot re-derive
+//! what it just withdrew. A broker that *can* prove it -- the clean-shutdown
+//! record [`crate::clean_shutdown`] keeps, offered back as
 //! `previousBrokerEpoch` -- keeps its membership, because its log is still the
 //! log the claim was about.
 

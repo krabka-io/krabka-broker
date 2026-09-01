@@ -11,14 +11,16 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use assert2::assert;
 use krabka_metadata::{
-    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
-    TopicRecord,
+    BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
+    TopicConfigRecord, TopicRecord,
 };
 use krabka_protocol::owned::{
     alter_partition_request::{
         AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
     },
     alter_partition_response::AlterPartitionResponse,
+    broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
+    broker_registration_response::BrokerRegistrationResponse,
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
@@ -47,6 +49,7 @@ const LEADER_EPOCH: i32 = 7;
 const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 =
     krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
+const REGISTER_VERSION: i16 = krabka_protocol::owned::broker_registration_request::MAX_VERSION;
 
 fn nodes(ids: &[u64]) -> Vec<NodeId> {
     ids.iter().copied().map(NodeId).collect()
@@ -71,6 +74,13 @@ fn partition_record(isr: &[u64]) -> PartitionRecord {
 /// ISR is full, and a `min.insync.replicas` of 2, which is what gives the
 /// partition an ELR to fall below.
 fn seed_records() -> Vec<MetadataRecord> {
+    seed_records_with_min_isr("2")
+}
+
+/// [`seed_records`] with `min.insync.replicas` chosen by the caller. A value
+/// equal to the replication factor is what makes the ISR shrink of a single
+/// replica cross the threshold on its own.
+fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
     vec![
         MetadataRecord::V1Topic(TopicRecord {
             name: TOPIC.into(),
@@ -81,11 +91,28 @@ fn seed_records() -> Vec<MetadataRecord> {
         MetadataRecord::V1Partition(partition_record(&[1, 2, 3])),
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: TOPIC.into(),
-            overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
+            overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
                 .into_iter()
                 .collect(),
         }),
     ]
+}
+
+/// The registration record that puts broker 3 in the image under
+/// `incarnation`. Without one, the registration handler reads the broker as
+/// new rather than as one that has come back.
+fn registration_record(incarnation: u128) -> MetadataRecord {
+    MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        node_id: NodeId(3),
+        broker_epoch: 0,
+        incarnation_id: uuid::Uuid::from_u128(incarnation),
+        host: "127.0.0.1".into(),
+        port: 9094,
+        rack: None,
+        endpoints: vec![],
+        log_dirs: vec![],
+        features: std::collections::BTreeMap::new(),
+    })
 }
 
 async fn wait_for_leader(broker: &Broker) {
@@ -200,6 +227,18 @@ async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResp
 /// the ELR columns cannot be read as having moved because some neighbouring
 /// field moved instead.
 fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsResponsePartition {
+    row(isr, eligible, &[], &[2, 3])
+}
+
+/// [`expected_row`] with the last-known ELR and the offline set given too.
+/// The registration tests need both: they register broker 3, which takes it
+/// out of the offline set, and a withdrawn eligibility lands in last-known.
+fn row(
+    isr: &[i32],
+    eligible: &[i32],
+    last_known: &[i32],
+    offline: &[i32],
+) -> DescribeTopicPartitionsResponsePartition {
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
         partition_index: 0,
@@ -208,10 +247,59 @@ fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsRespons
         replica_nodes: vec![1, 2, 3],
         isr_nodes: isr.to_vec(),
         eligible_leader_replicas: Some(eligible.to_vec()),
-        last_known_elr: Some(Vec::new()),
-        offline_replicas: vec![2, 3],
+        last_known_elr: Some(last_known.to_vec()),
+        offline_replicas: offline.to_vec(),
         ..Default::default()
     }
+}
+
+/// Register broker 3 under `incarnation` through the real
+/// `BrokerRegistration` handler, and answer with what it replied.
+///
+/// The features are read back off the image so the request satisfies whatever
+/// the cluster has finalized, which is what a real broker's
+/// `SupportedFeatures` does.
+async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerRegistrationResponse {
+    let image = broker.controller.current_image();
+    let features = image
+        .finalized_features()
+        .iter()
+        .map(|(name, level)| Feature {
+            name: name.clone(),
+            min_supported_version: 0,
+            max_supported_version: *level,
+            ..Default::default()
+        })
+        .collect();
+    let request = BrokerRegistrationRequest {
+        broker_id: 3,
+        cluster_id: image.cluster_id().to_string(),
+        incarnation_id: krabka_protocol::primitives::uuid::Uuid(
+            *uuid::Uuid::from_u128(incarnation).as_bytes(),
+        ),
+        listeners: vec![Listener {
+            name: "PLAINTEXT".into(),
+            host: "127.0.0.1".into(),
+            port: 9094,
+            security_protocol: 0,
+            ..Default::default()
+        }],
+        features,
+        ..Default::default()
+    };
+    let principal = principal();
+    let peer = peer();
+    let ctx = request_context(&principal, &peer, "broker-client");
+    let bytes = crate::handlers::broker_registration::handle(
+        broker,
+        REGISTER_VERSION,
+        3,
+        &encode_request(&request, REGISTER_VERSION),
+        &ctx,
+    )
+    .await
+    .expect("BrokerRegistration");
+    decode_response(&bytes, REGISTER_VERSION)
 }
 
 /// The issue's acceptance path: shrink the ISR below `min.insync.replicas`
@@ -259,6 +347,92 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
     alter_isr(&broker, &[1, 2]).await;
 
     assert!(describe_partition(&broker).await == expected_row(&[1, 2], &[]));
+
+    handle.shutdown().await;
+}
+
+/// krabka-io/krabka-broker#314: a broker that comes back under a new
+/// incarnation must not be re-derived into the ELR from the ISR the image
+/// still holds it in.
+///
+/// This is the case the published-state withdrawal alone could not see. The
+/// ISR is healthy when the broker re-registers, so there is no ELR to
+/// withdraw at all -- and yet `old_isr ∪ eligible_before` would hand the
+/// returning broker straight back the first time the ISR fell below
+/// `min.insync.replicas`. The registration batch has to take it out of the
+/// ISR for that not to happen.
+///
+/// The last assertion is also the guard against a fix that just turns ELR
+/// off: broker 2 left the same ISR in the same shrink and is eligible, which
+/// is the whole point of KIP-966.
+#[tokio::test]
+async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
+    let (handle, _dir) =
+        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    let mut seed = seed_records();
+    seed.push(registration_record(1));
+    broker
+        .controller
+        .submit_change(seed)
+        .await
+        .expect("seed orders");
+
+    // Broker 3 is registered and in a healthy ISR, so nothing is published
+    // about it and nothing about it is offline.
+    assert!(describe_partition(&broker).await == row(&[1, 2, 3], &[], &[], &[2]));
+
+    let response = register_broker_3(&broker, 2).await;
+    assert!(response.error_code == codes::NONE, "{response:?}");
+
+    // The registration itself takes broker 3 out of the ISR. The ISR that is
+    // left still meets `min.insync.replicas`, so nothing is eligible yet.
+    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2]));
+
+    // The change that used to re-derive the membership. Broker 2 left an ISR
+    // that met min ISR, so it is eligible; broker 3 is no longer in any ISR
+    // the derivation reads, so it is not.
+    alter_isr(&broker, &[1]).await;
+    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2]));
+
+    handle.shutdown().await;
+}
+
+/// The same defect one step earlier: with `min.insync.replicas` at the
+/// replication factor, dropping the returning broker from the ISR is itself a
+/// change that falls below min ISR, so the registration batch recomputes the
+/// ELR from the ISR it is in the middle of shrinking.
+///
+/// Kafka stops that with `uncleanShutdownReplicas`, which
+/// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from `targetElr`
+/// and from nothing else -- so the returning broker lands in the last-known
+/// set instead, which is what the second column asserts. Without the
+/// exclusion the batch publishes broker 3 as an eligible leader replica: a
+/// membership backed by whatever disk the new process actually has.
+#[tokio::test]
+async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
+    let (handle, _dir) =
+        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    let mut seed = seed_records_with_min_isr("3");
+    seed.push(registration_record(1));
+    broker
+        .controller
+        .submit_change(seed)
+        .await
+        .expect("seed orders");
+
+    let response = register_broker_3(&broker, 2).await;
+    assert!(response.error_code == codes::NONE, "{response:?}");
+
+    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[3], &[2]));
+
+    // And it stays out of every later derivation, while broker 2 -- which
+    // left the ISR without its log being called into question -- goes in.
+    alter_isr(&broker, &[1]).await;
+    assert!(describe_partition(&broker).await == row(&[1], &[2], &[3], &[2]));
 
     handle.shutdown().await;
 }
