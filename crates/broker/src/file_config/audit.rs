@@ -22,7 +22,10 @@ pub struct FileAuditConfig {
     #[serde(default = "default_audit_failure_mode")]
     #[schemars(with = "String")]
     pub failure_mode: krabka_audit::AuditMode,
-    /// Internal topic name for audit records.
+    /// Internal topic name for audit records. It has to start with `__`: the
+    /// broker reports it internal on `Metadata` and refuses to freeze it by
+    /// that prefix, and a name outside the convention would satisfy only the
+    /// first of the two.
     #[serde(default = "default_audit_topic")]
     pub topic: String,
     /// Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints.

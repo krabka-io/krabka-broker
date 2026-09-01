@@ -48,6 +48,10 @@ pub(super) async fn append_txn_batch(
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
                 commit_timestamp_ms: now_ms,
+                // `TxnOffsetCommit` has no `retention_time_ms` field at any
+                // version, so a transactional commit always takes the
+                // broker-wide retention.
+                expire_timestamp_ms: None,
             };
             batch.records.push(Record {
                 offset_delta: delta,

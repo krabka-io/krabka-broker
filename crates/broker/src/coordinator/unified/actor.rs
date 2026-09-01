@@ -35,6 +35,7 @@ mod member_state;
 mod messages;
 mod pending_records;
 mod persistence;
+mod retention;
 mod seed;
 mod tick;
 mod views;
@@ -55,6 +56,7 @@ use self::{
 };
 pub use self::{
     messages::{GroupActorMessage, JoinResult, JoinResultMember, LeaveResult, SyncResult},
+    retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
 use crate::coordinator::unified::{
@@ -190,19 +192,19 @@ async fn actor_loop(
     let mut tick = sleeper.sleep_for_async(Duration::ZERO);
     loop {
         let deadline = classic_deadline(&group);
-        tokio::select! {
-            msg = rx.recv() => {
-                let Some(msg) = msg else { break };
-                let services = ActorServices {
-                    config: &config,
-                    metadata: &*metadata,
-                    offsets_log: &*offsets_log,
-                    coordinator: &coordinator,
-                };
-                if !handle_actor_message(&mut group, &mut parked, services, msg).await {
-                    break;
+        let keep_running = tokio::select! {
+            msg = rx.recv() => match msg {
+                None => false,
+                Some(msg) => {
+                    let services = ActorServices {
+                        config: &config,
+                        metadata: &*metadata,
+                        offsets_log: &*offsets_log,
+                        coordinator: &coordinator,
+                    };
+                    handle_actor_message(&mut group, &mut parked, services, msg).await
                 }
-            }
+            },
             () = &mut tick => {
                 let services = ActorServices {
                     config: &config,
@@ -210,10 +212,9 @@ async fn actor_loop(
                     offsets_log: &*offsets_log,
                     coordinator: &coordinator,
                 };
-                if !handle_actor_tick(&mut group, &mut parked, services).await {
-                    break;
-                }
+                let keep_running = handle_actor_tick(&mut group, &mut parked, services).await;
                 tick = sleeper.sleep_for_async(config.session_expiry_tick);
+                keep_running
             }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: complete with whoever is here.
@@ -224,7 +225,16 @@ async fn actor_loop(
                         &mut parked.followers,
                     );
                 }
+                true
             }
+        };
+        // One place maintains `empty_since_ms`, after whatever the turn did to
+        // membership. Every join, leave, eviction, seed, and in-place kind flip
+        // therefore keeps the offset-retention clock honest without knowing it
+        // exists.
+        group.observe_membership(chrono_now_ms());
+        if !keep_running {
+            break;
         }
     }
 }

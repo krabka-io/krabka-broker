@@ -24,7 +24,8 @@ use super::{
     LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
     RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        BROKER_FENCED, BROKER_WITNESS, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
         STRETCH_PREFERRED_LEADER_SITE,
     },
     delivery::{
@@ -171,9 +172,16 @@ impl ConfigKey {
     /// `true` when the resource's stored override map can hold the key.
     ///
     /// The broker synthesises the rest: `write.freeze` comes from the freeze
-    /// registry and `node.id` from the broker's static configuration.
+    /// registry, and `node.id` and the two KIP-211 retention keys come from
+    /// the broker's static configuration.
     pub(crate) fn is_stored(&self) -> bool {
-        !matches!(self.name, WRITE_FREEZE | NODE_ID)
+        !matches!(
+            self.name,
+            WRITE_FREEZE
+                | NODE_ID
+                | OFFSETS_RETENTION_MINUTES
+                | OFFSETS_RETENTION_CHECK_INTERVAL_MS
+        )
     }
 
     /// `true` when the value must not be disclosed. `DescribeConfigs` reports
@@ -579,6 +587,32 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::String,
             None,
             "The `broker.rack` value that should hold partition leadership in a stretch cluster. Only the controller writes it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("minutes"),
+        kip: Some("KIP-211"),
+        read_only: true,
+        ..key(
+            OFFSETS_RETENTION_MINUTES,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            Some("10080"),
+            "How long a committed consumer-group offset outlives the group that owns it, once that group loses its last member. The process reads it at startup, so no alter path can change it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-211"),
+        read_only: true,
+        ..key(
+            OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            Some("600000"),
+            "Cadence of the background sweep that tombstones expired committed offsets. The process reads it at startup, so no alter path can change it.",
             ValueCheck::NotAltered,
         )
     },

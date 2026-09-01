@@ -20,9 +20,9 @@
 
 use krabka_protocol::owned::{
     add_raft_voter_request, api_versions_request, begin_quorum_epoch_request,
-    broker_heartbeat_request, broker_registration_request, controller_registration_request,
-    describe_cluster_request, describe_quorum_request, end_quorum_epoch_request, fetch_request,
-    fetch_snapshot_request, remove_raft_voter_request, update_raft_voter_request, vote_request,
+    broker_registration_request, controller_registration_request, describe_cluster_request,
+    describe_quorum_request, end_quorum_epoch_request, fetch_request, fetch_snapshot_request,
+    remove_raft_voter_request, update_raft_voter_request, vote_request,
 };
 
 use crate::{
@@ -93,7 +93,10 @@ const fn pinned(
 ///
 /// The KIP-919 Admin surface the broker attaches through
 /// [`ControllerAdminRouter`](crate::ControllerAdminRouter) is advertised
-/// alongside this table but declared by the broker, not here.
+/// alongside this table but declared by the broker, not here. `BrokerHeartbeat`
+/// is one of those: only the broker crate holds the heartbeat registry that
+/// answering it maintains, so it is declared and served there rather than
+/// listed below.
 ///
 /// Every pinned version still intersects what a real peer offers. A
 /// `mirror.gcr.io/apache/kafka:4.0.0` controller listener, asked for
@@ -111,7 +114,6 @@ pub(super) const CONTROLLER_LISTENER_APIS: &[ControllerApiVersion] = &[
     api_version!(fetch_snapshot_request, pinned = FETCH_SNAPSHOT_VERSION),
     api_version!(describe_cluster_request),
     api_version!(broker_registration_request),
-    api_version!(broker_heartbeat_request),
     api_version!(controller_registration_request),
     api_version!(add_raft_voter_request),
     api_version!(remove_raft_voter_request),
@@ -220,11 +222,6 @@ mod tests {
                 broker_registration_request::API_KEY,
                 broker_registration_request::MIN_VERSION,
                 broker_registration_request::MAX_VERSION,
-            ),
-            entry(
-                broker_heartbeat_request::API_KEY,
-                broker_heartbeat_request::MIN_VERSION,
-                broker_heartbeat_request::MAX_VERSION,
             ),
             entry(
                 controller_registration_request::API_KEY,
@@ -356,6 +353,10 @@ mod tests {
         check!(
             flexible_min(krabka_protocol::owned::create_topics_request::API_KEY) == None,
             "CreateTopics is an Admin-router API, not a listener-owned one"
+        );
+        check!(
+            flexible_min(krabka_protocol::owned::broker_heartbeat_request::API_KEY) == None,
+            "BrokerHeartbeat is served by the broker's handler through the Admin              router, so its framing rule comes from the router's table"
         );
     }
 

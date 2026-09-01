@@ -78,6 +78,10 @@ fn broker_key_types_match_apache_kafka() {
         ),
         (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
         (REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long),
+        // `GroupCoordinatorConfig`: `offsets.retention.minutes` is `INT` and
+        // `offsets.retention.check.interval.ms` is `LONG`.
+        (OFFSETS_RETENTION_MINUTES, ConfigType::Int),
+        (OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long),
         (NODE_ID, ConfigType::Int),
     ] {
         let row = lookup(ConfigScope::Broker, name).expect(name);
@@ -171,14 +175,22 @@ fn value_type_renders_the_type_and_its_note() {
 }
 
 #[test]
-fn the_two_synthesised_keys_are_the_only_unstored_rows() {
+fn the_synthesised_keys_are_the_only_unstored_rows() {
     let unstored: Vec<&str> = CONFIG_KEYS
         .iter()
         .filter(|row| !row.is_stored())
         .map(|row| row.name)
         .collect();
 
-    assert!(unstored == vec![WRITE_FREEZE, NODE_ID]);
+    assert!(
+        unstored
+            == vec![
+                WRITE_FREEZE,
+                OFFSETS_RETENTION_MINUTES,
+                OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                NODE_ID,
+            ]
+    );
 }
 
 #[test]

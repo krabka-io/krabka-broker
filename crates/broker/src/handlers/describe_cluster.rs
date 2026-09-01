@@ -90,17 +90,16 @@ pub(crate) async fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
-    let controller_id = broker
-        .controller
-        .watch_leader()
-        .borrow()
-        .map_or(-1, |n| i32::try_from(n.0).unwrap_or(-1));
-
     // KIP-919: a broker listener serves only BROKERS. KIP-1073 excludes known
     // dead/fenced brokers unless the request opts in, and marks included
     // unavailable rows as fenced. Unknown liveness entries remain eligible
     // while a newly elected controller seeds its heartbeat registry.
     let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // `Metadata` answers from the same helper. See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
     let inter_broker_name = broker.config.inter_broker_listener_name.as_str();
     let brokers: Vec<DescribeClusterBroker> = image
         .brokers()

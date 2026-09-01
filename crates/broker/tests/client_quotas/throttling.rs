@@ -8,6 +8,10 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
+use krabka_protocol::owned::{
+    add_offsets_to_txn_response::AddOffsetsToTxnResponse,
+    allocate_producer_ids_response::AllocateProducerIdsResponse,
+};
 
 use super::{
     cluster::{
@@ -15,9 +19,17 @@ use super::{
         seed_compat_shim_disable_acl, start_single_broker_sasl_plaintext_with_users,
         wait_partition_exists,
     },
-    data_plane::{drive_fetch_sasl, drive_produce_sasl},
+    data_plane::{
+        drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl,
+        drive_unsupported_allocate_producer_ids,
+    },
     quota_admin::drive_alter_client_quotas_sasl,
+    wire::sasl_plain_authenticate,
 };
+
+/// The broker's default `quota_throttle_max`, in milliseconds. KIP-219 caps
+/// the reported back-off at this, so no response may carry more.
+const QUOTA_THROTTLE_MAX_MS: i32 = 1000;
 
 /// Test 2: a low `(user=alice) producer_byte_rate` throttles a produce.
 ///
@@ -513,6 +525,197 @@ async fn user_client_tuple_overrides_user_specific() {
         resp.throttle_time_ms > 0,
         "expected throttle_time_ms > 0 because the user/client tuple rate applies; got {}",
         resp.throttle_time_ms
+    );
+
+    handle.shutdown().await;
+}
+
+/// Test 7: the request quota is echoed on an API the dispatch loop patches.
+///
+/// `Produce` and `Fetch` fill `ThrottleTimeMs` in themselves, before encoding.
+/// Everywhere else `maybe_apply_request_quota` runs, the delay is written into
+/// the already-encoded body by patching its leading int32, which is only safe
+/// on the responses whose schema really does put `ThrottleTimeMs` first.
+/// `network::dispatch::throttle_audit` pins which those are against the
+/// generated encoders; this test proves the patch reaches the wire on one of
+/// them and corrupts nothing else.
+///
+/// `AddOffsetsToTxn` is the API driven here because its dispatch entry carries
+/// `RequestQuotaPolicy::ApplyFallbackAccounting`, so the quota path runs, and
+/// its response leads with `ThrottleTimeMs`, so the patch applies. alice drives
+/// it with no quota set, then again with a tiny `(user=alice)`
+/// `request_percentage`. The throttled response must report
+/// `throttle_time_ms > 0` and be equal to the unthrottled one in every other
+/// field, which is what a leading-int32 patch and nothing more looks like.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
+        "admin",
+        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    )
+    .await;
+
+    // One connection for every alice request: re-authenticating would charge
+    // each handshake to the same quota bucket.
+    let mut stream = sasl_plain_authenticate(addr, "alice", b"alice-secret")
+        .await
+        .expect("SASL authenticate for AddOffsetsToTxn");
+
+    // Baseline: no quota is configured yet, so there is no delay to report.
+    let baseline = drive_add_offsets_to_txn(&mut stream, 10).await;
+    assert!(
+        baseline.throttle_time_ms == 0,
+        "unthrottled response must report throttle_time_ms=0, got {}",
+        baseline.throttle_time_ms
+    );
+
+    let alter_resp = drive_alter_client_quotas_sasl(
+        addr,
+        "admin",
+        "admin-secret",
+        vec![(
+            vec![("user".into(), Some("alice".into()))],
+            vec![("request_percentage".into(), 0.001, false)],
+        )],
+        false,
+    )
+    .await;
+    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
+
+    handle
+        .wait_for_image(|img| {
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            img.client_quotas()
+                .get(&key)
+                .and_then(|cfgs| cfgs.get("request_percentage"))
+                == Some(&0.001)
+        })
+        .await;
+
+    // Drive the same request until the request bucket runs dry. Each request
+    // charges its own handler time, so the first one over budget is throttled.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut corr_id = 11;
+    let throttled = loop {
+        let resp = drive_add_offsets_to_txn(&mut stream, corr_id).await;
+        corr_id += 1;
+        if resp.throttle_time_ms > 0 {
+            break resp;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "no request-quota throttle on AddOffsetsToTxn after 15s"
+        );
+    };
+
+    // The patch touched the leading int32 and nothing else: every other field
+    // still decodes to what the unthrottled response carried.
+    assert!(
+        throttled
+            == AddOffsetsToTxnResponse {
+                throttle_time_ms: throttled.throttle_time_ms,
+                ..baseline
+            }
+    );
+
+    handle.shutdown().await;
+}
+
+/// Test 8: the request-quota patch uses the version the reply was encoded at,
+/// not the version the client asked for.
+///
+/// `send_unsupported_version` answers at the *nearest supported* version, so
+/// the reply's schema version and header flexibility are not the request's.
+/// `AllocateProducerIds` exists at v0 only and is flexible from v0: a request
+/// at version -1 parses with a non-flexible request header and is answered
+/// with a flexible v0 body, whose response header carries an extra
+/// tagged-fields byte. Its response also leads with `ThrottleTimeMs`, so the
+/// dispatch loop reports a request-quota delay by patching that leading int32
+/// in place.
+///
+/// Reading the offset from the request header instead of the reply's puts the
+/// patch one byte early: it overwrites the header's tagged-fields byte and
+/// three of the four throttle bytes, leaving the fourth behind. The response
+/// still decodes, so the corruption shows up as a `throttle_time_ms` far above
+/// the broker's own cap rather than as a decode failure -- which is why this
+/// test asserts the reported back-off is within `quota_throttle_max` and that
+/// the reply is otherwise the unsupported-version response verbatim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_quota_patch_uses_the_reply_version_not_the_request_version() {
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
+        "admin",
+        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    )
+    .await;
+
+    // One connection for every alice request: re-authenticating would charge
+    // each handshake to the same quota bucket.
+    let mut stream = sasl_plain_authenticate(addr, "alice", b"alice-secret")
+        .await
+        .expect("SASL authenticate for AllocateProducerIds");
+
+    // Baseline: no quota is configured yet, so there is no delay to report and
+    // the reply is untouched by the patch.
+    let baseline = drive_unsupported_allocate_producer_ids(&mut stream, 10).await;
+    assert!(
+        baseline
+            == AllocateProducerIdsResponse {
+                error_code: 35, // UNSUPPORTED_VERSION
+                ..Default::default()
+            }
+    );
+
+    let alter_resp = drive_alter_client_quotas_sasl(
+        addr,
+        "admin",
+        "admin-secret",
+        vec![(
+            vec![("user".into(), Some("alice".into()))],
+            vec![("request_percentage".into(), 0.001, false)],
+        )],
+        false,
+    )
+    .await;
+    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
+
+    handle
+        .wait_for_image(|img| {
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            img.client_quotas()
+                .get(&key)
+                .and_then(|cfgs| cfgs.get("request_percentage"))
+                == Some(&0.001)
+        })
+        .await;
+
+    // Drive the same rejected request until the request bucket runs dry.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut corr_id = 11;
+    let throttled = loop {
+        let resp = drive_unsupported_allocate_producer_ids(&mut stream, corr_id).await;
+        corr_id += 1;
+        if resp.throttle_time_ms > 0 {
+            break resp;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "no request-quota throttle on an unsupported-version reply after 15s"
+        );
+    };
+
+    assert!(
+        throttled.throttle_time_ms <= QUOTA_THROTTLE_MAX_MS,
+        "throttle_time_ms={} exceeds the {QUOTA_THROTTLE_MAX_MS}ms cap, so the \
+         patch wrote at the wrong offset",
+        throttled.throttle_time_ms
+    );
+    // The patch touched the leading int32 of the reply and nothing else.
+    assert!(
+        throttled
+            == AllocateProducerIdsResponse {
+                throttle_time_ms: throttled.throttle_time_ms,
+                ..baseline
+            }
     );
 
     handle.shutdown().await;
