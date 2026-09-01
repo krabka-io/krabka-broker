@@ -22,12 +22,16 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Format, lint, build, test under coverage, and render rustdoc in one Bazel
-  # output tree. Coverage executes the tests, so a separate test pass would only
-  # repeat them. The build remains because tests do not compile every shippable
-  # target.
+  # Format, lint, build and render rustdoc in one Bazel output tree.
+  #
+  # Coverage is a sibling job rather than a step here. Both configurations build
+  # the same ~140 broker integration tests as separate statically linked
+  # binaries, and Bazel writes every one of them to `bazel-out` *and* to the
+  # disk cache -- so running them on one runner put roughly 300 such binaries on
+  # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
+  # through coverage. On two runners each configuration gets its own disk.
   ci:
-    name: build · coverage · lint · format · docgen
+    name: build · lint · format · docgen
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -37,33 +41,14 @@ jobs:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
 
-      # Coverage previously ran the hosted runner out of disk intermittently.
-      # It needs about 86 GB after restoring caches and instrumenting the test
-      # binaries, leaving less than 1 GB on a stock runner. These preinstalled
-      # toolchains and images are not inputs to the hermetic Bazel build.
-      - name: reclaim runner disk
-        run: |
-          echo "::group::free space before"
-          df -h /
-          echo "::endgroup::"
-          sudo rm -rf \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /usr/share/swift \
-            /usr/local/.ghcup \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          echo "::group::free space after"
-          df -h /
-          echo "::endgroup::"
+      - uses: ./.github/actions/reclaim-disk
 
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          # Share the one output tree across build, coverage and docgen, and
-          # restore it in the delivery job.
+          # Share the one output tree across format, lint, build and docgen,
+          # and restore it in the `coverage` and `delivery` jobs.
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
@@ -84,23 +69,6 @@ jobs:
       - name: build
         run: aspect build --bazel-flag=--build_tag_filters=-docker //...
 
-      # Coverage builds and executes the tests with LLVM instrumentation. Its
-      # first-party compile actions have distinct keys, but it reuses this
-      # runner's repositories, toolchains and unaffected Bazel actions.
-      - name: coverage
-        run: bazel coverage //crates/...
-
-      - name: free space after coverage
-        if: always()
-        run: df -h /
-
-      - uses: codecov/codecov-action@v7
-        with:
-          use_oidc: true
-          files: bazel-out/_coverage/_coverage_report.dat
-          disable_search: true
-          fail_ci_if_error: true
-
       # `aspect build` renders docs for impacted crates. Build the complete set
       # here for the artifact, reusing this runner's Bazel output tree.
       - name: docgen
@@ -110,6 +78,62 @@ jobs:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
+
+  # Build and execute the tests with LLVM instrumentation, and upload the merged
+  # LCOV report.
+  #
+  # `--build_tests_only` (set on the `coverage` command in `.bazelrc`) is what
+  # keeps this to the tests it actually runs. `//crates/...` reaches the 22
+  # `*_docker_test` wrappers, each of which links its suite a second time as a
+  # `*_docker_bin`, and `--test_tag_filters` alone excludes a test from the run
+  # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
+  # instrumented broker binaries this job would otherwise link and discard.
+  #
+  # It shares the `ci` disk-cache namespace. Only `//crates/...` is instrumented
+  # (see `--instrumentation_filter`), so the third-party closure -- which is
+  # most of a cold build -- has identical action keys in both configurations and
+  # this job starts warm off the entry the `ci` job populated. The instrumented
+  # first-party outputs it writes locally are never saved back: the namespace
+  # key is constant, so a restore is an exact hit and the post step skips the
+  # save.
+  coverage:
+    name: coverage
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # No `fetch-depth: 0`: nothing here reads the merge base -- the report
+      # covers every target under //crates/..., not the impacted ones.
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: coverage
+        run: bazel coverage //crates/...
+
+      # `if: always()`, and the two directories by name: when this job does run
+      # the disk out, the failure arrives as a linker `Bus error` or a bare
+      # `No space left on device` that names no consumer. This says whether the
+      # output tree or the disk cache took the space.
+      - name: disk usage after coverage
+        if: always()
+        run: |
+          df -h /
+          du -sh ~/.cache/bazel ~/.cache/bazel-disk 2>/dev/null || true
+
+      - uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: bazel-out/_coverage/_coverage_report.dat
+          disable_search: true
+          fail_ci_if_error: true
 
   supply-chain:
     name: cargo deny
@@ -160,15 +184,57 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # setup-aspect's log and BEP uploads, as in every other Bazel job.
+      id-token: write
+      # Publishing the proof image, on the runs that build one.
+      packages: write
+    env:
+      # What the proof step runs, and what `image_load` writes locally.
+      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.13.0
+      # Must match `image_push`'s registry and repository in //tools/creusot.
+      REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
       - uses: actions/checkout@v7
+
+      # A digest of everything that decides the image's contents. See
+      # //tools/creusot for why the registry, and not the Bazel disk cache, is
+      # what keeps CI from reinstalling Creusot on every run.
+      - id: image
+        name: resolve the proof image tag
+        run: echo "tag=$(tools/creusot/image-tag.sh)" >>"${GITHUB_OUTPUT}"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A miss is a normal outcome, not a failure: the tag is new, or this is a
+      # fork whose token cannot read the package. Either way the job falls
+      # through to building the image, which is what it always used to do.
+      - id: cached
+        name: reuse the published proof image
+        env:
+          IMAGE: ${{ env.REGISTRY_IMAGE }}:${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if docker pull "${IMAGE}"; then
+            docker tag "${IMAGE}" "${LOCAL_IMAGE}"
+            echo "hit=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "hit=false" >>"${GITHUB_OUTPUT}"
+          fi
+
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        if: steps.cached.outputs.hit != 'true'
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          # This cache namespace contains the large installed-toolchain layer.
-          # Its Bazel inputs exclude the workspace source, so normal changes hit
-          # the cached image instead of rebuilding Creusot.
+          # Reached only when the registry has no image for this tree, so this
+          # namespace is a bonus on the apko base and the repository rules, not
+          # what keeps the Creusot installation from being rebuilt.
           disk-cache: ${{ github.workflow }}-images
           repository-cache: true
 
@@ -177,8 +243,18 @@ jobs:
       # "Target //tools/creusot:image_load failed to build" with no command and
       # no output. The flag is what makes that action's failure diagnosable
       # from the log alone.
-      - name: load the pinned proof image
+      - name: build the pinned proof image
+        if: steps.cached.outputs.hit != 'true'
         run: bazel run --verbose_failures //tools/creusot:image_load
+
+      # Before the proofs, not after: the image is valid whether or not the
+      # proofs it runs pass, and publishing it here means a failing run's retry
+      # already has it. A fork's token is read-only, so it keeps its build.
+      - name: publish the proof image
+        if: steps.cached.outputs.hit != 'true' && github.event.pull_request.head.repo.fork != true
+        run: bazel run //tools/creusot:push -- --tag "${IMAGE_TAG}"
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
 
       # The runner supplies only the Docker kernel boundary and the checkout.
       # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
@@ -187,7 +263,7 @@ jobs:
         run: |
           docker run --rm \
             --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
-            docker.io/krabka-io/creusot:0.13.0
+            "${LOCAL_IMAGE}"
 
   # Container suites, one runner each.
   #
@@ -323,7 +399,7 @@ jobs:
   delivery:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [ci, supply-chain]
+    needs: [ci, coverage, supply-chain]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -374,6 +450,7 @@ jobs:
     if: always() && github.event_name != 'schedule'
     needs:
       - ci
+      - coverage
       - supply-chain
       - docs
       - proofs
