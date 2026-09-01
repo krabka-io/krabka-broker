@@ -14,7 +14,8 @@ use krabka_units::{
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_MS, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
+    LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
+    SEGMENT_BYTES,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     validation::parse_compression_type,
 };
@@ -58,6 +59,13 @@ pub(crate) fn apply_to_log_config(
             SEGMENT_BYTES => {
                 if let Ok(b) = v.parse::<u64>() {
                     out.segment_size = ByteSize::from_bytes(b);
+                }
+            }
+            MAX_MESSAGE_BYTES => {
+                if let Ok(b) = v.parse::<i32>()
+                    && let Ok(b) = u64::try_from(b)
+                {
+                    out.max_message_size = ByteSize::from_bytes(b);
                 }
             }
             CLEANUP_POLICY => {
@@ -198,6 +206,28 @@ mod tests {
         o.insert(SEGMENT_BYTES.into(), "1048576".into());
         let out = apply_to_log_config(&o, &LogConfig::default());
         assert!(out.segment_size == mebibytes(1));
+    }
+
+    #[test]
+    fn apply_max_message_bytes_propagates() {
+        let mut o = BTreeMap::new();
+        o.insert(MAX_MESSAGE_BYTES.into(), "2048".into());
+        let out = apply_to_log_config(&o, &LogConfig::default());
+        assert!(out.max_message_size == bytes(2048));
+    }
+
+    #[test]
+    fn apply_max_message_bytes_leaves_base_alone_on_a_corrupt_value() {
+        let base = LogConfig {
+            max_message_size: bytes(4096),
+            ..LogConfig::default()
+        };
+        for corrupt in ["-1", "not-a-number", "2147483648"] {
+            let mut o = BTreeMap::new();
+            o.insert(MAX_MESSAGE_BYTES.into(), corrupt.into());
+            let out = apply_to_log_config(&o, &base);
+            assert!(out.max_message_size == bytes(4096), "corrupt {corrupt}");
+        }
     }
 
     #[test]

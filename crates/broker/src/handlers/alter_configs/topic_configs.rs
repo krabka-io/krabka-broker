@@ -17,8 +17,10 @@
 //! [`ELIGIBLE_LEADER_REPLICAS`](crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
 //! would vanish the first time an operator set `retention.ms`, and every
 //! `DescribeTopicPartitions` after that would report the partition as having
-//! no eligible leader. The keys the client sends are the whole *client* map;
-//! the record this builds is that map plus what only the controller writes.
+//! no eligible leader. Kafka has no such exposure: it carries the ELR on
+//! `PartitionRegistration`, where no config path can reach it. The keys the
+//! client sends are the whole *client* map; the record this builds is that map
+//! plus what only the controller writes.
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -133,6 +135,36 @@ mod tests {
             overrides: maplit::btreemap! {
             crate::config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
             crate::config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string()},
+        });
+        assert!(record == expected);
+    }
+
+    /// KIP-966 state survives a replacement that does not mention it. A
+    /// client cannot name the key, so an `AlterConfigs` that replaces a
+    /// topic's overrides would otherwise delete the ELR the controller keeps
+    /// and leave `DescribeTopicPartitions` reporting an empty set until the
+    /// next ISR change rebuilt one.
+    #[test]
+    fn topic_replacement_carries_the_controller_managed_state_forward() {
+        let image = image_with_topic_config(
+            "orders",
+            &[
+                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
+                (config_keys::RETENTION_MS, "60000"),
+            ],
+        );
+
+        let record = topic_config_record(
+            &topic_resource("orders", &[(config_keys::RETENTION_MS, "120000")]),
+            &image,
+        )
+        .expect("an ordinary replacement is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+            config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2,3:".to_string(),
+            config_keys::RETENTION_MS.to_string() => "120000".to_string()},
         });
         assert!(record == expected);
     }

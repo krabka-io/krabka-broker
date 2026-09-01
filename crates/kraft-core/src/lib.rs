@@ -11,7 +11,7 @@
 //! `krabka-raft` wraps this core with the async engine, the real KIP-595 wire,
 //! and the on-disk `krabka-log`. It re-exports these modules under
 //! `krabka_raft::kraft`. The core is a leaf crate with no tokio, no filesystem,
-//! and no crypto, so it compiles for `wasm32-unknown-unknown`. The [`sim`]
+//! and no crypto, so it compiles for `wasm32-unknown-unknown`. The `sim`
 //! module, behind the `sim` feature, uses this to drive an interactive
 //! consensus simulation in the browser playground.
 

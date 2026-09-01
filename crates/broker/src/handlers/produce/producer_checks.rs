@@ -241,6 +241,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,

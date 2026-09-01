@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Entry point for the KDC container. Bootstraps the CRABKA.TEST realm, creates
 # the broker service principal (kafka/localhost) and a client principal (alice),
 # exports their keytabs into the shared /fixtures volume, then runs krb5kdc in

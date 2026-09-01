@@ -105,6 +105,12 @@ pub(crate) async fn handle(
         by_topic.insert(topic.name.clone(), rows);
     }
 
+    // KIP-966: starting or cancelling a reassignment rewrites the replica set
+    // and the ISR with it, so the eligible-leader state the controller keeps
+    // rides the same batch. Without it a cancel can leave a replica the
+    // partition no longer has in the published ELR.
+    crate::elr::ElrPublisher::new(&image).extend(&mut batch.records);
+
     let mut submit_failure = None;
     if !batch.records.is_empty() {
         match batch.require_audit(broker, ctx).await {

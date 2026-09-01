@@ -212,6 +212,11 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]
     pub log_segment_bytes: Option<ByteSize>,
+    /// Kafka's broker-wide `message.max.bytes`: the largest record batch a
+    /// topic that sets no `max.message.bytes` accepts.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<String>")]
+    pub message_max_bytes: Option<ByteSize>,
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
     pub log_delivery_clock_uncertainty: Option<Time>,

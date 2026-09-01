@@ -8,7 +8,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use futures_util::FutureExt as _;
-use krabka_metadata::{MetadataRecord, PartitionRecord};
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use krabka_raft::NodeId;
 use krabka_units::convert::TimeExt as _;
@@ -209,7 +209,7 @@ impl UncleanRecoveryManager {
             return RecoveryOutcome::NotNeeded;
         }
 
-        self.commit_elected_leader(job, pr, winner).await
+        self.commit_elected_leader(job, &image, pr, winner).await
     }
 
     /// Builds and submits the `PartitionRecord` that elects `winner` as the
@@ -218,6 +218,7 @@ impl UncleanRecoveryManager {
     async fn commit_elected_leader(
         &self,
         job: &RecoveryJob,
+        image: &MetadataImage,
         pr: &PartitionRecord,
         winner: NodeId,
     ) -> RecoveryOutcome {
@@ -248,11 +249,12 @@ impl UncleanRecoveryManager {
             leader = winner.0,
             "unclean recovery: elected most-complete-log replica (possible data loss)"
         );
-        if let Err(e) = self
-            .controller
-            .submit_change(vec![MetadataRecord::V1Partition(new_pr)])
-            .await
-        {
+        // KIP-966: the elected replica need not hold every committed record,
+        // so nothing that was eligible before it still is. `ElrPublisher`
+        // reads that off the record and clears the published state.
+        let mut changes = vec![MetadataRecord::V1Partition(new_pr)];
+        crate::elr::ElrPublisher::new(image).extend(&mut changes);
+        if let Err(e) = self.controller.submit_change(changes).await {
             warn!(error = %e, "unclean recovery submit_change failed");
             return RecoveryOutcome::NoEligibleReplica;
         }

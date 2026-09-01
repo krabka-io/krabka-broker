@@ -1,10 +1,16 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes twenty-two topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes twenty-three topic keys. Six propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
-//! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
-//! delete-horizon grace window (`delete.retention.ms`) propagate live too.
+//! (`local.retention.ms`, `local.retention.bytes`), the KIP-534
+//! delete-horizon grace window (`delete.retention.ms`), and the batch-size cap
+//! (`max.message.bytes`) propagate live too.
+//!
+//! One key bounds a single write: `max.message.bytes`. The produce path reads
+//! it per topic, falls back to the broker's `message.max.bytes` when the topic
+//! sets none, and refuses a larger record batch with `MESSAGE_TOO_LARGE` (10)
+//! before it verifies a CRC or decompresses a body.
 //!
 //! The produce hot path's pre-flight gate reads one key,
 //! `min.insync.replicas`, which takes integers >= 1. An `acks=-1` produce
@@ -70,6 +76,9 @@ mod delivery;
 mod diskless;
 mod docs;
 mod log_config;
+mod lookup;
+mod message_size;
+mod min_isr;
 mod qos;
 mod recovery;
 pub(crate) mod registry;
@@ -89,13 +98,13 @@ pub(crate) use self::{
 };
 pub(crate) use self::{
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, FENCED_TRUE, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        TRANSACTIONAL_ID_EXPIRATION_MS, WITNESS_TRUE, fenced_node_ids,
-        is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
-        resolve_broker_fenced, resolve_broker_witness, resolve_preferred_leader_site,
-        resolve_remote_list_offsets_timeout, witness_node_ids,
+        BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS, FENCED_TRUE,
+        OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
+        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
+        WITNESS_TRUE, fenced_node_ids, is_controller_managed_broker_config,
+        parse_remote_list_offsets_timeout, resolve_broker_fenced, resolve_broker_witness,
+        resolve_preferred_leader_site, resolve_remote_list_offsets_timeout, witness_node_ids,
     },
     delivery::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,
@@ -103,6 +112,8 @@ pub(crate) use self::{
     },
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
+    message_size::resolve_max_message_bytes,
+    min_isr::{configured_min_insync_replicas, effective_min_insync_replicas},
     qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
@@ -125,6 +136,9 @@ pub(crate) const SEGMENT_BYTES: &str = "segment.bytes";
 pub(crate) const CLEANUP_POLICY: &str = "cleanup.policy";
 pub(crate) const COMPRESSION_TYPE: &str = "compression.type";
 pub(crate) const MIN_INSYNC_REPLICAS: &str = "min.insync.replicas";
+/// The largest record batch a topic accepts, measured over the batch's whole
+/// wire encoding. An oversized batch earns `MESSAGE_TOO_LARGE` (10).
+pub(crate) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
 
 /// KIP-405: per-topic tiered-storage opt-in.
 pub(crate) const REMOTE_STORAGE_ENABLE: &str = "remote.storage.enable";

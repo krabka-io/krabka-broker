@@ -179,6 +179,19 @@ pub enum GroupActorMessage {
     /// place. This exercises the tick's dispatch on the live `group.kind`.
     #[cfg(test)]
     TestForceConsumerKind,
+
+    /// Test-only: read back the moment the actor stamped this group
+    /// memberless.
+    ///
+    /// The actor maintains `empty_since_ms` at the end of every turn, so a
+    /// retention test that wants to sweep exactly one grace period after that
+    /// stamp cannot read the wall clock for it — the stamp lands whenever the
+    /// actor next runs, which on a loaded machine is after any instant the
+    /// test read. Asking the actor orders the two.
+    #[cfg(test)]
+    TestEmptySinceMs {
+        reply: oneshot::Sender<Option<i64>>,
+    },
 }
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the

@@ -38,7 +38,7 @@ fn doc_for(key: &str) -> String {
 const INT: i8 = 3;
 
 /// Both keys as an operator supplied them.
-fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs {
+fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs<'static> {
     StaticBrokerConfigs {
         txn_id_expiration: StaticBrokerSetting {
             value_ms: expiration_ms,

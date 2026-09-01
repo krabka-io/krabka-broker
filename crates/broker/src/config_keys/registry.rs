@@ -21,13 +21,13 @@
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
-    RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        TRANSACTIONAL_ID_EXPIRATION_MS,
+        BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
+        OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
+        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
     },
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
@@ -173,9 +173,9 @@ impl ConfigKey {
     /// `true` when the resource's stored override map can hold the key.
     ///
     /// The broker synthesises the rest: `write.freeze` comes from the freeze
-    /// registry, and `node.id`, the two KIP-211 retention keys and the two
-    /// KIP-98 transactional-id expiry keys come from the broker's own static
-    /// configuration, which no metadata record holds.
+    /// registry, and `node.id`, the two KIP-211 retention keys, the two
+    /// KIP-98 transactional-id expiry keys and the idle window come from the
+    /// broker's own static configuration, which no metadata record holds.
     pub(crate) fn is_stored(&self) -> bool {
         !matches!(
             self.name,
@@ -183,6 +183,7 @@ impl ConfigKey {
                 | NODE_ID
                 | OFFSETS_RETENTION_MINUTES
                 | OFFSETS_RETENTION_CHECK_INTERVAL_MS
+                | CONNECTIONS_MAX_IDLE_MS
                 | TRANSACTIONAL_ID_EXPIRATION_MS
                 | TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
         )
@@ -310,6 +311,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             Some("1"),
             "With acks=all, the minimum in-sync replicas required to accept a write; otherwise NOT_ENOUGH_REPLICAS (19).",
             ValueCheck::I32AtLeast(1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes, >=0"),
+        ..key(
+            MAX_MESSAGE_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("1048588"),
+            "Largest record batch accepted for this topic, measured over the batch's whole wire encoding; a larger one is refused with MESSAGE_TOO_LARGE (10). Unset topics inherit the broker's message.max.bytes.",
+            ValueCheck::I32AtLeast(0),
         )
     },
     ConfigKey {
@@ -643,6 +655,18 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Long,
             Some("600000"),
             "Cadence of the background sweep that tombstones expired committed offsets. The process reads it at startup, so no alter path can change it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        read_only: true,
+        ..key(
+            CONNECTIONS_MAX_IDLE_MS,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            Some("600000"),
+            "How long a client connection may go without a complete request frame before the broker closes it. The process reads it at startup, so no alter path can change it.",
             ValueCheck::NotAltered,
         )
     },

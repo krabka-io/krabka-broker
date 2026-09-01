@@ -22,11 +22,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Build, test, lint and format. The Aspect CLI narrows each of these to what
-  # the change actually touched; `bazel build|test //...` is the equivalent for
-  # anyone without the CLI, and is what the nightly job runs.
+  # Format, lint, build, test under coverage, and render rustdoc in one Bazel
+  # output tree. Coverage executes the tests, so a separate test pass would only
+  # repeat them. The build remains because tests do not compile every shippable
+  # target.
   ci:
-    name: build · test · lint · format
+    name: build · coverage · lint · format · docgen
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -35,76 +36,11 @@ jobs:
         with:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: false
-          repository-cache: true
 
-      # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
-      # and `info` off it -- so this gates here and only reports locally.
-      - name: format
-        run: aspect format
-
-      # `aspect lint` narrows to the targets a change touched and annotates the
-      # pull request. It reads the `rules_lint_machine` output group, which is
-      # why the clippy aspect comes from aspect_rules_lint_rust rather than from
-      # @rules_rust -- see //tools/lint/linters.bzl. `bazel test //...` gates on
-      # the same aspect through the `*_clippy` targets, for anyone without the
-      # CLI.
-      - name: lint
-        run: aspect lint
-
-      - name: build
-        run: aspect build --bazel-flag=--build_tag_filters=-docker //...
-
-      - name: test
-        run: aspect test --bazel-flag=--test_tag_filters=-docker //...
-
-  # LCOV over the first-party crates. Separate from `ci` because instrumented
-  # binaries are a different build, so sharing that job's cache would only
-  # evict it.
-  coverage:
-    name: coverage
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7
-
-      # This job was running the runner out of disk, roughly one PR in three.
-      # Measured on an `ubuntu-latest` runner: the root filesystem is 145 GB
-      # with 87 GB free at boot, and a coverage run needs about 86 GB of it --
-      # a ~10 GB compressed disk cache and a ~4 GB repository cache to unpack,
-      # then a coverage-instrumented build of the whole workspace, where the
-      # broker's 300-file test binaries each carry full LLVM profile
-      # instrumentation. The margin was under a gigabyte, so whether a given
-      # run fit came down to how large a cache it happened to restore. That is
-      # the intermittency: re-running sometimes "fixed" it.
-      #
-      # It surfaced twice over, and neither message says "disk": clang++ takes
-      # `Bus error (core dumped)` when a write to an mmap'd object file lands
-      # past the end of a full device, and the cache save reports `zstd: error
-      # 70 : Write error : cannot write block`. Every occurrence skipped
-      # `codecov-action`, so no report was uploaded and `codecov/patch` never
-      # posted -- which made a disk problem look like a coverage-threshold one.
-      #
-      # Removing the preinstalled toolchains this job never uses frees ~27 GB
-      # and takes the post-build headroom from under 1 GB to 28 GB. Nothing
-      # removed here is an input to `bazel coverage`: the C++ toolchain is the
-      # hermetic `@llvm` one, the JDK is `remotejdk_21` (both per .bazelrc),
-      # and the coverage run tag-filters out every container suite
-      # (`--test_tag_filters=-docker`), so the preinstalled Docker images have
-      # no consumer here either. Only the CodeQL subtree goes from
-      # hostedtoolcache, so the runner's own Node and Python survive for
-      # `checkout` and `codecov-action`.
-      #
-      # The `df` lines bracket the reclaim and the build so the headroom this
-      # job actually has stays a number in the log rather than something
-      # inferred from a crash. If it trends back toward zero as the workspace
-      # grows, that is the signal to act -- next levers would be the debug-info
-      # level on the instrumented build, or scoping the disk cache.
+      # Coverage previously ran the hosted runner out of disk intermittently.
+      # It needs about 86 GB after restoring caches and instrumenting the test
+      # binaries, leaving less than 1 GB on a stock runner. These preinstalled
+      # toolchains and images are not inputs to the hermetic Bazel build.
       - name: reclaim runner disk
         run: |
           echo "::group::free space before"
@@ -126,14 +62,35 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-coverage
+          # Share the one output tree across build, coverage and docgen, and
+          # restore it in the delivery job.
+          disk-cache: ${{ github.workflow }}
           repository-cache: true
-      - run: bazel coverage //crates/...
 
-      # Headroom left at the point the build finished, which is the number that
-      # says whether this fix still has room in it. `always()` so a failure
-      # still reports it.
-      - name: free space after the build
+      # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
+      # and `info` off it -- so this gates here and only reports locally.
+      - name: format
+        run: aspect format
+
+      # `aspect lint` narrows to the targets a change touched and annotates the
+      # pull request. It reads the `rules_lint_machine` output group, which is
+      # why the clippy aspect comes from aspect_rules_lint_rust rather than from
+      # @rules_rust -- see //tools/lint/linters.bzl. `bazel test //...` gates on
+      # the same aspect through the `*_clippy` targets, for anyone without the
+      # CLI.
+      - name: lint
+        run: aspect lint
+
+      - name: build
+        run: aspect build --bazel-flag=--build_tag_filters=-docker //...
+
+      # Coverage builds and executes the tests with LLVM instrumentation. Its
+      # first-party compile actions have distinct keys, but it reuses this
+      # runner's repositories, toolchains and unaffected Bazel actions.
+      - name: coverage
+        run: bazel coverage //crates/...
+
+      - name: free space after coverage
         if: always()
         run: df -h /
 
@@ -143,6 +100,16 @@ jobs:
           files: bazel-out/_coverage/_coverage_report.dat
           disable_search: true
           fail_ci_if_error: true
+
+      # `aspect build` renders docs for impacted crates. Build the complete set
+      # here for the artifact, reusing this runner's Bazel output tree.
+      - name: docgen
+        run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rustdoc
+          path: bazel-bin/crates/**/*.rustdoc
+          if-no-files-found: error
 
   supply-chain:
     name: cargo deny
@@ -155,12 +122,10 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
-  # rustdoc for every crate, kept as an artifact. The `ci` job already builds
-  # these -- a `rust_doc` per crate is an ordinary target -- so this exists to
-  # publish the output, and to keep rendering the whole set even when `aspect
-  # build` narrowed to the crates a change touched.
+  # Documentation source checks do not use Bazel, so they can stay parallel
+  # while the `ci` job renders and uploads rustdoc from its warm output tree.
   docs:
-    name: docgen
+    name: docs checks
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -176,18 +141,6 @@ jobs:
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-docs
-          repository-cache: true
-      - run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
-      - uses: actions/upload-artifact@v7
-        with:
-          name: rustdoc
-          path: bazel-bin/crates/**/*.rustdoc
-          if-no-files-found: error
 
   # Re-discharge the Creusot proof sessions under `verif/`.
   #
@@ -209,67 +162,32 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-
-      # `why3-ide` is a hard dependency of the `creusot-deps` opam package and
-      # needs GTK. opam syncs its local pin with `rsync`, and fails the whole
-      # install without it.
-      - name: system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            opam ocaml-nox build-essential pkg-config libgmp-dev libmpfr-dev \
-            m4 unzip autoconf rsync libgtk-3-dev libgtksourceview-3.0-dev
-
-      - name: read the pinned Creusot version
-        id: creusot
-        run: echo "version=$(cat .creusot-version)" >>"${GITHUB_OUTPUT}"
-
-      # The opam switch builds why3 from source, which is the slow part of a
-      # cold run. Key the cache on the Creusot pin and the prover profile, so a
-      # bump of either rebuilds and nothing else does.
-      - uses: actions/cache@v6
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
-          path: |
-            ~/.opam
-            ~/.local/share/creusot
-          key: creusot-${{ runner.os }}-${{ hashFiles('.creusot-version', 'why3find.json') }}
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          # This cache namespace contains the large installed-toolchain layer.
+          # Its Bazel inputs exclude the workspace source, so normal changes hit
+          # the cached image instead of rebuilding Creusot.
+          disk-cache: ${{ github.workflow }}-images
+          repository-cache: true
 
-      - name: opam
-        run: opam init --disable-sandboxing --bare -y --no-setup
+      # `--verbose_failures`: the toolchain layer is built by a genrule that
+      # shells out to Docker, and when it fails Bazel otherwise reports only
+      # "Target //tools/creusot:image_load failed to build" with no command and
+      # no output. The flag is what makes that action's failure diagnosable
+      # from the log alone.
+      - name: load the pinned proof image
+        run: bazel run --verbose_failures //tools/creusot:image_load
 
-      # `creusot-rustc` links against the compiler internals of one exact
-      # nightly, which Creusot pins in its own repository, so the toolchain
-      # comes from there rather than from this repository's pin. Its installer
-      # places every component, including the Why3 prelude package and the four
-      # provers `why3find.json` names.
-      - name: creusot toolchain
-        env:
-          OPAMYES: "1"
-          OPAMCONFIRMLEVEL: unsafe-yes
-        run: |
-          git clone --depth 1 --branch "${{ steps.creusot.outputs.version }}" \
-            https://github.com/creusot-rs/creusot /tmp/creusot
-          rustup toolchain install \
-            "$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/creusot/rust-toolchain)" \
-            --component rustfmt --component rustc-dev --component llvm-tools \
-            --profile minimal
-          cd /tmp/creusot
-          cargo run --bin creusot-install -- \
-            prelude why3 provers why3-conf cargo-creusot creusot-rustc \
-            cargo-creusot-config
-
-      # A non-zero exit or any unproved goal fails the job. Check the explicit
-      # proof list first so adding a contract-bearing crate cannot silently
-      # leave it outside this gate.
+      # The runner supplies only the Docker kernel boundary and the checkout.
+      # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
+      # come from the apko/rules_img image.
       - name: prove
         run: |
-          export PATH="${HOME}/.local/share/creusot/bin:${PATH}"
-          python3 tools/test_creusot_packages.py
-          packages=(krabka-verified)
-          python3 tools/creusot_packages.py "${packages[@]}"
-          for package in "${packages[@]}"; do
-            cargo creusot --package "${package}"
-          done
+          docker run --rm \
+            --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
+            docker.io/krabka-io/creusot:0.13.0
 
   # Container suites, one runner each.
   #
@@ -342,12 +260,27 @@ jobs:
       # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
-      - run: bazel test --config=docker ${{ matrix.suite.target }}
+      # `aspect container-suites` selects by touched path, so the matrix can
+      # name a container target that is not a test rule -- the KDC fixture's
+      # `image` and `seed_layer` are built, not run. `bazel test` exits 4 on a
+      # label with no test targets ("No test targets were found, yet testing was
+      # requested"), which failed every suite in the matrix regardless of the
+      # code under review. Dispatch on the rule kind instead.
+      - run: |
+          set -euo pipefail
+          target='${{ matrix.suite.target }}'
+          kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
+          case "${kind}" in
+            # `--config=docker` is defined for `test` only (it swaps the
+            # `--test_tag_filters` set), so passing it to `build` fails with
+            # "Config value 'docker' is not defined in any .rc file".
+            *_test) bazel test --config=docker "${target}" ;;
+            *) bazel build "${target}" ;;
+          esac
 
-  # The KDC fixture builds Debian packages and writes fresh keytabs through a
-  # bind mount, so it cannot be loaded as one of //bazel/images' immutable
-  # tarballs. Keep the two Kerberos acceptance cases visible in their own
-  # scheduled lane instead of leaving them permanently #[ignore]d.
+  # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
+  # Kerberos acceptance cases visible in their own scheduled lane instead of
+  # leaving them permanently #[ignore]d.
   gssapi:
     name: container · gssapi
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -355,7 +288,15 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-images
+          repository-cache: true
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+      - name: load KDC image
+        run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
       - name: run GSSAPI acceptance suites
         env:
           KRB5_CONFIG: ${{ github.workspace }}/crates/broker/tests/fixtures/security/kdc/krb5.conf
@@ -365,7 +306,7 @@ jobs:
           set -euo pipefail
           fixture=crates/broker/tests/fixtures/security/kdc/docker-compose.yml
           trap 'docker compose -f "${fixture}" down' EXIT
-          docker compose -f "${fixture}" up --build -d
+          docker compose -f "${fixture}" up -d
           timeout 60 sh -c 'until docker compose -f "$1" logs kdc | grep -q KDC_READY; do sleep 1; done' _ "${fixture}"
           cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 
@@ -433,7 +374,6 @@ jobs:
     if: always() && github.event_name != 'schedule'
     needs:
       - ci
-      - coverage
       - supply-chain
       - docs
       - proofs
