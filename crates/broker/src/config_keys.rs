@@ -93,7 +93,7 @@ pub(crate) use self::{
     },
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
-    min_isr::effective_min_insync_replicas,
+    min_isr::{configured_min_insync_replicas, effective_min_insync_replicas},
     qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,

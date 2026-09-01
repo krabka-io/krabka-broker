@@ -1,18 +1,72 @@
-//! The controller-side resolution of `min.insync.replicas`.
+//! The resolution of `min.insync.replicas` that the controller and the
+//! produce path share.
 //!
-//! The produce path resolves the key against the broker's own
-//! `default_min_insync_replicas` command-line value, because a rejected
-//! `acks=all` write is that broker's decision. The controller cannot: the
-//! answer decides what it writes into the metadata log, and a value that
-//! lives on one node's command line is not what another node would compute
-//! from the same image. So this resolver reads the topic override, then the
-//! cluster-wide default broker config, and finally Kafka's own default of 1.
+//! Kafka resolves a topic's `min.insync.replicas` through one layered lookup
+//! -- `KafkaConfigSchema.resolveEffectiveTopicConfigs(staticNodeConfig,
+//! dynamicClusterConfigs, dynamicNodeConfigs, dynamicTopicConfigs)` -- and
+//! both halves of KIP-966 read it through that: the controller's
+//! `ReplicationControlManager.getTopicEffectiveMinIsr` calls
+//! `ConfigurationControlManager.getTopicConfig`, and the broker's produce
+//! gate reads the same value off the partition's `LogConfig`. The two
+//! agreeing is load-bearing. ELR names the replicas that are still known to
+//! hold every committed record, and what is committed is exactly what the
+//! produce gate accepted, so a controller that maintained ELR against a
+//! higher threshold than the gate enforced would keep naming a replica that
+//! writes had already moved past.
+//!
+//! Kafka does not leave the agreement to chance. Reconstructed from
+//! `kafka-metadata-4.3.1.jar`, `ConfigurationControlManager` refuses two
+//! alterations outright while the ELR feature is enabled:
+//! `isDisallowedBrokerMinIsrTransition` rejects any *per-node*
+//! `min.insync.replicas`, and `isDisallowedClusterMinIsrTransition` rejects
+//! *removing* the cluster-wide one -- removal would drop resolution back to
+//! each node's static config, which the controller cannot see.
+//!
+//! [`configured_min_insync_replicas`] is the layer both krabka paths share:
+//! the topic override, then the cluster-wide dynamic broker default. krabka
+//! has no per-node layer to disagree over, because it stores no per-node
+//! `min.insync.replicas`. The one layer that stays split is the last one:
+//! the broker falls back to its own `default_min_insync_replicas`
+//! command-line value, and the controller cannot, because the answer decides
+//! what it writes into the metadata log and a value that lives on one node's
+//! command line is not what another node would compute from the same image.
+//! So the controller falls back to Kafka's own default of 1.
+//!
+//! That residue can only run one way. The broker's fallback is used only
+//! when neither dynamic layer names a value, where the controller resolves
+//! 1, and a broker default is at least 1; every other case resolves the same
+//! number on both sides, modulo the replication-factor cap the controller
+//! applies and Kafka applies with it. So the controller's threshold is never
+//! above the gate's, and the rule it drives -- clear the ELR once the ISR
+//! reaches min ISR -- can only clear the set early. It cannot leave a
+//! replica in it that an accepted write has moved past.
 
 use super::{MIN_INSYNC_REPLICAS, lookup::topic_or_cluster_default};
 
 /// Apache Kafka's `min.insync.replicas` default, used when neither the topic
 /// nor the cluster-wide broker config names one.
 const KAFKA_DEFAULT_MIN_INSYNC_REPLICAS: usize = 1;
+
+/// The `min.insync.replicas` the metadata image names for `topic`: the topic
+/// override, else the cluster-wide dynamic broker default, else `None`.
+///
+/// Both KIP-966 halves resolve through this, so that the threshold the
+/// controller maintains the ELR against is the threshold the produce gate
+/// enforces. `None` leaves each caller its own last resort: the broker's
+/// command-line default on the produce side, Kafka's own default of 1 on the
+/// controller side. See the module docs for why that residue is safe.
+///
+/// An unparseable value reads as `None`. The alter paths reject those, so a
+/// string here that does not parse means a corrupt metadata image, and both
+/// callers would rather fall back than fail the request.
+pub(crate) fn configured_min_insync_replicas(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+) -> Option<i32> {
+    topic_or_cluster_default(image, topic, MIN_INSYNC_REPLICAS)?
+        .parse::<i32>()
+        .ok()
+}
 
 /// The effective `min.insync.replicas` of one partition, as Kafka's
 /// `ReplicationControlManager.getTopicEffectiveMinIsr` computes it: the
@@ -32,8 +86,8 @@ pub(crate) fn effective_min_insync_replicas(
     topic: &str,
     replication_factor: usize,
 ) -> usize {
-    let configured = topic_or_cluster_default(image, topic, MIN_INSYNC_REPLICAS)
-        .and_then(|value| value.parse::<usize>().ok())
+    let configured = configured_min_insync_replicas(image, topic)
+        .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(KAFKA_DEFAULT_MIN_INSYNC_REPLICAS);
     configured.min(replication_factor)
 }
