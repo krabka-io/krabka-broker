@@ -25,6 +25,7 @@ pub(crate) struct FollowerStats {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ReplicaState {
     pub(crate) isr: HashSet<NodeId>,
+    replicas: HashSet<NodeId>,
     pub(crate) per_follower: HashMap<NodeId, FollowerStats>,
     pub(crate) hw: Offset,
     pub(crate) current_leader_epoch: LeaderEpoch,
@@ -35,6 +36,7 @@ impl ReplicaState {
     pub(crate) fn new() -> Self {
         Self {
             isr: HashSet::new(),
+            replicas: HashSet::new(),
             per_follower: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
@@ -66,6 +68,7 @@ impl ReplicaState {
     ) {
         self.leader = Some(leader);
         self.isr = isr.iter().copied().collect();
+        self.replicas = replicas.iter().copied().collect();
         self.per_follower.remove(&leader);
         // Seed only ISR members: seeding a non-ISR replica with
         // `last_caught_up = now` would let `isr_maintenance` falsely
@@ -79,13 +82,17 @@ impl ReplicaState {
                 });
             }
         }
-        let keep: HashSet<NodeId> = replicas.iter().copied().collect();
-        self.per_follower.retain(|k, _| keep.contains(k));
+        self.per_follower.retain(|k, _| self.replicas.contains(k));
     }
 
     pub(crate) fn reset_for_leader(&mut self, leader: NodeId) {
         self.leader = Some(leader);
+        self.replicas.insert(leader);
         self.per_follower.clear();
+    }
+
+    pub(crate) fn leader_and_replicas(&self) -> (Option<NodeId>, &HashSet<NodeId>) {
+        (self.leader, &self.replicas)
     }
 
     // Deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
@@ -197,6 +204,7 @@ mod tests {
         let s = fresh();
         let expected = ReplicaState {
             isr: HashSet::new(),
+            replicas: HashSet::new(),
             per_follower: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
@@ -224,6 +232,7 @@ mod tests {
         // gets no per_follower entry.
         let expected = ReplicaState {
             isr: [NodeId(1), NodeId(2), NodeId(3)].into_iter().collect(),
+            replicas: [NodeId(1), NodeId(2), NodeId(3)].into_iter().collect(),
             per_follower: [(NodeId(2), seeded), (NodeId(3), seeded)]
                 .into_iter()
                 .collect(),

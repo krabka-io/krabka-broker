@@ -45,6 +45,34 @@ pub fn isr_admission(
     }
 }
 
+/// Decide whether one unique assigned replica belongs in an ISR proposal.
+#[ensures(result == (assigned && (
+    is_leader
+        || (in_isr && fetch_recent)
+        || (!in_isr && fetch_recent && caught_up_recent)
+)))]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent assignment, role, membership, and recency facts"
+)]
+#[must_use]
+pub fn isr_maintenance_selected(
+    assigned: bool,
+    is_leader: bool,
+    in_isr: bool,
+    fetch_recent: bool,
+    caught_up_recent: bool,
+) -> bool {
+    assigned && (is_leader || fetch_recent && (in_isr || caught_up_recent))
+}
+
+/// Report a proposal only when at least one unique member is added or removed.
+#[ensures(result == (removed@ > 0 || added@ > 0))]
+#[must_use]
+pub fn isr_proposal_changed(removed: usize, added: usize) -> bool {
+    removed > 0 || added > 0
+}
+
 /// Return the minimum represented log-end offset across the leader and ISR.
 #[ensures(result@ <= leader_leo@)]
 #[ensures(forall<i: Int> 0 <= i && i < follower_leos@.len()
@@ -104,5 +132,34 @@ mod tests {
         ] {
             assert2::check!(isr_admission(epoch_matches, nonempty, subset, eligible) == expected);
         }
+    }
+
+    #[test]
+    fn isr_maintenance_truth_table_retains_only_eligible_members() {
+        for assigned in [false, true] {
+            for leader in [false, true] {
+                for current in [false, true] {
+                    for fetch_recent in [false, true] {
+                        for caught_up_recent in [false, true] {
+                            let expected = assigned
+                                && (leader || fetch_recent && (current || caught_up_recent));
+                            assert2::check!(
+                                isr_maintenance_selected(
+                                    assigned,
+                                    leader,
+                                    current,
+                                    fetch_recent,
+                                    caught_up_recent
+                                ) == expected
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert2::check!(!isr_proposal_changed(0, 0));
+        assert2::check!(isr_proposal_changed(1, 0));
+        assert2::check!(isr_proposal_changed(0, 1));
+        assert2::check!(isr_proposal_changed(usize::MAX, usize::MAX));
     }
 }
