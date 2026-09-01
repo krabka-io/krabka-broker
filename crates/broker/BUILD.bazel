@@ -89,6 +89,10 @@ crate_tests(
         ],
         "jvm_barrier_markers": ["cp_kafka_7_5_0"],
         "jvm_bootstrap_controller": ["apache_kafka_4_3_1"],
+        # KIP-412 dynamic log levels. The 4.3.1 tool because its non-`--all`
+        # describe asks `DescribeCluster` whether the broker exists before it
+        # prints anything, which no older tool does.
+        "jvm_broker_loggers": ["apache_kafka_4_3_1"],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
@@ -103,6 +107,7 @@ crate_tests(
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],
+        "jvm_role_separated_admin": ["apache_kafka_4_3_1"],
         "jvm_share_groups": ["apache_kafka_4_1_0"],
         "jvm_static_quorum_spike": ["apache_kafka_4_0_0"],
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
@@ -135,17 +140,9 @@ crate_tests(
     # `gssapi_e2e` cannot use the digest-pinned lane: its locally built KDC
     # fixture writes keytabs into the fixture directory and must be
     # Docker-Compose-managed.
-    # `jvm_role_separated_admin` needs a capability the broker does not have
-    # yet: a broker-only node resolves the controller leader's address out of
-    # that leader's `BrokerRegistration`, and a controller-only node writes
-    # none, so it never heartbeats, the controller fences it, and no JVM tool
-    # can reach the cluster at all. See `tests/KNOWN_ISSUES.md`. The suite is
-    # correct and stays here; it moves back into `docker` when the heartbeat
-    # path works in a role-separated cluster.
     manual = [
         "describe_groups_jvm",
         "gssapi_e2e",
-        "jvm_role_separated_admin",
     ],
     # 212k lines: a full sweep is nightly-sized even sharded this far.
     mutants_shards = 32,
