@@ -267,7 +267,11 @@ jobs:
           kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
           case "${kind}" in
             *_test) bazel test --config=docker "${target}" ;;
-            *) bazel build --config=docker "${target}" ;;
+            # No --config=docker here: .bazelrc defines `test:docker` only, and
+            # it sets --test_tag_filters, which a build has no use for. Passing
+            # it fails with "Config value 'docker' is not defined in any .rc
+            # file", because Bazel resolves --config against <command>:<name>.
+            *) bazel build "${target}" ;;
           esac
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
