@@ -266,8 +266,11 @@ jobs:
           target='${{ matrix.suite.target }}'
           kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
           case "${kind}" in
+            # `--config=docker` is defined for `test` only (it swaps the
+            # `--test_tag_filters` set), so passing it to `build` fails with
+            # "Config value 'docker' is not defined in any .rc file".
             *_test) bazel test --config=docker "${target}" ;;
-            *) bazel build --config=docker "${target}" ;;
+            *) bazel build "${target}" ;;
           esac
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
