@@ -31,6 +31,7 @@ pub mod local_recovery;
 pub mod log_index;
 pub mod oauth;
 pub mod offset_allocator;
+pub mod opa;
 pub mod produce;
 pub mod producer;
 pub mod producer_id;
@@ -144,6 +145,10 @@ pub use oauth::{
 pub use offset_allocator::{
     reserve_offsets, wal_reservation_epoch_ready, wal_reservation_frontier,
     wal_reservation_response,
+};
+pub use opa::{
+    OpaAuthorizationDecision, OpaCacheAdmission, OpaCacheExpiry, opa_cache_admission,
+    opa_cache_expiry, opa_error_decision,
 };
 pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};
 pub use producer::{
