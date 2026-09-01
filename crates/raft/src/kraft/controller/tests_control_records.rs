@@ -37,6 +37,34 @@ fn control_state_applies_before_commit_and_restores_on_truncation() {
 }
 
 #[test]
+fn control_history_frontiers_handle_empty_exact_repeated_and_moving_states() {
+    let initial = voter_set(&[NodeId(1)]);
+    let mut controls = KraftControlState::new(initial.clone(), 0);
+    controls.voter_history.clear();
+    controls.version_history.clear();
+
+    check!(controls.voters_at(Offset(10)) == initial);
+    check!(controls.version_at(Offset(10)) == 0);
+
+    controls
+        .version_history
+        .extend([(2, 0), (4, 1), (6, 1), (8, 0)]);
+    check!(controls.version_at(Offset(2)) == 0);
+    check!(controls.version_at(Offset(4)) == 0);
+    check!(controls.version_at(Offset(5)) == 1);
+    check!(controls.version_at(Offset(8)) == 1);
+    check!(controls.version_at(Offset(9)) == 0);
+
+    check!(!controls.commit_to(4));
+    check!(controls.commit_to(5));
+    check!(!controls.commit_to(7));
+    controls.truncate_to(6);
+    check!(controls.version_history.keys().copied().collect::<Vec<_>>() == vec![2, 4]);
+    check!(controls.version_at(Offset(i64::MAX)) == 1);
+    check!(!controls.commit_to(i64::MAX));
+}
+
+#[test]
 fn execute_local_only_appends_leader_change_batch_to_log() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
     let start = engine.log.log_end_offset();

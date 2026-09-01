@@ -120,6 +120,36 @@ pub const fn frontier_reaches(frontier: i64, target: i64) -> bool {
     frontier >= target
 }
 
+/// Return the length of the strictly ordered control-record prefix below a
+/// half-open frontier.
+#[cfg_attr(creusot, requires(forall<i: Int, j: Int>
+    0 <= i && i < j && j < offsets@.len() ==> offsets@[i]@ < offsets@[j]@))]
+#[cfg_attr(creusot, ensures(result@ <= offsets@.len()))]
+#[cfg_attr(creusot, ensures(forall<i: Int>
+    0 <= i && i < result@ ==> offsets@[i]@ < frontier@))]
+#[cfg_attr(creusot, ensures(forall<i: Int>
+    result@ <= i && i < offsets@.len() ==> frontier@ <= offsets@[i]@))]
+#[must_use]
+pub fn control_history_frontier(offsets: &[i64], frontier: i64) -> usize {
+    let mut lo = 0usize;
+    let mut hi = offsets.len();
+    #[cfg_attr(creusot, invariant(lo@ <= hi@ && hi@ <= offsets@.len()))]
+    #[cfg_attr(creusot, invariant(forall<i: Int>
+        0 <= i && i < lo@ ==> offsets@[i]@ < frontier@))]
+    #[cfg_attr(creusot, invariant(forall<i: Int>
+        hi@ <= i && i < offsets@.len() ==> frontier@ <= offsets@[i]@))]
+    #[cfg_attr(creusot, variant(hi - lo))]
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if offsets[mid] < frontier {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// Compute one record's contiguous offset delta and its batch's final delta.
 ///
 /// Empty batches, out-of-bounds indexes, and record counts that cannot be
@@ -173,6 +203,15 @@ mod tests {
         assert!(!in_half_open_window(8, 5, 8));
         assert!(!frontier_reaches(4, 5));
         assert!(frontier_reaches(5, 5));
+    }
+
+    #[test]
+    fn control_history_frontier_is_strictly_half_open() {
+        let offsets = [-1, 2, 5, 9];
+        for (frontier, expected) in [(-1, 0), (0, 1), (2, 1), (5, 2), (9, 3), (10, 4)] {
+            assert!(control_history_frontier(&offsets, frontier) == expected);
+        }
+        assert!(control_history_frontier(&[], 5) == 0);
     }
 
     #[test]

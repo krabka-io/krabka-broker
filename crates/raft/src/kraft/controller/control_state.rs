@@ -18,6 +18,24 @@ use uuid::Uuid;
 use super::KraftControlState;
 use crate::{error::RaftError, kraft::types::NodeId};
 
+fn history_value_before<T>(history: &BTreeMap<i64, T>, frontier: i64) -> Option<&T> {
+    let offsets: Vec<i64> = history.keys().copied().collect();
+    let prefix_len = krabka_verified::raft::control_history_frontier(&offsets, frontier);
+    if prefix_len == 0 {
+        None
+    } else {
+        history.get(&offsets[prefix_len - 1])
+    }
+}
+
+fn truncate_history<T>(history: &mut BTreeMap<i64, T>, frontier: i64) {
+    let offsets: Vec<i64> = history.keys().copied().collect();
+    let prefix_len = krabka_verified::raft::control_history_frontier(&offsets, frontier);
+    if prefix_len < offsets.len() {
+        drop(history.split_off(&offsets[prefix_len]));
+    }
+}
+
 impl KraftControlState {
     pub fn new(voters: VoterSet, version: u16) -> Self {
         Self {
@@ -41,20 +59,13 @@ impl KraftControlState {
     }
 
     pub fn voters_at(&self, end_offset: Offset) -> VoterSet {
-        self.voter_history
-            .range(..end_offset.0)
-            .next_back()
-            .map_or_else(
-                || self.committed_voters.clone(),
-                |(_, voters)| voters.clone(),
-            )
+        history_value_before(&self.voter_history, end_offset.0)
+            .map_or_else(|| self.committed_voters.clone(), Clone::clone)
     }
 
     pub fn version_at(&self, end_offset: Offset) -> u16 {
-        self.version_history
-            .range(..end_offset.0)
-            .next_back()
-            .map_or(self.committed_version, |(_, version)| *version)
+        history_value_before(&self.version_history, end_offset.0)
+            .map_or(self.committed_version, |version| *version)
     }
 
     pub fn apply(&mut self, offset: i64, record: &ControlRecord) -> Result<(), RaftError> {
@@ -75,26 +86,15 @@ impl KraftControlState {
     }
 
     pub fn truncate_to(&mut self, offset: i64) {
-        self.voter_history
-            .retain(|record_offset, _| *record_offset < offset);
-        self.version_history
-            .retain(|record_offset, _| *record_offset < offset);
+        truncate_history(&mut self.voter_history, offset);
+        truncate_history(&mut self.version_history, offset);
     }
 
     pub fn commit_to(&mut self, high_watermark: i64) -> bool {
-        let voters = self
-            .voter_history
-            .range(..high_watermark)
-            .next_back()
-            .map_or_else(
-                || self.committed_voters.clone(),
-                |(_, voters)| voters.clone(),
-            );
-        let version = self
-            .version_history
-            .range(..high_watermark)
-            .next_back()
-            .map_or(self.committed_version, |(_, version)| *version);
+        let voters = history_value_before(&self.voter_history, high_watermark)
+            .map_or_else(|| self.committed_voters.clone(), Clone::clone);
+        let version = history_value_before(&self.version_history, high_watermark)
+            .map_or(self.committed_version, |version| *version);
         let changed = voters != self.committed_voters || version != self.committed_version;
         self.committed_voters = voters;
         self.committed_version = version;
