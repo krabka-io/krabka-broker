@@ -8,6 +8,7 @@
 
 pub mod audit;
 pub mod authz;
+pub mod break_glass;
 pub mod broker;
 pub mod chain;
 pub mod compaction;
@@ -20,11 +21,13 @@ pub mod log_index;
 pub mod offset_allocator;
 pub mod producer;
 pub mod raft;
+pub mod reassignment;
 pub mod remote_metadata;
 pub mod remote_read;
 pub mod remote_txn;
 pub mod restore;
 pub mod schema;
+pub mod storage;
 pub mod stretch;
 pub mod throttle;
 pub mod transaction;
@@ -33,6 +36,7 @@ pub mod wal;
 
 pub use audit::{SpoolAppendDecision, spool_append_decision};
 pub use authz::{AclDecision, acl_decision};
+pub use break_glass::{BreakGlassAdmission, break_glass_admission, select_break_glass_candidate};
 pub use broker::{
     FetchVisibility, FetchWatermarks, delete_records_offset_out_of_range, delete_records_target,
     effective_share_backlog, fetch_visibility,
@@ -56,20 +60,23 @@ pub use offset_allocator::reserve_offsets;
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
 };
+pub use reassignment::{ReassignmentAction, reassignment_action};
 pub use remote_metadata::remote_metadata_partition;
 pub use remote_read::remote_read_relative_offset;
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{restore_batch_step, restore_record_coordinates};
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
+pub use storage::future_log_swap_admission;
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
 };
 pub use transaction::{
-    TransactionCompletionDecision, TransactionIdentity, TransactionSnapshot,
-    transaction_completion_decision,
+    IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS, TransactionCompletionDecision,
+    TransactionIdentity, TransactionSnapshot, resolve_transaction_timeout,
+    should_abort_idle_transaction, transaction_completion_decision,
 };
 pub use vote::{
     VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,
     vote_encode_decision, vote_wire_decision,
 };
-pub use wal::{WalFetchAdmission, wal_fetch_admission};
+pub use wal::{WalFetchAdmission, select_wal_voter_index, wal_fetch_admission};

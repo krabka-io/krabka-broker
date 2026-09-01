@@ -47,6 +47,60 @@ fn contains_voter(voters: &[u64], node: u64) -> bool {
     false
 }
 
+/// Select the first registered/racked broker whose node and rack are unused.
+/// When `require_local` is set, only the local broker is eligible.
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < candidates@.len()
+    ==> candidates@[i].0@ < candidates@[j].0@)]
+#[ensures(match result {
+    None => forall<i: Int> 0 <= i && i < candidates@.len() ==>
+        (exists<j: Int> 0 <= j && j < used_nodes@.len()
+            && used_nodes@[j] == candidates@[i].0)
+        || (exists<j: Int> 0 <= j && j < used_racks@.len()
+            && used_racks@[j] == candidates@[i].1)
+        || (require_local && candidates@[i].0 != local_node),
+    Some(index) => index@ < candidates@.len()
+        && (forall<j: Int> 0 <= j && j < used_nodes@.len()
+            ==> used_nodes@[j] != candidates@[index@].0)
+        && (forall<j: Int> 0 <= j && j < used_racks@.len()
+            ==> used_racks@[j] != candidates@[index@].1)
+        && (!require_local || candidates@[index@].0 == local_node)
+        && (forall<i: Int> 0 <= i && i < index@ ==>
+            (exists<j: Int> 0 <= j && j < used_nodes@.len()
+                && used_nodes@[j] == candidates@[i].0)
+            || (exists<j: Int> 0 <= j && j < used_racks@.len()
+                && used_racks@[j] == candidates@[i].1)
+            || (require_local && candidates@[i].0 != local_node)),
+})]
+#[must_use]
+pub fn select_wal_voter_index(
+    candidates: &[(u64, u64)],
+    used_nodes: &[u64],
+    used_racks: &[u64],
+    local_node: u64,
+    require_local: bool,
+) -> Option<usize> {
+    let mut i = 0usize;
+    #[invariant(i@ <= candidates@.len())]
+    #[invariant(forall<k: Int> 0 <= k && k < i@ ==>
+        (exists<j: Int> 0 <= j && j < used_nodes@.len()
+            && used_nodes@[j] == candidates@[k].0)
+        || (exists<j: Int> 0 <= j && j < used_racks@.len()
+            && used_racks@[j] == candidates@[k].1)
+        || (require_local && candidates@[k].0 != local_node))]
+    #[variant(candidates@.len() - i@)]
+    while i < candidates.len() {
+        let candidate = candidates[i];
+        if !contains_voter(used_nodes, candidate.0)
+            && !contains_voter(used_racks, candidate.1)
+            && (!require_local || candidate.0 == local_node)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Authorize a diskless WAL Fetch and classify its leader epoch.
 ///
 /// Authorization deliberately precedes epoch classification, so an
@@ -108,5 +162,18 @@ mod tests {
                 wal_fetch_admission(authenticated, claimed, local, &voters, epoch, 8) == expected
             );
         }
+    }
+
+    #[test]
+    fn wal_voter_selection_is_local_first_and_rack_distinct() {
+        let candidates = [(1, 10), (2, 20), (3, 10), (4, 30)];
+        assert2::assert!(select_wal_voter_index(&candidates, &[], &[], 2, true) == Some(1));
+        assert2::assert!(select_wal_voter_index(&candidates, &[2], &[20], 2, false) == Some(0));
+        assert2::assert!(
+            select_wal_voter_index(&candidates, &[1, 2], &[10, 20], 2, false) == Some(3)
+        );
+        assert2::assert!(
+            select_wal_voter_index(&candidates, &[1, 2, 4], &[10, 20, 30], 2, false) == None
+        );
     }
 }

@@ -15,6 +15,72 @@ pub enum TransactionCompletionDecision {
     RejectState,
 }
 
+/// Sentinel persisted for a transaction controlled by an external 2PC owner.
+pub const NO_TRANSACTION_TIMEOUT_MS: i32 = i32::MAX;
+
+/// State fact needed by the idle-transaction reaper.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum IdleTransactionState {
+    Ongoing,
+    Other,
+}
+
+/// Resolve the persisted timeout without colliding with the 2PC sentinel.
+#[requires(0 < min_timeout_ms@)]
+#[requires(min_timeout_ms@ <= max_timeout_ms@)]
+#[requires(max_timeout_ms@ < i32::MAX@)]
+#[ensures(enable_2pc ==> result@ == i32::MAX@)]
+#[ensures(!enable_2pc ==> min_timeout_ms@ <= result@ && result@ <= max_timeout_ms@)]
+#[ensures(!enable_2pc && requested_ms@ < min_timeout_ms@ ==> result@ == min_timeout_ms@)]
+#[ensures(!enable_2pc && requested_ms@ > max_timeout_ms@ ==> result@ == max_timeout_ms@)]
+#[ensures(!enable_2pc && min_timeout_ms@ <= requested_ms@ && requested_ms@ <= max_timeout_ms@
+    ==> result@ == requested_ms@)]
+#[must_use]
+pub fn resolve_transaction_timeout(
+    enable_2pc: bool,
+    requested_ms: i32,
+    min_timeout_ms: i32,
+    max_timeout_ms: i32,
+) -> i32 {
+    if enable_2pc {
+        NO_TRANSACTION_TIMEOUT_MS
+    } else if requested_ms < min_timeout_ms {
+        min_timeout_ms
+    } else if requested_ms > max_timeout_ms {
+        max_timeout_ms
+    } else {
+        requested_ms
+    }
+}
+
+/// Whether the idle reaper may abort one persisted transaction.
+#[requires(0 < txn_timeout_ms@)]
+#[ensures(state != IdleTransactionState::Ongoing ==> !result)]
+#[ensures(txn_timeout_ms@ == i32::MAX@ ==> !result)]
+#[ensures(result ==> state == IdleTransactionState::Ongoing
+    && txn_timeout_ms@ != i32::MAX@
+    && now_ms@ - start_ms@ >= txn_timeout_ms@)]
+#[ensures(state == IdleTransactionState::Ongoing
+    && txn_timeout_ms@ != i32::MAX@
+    && now_ms@ - start_ms@ >= txn_timeout_ms@ ==> result)]
+#[must_use]
+pub fn should_abort_idle_transaction(
+    state: IdleTransactionState,
+    txn_timeout_ms: i32,
+    start_ms: i64,
+    now_ms: i64,
+) -> bool {
+    let ongoing = match state {
+        IdleTransactionState::Ongoing => true,
+        IdleTransactionState::Other => false,
+    };
+    if !ongoing || txn_timeout_ms == NO_TRANSACTION_TIMEOUT_MS || now_ms < start_ms {
+        return false;
+    }
+    now_ms.saturating_sub(start_ms) >= i64::from(txn_timeout_ms)
+}
+
 /// The persisted identity and state observed after marker fan-out.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -213,6 +279,37 @@ mod tests {
 
     const PREPARE_COMMIT: i8 = 2;
     const COMPLETE_COMMIT: i8 = 4;
+
+    #[test]
+    fn two_pc_timeout_and_reaper_are_fail_closed() {
+        assert2::assert!(resolve_transaction_timeout(true, -1, 2_000, 8_000) == i32::MAX);
+        assert2::assert!(resolve_transaction_timeout(false, -1, 2_000, 8_000) == 2_000);
+        assert2::assert!(resolve_transaction_timeout(false, i32::MAX, 2_000, 8_000) == 8_000);
+        assert2::assert!(!should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            i32::MAX,
+            0,
+            i64::MAX,
+        ));
+        assert2::assert!(!should_abort_idle_transaction(
+            IdleTransactionState::Other,
+            1,
+            0,
+            i64::MAX,
+        ));
+        assert2::assert!(!should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            1,
+            10,
+            9,
+        ));
+        assert2::assert!(should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            1,
+            10,
+            11,
+        ));
+    }
 
     #[test]
     fn producer_identity_boundary_table() {
