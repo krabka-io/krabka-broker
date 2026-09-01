@@ -40,6 +40,7 @@ pub mod retention;
 pub mod schema;
 pub mod share;
 pub mod snapshot;
+pub mod stamp;
 pub mod storage;
 pub mod stretch;
 pub mod throttle;
@@ -129,6 +130,10 @@ pub use share::share_prune_frontier;
 pub use snapshot::{
     SnapshotChunkDecision, SnapshotInstallDecision, snapshot_chunk_admission,
     snapshot_install_decision, snapshot_prune_admission,
+};
+pub use stamp::{
+    covering_stamp_range_index, exact_stamp_range_index, stamp_range_insertion_index,
+    stamp_ranges_valid,
 };
 pub use storage::{
     LocalTruncationPlan, future_log_swap_admission, local_append_coordinates,
