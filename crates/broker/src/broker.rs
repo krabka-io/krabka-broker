@@ -243,23 +243,6 @@ impl Broker {
         &self.handlers
     }
 
-    /// The node ids this broker knows to be fenced or dead.
-    ///
-    /// Heartbeat liveness is registered on the active controller, so only the
-    /// controller answers with a populated set; every other node reports an
-    /// empty one and treats each registered broker as available. Both
-    /// `DescribeCluster`, which marks and filters fenced rows, and the
-    /// advertised `controller_id` of `Metadata` and `DescribeCluster` narrow
-    /// their candidates with it.
-    pub(crate) async fn unavailable_brokers(&self) -> std::collections::HashSet<u64> {
-        let is_controller = *self.controller.watch_leader().borrow() == Some(self.config.node_id);
-        if is_controller {
-            self.liveness.unavailable_snapshot().await
-        } else {
-            std::collections::HashSet::new()
-        }
-    }
-
     pub(crate) fn audit_product() -> krabka_audit::ProductInfo {
         krabka_audit::ProductInfo {
             vendor_name: "Krabka".to_string(),

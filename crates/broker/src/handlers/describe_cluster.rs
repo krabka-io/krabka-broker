@@ -93,7 +93,7 @@ pub(crate) async fn handle(
     // dead/fenced brokers unless the request opts in, and marks included
     // unavailable rows as fenced. Unknown liveness entries remain eligible
     // while a newly elected controller seeds its heartbeat registry.
-    let unavailable = broker.unavailable_brokers().await;
+    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
     let inter_broker_name = broker.config.inter_broker_listener_name.as_str();
     let brokers: Vec<DescribeClusterBroker> = image
         .brokers()

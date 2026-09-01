@@ -9,6 +9,10 @@ use krabka_log::Log;
 
 use crate::{error::BrokerError, partition::Partition};
 
+/// Kafka's `RecordBatch.NO_PARTITION_LEADER_EPOCH`: the wire value a request
+/// carries when it holds no leader epoch for the partition.
+const NO_PARTITION_LEADER_EPOCH: i32 = -1;
+
 /// Immutable topic identity plus the leader generation allowed to mutate a
 /// follower log. A read guard over this value linearizes replication writes
 /// with [`Partition::install_leader_change`].
@@ -171,6 +175,58 @@ impl Partition {
         self.hw_advance_notify.notify_waiters();
     }
 
+    /// KIP-320's leader-epoch comparison, Kafka's
+    /// `Partition.checkCurrentLeaderEpoch`. An asserted epoch below this
+    /// partition's live epoch belongs to a leader generation that has already
+    /// been superseded and takes `FENCED_LEADER_EPOCH`; one above it names a
+    /// generation this broker has not observed yet and takes
+    /// `UNKNOWN_LEADER_EPOCH`.
+    ///
+    /// Returns the error code together with the live epoch, which a response
+    /// shape that reports the current leader back to the client needs.
+    ///
+    /// Which request epochs count as *asserted* is not spelled the same way in
+    /// every API, so each caller decides that before it gets here. See
+    /// [`Self::fetch_leader_epoch_fence`] and
+    /// [`Self::list_offsets_leader_epoch_fence`].
+    fn check_leader_epoch(&self, request_epoch: i32) -> Option<(i16, i32)> {
+        let current = self.current_leader_epoch.load(Ordering::Acquire);
+        if request_epoch == current {
+            return None;
+        }
+        let code = if request_epoch < current {
+            crate::codes::FENCED_LEADER_EPOCH
+        } else {
+            crate::codes::UNKNOWN_LEADER_EPOCH
+        };
+        Some((code, current))
+    }
+
+    /// [`Self::check_leader_epoch`] as Fetch reaches it.
+    /// `FetchRequest.optionalEpoch` maps *any* negative epoch to
+    /// `Optional.empty`, so a Fetch that carries one asserts nothing and
+    /// passes unfenced.
+    pub(crate) fn fetch_leader_epoch_fence(&self, request_epoch: i32) -> Option<(i16, i32)> {
+        if request_epoch < 0 {
+            return None;
+        }
+        self.check_leader_epoch(request_epoch)
+    }
+
+    /// [`Self::check_leader_epoch`] as `ListOffsets` reaches it.
+    /// `RequestUtils.getLeaderEpoch` maps only `NO_PARTITION_LEADER_EPOCH`
+    /// (`-1`) to `Optional.empty`, so every *other* negative epoch is an
+    /// assertion and is fenced. The two APIs really do differ: on
+    /// apache/kafka:4.3.1 with a live epoch of 0, `ListOffsets` v4 answers
+    /// `current_leader_epoch = -2` with `FENCED_LEADER_EPOCH` while Fetch v11
+    /// serves that same request its records.
+    pub(crate) fn list_offsets_leader_epoch_fence(&self, request_epoch: i32) -> Option<(i16, i32)> {
+        if request_epoch == NO_PARTITION_LEADER_EPOCH {
+            return None;
+        }
+        self.check_leader_epoch(request_epoch)
+    }
+
     /// Test-only: directly set the partition's `current_leader_epoch`
     /// and do not use the supervisor's metadata-image-driven path.
     /// `tests/leader_epoch.rs` uses this to simulate split-brain with a
@@ -295,6 +351,40 @@ mod tests {
             assert!(
                 st.current_leader_epoch == krabka_ids::LeaderEpoch(epoch),
                 "case ({leader}, {epoch})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn each_api_spells_the_no_epoch_sentinel_the_way_kafka_spells_it() {
+        // Live epoch 3. Kafka fences a `ListOffsets` row for every request
+        // epoch but `-1` and the live one, while Fetch also lets every other
+        // negative epoch through. Verified on apache/kafka:4.3.1: with a live
+        // epoch of 0, `ListOffsets` v4 answers `current_leader_epoch = -2`
+        // with FENCED_LEADER_EPOCH (74) and Fetch v11 serves it records.
+        const LIVE: i32 = 3;
+        let (p, _td) = test_partition(Arc::new(Notify::new()));
+        p.test_set_leader_epoch(LIVE);
+
+        let fenced = Some((crate::codes::FENCED_LEADER_EPOCH, LIVE));
+        let unknown = Some((crate::codes::UNKNOWN_LEADER_EPOCH, LIVE));
+        // (request epoch, Fetch verdict, ListOffsets verdict)
+        let cases = [
+            (LIVE - 1, fenced, fenced),
+            (LIVE, None, None),
+            (LIVE + 1, unknown, unknown),
+            (-1, None, None),
+            (-2, None, fenced),
+            (i32::MIN, None, fenced),
+        ];
+        for (request_epoch, fetch, list_offsets) in cases {
+            assert!(
+                p.fetch_leader_epoch_fence(request_epoch) == fetch,
+                "{request_epoch}"
+            );
+            assert!(
+                p.list_offsets_leader_epoch_fence(request_epoch) == list_offsets,
+                "{request_epoch}"
             );
         }
     }

@@ -1,0 +1,78 @@
+name: mutants
+
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Workspace crate directory, for example raft
+        required: true
+        type: string
+      shards:
+        description: Number of mutation shards
+        required: true
+        default: 8
+        type: number
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      target: ${{ steps.prepare.outputs.target }}
+      timeout: ${{ steps.prepare.outputs.timeout }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-prepare
+          repository-cache: true
+      - id: prepare
+        env:
+          CRATE: ${{ inputs.crate }}
+          SHARDS: ${{ inputs.shards }}
+        run: |
+          set -euo pipefail
+          [[ "${CRATE}" =~ ^[a-z0-9-]+$ ]]
+          (( SHARDS >= 1 && SHARDS <= 64 ))
+          target="//crates/${CRATE}:${CRATE}_mutants"
+          bazel query "${target}"
+          matrix="$(jq -nc --argjson total "${SHARDS}" \
+            '[range(0; $total) | {index: ., number: (. + 1), total: $total}]')"
+          echo "matrix=${matrix}" >>"${GITHUB_OUTPUT}"
+          echo "target=${target}" >>"${GITHUB_OUTPUT}"
+          if [[ "${CRATE}" == broker ]]; then
+            echo "timeout=300" >>"${GITHUB_OUTPUT}"
+          else
+            echo "timeout=60" >>"${GITHUB_OUTPUT}"
+          fi
+
+  mutants:
+    name: ${{ inputs.crate }} · ${{ matrix.shard.number }}/${{ matrix.shard.total }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.prepare.outputs.timeout) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        with:
+          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ inputs.crate }}
+          repository-cache: true
+      - run: >-
+          bash tools/check-mutants.sh
+          '${{ needs.prepare.outputs.target }}'
+          '${{ matrix.shard.index }}'
+          '${{ matrix.shard.total }}'

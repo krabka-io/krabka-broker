@@ -117,6 +117,7 @@ pub(crate) mod list_offsets;
 pub(crate) mod list_partition_reassignments;
 pub(crate) mod list_transactions;
 pub(crate) mod metadata;
+pub(crate) mod offline_replicas;
 pub(crate) mod offset_commit;
 pub(crate) mod offset_delete;
 pub(crate) mod offset_fetch;

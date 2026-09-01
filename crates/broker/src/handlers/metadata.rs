@@ -125,22 +125,29 @@ pub(crate) async fn handle(
         .map(|broker| project_broker(broker, ctx.connection_listener_name, &inter_broker_name))
         .collect();
 
+    // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
+    // as the image; see `handlers::offline_replicas`.
+    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
     let topics_out = build_topic_rows(
         broker,
         &image,
         ctx,
-        &req,
-        &resolved,
-        &candidate_topics,
-        &acl_by_name,
+        &TopicRowInputs {
+            request: &req,
+            resolved: &resolved,
+            candidates: &candidate_topics,
+            authorization: &acl_by_name,
+            unavailable: &unavailable,
+        },
     );
 
     // controller_id: a broker out of the list this very response carries, not
     // the raft leader. A role-separated controller registers no broker
     // endpoint, so naming it would hand the client an id it cannot resolve.
     // Kafka's KRaft brokers advertise a live broker here for the same reason.
-    // See `crate::handlers::advertised_controller`.
-    let unavailable = broker.unavailable_brokers().await;
+    // See `crate::handlers::advertised_controller`. The fenced set is the same
+    // one `offline_replicas` used above, so the id a client is pointed at and
+    // the replicas it is told are offline cannot disagree.
     let eligible: Vec<i32> = brokers
         .iter()
         .filter(|row| u64::try_from(row.node_id).is_ok_and(|id| !unavailable.contains(&id)))
@@ -191,38 +198,50 @@ type ResolvedTopic<'a> = (
     Result<&'a krabka_metadata::TopicRecord, i16>,
 );
 
+/// The per-request inputs every topic row shares. They travel as one struct so
+/// the row builders keep a readable arity as the response gains fields.
+struct TopicRowInputs<'a> {
+    request: &'a MetadataRequest,
+    resolved: &'a [ResolvedTopic<'a>],
+    candidates: &'a [String],
+    authorization: &'a std::collections::HashMap<&'a str, AuthorizationResult>,
+    /// Brokers the controller currently treats as fenced or dead, from
+    /// [`crate::handlers::offline_replicas::unavailable_brokers`].
+    unavailable: &'a std::collections::HashSet<u64>,
+}
+
 fn build_topic_rows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
-    request: &MetadataRequest,
-    resolved: &[ResolvedTopic<'_>],
-    candidates: &[String],
-    authorization: &std::collections::HashMap<&str, AuthorizationResult>,
+    inputs: &TopicRowInputs<'_>,
 ) -> Vec<MetadataResponseTopic> {
     let allowed = |name: &str| {
-        authorization
+        inputs
+            .authorization
             .get(name)
             .copied()
             .unwrap_or(AuthorizationResult::Deny)
             == AuthorizationResult::Allow
     };
-    if request.topics.is_none() {
-        return candidates
+    if inputs.request.topics.is_none() {
+        return inputs
+            .candidates
             .iter()
             .filter(|name| allowed(name))
             .filter_map(|name| {
                 image
                     .topic(name)
-                    .map(|record| success_topic_row(broker, image, context, request, name, record))
+                    .map(|record| success_topic_row(broker, image, context, inputs, name, record))
             })
             .collect();
     }
-    resolved
+    inputs
+        .resolved
         .iter()
         .map(|(topic, outcome)| match outcome {
             Ok(record) if allowed(&record.name) => {
-                success_topic_row(broker, image, context, request, &record.name, record)
+                success_topic_row(broker, image, context, inputs, &record.name, record)
             }
             Ok(record) => MetadataResponseTopic {
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
@@ -257,7 +276,7 @@ fn success_topic_row(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
-    request: &MetadataRequest,
+    inputs: &TopicRowInputs<'_>,
     name: &str,
     record: &krabka_metadata::TopicRecord,
 ) -> MetadataResponseTopic {
@@ -278,10 +297,15 @@ fn success_topic_row(
                 .iter()
                 .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
                 .collect(),
+            offline_replicas: crate::handlers::offline_replicas::offline_replicas(
+                image,
+                partition,
+                inputs.unavailable,
+            ),
             ..Default::default()
         })
         .collect();
-    let topic_authorized_operations = if request.include_topic_authorized_operations {
+    let topic_authorized_operations = if inputs.request.include_topic_authorized_operations {
         authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             image,
