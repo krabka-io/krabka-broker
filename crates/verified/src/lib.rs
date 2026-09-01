@@ -85,8 +85,9 @@ pub use break_glass_persistence::{
     break_glass_consumption_decision, break_glass_local_action_decision,
 };
 pub use broker::{
-    FetchVisibility, FetchWatermarks, ReplicaFetchMutation, delete_records_offset_out_of_range,
-    delete_records_target, effective_share_backlog, fetch_visibility,
+    DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
+    FetchVisibility, FetchWatermarks, ReplicaFetchMutation, delete_records_trim_application,
+    delete_records_trim_decision, effective_share_backlog, fetch_visibility,
     preferred_rebalance_admission, replica_fetch_mutation, unclean_recovery_commit_admission,
 };
 pub use chain::{ChainStep, chain_step, select_chain_tip};

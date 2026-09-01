@@ -3,7 +3,7 @@
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicI64, Ordering},
+    atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
 use krabka_ids::PartitionIndex;
@@ -61,6 +61,7 @@ pub(super) struct GatedWal {
     sync_started: Mutex<Option<oneshot::Sender<()>>>,
     release_sync: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
     pub(super) trimmed_to: AtomicI64,
+    trim_failures: AtomicUsize,
     hot_tail: Option<(
         Arc<crate::diskless::hot_tail::HotTailCache>,
         uuid::Uuid,
@@ -77,8 +78,15 @@ impl GatedWal {
             sync_started: Mutex::new(Some(sync_started)),
             release_sync: tokio::sync::Mutex::new(Some(release_sync)),
             trimmed_to: AtomicI64::new(-1),
+            trim_failures: AtomicUsize::new(0),
             hot_tail: None,
         }
+    }
+
+    #[must_use]
+    pub(super) fn fail_trim_times(self, failures: usize) -> Self {
+        self.trim_failures.store(failures, Ordering::SeqCst);
+        self
     }
 
     #[must_use]
@@ -110,6 +118,17 @@ impl crate::wal::WalStore for GatedWal {
     }
 
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, crate::error::BrokerError> {
+        if self
+            .trim_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(crate::error::BrokerError::Replication(
+                "injected WAL trim failure".into(),
+            ));
+        }
         self.trimmed_to.store(new_start.0, Ordering::SeqCst);
         Ok(new_start)
     }

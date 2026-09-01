@@ -235,22 +235,190 @@ pub fn fetch_visibility(
     }
 }
 
-/// Resolve `DeleteRecords`' `-1` sentinel to the current high watermark.
-#[ensures(result@ == if requested_offset@ == -1 { high_watermark@ } else { requested_offset@ })]
+/// Offset facts used to admit one `DeleteRecords` trim.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct DeleteRecordsTrimFacts {
+    pub requested: i64,
+    pub high_watermark: i64,
+    pub log_end: i64,
+    pub current_start: i64,
+    pub has_delivery_watermark: bool,
+    pub delivery_watermark: i64,
+}
+
+/// The complete boundary decision for one `DeleteRecords` trim.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum DeleteRecordsTrimDecision {
+    RejectMalformed,
+    RejectOutOfRange,
+    Noop { frontier: i64 },
+    Apply { frontier: i64 },
+}
+
+/// Admit a trim and cap it at every logical deletion frontier.
+///
+/// `-1` means the current high watermark. Explicit requests may name the
+/// uncommitted tail, so the committed high watermark still caps them. A
+/// scheduled topic adds its delivery watermark as a second cap. Stale and
+/// repeated requests return the current start and never move it backwards.
 #[must_use]
-pub const fn delete_records_target(requested_offset: i64, high_watermark: i64) -> i64 {
-    if requested_offset == -1 {
-        high_watermark
+#[ensures({
+    let malformed = facts.requested@ < -1
+        || facts.current_start@ < 0
+        || facts.high_watermark@ < facts.current_start@
+        || facts.log_end@ < facts.high_watermark@
+        || (facts.has_delivery_watermark
+            && facts.delivery_watermark@ < facts.current_start@);
+    let out_of_range = !malformed && facts.requested@ > facts.log_end@;
+    let resolved = if facts.requested@ == -1 {
+        facts.high_watermark@
     } else {
-        requested_offset
+        facts.requested@
+    };
+    let committed = if resolved < facts.high_watermark@ {
+        resolved
+    } else {
+        facts.high_watermark@
+    };
+    let bounded = if facts.has_delivery_watermark
+        && facts.delivery_watermark@ < committed
+    {
+        facts.delivery_watermark@
+    } else {
+        committed
+    };
+    match result {
+        DeleteRecordsTrimDecision::RejectMalformed => malformed,
+        DeleteRecordsTrimDecision::RejectOutOfRange => out_of_range,
+        DeleteRecordsTrimDecision::Noop { frontier } => {
+            !malformed && !out_of_range
+                && bounded <= facts.current_start@
+                && frontier@ == facts.current_start@
+        }
+        DeleteRecordsTrimDecision::Apply { frontier } => {
+            !malformed && !out_of_range
+                && bounded > facts.current_start@
+                && frontier@ == bounded
+                && frontier@ <= facts.high_watermark@
+                && frontier@ <= facts.log_end@
+                && (!facts.has_delivery_watermark
+                    || frontier@ <= facts.delivery_watermark@)
+        }
+    }
+})]
+pub const fn delete_records_trim_decision(
+    facts: DeleteRecordsTrimFacts,
+) -> DeleteRecordsTrimDecision {
+    if facts.requested < -1
+        || facts.current_start < 0
+        || facts.high_watermark < facts.current_start
+        || facts.log_end < facts.high_watermark
+        || (facts.has_delivery_watermark && facts.delivery_watermark < facts.current_start)
+    {
+        return DeleteRecordsTrimDecision::RejectMalformed;
+    }
+    if facts.requested > facts.log_end {
+        return DeleteRecordsTrimDecision::RejectOutOfRange;
+    }
+    let resolved = if facts.requested == -1 {
+        facts.high_watermark
+    } else {
+        facts.requested
+    };
+    let committed = if resolved < facts.high_watermark {
+        resolved
+    } else {
+        facts.high_watermark
+    };
+    let bounded = if facts.has_delivery_watermark {
+        if committed < facts.delivery_watermark {
+            committed
+        } else {
+            facts.delivery_watermark
+        }
+    } else {
+        committed
+    };
+    if bounded <= facts.current_start {
+        DeleteRecordsTrimDecision::Noop {
+            frontier: facts.current_start,
+        }
+    } else {
+        DeleteRecordsTrimDecision::Apply { frontier: bounded }
     }
 }
 
-/// Whether a resolved `DeleteRecords` target is outside the local log.
-#[ensures(result == (target@ < 0 || target@ > log_end_offset@))]
+/// The next idempotent step while reconciling WAL and local trim frontiers.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum DeleteRecordsTrimApplication {
+    RejectMalformed,
+    TrimWal { frontier: i64 },
+    TrimLocal { frontier: i64 },
+    Complete { frontier: i64 },
+}
+
+/// Choose one monotonic trim step, with WAL ordered before the local log.
+///
+/// Re-evaluating this function after a failed step is retry-safe: the chosen
+/// frontier is the maximum of the request and both observed frontiers, so no
+/// retry can regress either store. Completion requires exact equality.
 #[must_use]
-pub const fn delete_records_offset_out_of_range(target: i64, log_end_offset: i64) -> bool {
-    target < 0 || target > log_end_offset
+#[ensures({
+    let frontier = if requested@ > wal_start@ {
+        if requested@ > local_start@ { requested@ } else { local_start@ }
+    } else if wal_start@ > local_start@ {
+        wal_start@
+    } else {
+        local_start@
+    };
+    match result {
+        DeleteRecordsTrimApplication::RejectMalformed => {
+            requested@ < 0 || wal_start@ < 0 || local_start@ < 0
+        }
+        DeleteRecordsTrimApplication::TrimWal { frontier: next } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ < frontier && next@ == frontier
+        }
+        DeleteRecordsTrimApplication::TrimLocal { frontier: next } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ == frontier && local_start@ < frontier
+                && next@ == frontier
+        }
+        DeleteRecordsTrimApplication::Complete { frontier: done } => {
+            requested@ >= 0 && wal_start@ >= 0 && local_start@ >= 0
+                && wal_start@ == frontier && local_start@ == frontier
+                && done@ == frontier
+        }
+    }
+})]
+pub const fn delete_records_trim_application(
+    requested: i64,
+    wal_start: i64,
+    local_start: i64,
+) -> DeleteRecordsTrimApplication {
+    if requested < 0 || wal_start < 0 || local_start < 0 {
+        return DeleteRecordsTrimApplication::RejectMalformed;
+    }
+    let request_or_wal = if requested > wal_start {
+        requested
+    } else {
+        wal_start
+    };
+    let frontier = if request_or_wal > local_start {
+        request_or_wal
+    } else {
+        local_start
+    };
+    if wal_start < frontier {
+        DeleteRecordsTrimApplication::TrimWal { frontier }
+    } else if local_start < frontier {
+        DeleteRecordsTrimApplication::TrimLocal { frontier }
+    } else {
+        DeleteRecordsTrimApplication::Complete { frontier }
+    }
 }
 
 /// Non-negative KIP-932 backlog above the effective share start offset.
@@ -689,11 +857,34 @@ mod tests {
 
     #[test]
     fn broker_arithmetic_edges_are_explicit() {
-        assert!(delete_records_target(-1, 7) == 7);
-        assert!(delete_records_offset_out_of_range(-1, 7));
+        assert!(
+            delete_records_trim_decision(DeleteRecordsTrimFacts {
+                requested: -1,
+                high_watermark: 7,
+                log_end: 9,
+                current_start: 2,
+                has_delivery_watermark: false,
+                delivery_watermark: 0,
+            }) == DeleteRecordsTrimDecision::Apply { frontier: 7 }
+        );
         assert!(effective_share_backlog(12, -1, 4) == 8);
         assert!(effective_share_backlog(5, 9, 4) == 0);
         assert!(effective_share_backlog(i64::MAX, i64::MIN, i64::MIN) == i64::MAX);
+    }
+
+    #[test]
+    fn delete_records_application_orders_retries_wal_first() {
+        use DeleteRecordsTrimApplication::{Complete, RejectMalformed, TrimLocal, TrimWal};
+
+        assert!(delete_records_trim_application(-1, 0, 0) == RejectMalformed);
+        assert!(delete_records_trim_application(8, 2, 2) == TrimWal { frontier: 8 });
+        assert!(delete_records_trim_application(8, 8, 2) == TrimLocal { frontier: 8 });
+        assert!(delete_records_trim_application(8, 8, 8) == Complete { frontier: 8 });
+        // A retry repairs either side at the highest frontier and never
+        // regresses a partially applied trim.
+        assert!(delete_records_trim_application(5, 8, 3) == TrimLocal { frontier: 8 });
+        assert!(delete_records_trim_application(5, 3, 8) == TrimWal { frontier: 8 });
+        assert!(delete_records_trim_application(i64::MAX, 0, 0) == TrimWal { frontier: i64::MAX });
     }
 
     #[test]
@@ -875,23 +1066,6 @@ mod tests {
     #[test]
     fn broker_arithmetic_matches_wide_integer_oracles() {
         let values = [i64::MIN, -2, -1, 0, 1, 2, i64::MAX];
-        for requested in values {
-            for high_watermark in values {
-                assert!(
-                    delete_records_target(requested, high_watermark)
-                        == if requested == -1 {
-                            high_watermark
-                        } else {
-                            requested
-                        }
-                );
-                assert!(
-                    delete_records_offset_out_of_range(requested, high_watermark)
-                        == (requested < 0 || requested > high_watermark)
-                );
-            }
-        }
-
         for hwm in values {
             for spso in values {
                 for log_start in values {
