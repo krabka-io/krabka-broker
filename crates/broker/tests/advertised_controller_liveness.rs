@@ -74,6 +74,14 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     // first heartbeat. Both edges are published, so settle on the steady state
     // before measuring: a run started inside the seed window would be reading
     // the seed rather than the death.
+    //
+    // The registry settles first. An observer image that has simply not seen
+    // the seed publication yet reads exactly like one past it, so waiting on
+    // the image alone can return before the seed even lands.
+    let leader_index = (0..cluster.len())
+        .find(|&i| cluster[i].0.node_id() == leader.0)
+        .expect("the elected leader is one of these nodes");
+    wait_until_the_controller_has_unfenced_every_broker(&cluster[leader_index].0).await;
     wait_until_fenced_set(&cluster[observer_index].0, &BTreeSet::new()).await;
 
     // Every broker is advertised while every broker is alive, so what the
@@ -162,6 +170,23 @@ async fn advertised_over_a_run(client: &Client) -> BTreeSet<i32> {
 /// the same pair back through `kafka-configs --describe --entity-type brokers`.
 const BROKER_FENCED: &str = "broker.fenced";
 const FENCED_TRUE: &str = "true";
+
+/// Block until the controller's own liveness registry holds no fenced or dead
+/// broker, so no further `broker.fenced=true` publication is coming.
+async fn wait_until_the_controller_has_unfenced_every_broker(handle: &BrokerHandle) {
+    let deadline = tokio::time::Instant::now() + FENCING_DEADLINE;
+    loop {
+        let unavailable = handle.unavailable_brokers_for_test().await;
+        if unavailable.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the controller still treats brokers {unavailable:?} as unavailable"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
 /// Block until `handle`'s own replicated image marks exactly `expected` fenced.
 ///

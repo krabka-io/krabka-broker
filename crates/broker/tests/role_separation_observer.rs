@@ -14,7 +14,7 @@
 //! that list, which is why both APIs advertise a broker instead of the raft
 //! leader, the way a `KRaft` broker does.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker, BrokerHandle, config::NodeRole};
@@ -120,10 +120,83 @@ async fn start_role_separated(broker_count: usize) -> RoleSeparated {
         broker.wait_until_brokers_registered(broker_count).await;
     }
 
+    // A broker registers fenced and stays that way until it has heartbeated
+    // and proved metadata catch-up, so a freshly booted cluster advertises no
+    // controller at all for the first liveness tick or two. Settle the
+    // controller first — until it has unfenced every broker it may still
+    // publish `broker.fenced=true`, and an observer image that merely has not
+    // seen that publication yet reads the same as one past it. Then wait for
+    // the resulting tombstone to reach each observer's own copy.
+    wait_until_the_controller_has_unfenced_every_broker(&controller).await;
+    for broker in &brokers {
+        wait_until_no_broker_is_fenced(broker).await;
+    }
+
     RoleSeparated {
         controller,
         brokers,
         _dirs: dirs,
+    }
+}
+
+/// The controller-managed broker config that carries a fencing decision into
+/// the metadata log, and the value it takes on a fenced node.
+const BROKER_FENCED: &str = "broker.fenced";
+const FENCED_TRUE: &str = "true";
+
+/// `heartbeat_timeout` plus a liveness-tick publication and one metadata
+/// propagation, with slack for a loaded runner.
+const UNFENCING_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Block until the controller reports no unavailable broker at all: neither
+/// its own liveness registry nor its image holds one, so no further
+/// `broker.fenced=true` publication is coming.
+async fn wait_until_the_controller_has_unfenced_every_broker(handle: &BrokerHandle) {
+    let deadline = tokio::time::Instant::now() + UNFENCING_DEADLINE;
+    loop {
+        let unavailable = handle.unavailable_brokers_for_test().await;
+        if unavailable.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the controller still treats brokers {unavailable:?} as unavailable"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Block until `handle`'s own replicated image marks no registered broker
+/// fenced.
+///
+/// This reads the image rather than a response, on purpose: the wait must not
+/// run through the handlers under test, or a handler that ignored the
+/// replicated state would hang here instead of failing on the id it
+/// advertises.
+async fn wait_until_no_broker_is_fenced(handle: &BrokerHandle) {
+    let deadline = tokio::time::Instant::now() + UNFENCING_DEADLINE;
+    loop {
+        let image = handle.controller_image_for_test();
+        let fenced: BTreeSet<u64> = image
+            .brokers()
+            .filter(|broker| {
+                image
+                    .broker_config(broker.node_id)
+                    .and_then(|configs| configs.get(BROKER_FENCED))
+                    .map(String::as_str)
+                    == Some(FENCED_TRUE)
+            })
+            .map(|broker| broker.node_id.0)
+            .collect();
+        if fenced.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "node {} still marks brokers {fenced:?} fenced",
+            handle.node_id()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
