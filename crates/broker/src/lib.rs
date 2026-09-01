@@ -165,6 +165,7 @@ pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
 pub mod bootstrap;
 pub(crate) mod break_glass;
 mod broker;
+pub(crate) mod clean_shutdown;
 pub(crate) mod cleaner;
 mod client_metrics;
 /// Client-visible failover model: producer retry/routing composed with broker

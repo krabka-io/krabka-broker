@@ -39,8 +39,11 @@
 
 pub(crate) mod maintain;
 pub(crate) mod state;
+pub(crate) mod unclean_restart;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{maintain::ElrPublisher, state::TopicElr};
+pub(crate) use self::{
+    maintain::ElrPublisher, state::TopicElr, unclean_restart::withdraw_elr_membership,
+};
