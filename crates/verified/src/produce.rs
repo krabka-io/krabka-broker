@@ -13,6 +13,27 @@ pub enum ProduceBatchAdmission {
     InvalidTimestamp,
 }
 
+/// Compute the exclusive durability frontier for an acknowledged Produce
+/// batch. Both a fresh append and an idempotent duplicate wait for this value.
+#[ensures(match result {
+    Some(frontier) => base_offset@ >= 0
+        && last_offset_delta@ >= 0
+        && frontier@ == base_offset@ + last_offset_delta@ + 1
+        && base_offset@ < frontier@,
+    None => base_offset@ < 0
+        || last_offset_delta@ < 0
+        || base_offset@ + last_offset_delta@ + 1 > i64::MAX@,
+})]
+#[must_use]
+pub fn produce_durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<i64> {
+    if base_offset < 0 || last_offset_delta < 0 {
+        return None;
+    }
+    base_offset
+        .checked_add(i64::from(last_offset_delta))?
+        .checked_add(1)
+}
+
 #[allow(
     clippy::fn_params_excessive_bools,
     reason = "the proof classifies independent CRC-covered header facts"
@@ -72,6 +93,15 @@ pub fn produce_batch_admission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durability_frontier_is_exact_and_fail_closed() {
+        assert2::assert!(produce_durability_frontier(10, 2) == Some(13));
+        assert2::assert!(produce_durability_frontier(-1, 0).is_none());
+        assert2::assert!(produce_durability_frontier(10, -1).is_none());
+        assert2::assert!(produce_durability_frontier(i64::MAX, 0).is_none());
+        assert2::assert!(produce_durability_frontier(i64::MAX - 1, 0) == Some(i64::MAX));
+    }
 
     #[test]
     fn produce_header_admission_is_ordered_and_exhaustive() {

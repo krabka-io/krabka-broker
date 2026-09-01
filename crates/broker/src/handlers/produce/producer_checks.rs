@@ -4,10 +4,9 @@
 
 use std::time::Duration;
 
-use krabka_log::Offset;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
-use super::{ACKS_ALL, INVALID_OFFSET, prepare::PreparedBatch};
+use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch};
 use crate::{codes, error::BrokerError};
 
 pub(super) async fn validate_transactional_produce(
@@ -95,14 +94,17 @@ pub(super) async fn handle_duplicate(
     // with the sentinel.
     let (error_code, base_offset, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
+            let Some(target) = durability_frontier(base_offset, batch.last_offset_delta) else {
+                return Some(PartitionProduceResponse {
+                    index: partition_index,
+                    error_code: codes::INVALID_RECORD,
+                    base_offset: -1,
+                    ..Default::default()
+                });
+            };
             let error_code = if acks == ACKS_ALL {
-                let target = base_offset + i64::from(batch.last_offset_delta) + 1;
                 let deadline = std::time::Instant::now() + timeout;
-                if partition
-                    .await_hw_at_least(Offset(target), deadline)
-                    .await
-                    .is_ok()
-                {
+                if partition.await_hw_at_least(target, deadline).await.is_ok() {
                     codes::NONE
                 } else {
                     codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND

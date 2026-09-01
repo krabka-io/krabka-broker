@@ -9,7 +9,7 @@ use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 use tokio::sync::oneshot;
 
 use super::{
-    ACKS_ALL, INVALID_OFFSET,
+    ACKS_ALL, INVALID_OFFSET, durability_frontier,
     prepare::{PreparedBatch, PreparedSource},
 };
 use crate::{
@@ -129,7 +129,11 @@ async fn finalize_ack(
     key: &CommitKey<'_>,
 ) {
     let part = context.partition;
-    let target = base_offset + i64::from(key.last_offset_delta) + 1;
+    let Some(target) = durability_frontier(base_offset.0, key.last_offset_delta) else {
+        out.error_code = codes::INVALID_RECORD;
+        out.base_offset = -1;
+        return;
+    };
     if context.acks == ACKS_ALL {
         let started = std::time::Instant::now();
         let deadline = started + context.timeout;

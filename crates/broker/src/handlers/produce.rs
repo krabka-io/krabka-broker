@@ -55,6 +55,25 @@ mod test_support;
 /// until every in-sync replica has it.
 const ACKS_ALL: i16 = -1;
 
+/// Map one admitted batch to the exact exclusive frontier used by both fresh
+/// append and duplicate `acks=all` waits.
+fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabka_log::Offset> {
+    krabka_verified::produce_durability_frontier(base_offset, last_offset_delta)
+        .map(krabka_log::Offset)
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::*;
+
+    #[test]
+    fn adapter_rejects_malformed_and_overflowing_frontiers() {
+        assert2::assert!(durability_frontier(10, 2) == Some(krabka_log::Offset(13)));
+        assert2::assert!(durability_frontier(10, -1).is_none());
+        assert2::assert!(durability_frontier(i64::MAX, 0).is_none());
+    }
+}
+
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.

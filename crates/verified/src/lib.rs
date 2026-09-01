@@ -88,7 +88,7 @@ pub use features::{FeatureUpdateDecision, feature_update_decision};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
-pub use produce::{ProduceBatchAdmission, produce_batch_admission};
+pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
 };
