@@ -21,12 +21,13 @@ pub struct TopicConfigDoc {
 
 /// The full whitelist documented on the topic-configs reference page.
 ///
-/// Synthesised keys stay off the page: they are not stored, so no operator can
-/// set one. `WRITE_FREEZE` is the only such topic key.
+/// A key no alter path may write stays off the page, because no operator can
+/// set one. `WRITE_FREEZE` is synthesised and never stored;
+/// `ELIGIBLE_LEADER_REPLICAS` is stored, but only the controller writes it.
 #[must_use]
 pub fn topic_config_docs() -> Vec<TopicConfigDoc> {
     registry::keys_in(ConfigScope::Topic)
-        .filter(|row| row.is_stored())
+        .filter(|row| row.is_alterable())
         .map(|row| TopicConfigDoc {
             key: row.name,
             value_type: row.value_type(),

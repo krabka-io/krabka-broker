@@ -26,7 +26,8 @@ use super::{
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
         OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE,
+        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        TRANSACTIONAL_ID_EXPIRATION_MS,
     },
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
@@ -39,7 +40,7 @@ use super::{
         SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL,
         SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_VALUE,
     },
-    topic_scope::WRITE_FREEZE,
+    topic_scope::{ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE},
 };
 
 /// The `node.id` a broker resource reports beside its dynamic overrides. The
@@ -172,8 +173,9 @@ impl ConfigKey {
     /// `true` when the resource's stored override map can hold the key.
     ///
     /// The broker synthesises the rest: `write.freeze` comes from the freeze
-    /// registry, and `node.id` and the two KIP-211 retention keys come from
-    /// the broker's static configuration.
+    /// registry, and `node.id`, the two KIP-211 retention keys and the two
+    /// KIP-98 transactional-id expiry keys come from the broker's own static
+    /// configuration, which no metadata record holds.
     pub(crate) fn is_stored(&self) -> bool {
         !matches!(
             self.name,
@@ -181,7 +183,22 @@ impl ConfigKey {
                 | NODE_ID
                 | OFFSETS_RETENTION_MINUTES
                 | OFFSETS_RETENTION_CHECK_INTERVAL_MS
+                | TRANSACTIONAL_ID_EXPIRATION_MS
+                | TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
         )
+    }
+
+    /// `true` when an alter path may write the key, which is what the
+    /// reference page documents and what `validate_topic_config` accepts.
+    ///
+    /// Two things put a key outside that set. A key the resource's override
+    /// map cannot hold is synthesised, so no alter has anywhere to store it.
+    /// A key whose check is [`ValueCheck::NotAltered`] is stored but
+    /// controller-written: KIP-966's `krabka.elr` and the broker fencing and
+    /// stretch-site keys are published by the controller as cluster state
+    /// changes, and an operator who set one by hand would be overwritten.
+    pub(crate) fn is_alterable(&self) -> bool {
+        self.is_stored() && !matches!(self.check, ValueCheck::NotAltered)
     }
 
     /// `true` when the value must not be disclosed. `DescribeConfigs` reports
@@ -486,6 +503,18 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ValueCheck::NotAltered,
         )
     },
+    ConfigKey {
+        read_only: true,
+        kip: Some("KIP-966"),
+        ..key(
+            ELIGIBLE_LEADER_REPLICAS,
+            ConfigScope::Topic,
+            ConfigType::String,
+            None,
+            "Eligible-leader-replica state of the topic's partitions, one `partition:elr:last-known-elr` group per partition that has any. Only the controller's ISR transitions write it, and `kafka-topics --describe` reads it.",
+            ValueCheck::NotAltered,
+        )
+    },
     // ── Broker scope ────────────────────────────────────────────
     ConfigKey {
         type_note: Some("bytes/s"),
@@ -569,6 +598,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         )
     },
     ConfigKey {
+        kip: Some("KIP-500"),
         read_only: true,
         ..key(
             BROKER_FENCED,
@@ -613,6 +643,32 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Long,
             Some("600000"),
             "Cadence of the background sweep that tombstones expired committed offsets. The process reads it at startup, so no alter path can change it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-98"),
+        read_only: true,
+        ..key(
+            TRANSACTIONAL_ID_EXPIRATION_MS,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            Some("604800000"),
+            "How long a transactional id may sit in a terminal or idle state before the transaction coordinator tombstones it out of `__transaction_state`. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-98"),
+        read_only: true,
+        ..key(
+            TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            Some("3600000"),
+            "How often the transactional-id expiry sweep scans the `__transaction_state` partitions this node leads. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
             ValueCheck::NotAltered,
         )
     },

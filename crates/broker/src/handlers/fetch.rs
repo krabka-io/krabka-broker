@@ -195,7 +195,7 @@ pub(crate) async fn handle(
             .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
         0
     } else {
-        apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses).await
+        apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses)
     };
 
     record_fetch_metrics(broker, &responses, &cpu_micros_by_idx, is_follower_fetch);

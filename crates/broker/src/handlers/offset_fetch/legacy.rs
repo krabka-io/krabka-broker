@@ -16,11 +16,12 @@ use krabka_protocol::owned::{
     },
 };
 
-use super::{authz::group_authorized, committed::fetch_committed};
+use super::{authz::group_authorized, committed::fetch_offsets, unstable};
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
+    coordinator::unified::group::GroupOffsets,
     error::BrokerError,
 };
 
@@ -28,6 +29,10 @@ use crate::{
 ///
 /// It gates the group, resolves the group's committed offsets, and fills
 /// `resp.topics`, which the encoder writes only for versions below 8.
+///
+/// `req.require_stable` decodes as `false` below v7, so a pre-KIP-447 client
+/// keeps seeing the stable offset for a partition an open transaction has
+/// written.
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_legacy(
@@ -63,21 +68,22 @@ pub(super) async fn handle_legacy(
         );
     }
 
-    // Fetch the group's committed offsets from its actor (a classic actor is
+    // Fetch the group's offset state from its actor (a classic actor is
     // created for an unknown id; offsets are protocol-agnostic, so an existing
-    // actor of either kind serves `FetchCommitted` the same way).
-    let committed = fetch_committed(broker, &req.group_id).await;
+    // actor of either kind serves `FetchOffsets` the same way).
+    let offsets = fetch_offsets(broker, &req.group_id).await;
 
     // A `None` `topics` field (v ≥ 2) is the "fetch all" sentinel:
     // return every committed offset stored for this group.
     let topics_out: Vec<OffsetFetchResponseTopic> = if req.topics.is_none() {
-        legacy_fetch_all(broker, ctx, &committed)
+        legacy_fetch_all(broker, ctx, &offsets, req.require_stable)
     } else {
         legacy_named_topics(
             broker,
             ctx,
             req.topics.as_deref().unwrap_or(&[]),
-            &committed,
+            &offsets,
+            req.require_stable,
         )
     };
 
@@ -95,15 +101,15 @@ pub(super) async fn handle_legacy(
 /// Each requested topic is gated with `Read`; a denial replaces every one of
 /// its partitions with `TOPIC_AUTHORIZATION_FAILED` and the `-1` sentinels,
 /// and an offset the group never committed reports `-1` with no error, which
-/// is what the JVM consumer expects for an unset partition.
+/// is what the JVM consumer expects for an unset partition. Under
+/// `require_stable`, a partition an unresolved transaction has written reports
+/// `UNSTABLE_OFFSET_COMMIT` ahead of either of those.
 fn legacy_named_topics(
     broker: &Broker,
     ctx: &crate::handlers::RequestContext<'_>,
     req_topics: &[OffsetFetchRequestTopic],
-    committed: &std::collections::HashMap<
-        (String, i32),
-        crate::coordinator::unified::classic_state::OffsetEntry,
-    >,
+    offsets: &GroupOffsets,
+    require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopic> {
     // ── ACL preamble ─────────────────────────────────────
     // Step 2 (named topics): `Read` on each requested topic. On Deny →
@@ -151,23 +157,29 @@ fn legacy_named_topics(
                 let partitions = t
                     .partition_indexes
                     .iter()
-                    .map(|&pid| match committed.get(&(t.name.clone(), pid)) {
-                        Some(entry) => OffsetFetchResponsePartition {
-                            partition_index: pid,
-                            committed_offset: entry.offset.0,
-                            committed_leader_epoch: entry.leader_epoch,
-                            metadata: Some(entry.metadata.clone()),
-                            error_code: codes::NONE,
-                            ..Default::default()
-                        },
-                        None => OffsetFetchResponsePartition {
-                            partition_index: pid,
-                            committed_offset: -1,
-                            committed_leader_epoch: -1,
-                            metadata: None,
-                            error_code: codes::NONE,
-                            ..Default::default()
-                        },
+                    .map(|&pid| {
+                        let key = (t.name.clone(), pid);
+                        if require_stable && offsets.pending_txn.contains(&key) {
+                            return unstable::legacy_row(pid);
+                        }
+                        match offsets.committed.get(&key) {
+                            Some(entry) => OffsetFetchResponsePartition {
+                                partition_index: pid,
+                                committed_offset: entry.offset.0,
+                                committed_leader_epoch: entry.leader_epoch,
+                                metadata: Some(entry.metadata.clone()),
+                                error_code: codes::NONE,
+                                ..Default::default()
+                            },
+                            None => OffsetFetchResponsePartition {
+                                partition_index: pid,
+                                committed_offset: -1,
+                                committed_leader_epoch: -1,
+                                metadata: None,
+                                error_code: codes::NONE,
+                                ..Default::default()
+                            },
+                        }
                     })
                     .collect();
                 OffsetFetchResponseTopic {
@@ -180,28 +192,35 @@ fn legacy_named_topics(
         .collect()
 }
 
+/// Builds the response rows for the fetch-all sentinel on the legacy shape.
+///
+/// The rows come from the group's stable offsets, so a partition that an open
+/// transaction has written but that has no earlier committed offset is absent
+/// here, exactly as it is in Kafka. `require_stable` still applies to the rows
+/// that are present.
 fn legacy_fetch_all(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
-    committed: &std::collections::HashMap<
-        (String, i32),
-        crate::coordinator::unified::classic_state::OffsetEntry,
-    >,
+    offsets: &GroupOffsets,
+    require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopic> {
     let mut by_topic: std::collections::HashMap<String, Vec<OffsetFetchResponsePartition>> =
         std::collections::HashMap::new();
-    for ((topic, partition), entry) in committed {
-        by_topic
-            .entry(topic.clone())
-            .or_default()
-            .push(OffsetFetchResponsePartition {
+    for (key, entry) in &offsets.committed {
+        let (topic, partition) = key;
+        let row = if require_stable && offsets.pending_txn.contains(key) {
+            unstable::legacy_row(*partition)
+        } else {
+            OffsetFetchResponsePartition {
                 partition_index: *partition,
                 committed_offset: entry.offset.0,
                 committed_leader_epoch: entry.leader_epoch,
                 metadata: Some(entry.metadata.clone()),
                 error_code: codes::NONE,
                 ..Default::default()
-            });
+            }
+        };
+        by_topic.entry(topic.clone()).or_default().push(row);
     }
     let names: Vec<_> = by_topic.keys().cloned().collect();
     let image = broker.controller.current_image();

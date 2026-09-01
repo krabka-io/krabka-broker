@@ -533,7 +533,7 @@ async fn user_client_tuple_overrides_user_specific() {
 /// Test 7: the request quota is echoed on an API the dispatch loop patches.
 ///
 /// `Produce` and `Fetch` fill `ThrottleTimeMs` in themselves, before encoding.
-/// Everywhere else `maybe_apply_request_quota` runs, the delay is written into
+/// Everywhere else `apply_request_quota` runs, the delay is written into
 /// the already-encoded body by patching its leading int32, which is only safe
 /// on the responses whose schema really does put `ThrottleTimeMs` first.
 /// `network::dispatch::throttle_audit` pins which those are against the

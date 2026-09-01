@@ -47,10 +47,13 @@
 //! them, so [`validate_config_combination`] checks all three rules over a whole
 //! override map.
 //!
-//! One topic key sits outside the whitelist. KFC-9's [`WRITE_FREEZE`] is
-//! synthesised for `DescribeConfigs` and is never stored, so
-//! [`validate_topic_config`] does not accept it and both alter paths refuse
-//! it by name. See [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
+//! Two topic keys sit outside the whitelist, because the controller is their
+//! only writer. KFC-9's [`WRITE_FREEZE`] is synthesised for `DescribeConfigs`
+//! and is never stored. KIP-966's [`ELIGIBLE_LEADER_REPLICAS`] is stored, but
+//! only the controller's ISR transitions write it and only
+//! `DescribeTopicPartitions` reads it. [`validate_topic_config`] accepts
+//! neither and both alter paths refuse them by name. See
+//! [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 //!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
 //!
@@ -88,7 +91,8 @@ pub(crate) use self::{
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, FENCED_TRUE, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
         OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE, fenced_node_ids,
+        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        TRANSACTIONAL_ID_EXPIRATION_MS, WITNESS_TRUE, fenced_node_ids,
         is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
         resolve_broker_fenced, resolve_broker_witness, resolve_preferred_leader_site,
         resolve_remote_list_offsets_timeout, witness_node_ids,
@@ -106,7 +110,8 @@ pub(crate) use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
+        ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE, controller_managed_topic_config_message,
+        is_controller_managed_topic_config,
     },
     validation::{
         is_recognized, parse_compression_type, validate_config_combination, validate_topic_config,

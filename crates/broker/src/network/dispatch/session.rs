@@ -1,6 +1,7 @@
 //! Per-connection authentication session state. It derives the initial
-//! `ConnectionAuth` for a listener, borrows the connection's principal, and
-//! arms the KIP-368 session-expiry deadline that races the next frame read.
+//! `ConnectionAuth` for a listener, borrows the connection's principal, arms
+//! the KIP-368 session-expiry deadline that races the next frame read, and
+//! holds the read off for the KIP-219 mute window a throttled request earned.
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -107,20 +108,47 @@ fn auth_deadline(auth: &crate::network::auth::ConnectionAuth) -> Option<tokio::t
     }
 }
 
+/// Logs the KIP-368 session expiry that ends the connection.
+fn log_session_expiry(auth: &crate::network::auth::ConnectionAuth) {
+    tracing::info!(
+        principal = ?auth_principal_name(auth),
+        "SASL session expired, closing connection (KIP-368)"
+    );
+}
+
+/// Reads the next request frame, after honouring any KIP-219 mute window.
+///
+/// `mute_until` is the deadline the previous response's throttle earned. Kafka
+/// enforces a quota by muting the connection: the response is already on the
+/// wire, and the broker simply stops reading requests until the window closes.
+/// Holding the read back here — rather than delaying the write — is what keeps
+/// a throttled client from timing out its in-flight request and retrying into
+/// the quota that is shedding load.
+///
+/// The KIP-368 session-expiry deadline races the mute as well as the read, so
+/// an expiring session still closes the connection on time.
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     auth: &crate::network::auth::ConnectionAuth,
+    mute_until: Option<tokio::time::Instant>,
 ) -> Option<Bytes>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    if let Some(mute_until) = mute_until {
+        tokio::select! {
+            biased;
+            () = sleep_until_some(auth_deadline(auth)) => {
+                log_session_expiry(auth);
+                return None;
+            }
+            () = tokio::time::sleep_until(mute_until) => {}
+        }
+    }
     let frame_result = tokio::select! {
         biased;
         () = sleep_until_some(auth_deadline(auth)) => {
-            tracing::info!(
-                principal = ?auth_principal_name(auth),
-                "SASL session expired, closing connection (KIP-368)"
-            );
+            log_session_expiry(auth);
             return None;
         },
         next = framed.next() => next,
@@ -201,6 +229,53 @@ mod tests {
             .await
             .expect("deadline should resolve");
         assert!(tokio::time::Instant::now() >= deadline);
+    }
+
+    /// KIP-368 beats KIP-219: an expiring SASL session closes the connection
+    /// on time even while a throttle mute is holding the read off.
+    ///
+    /// The mute is armed for five seconds and the session expires in a
+    /// hundred milliseconds, with a request frame already waiting to be read.
+    /// A mute that did not race the expiry would sleep out its window and then
+    /// hand back that frame, serving a request on an expired session; instead
+    /// the connection ends.
+    #[tokio::test(start_paused = true)]
+    async fn an_expiring_session_closes_while_the_connection_is_muted() {
+        use futures_util::SinkExt as _;
+
+        const MAX_FRAME_BYTES: usize = 4096;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let auth = crate::network::auth::ConnectionAuth::Authenticated {
+            principal: krabka_security::Principal {
+                name: "alice".to_string(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: krabka_security::SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(now_ms + 100),
+            authenticated_via_token: true,
+        };
+
+        let (client, server) = tokio::io::duplex(MAX_FRAME_BYTES);
+        let mut client_framed =
+            tokio_util::codec::Framed::new(client, crate::network::codec::codec(MAX_FRAME_BYTES));
+        client_framed
+            .send(Bytes::from_static(b"a queued request"))
+            .await
+            .expect("queue a request behind the mute");
+        let mut server_framed =
+            tokio_util::codec::Framed::new(server, crate::network::codec::codec(MAX_FRAME_BYTES));
+
+        let mute_until = tokio::time::Instant::now() + Duration::from_secs(5);
+        let frame = next_connection_frame(&mut server_framed, &auth, Some(mute_until)).await;
+
+        assert!(
+            frame.is_none(),
+            "the session expiry must end the connection, not wait out the mute"
+        );
     }
 
     #[test]

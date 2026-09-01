@@ -99,7 +99,7 @@ mod tests {
         let (coord, _log) = make_coordinator();
         let handle = coord.get_or_create_classic("g");
 
-        // UpdateCommitted then FetchCommitted round-trips on the kind-agnostic Group.
+        // UpdateCommitted then FetchOffsets round-trips on the kind-agnostic Group.
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
@@ -122,10 +122,10 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
-            .send(GroupActorMessage::FetchCommitted { reply: tx })
+            .send(GroupActorMessage::FetchOffsets { reply: tx })
             .await
             .unwrap();
-        let committed = rx.await.unwrap();
+        let committed = rx.await.unwrap().committed;
         assert!(committed.get(&("t".to_string(), 0)).unwrap().offset == 42);
 
         // Classic offset-commit validate: a simple consumer (no member/instance)
@@ -174,10 +174,10 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
-            .send(GroupActorMessage::FetchCommitted { reply: tx })
+            .send(GroupActorMessage::FetchOffsets { reply: tx })
             .await
             .unwrap();
-        assert!(rx.await.unwrap().is_empty());
+        assert!(rx.await.unwrap().committed.is_empty());
     }
 
     /// Regression for the stale-`handle.kind` defect (KIP-848 live migration).

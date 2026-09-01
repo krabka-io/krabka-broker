@@ -1,5 +1,5 @@
 //! Assembly and encoding of the `CreatePartitions` response, including the
-//! KIP-599 throttle that the handler applies after it has built the per-topic
+//! KIP-599 throttle that the handler records after it has built the per-topic
 //! result rows.
 
 use bytes::Bytes;
@@ -8,7 +8,7 @@ use krabka_protocol::{
     api_key::ApiKey,
     owned::create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
 };
-use krabka_units::{Time, convert::TimeExt};
+use krabka_units::Time;
 
 use crate::error::BrokerError;
 
@@ -27,8 +27,9 @@ pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes
     crate::handlers::encode_response(resp, version)
 }
 
-pub(super) async fn finish_response(
+pub(super) fn finish_response(
     broker: &crate::broker::Broker,
+    context: &crate::handlers::RequestContext<'_>,
     delay: Time,
     results: Vec<CreatePartitionsTopicResult>,
     version: i16,
@@ -42,9 +43,9 @@ pub(super) async fn finish_response(
         &[(crate::metrics::QuotaType::ControllerMutation, delay)],
     );
     let resp = create_partitions_response(results, crate::quota::throttle_time_ms(delay));
-    if delay > <Time as TimeExt>::ZERO {
-        tokio::time::sleep(delay.to_std()).await;
-    }
+    // KIP-219: the KIP-599 window is reported here and enforced by the
+    // connection loop, which mutes the connection after the response is sent.
+    context.record_throttle(delay);
     encode_response(&resp, version)
 }
 

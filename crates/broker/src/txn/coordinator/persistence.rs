@@ -2,8 +2,10 @@
 //!
 //! One path appends a `TxnEntry` to its `__transaction_state` partition as a
 //! byte-exact Kafka `TransactionLogKey` / `TransactionLogValue` record pair and
-//! then publishes it to the in-memory map. The other replays every locally-led
-//! `__transaction_state` partition on broker start to rebuild that map.
+//! then publishes it to the in-memory map. A second appends a null-valued
+//! record under that same key, which is how KIP-98 expires a transactional id.
+//! The third replays every locally-led `__transaction_state` partition on
+//! broker start to rebuild that map, tombstones included.
 
 use std::sync::Arc;
 
@@ -76,6 +78,61 @@ impl TxnCoordinator {
                 .insert(entry.next_producer_id, entry.transactional_id.clone());
         }
         self.state.insert(tid, Arc::new(Mutex::new(entry)));
+        Ok(())
+    }
+
+    /// Appends a `TransactionLogKey` tombstone for `entry`'s transactional id,
+    /// then drops that id from the in-memory map and from the producer-id
+    /// reverse index.
+    ///
+    /// The record is a null-valued record under the same byte-exact
+    /// `TransactionLogKey(v0)` that [`Self::put`] writes, which is how Kafka
+    /// expires a transactional id: compaction reclaims the tid's history, and
+    /// [`Self::recover`] already reads a null value as a delete.
+    ///
+    /// `entry` is the live entry, and the caller **holds its lock**. That is
+    /// what makes the append and the in-memory drop one step: every path that
+    /// revives a known tid mutates the entry under that same lock, so no
+    /// revival can land between them and no reviving record can end up before
+    /// this tombstone in the log.
+    ///
+    /// A failed append leaves the coordinator exactly as it was, and the next
+    /// sweep retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Txn`] if the partition is not locally held, or
+    /// the append error if the append fails.
+    // cargo-mutants: append to a live partition log + live DashMap state
+    #[cfg_attr(test, mutants::skip)]
+    #[tracing::instrument(
+        name = "txn_coordinator_tombstone",
+        level = "debug",
+        skip_all,
+        fields(tid = %entry.transactional_id),
+        err,
+    )]
+    pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
+        let tid = entry.transactional_id.as_str();
+        let p = self.partition_for(tid);
+        let part = self
+            .partitions
+            .get(bootstrap::TOPIC, p)
+            .ok_or_else(|| BrokerError::Txn(format!("__transaction_state-{p} not local")))?;
+
+        let mut batch = RecordBatch::default();
+        batch.records.push(Record {
+            offset_delta: 0,
+            key: Some(Bytes::from(crate::txn::log_record::encode_key(tid))),
+            value: None,
+            ..Default::default()
+        });
+        batch.last_offset_delta = 0;
+
+        part.produce_batch(batch).await?;
+
+        self.state.remove(tid);
+        Self::evict_entry_pids(&self.pid_to_tid, entry);
         Ok(())
     }
 
@@ -153,8 +210,16 @@ impl TxnCoordinator {
                             }
                         };
                         let Some(value_bytes) = rec.value.as_ref() else {
-                            // Tombstone (null value) deletes txn state for this tid.
-                            self.state.remove(&tid);
+                            // Tombstone (null value) deletes txn state for this
+                            // tid, and with it every producer-id mapping the
+                            // value records before it built. Dropping the state
+                            // entry alone would leave the reverse index -- and
+                            // so this broker's start-up footprint -- growing
+                            // with every transactional id ever expired.
+                            if let Some((_, handle)) = self.state.remove(&tid) {
+                                let entry = handle.lock().await;
+                                Self::evict_entry_pids(&self.pid_to_tid, &entry);
+                            }
                             continue;
                         };
                         let entry = match crate::txn::log_record::decode_value(value_bytes, tid) {
