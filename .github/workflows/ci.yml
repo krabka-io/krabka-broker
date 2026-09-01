@@ -160,15 +160,57 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # setup-aspect's log and BEP uploads, as in every other Bazel job.
+      id-token: write
+      # Publishing the proof image, on the runs that build one.
+      packages: write
+    env:
+      # What the proof step runs, and what `image_load` writes locally.
+      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.13.0
+      # Must match `image_push`'s registry and repository in //tools/creusot.
+      REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
       - uses: actions/checkout@v7
+
+      # A digest of everything that decides the image's contents. See
+      # //tools/creusot for why the registry, and not the Bazel disk cache, is
+      # what keeps CI from reinstalling Creusot on every run.
+      - id: image
+        name: resolve the proof image tag
+        run: echo "tag=$(tools/creusot/image-tag.sh)" >>"${GITHUB_OUTPUT}"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A miss is a normal outcome, not a failure: the tag is new, or this is a
+      # fork whose token cannot read the package. Either way the job falls
+      # through to building the image, which is what it always used to do.
+      - id: cached
+        name: reuse the published proof image
+        env:
+          IMAGE: ${{ env.REGISTRY_IMAGE }}:${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if docker pull "${IMAGE}"; then
+            docker tag "${IMAGE}" "${LOCAL_IMAGE}"
+            echo "hit=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "hit=false" >>"${GITHUB_OUTPUT}"
+          fi
+
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+        if: steps.cached.outputs.hit != 'true'
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          # This cache namespace contains the large installed-toolchain layer.
-          # Its Bazel inputs exclude the workspace source, so normal changes hit
-          # the cached image instead of rebuilding Creusot.
+          # Reached only when the registry has no image for this tree, so this
+          # namespace is a bonus on the apko base and the repository rules, not
+          # what keeps the Creusot installation from being rebuilt.
           disk-cache: ${{ github.workflow }}-images
           repository-cache: true
 
@@ -177,8 +219,18 @@ jobs:
       # "Target //tools/creusot:image_load failed to build" with no command and
       # no output. The flag is what makes that action's failure diagnosable
       # from the log alone.
-      - name: load the pinned proof image
+      - name: build the pinned proof image
+        if: steps.cached.outputs.hit != 'true'
         run: bazel run --verbose_failures //tools/creusot:image_load
+
+      # Before the proofs, not after: the image is valid whether or not the
+      # proofs it runs pass, and publishing it here means a failing run's retry
+      # already has it. A fork's token is read-only, so it keeps its build.
+      - name: publish the proof image
+        if: steps.cached.outputs.hit != 'true' && github.event.pull_request.head.repo.fork != true
+        run: bazel run //tools/creusot:push -- --tag "${IMAGE_TAG}"
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
 
       # The runner supplies only the Docker kernel boundary and the checkout.
       # Rust, OCaml, opam, Why3, the provers, Python and native libraries all
@@ -187,7 +239,7 @@ jobs:
         run: |
           docker run --rm \
             --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
-            docker.io/krabka-io/creusot:0.13.0
+            "${LOCAL_IMAGE}"
 
   # Container suites, one runner each.
   #
