@@ -6,7 +6,7 @@ use std::clone::Clone;
 #[cfg(creusot)]
 use creusot_std::prelude::*;
 
-/// The only response-derived mutation an admitted KRaft Fetch may perform.
+/// The only response-derived mutation an admitted `KRaft` Fetch may perform.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum FetchResponseMutation {
@@ -53,6 +53,10 @@ pub enum FetchResponseMutation {
     FetchResponseMutation::Reject => true,
 }))]
 #[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the safety boundary takes the exact role, leader, epoch, and mutation fields"
+)]
 pub fn fetch_response_mutation(
     role_leader: Option<u64>,
     current_leader: Option<u64>,
