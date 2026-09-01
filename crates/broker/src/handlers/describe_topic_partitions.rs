@@ -217,21 +217,24 @@ fn partition_response(
     topic_elr: &TopicElr,
 ) -> DescribeTopicPartitionsResponsePartition {
     let elr = topic_elr.partition(partition.partition);
+    // Leader, ISR and `offlineReplicas` are one answer: see
+    // `crate::handlers::offline_replicas::partition_availability`. Kafka's
+    // `KRaftMetadataCache.partitionMetadataForDescribeTopicResponse` leaves
+    // `error_code` alone for a `-1` leader here -- only `Metadata` carries
+    // `LEADER_NOT_AVAILABLE` beside it -- so this row stays `NONE`.
+    let availability =
+        crate::handlers::offline_replicas::partition_availability(image, partition, unavailable);
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
         partition_index: partition.partition,
-        leader_id: i32::try_from(partition.leader.0).unwrap_or(i32::MAX),
+        leader_id: availability.leader_id,
         leader_epoch: partition.leader_epoch.0,
         replica_nodes: partition
             .replicas
             .iter()
             .map(|&replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
             .collect(),
-        isr_nodes: partition
-            .isr
-            .iter()
-            .map(|&replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-            .collect(),
+        isr_nodes: availability.isr_nodes,
         // KIP-966. Both fields are nullable in the schema, but a real broker
         // never sends null: `Replicas.toList` gives an empty list for a
         // partition with no ELR, and `kafka-topics --describe` renders a null
@@ -239,11 +242,7 @@ fn partition_response(
         // See `crate::elr`.
         eligible_leader_replicas: Some(elr.eligible_leader_replicas),
         last_known_elr: Some(elr.last_known_elr),
-        offline_replicas: crate::handlers::offline_replicas::offline_replicas(
-            image,
-            partition,
-            unavailable,
-        ),
+        offline_replicas: availability.offline_replicas,
         ..Default::default()
     }
 }
