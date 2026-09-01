@@ -96,25 +96,34 @@ async fn an_incremental_alter_raises_the_cap_for_the_next_produce() {
 
 /// The value check matches Kafka's: `INT` with `atLeast(0)`.
 ///
-/// `apache/kafka:4.1.0` answers "Value must be at least 0" to `-1` and "Not a
-/// number of type INT" to `2147483648`, and accepts `0`. A broker that took
-/// `-1` would store a cap no batch can satisfy.
+/// `apache/kafka:4.3.1` answers "Value must be at least 0" to `-1` and "Not a
+/// number of type INT" to `2147483648` and to `abc`, and accepts `0`. A broker
+/// that took `-1` would store a cap no batch can satisfy.
+///
+/// The refusal's error code is asserted, not merely its non-zero-ness, because
+/// `INVALID_CONFIG` (40) is the code this whole feature exists to stop the
+/// broker sending for a *valid* value. A refusal that arrived as some other
+/// code would leave `kafka-configs` printing an unfamiliar failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_alter_path_rejects_the_values_kafka_rejects() {
     let p = support::start().await;
     create_topic(&p.broker, &p.client, "orders", &[]).await;
 
-    for (value, accepted_by_kafka) in [
-        ("0", true),
-        ("2147483647", true),
-        ("-1", false),
-        ("2147483648", false),
-        ("plenty", false),
+    for (value, expected) in [
+        ("0", codes::NONE),
+        ("2147483647", codes::NONE),
+        ("-1", codes::INVALID_CONFIG),
+        ("2147483648", codes::INVALID_CONFIG),
+        ("plenty", codes::INVALID_CONFIG),
     ] {
-        let (error_code, _) = set_max_message_bytes(&p.client, "orders", value).await;
+        let (error_code, error_message) = set_max_message_bytes(&p.client, "orders", value).await;
         check!(
-            (error_code == codes::NONE) == accepted_by_kafka,
+            error_code == expected,
             "max.message.bytes={value} answered {error_code}"
+        );
+        check!(
+            error_message.is_some() == (expected != codes::NONE),
+            "max.message.bytes={value} answered {error_message:?}"
         );
     }
 

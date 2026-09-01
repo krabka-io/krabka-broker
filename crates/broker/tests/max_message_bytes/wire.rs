@@ -157,11 +157,19 @@ pub(super) fn accepted(base_offset: i64) -> PartitionProduceResponse {
 /// `apache/kafka:4.1.0` printed for the refused batch this suite is modelled
 /// on. A broker that sent its own message would replace that familiar line
 /// with an unfamiliar one.
+///
+/// `base_offset` is -1, the "no offset assigned" sentinel. The refusal lands
+/// before any append, so Kafka fills the row from
+/// `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO` and every offset in it is -1. A raw
+/// `Produce v9` against `apache/kafka:4.3.1` with `max.message.bytes=2048`
+/// answers a 2049-byte batch with exactly this row: error code 10,
+/// `base_offset=-1`, `log_append_time_ms=-1`, `log_start_offset=-1`, no record
+/// errors and no error message.
 pub(super) fn too_large() -> PartitionProduceResponse {
     PartitionProduceResponse {
         index: 0,
         error_code: codes::MESSAGE_TOO_LARGE,
-        base_offset: 0,
+        base_offset: -1,
         log_append_time_ms: -1,
         log_start_offset: -1,
         record_errors: vec![],

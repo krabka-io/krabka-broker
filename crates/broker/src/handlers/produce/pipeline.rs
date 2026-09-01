@@ -9,6 +9,7 @@ use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
+    INVALID_OFFSET,
     append::{AppendContext, dispatch_prepared},
     delivery::DeliveryGate,
     framing::FramedPartition,
@@ -154,8 +155,16 @@ pub(super) async fn process_partition(
     // `RecordTooLargeException` is not one of the exceptions it attaches a
     // custom message to; the client renders `Errors.MESSAGE_TOO_LARGE`'s own
     // text instead.
+    //
+    // `base_offset` is the -1 sentinel, not 0. The refusal happens before any
+    // append, so Kafka's `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO` supplies the
+    // row's offsets and every one of them is -1. A raw `Produce v9` against
+    // `apache/kafka:4.3.1` with `max.message.bytes=2048` answers a 2049-byte
+    // batch with `base_offset=-1`, and a producer that read 0 would report a
+    // record it never wrote as living at the partition's first offset.
     if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
         out.error_code = codes::MESSAGE_TOO_LARGE;
+        out.base_offset = INVALID_OFFSET;
         return Ok(out);
     }
 
