@@ -39,7 +39,7 @@
 //! arithmetic over a role's task map.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -80,7 +80,7 @@ pub struct StoredTopologyHandle {
 
 /// Full in-memory state of one streams group. Exactly one
 /// `actor::GroupActor` task owns it, and it is never shared.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StreamsGroupState {
     pub group_id: String,
     pub group_epoch: i32,
@@ -201,14 +201,24 @@ impl StreamsGroupState {
 
         for (mid, member) in &mut self.members {
             let target_active = self.target.active.get(mid).cloned().unwrap_or_default();
+            let mut held = member.active.clone();
+            for (subtopology, partitions) in &member.active_pending_revocation {
+                held.entry(subtopology.clone())
+                    .or_default()
+                    .extend(partitions.iter().copied());
+            }
             // `compute_active_revoke_split` returns (keep, revoke): tasks the
             // member retains (current ∩ target) first, tasks it must give up
             // (current \ target) second.
-            let (keep, revoke) = compute_active_revoke_split(&member.active, &target_active);
+            let (keep, revoke) = compute_active_revoke_split(&held, &target_active);
             member.active = keep;
             member.active_pending_revocation = revoke;
             member.assignment_state = if member.active_pending_revocation.is_empty() {
-                StreamsMemberAssignmentState::Stable
+                if task_map_covers(&member.active, &target_active) {
+                    StreamsMemberAssignmentState::Stable
+                } else {
+                    StreamsMemberAssignmentState::UnreleasedActiveTasks
+                }
             } else {
                 StreamsMemberAssignmentState::UnrevokedActiveTasks
             };
@@ -219,18 +229,10 @@ impl StreamsGroupState {
     /// target that the latest reconcile allotted to it.
     ///
     /// The method records `previous_member_epoch`, installs the member's
-    /// target active, standby, and warmup sets as its assigned sets, clears
-    /// any pending revocation, and returns the member to
-    /// [`StreamsMemberAssignmentState::Stable`].
+    /// target standby and warmup sets as its assigned sets. Active tasks use
+    /// [`Self::reconcile_member`] so a task remains withheld while another
+    /// member still owns it or has it pending revocation.
     pub fn advance_member_epoch(&mut self, member_id: &str) {
-        // Read the target out first to sidestep the borrow conflict between the
-        // immutable `self.target` reads and the mutable member borrow.
-        let active = self
-            .target
-            .active
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
         let standby = self
             .target
             .standby
@@ -247,13 +249,151 @@ impl StreamsGroupState {
         if let Some(m) = self.members.get_mut(member_id) {
             m.previous_member_epoch = m.member_epoch;
             m.member_epoch = epoch;
-            m.active = normalize_task_map(active);
             m.standby = normalize_task_map(standby);
             m.warmup = normalize_task_map(warmup);
-            m.active_pending_revocation.clear();
-            m.assignment_state = StreamsMemberAssignmentState::Stable;
         }
     }
+
+    /// Reconciles one member's reported active ownership against the current
+    /// target and withholds tasks still held by another member.
+    ///
+    /// A report can release a task the member previously held, but it cannot
+    /// claim a task the coordinator never granted. Target tasks are granted
+    /// only when they are already held by this member or are free. The method
+    /// returns `true` when the current or pending assignment changed.
+    pub fn reconcile_member(
+        &mut self,
+        member_id: &str,
+        reported_active: &BTreeMap<String, Vec<i32>>,
+    ) -> bool {
+        let target = self
+            .target
+            .active
+            .get(member_id)
+            .cloned()
+            .unwrap_or_default();
+        let Some(member) = self.members.get(member_id) else {
+            return false;
+        };
+
+        let mut previously_held = member.active.clone();
+        for (subtopology, partitions) in &member.active_pending_revocation {
+            previously_held
+                .entry(subtopology.clone())
+                .or_default()
+                .extend(partitions.iter().copied());
+        }
+        let previously_held = normalize_task_map(previously_held);
+
+        let mut held_by_others = HashSet::new();
+        for (other_id, other) in &self.members {
+            if other_id == member_id {
+                continue;
+            }
+            for (subtopology, partitions) in other
+                .active
+                .iter()
+                .chain(other.active_pending_revocation.iter())
+            {
+                for &partition in partitions {
+                    held_by_others.insert((subtopology.clone(), partition));
+                }
+            }
+        }
+
+        let reported: HashSet<(String, i32)> = reported_active
+            .iter()
+            .flat_map(|(subtopology, partitions)| {
+                partitions
+                    .iter()
+                    .map(|&partition| (subtopology.clone(), partition))
+            })
+            .collect();
+        let held_here: HashSet<(String, i32)> = previously_held
+            .iter()
+            .flat_map(|(subtopology, partitions)| {
+                partitions
+                    .iter()
+                    .map(|&partition| (subtopology.clone(), partition))
+            })
+            .collect();
+
+        let mut active = BTreeMap::new();
+        let mut fully_assigned = true;
+        for (subtopology, partitions) in &target {
+            for &partition in partitions {
+                let task = (subtopology.clone(), partition);
+                let still_owned_here = held_here.contains(&task) && reported.contains(&task);
+                let free = !held_by_others.contains(&task);
+                if still_owned_here || free {
+                    active
+                        .entry(subtopology.clone())
+                        .or_insert_with(Vec::new)
+                        .push(partition);
+                } else {
+                    fully_assigned = false;
+                }
+            }
+        }
+
+        let mut pending = BTreeMap::new();
+        for (subtopology, partitions) in &previously_held {
+            let target_partitions: HashSet<i32> = target
+                .get(subtopology)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect();
+            for &partition in partitions {
+                let task = (subtopology.clone(), partition);
+                if reported.contains(&task) && !target_partitions.contains(&partition) {
+                    pending
+                        .entry(subtopology.clone())
+                        .or_insert_with(Vec::new)
+                        .push(partition);
+                }
+            }
+        }
+
+        let active = normalize_task_map(active);
+        let pending = normalize_task_map(pending);
+        let Some(member) = self.members.get_mut(member_id) else {
+            return false;
+        };
+        let changed = member.active != active || member.active_pending_revocation != pending;
+        member.active = active;
+        member.active_pending_revocation = pending;
+        member.assignment_state = if !member.active_pending_revocation.is_empty() {
+            StreamsMemberAssignmentState::UnrevokedActiveTasks
+        } else if fully_assigned {
+            StreamsMemberAssignmentState::Stable
+        } else {
+            StreamsMemberAssignmentState::UnreleasedActiveTasks
+        };
+
+        if self.phase == StreamsGroupStatePhase::Reconciling
+            && self
+                .members
+                .values()
+                .all(|member| member.assignment_state == StreamsMemberAssignmentState::Stable)
+        {
+            self.phase = StreamsGroupStatePhase::Stable;
+        }
+        changed
+    }
+}
+
+fn task_map_covers(
+    assigned: &BTreeMap<String, Vec<i32>>,
+    target: &BTreeMap<String, Vec<i32>>,
+) -> bool {
+    target.iter().all(|(subtopology, partitions)| {
+        partitions.iter().all(|partition| {
+            assigned
+                .get(subtopology)
+                .is_some_and(|assigned| assigned.contains(partition))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -377,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn install_target_with_no_revocation_stays_stable() {
+    fn install_target_with_unreleased_task_waits() {
         let mut g = StreamsGroupState::new("g");
         let mut m = StreamsMemberState::joining("m1", "c1", "h1");
         m.active = task_map(&[("sub0", &[0, 1])]);
@@ -396,11 +536,32 @@ mod tests {
         // installed until the member advances its epoch.
         check!(m.active == task_map(&[("sub0", &[0, 1])]));
         check!(m.active_pending_revocation.is_empty());
-        check!(m.assignment_state == StreamsMemberAssignmentState::Stable);
+        check!(m.assignment_state == StreamsMemberAssignmentState::UnreleasedActiveTasks);
     }
 
     #[test]
-    fn advance_member_epoch_installs_target_clears_pending_sets_stable() {
+    fn install_target_retry_preserves_pending_revocation() {
+        let mut g = StreamsGroupState::new("g");
+        let mut m = StreamsMemberState::joining("m1", "c1", "h1");
+        m.active = task_map(&[("sub0", &[0, 1])]);
+        g.add_or_update_member(m);
+        g.group_epoch = 2;
+
+        let mut target = StreamsTargetAssignment::default();
+        target
+            .active
+            .insert("m1".to_string(), task_map(&[("sub0", &[0])]));
+        g.install_target(target.clone());
+        g.install_target(target);
+
+        let m = &g.members["m1"];
+        check!(m.active == task_map(&[("sub0", &[0])]));
+        check!(m.active_pending_revocation == task_map(&[("sub0", &[1])]));
+        check!(m.assignment_state == StreamsMemberAssignmentState::UnrevokedActiveTasks);
+    }
+
+    #[test]
+    fn advance_member_epoch_installs_free_roles_and_reconcile_clears_revocation() {
         let mut g = StreamsGroupState::new("g");
         let mut m = StreamsMemberState::joining("m1", "c1", "h1");
         m.active = task_map(&[("sub0", &[0, 1, 2])]);
@@ -425,6 +586,8 @@ mod tests {
         );
 
         g.advance_member_epoch("m1");
+        let reported = task_map(&[("sub0", &[0, 1])]);
+        assert!(g.reconcile_member("m1", &reported));
         let m = &g.members["m1"];
         check!(m.member_epoch == 9);
         check!(m.previous_member_epoch == 0);
@@ -433,5 +596,50 @@ mod tests {
         check!(m.warmup == task_map(&[("sub2", &[4, 5])]));
         check!(m.active_pending_revocation.is_empty());
         check!(m.assignment_state == StreamsMemberAssignmentState::Stable);
+    }
+
+    #[test]
+    fn active_task_waits_for_previous_owner_to_release() {
+        let mut g = StreamsGroupState::new("g");
+        let mut owner = StreamsMemberState::joining("m1", "c1", "h1");
+        owner.active = task_map(&[("sub0", &[0, 1])]);
+        g.add_or_update_member(owner);
+        g.add_or_update_member(StreamsMemberState::joining("m2", "c2", "h2"));
+        g.group_epoch = 2;
+
+        let mut target = StreamsTargetAssignment::default();
+        target
+            .active
+            .insert("m1".to_string(), task_map(&[("sub0", &[0])]));
+        target
+            .active
+            .insert("m2".to_string(), task_map(&[("sub0", &[1])]));
+        g.install_target(target);
+
+        g.advance_member_epoch("m2");
+        g.reconcile_member("m2", &BTreeMap::new());
+        check!(g.members["m2"].active.is_empty());
+        check!(
+            g.members["m2"].assignment_state == StreamsMemberAssignmentState::UnreleasedActiveTasks
+        );
+
+        g.reconcile_member("m1", &task_map(&[("sub0", &[0])]));
+        g.reconcile_member("m2", &BTreeMap::new());
+        check!(g.members["m1"].active == task_map(&[("sub0", &[0])]));
+        check!(g.members["m2"].active == task_map(&[("sub0", &[1])]));
+        check!(g.members["m1"].active_pending_revocation.is_empty());
+        check!(g.members["m2"].assignment_state == StreamsMemberAssignmentState::Stable);
+    }
+
+    #[test]
+    fn malformed_report_cannot_claim_ungranted_task() {
+        let mut g = StreamsGroupState::new("g");
+        g.add_or_update_member(StreamsMemberState::joining("m1", "c1", "h1"));
+        g.group_epoch = 1;
+        g.install_target(StreamsTargetAssignment::default());
+
+        g.reconcile_member("m1", &task_map(&[("unknown", &[-1, 99])]));
+        check!(g.members["m1"].active.is_empty());
+        check!(g.members["m1"].active_pending_revocation.is_empty());
     }
 }

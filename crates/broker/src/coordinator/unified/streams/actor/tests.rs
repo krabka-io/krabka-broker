@@ -3,6 +3,7 @@
 //! resolution of a persisted per-group config override.
 
 use assert2::{assert, check};
+use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::coordinator::unified::{
@@ -247,6 +248,27 @@ async fn fenced_epoch_is_rejected() {
     )
     .await;
     assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistence_failure_returns_loading_and_writes_no_partial_batch() {
+    let (coord, log) = make_coordinator();
+    let handle = coord.get_or_create_streams("g");
+    log.fail_next.store(true, Ordering::SeqCst);
+
+    let response = heartbeat(
+        &handle,
+        StreamsGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: 0,
+            ..Default::default()
+        },
+    )
+    .await;
+
+    check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+    assert!(log.batches().await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
