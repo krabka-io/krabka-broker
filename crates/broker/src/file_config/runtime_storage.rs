@@ -151,6 +151,12 @@ impl RuntimeFileConfig {
             cfg.log_config.segment_size,
             whole_bytes_u64
         );
+        set_runtime_size_bytes!(
+            runtime,
+            message_max_bytes,
+            cfg.log_config.max_message_size,
+            whole_bytes_u64
+        );
         set_runtime_time_millis!(
             runtime,
             log_delivery_clock_uncertainty,
@@ -234,7 +240,10 @@ impl RuntimeFileConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{convert::TimeExt as _, millis};
+    use krabka_units::{
+        convert::{ByteSizeExt as _, TimeExt as _},
+        millis,
+    };
 
     use crate::file_config::FileConfig;
 
@@ -273,6 +282,30 @@ mod tests {
         assert!(cfg.log_config.delivery_clock_uncertainty == millis(750));
         assert!(cfg.log_config.delivery_clock_uncertainty.millis_i64() == 750);
     }
+    #[test]
+    fn message_max_bytes_round_trips_into_the_log_config() {
+        // Kafka's broker-wide `message.max.bytes` is the default behind every
+        // topic's `max.message.bytes`, and in krabka that default is the base
+        // `LogConfig` the produce gate reads when a topic sets none.
+        let file: FileConfig = toml::from_str("[runtime]\nmessage_max_bytes = \"2KiB\"\n")
+            .expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
+    }
+
+    #[test]
+    fn omitted_message_max_bytes_keeps_kafkas_1048588() {
+        let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.max_message_size.bytes_u64() == 1_048_588);
+    }
+
     #[test]
     fn omitted_log_delivery_clock_uncertainty_keeps_the_quarter_second_default() {
         let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");

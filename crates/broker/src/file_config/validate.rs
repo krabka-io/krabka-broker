@@ -253,6 +253,7 @@ mod tests {
             "telemetry_decompressed_output_ceiling",
             "record_decompression_output_floor",
             "record_decompression_output_ceiling",
+            "message_max_bytes",
             "future_log_move_read_chunk",
             "metadata_max_between_snapshots",
             "metadata_snapshot_fetch_max",

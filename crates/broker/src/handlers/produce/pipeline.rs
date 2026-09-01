@@ -6,6 +6,7 @@ use std::{sync::Arc, time::Duration};
 use krabka_compression::RecordDecompressionPolicy;
 use krabka_metadata::TopicFreezeRecord;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{
     append::{AppendContext, dispatch_prepared},
@@ -38,6 +39,10 @@ use crate::{
 pub(super) struct PartitionInput<'a> {
     pub(super) part_data: FramedPartition,
     pub(super) topic_compression: Option<krabka_compression::CompressionType>,
+    /// The topic's `max.message.bytes`, resolved once per topic, with the
+    /// broker's `message.max.bytes` behind it. Every topic has one, so unlike
+    /// the gates below it is a value and not an `Option`.
+    pub(super) max_message_bytes: ByteSize,
     /// The topic's KFC-1 delivery settings, resolved once per topic. `None` is
     /// `delivery.mode=immediate`, and skips the delivery gate entirely.
     pub(super) delivery: Option<DeliveryGate>,
@@ -80,6 +85,7 @@ pub(super) async fn process_partition(
     let PartitionInput {
         part_data,
         topic_compression,
+        max_message_bytes,
         delivery,
         schema,
         topic_name,
@@ -133,6 +139,23 @@ pub(super) async fn process_partition(
         metrics.record_topic_freeze_rejection(topic_name);
         out.error_code = codes::POLICY_VIOLATION;
         out.error_message = Some(FreezeVerdict::from(entry).error_message());
+        return Ok(out);
+    }
+
+    // ── max.message.bytes ────────────────────────────────────────────
+    // Ahead of `prepare_batch`, which is the whole operational point: a batch
+    // the broker will never accept must not first cost it a CRC pass and a
+    // decompression over however many mebibytes the producer sent. The check
+    // reads v2 batch headers and nothing else.
+    //
+    // Kafka measures each batch on its own, over the batch's entire wire
+    // encoding including its 61-byte header, and refuses one that is strictly
+    // larger than the cap. `error_message` stays empty because Kafka's
+    // `RecordTooLargeException` is not one of the exceptions it attaches a
+    // custom message to; the client renders `Errors.MESSAGE_TOO_LARGE`'s own
+    // text instead.
+    if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
+        out.error_code = codes::MESSAGE_TOO_LARGE;
         return Ok(out);
     }
 

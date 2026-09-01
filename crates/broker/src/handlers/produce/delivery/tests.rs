@@ -373,6 +373,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                     ))),
                 },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery,
                 topic_name: "sched".into(),
                 topic_denied: false,

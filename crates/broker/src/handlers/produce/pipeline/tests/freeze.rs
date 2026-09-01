@@ -218,6 +218,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             PartitionInput {
                 part_data: FramedPartition { index: 0, payload },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 schema: None,
                 topic_name: topic.into(),

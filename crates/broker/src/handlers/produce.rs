@@ -26,7 +26,10 @@ use self::{
     topic_settings::resolve_topic_compression,
 };
 use crate::{
-    broker::Broker, codes, config_keys::resolve_schema_validation, error::BrokerError,
+    broker::Broker,
+    codes,
+    config_keys::{resolve_max_message_bytes, resolve_schema_validation},
+    error::BrokerError,
     freeze::resolve::resolve_topic_freeze,
 };
 
@@ -203,6 +206,16 @@ pub(crate) async fn handle(
         // decision exactly.
         let topic_compression = resolve_topic_compression(&image, &topic_name);
 
+        // Kafka's `max.message.bytes`, resolved here for the same reason: the
+        // cap belongs to the topic. A topic that sets none inherits the
+        // broker's `message.max.bytes`, which is the `DEFAULT_CONFIG` synonym
+        // `kafka-configs --describe --all` reports for the key.
+        let max_message_bytes = resolve_max_message_bytes(
+            &image,
+            &topic_name,
+            broker.config.log_config.max_message_size,
+        );
+
         // Resolve the topic's KFC-1 delivery settings once, beside the
         // compression resolve and for the same reason: they are a property of
         // the topic, not of a partition or of a batch. `None` is
@@ -237,6 +250,7 @@ pub(crate) async fn handle(
                     PartitionInput {
                         part_data,
                         topic_compression,
+                        max_message_bytes,
                         delivery,
                         schema,
                         topic_name: topic_name.clone(),

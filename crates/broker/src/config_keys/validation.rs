@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
-    RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
         DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
     },
     diskless::{DISKLESS, validate_diskless_combination},
+    message_size::validate_max_message_bytes,
     qos::{QOS_TIER, validate_qos_tier},
     recovery::{RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
@@ -41,6 +42,7 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
         },
         COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
         MIN_INSYNC_REPLICAS => parse_i64_at_least(1, value).map(|_| ()),
+        MAX_MESSAGE_BYTES => validate_max_message_bytes(value),
         UNCLEAN_LEADER_ELECTION_ENABLE => match value {
             "true" | "false" => Ok(()),
             _ => Err(format!(
@@ -210,6 +212,7 @@ pub(crate) fn is_recognized(key: &str) -> bool {
             | CLEANUP_POLICY
             | COMPRESSION_TYPE
             | MIN_INSYNC_REPLICAS
+            | MAX_MESSAGE_BYTES
             | UNCLEAN_LEADER_ELECTION_ENABLE
             | UNCLEAN_RECOVERY_STRATEGY
             | REMOTE_STORAGE_ENABLE

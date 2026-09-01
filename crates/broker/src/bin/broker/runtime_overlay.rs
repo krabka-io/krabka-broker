@@ -148,6 +148,7 @@ impl RuntimeArgs {
             log_read_buffer_cap,
             log_timestamp_scan_window,
             log_delivery_clock_uncertainty,
+            message_max_bytes,
             acl_max_principal,
             acl_max_resource_name,
             telemetry_max_decompression_ratio,

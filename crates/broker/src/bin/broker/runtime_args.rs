@@ -193,6 +193,8 @@ pub struct RuntimeArgs {
     pub log_timestamp_scan_window: Option<ByteSize>,
     #[arg(long, env = "KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = krabka_units::parse::positive_time)]
     pub log_delivery_clock_uncertainty: Option<Time>,
+    #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
+    pub message_max_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_request_max: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SENDFILE_MIN", value_parser = krabka_units::parse::positive_byte_size)]

@@ -3,8 +3,8 @@
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-    SEGMENT_BYTES,
+    LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
+    RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC,
     },
@@ -69,6 +69,13 @@ const TOPIC_CONFIG_DOCS: &[TopicConfigDoc] = &[
         default: Some("1"),
         kip: None,
         description: "With acks=all, the minimum in-sync replicas required to accept a write; otherwise NOT_ENOUGH_REPLICAS (19).",
+    },
+    TopicConfigDoc {
+        key: MAX_MESSAGE_BYTES,
+        value_type: "int (bytes, >=0)",
+        default: Some("1048588"),
+        kip: None,
+        description: "Largest record batch accepted for this topic, measured over the batch's whole wire encoding; a larger one is refused with MESSAGE_TOO_LARGE (10). Unset topics inherit the broker's message.max.bytes.",
     },
     TopicConfigDoc {
         key: UNCLEAN_LEADER_ELECTION_ENABLE,
@@ -221,6 +228,7 @@ mod tests {
             CLEANUP_POLICY,
             COMPRESSION_TYPE,
             MIN_INSYNC_REPLICAS,
+            MAX_MESSAGE_BYTES,
             UNCLEAN_LEADER_ELECTION_ENABLE,
             UNCLEAN_RECOVERY_STRATEGY,
             REMOTE_STORAGE_ENABLE,
