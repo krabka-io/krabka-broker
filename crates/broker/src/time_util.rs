@@ -85,9 +85,11 @@ mod tests {
     fn epoch_millis_reads_an_instant_and_saturates_outside_the_range() {
         let cases = [
             (UNIX_EPOCH, 0),
+            // A sub-second remainder, so a conversion that truncated to whole
+            // seconds would fail here rather than pass.
             (
-                UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
-                1_700_000_000_000,
+                UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+                1_700_000_000_123,
             ),
             // Before the epoch: a backwards clock reads as the epoch itself
             // rather than as a negative timestamp.
