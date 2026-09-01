@@ -6,6 +6,8 @@
 //! follow it. Checkpoints carry no chain headers and are skipped.
 
 use super::Spool;
+use krabka_verified::{ChainStep, chain_step};
+
 use crate::{
     chain::{chain_hash, from_hex32},
     event::AuditEventClass,
@@ -23,34 +25,55 @@ impl Spool {
     /// Returns an error if the spool file cannot be opened or read.
     pub fn resume_point(&self) -> Result<Option<(u64, [u8; 32])>, AuditError> {
         let records = self.read_all()?;
-        Ok(records
-            .iter()
-            .rev()
-            .find_map(resume_from_record)
-            .map(|(seq, head)| (seq.0, head)))
+        resume_from_records(&records).map(|resume| resume.map(|(seq, head)| (seq.0, head)))
     }
 }
 
-/// Compute `(next_seq, head_after)` from one chained record.
-///
-/// The computation uses the record's headers and its value. Returns `None` for
-/// a checkpoint, and for a record without the chain headers.
-fn resume_from_record(rec: &AuditRecord) -> Option<(Seq, [u8; 32])> {
-    if rec.class == AuditEventClass::Checkpoint {
-        return None;
-    }
-    let mut seq: Option<u64> = None;
-    let mut prev: Option<[u8; 32]> = None;
-    for (k, v) in &rec.headers {
-        if k == HEADER_SEQ {
-            seq = std::str::from_utf8(v).ok().and_then(|s| s.parse().ok());
-        } else if k == HEADER_PREV_HASH {
-            prev = std::str::from_utf8(v).ok().and_then(from_hex32);
+fn poisoned(reason: &str) -> AuditError {
+    AuditError::Poisoned(format!("audit spool resume: {reason}"))
+}
+
+fn resume_from_records(records: &[AuditRecord]) -> Result<Option<(Seq, [u8; 32])>, AuditError> {
+    let mut resume: Option<(Seq, [u8; 32])> = None;
+    for record in records {
+        if record.class == AuditEventClass::Checkpoint {
+            continue;
         }
+        let (seq, previous) = chain_headers(record)?;
+        let next_seq = match resume {
+            None => seq
+                .checked_add(1)
+                .filter(|next| *next < u64::MAX)
+                .ok_or_else(|| poisoned("chain sequence exhausted"))?,
+            Some((expected, head)) => match chain_step(expected.0, seq, previous == head) {
+                ChainStep::Continue(next) => next,
+                ChainStep::SequenceMismatch => {
+                    return Err(poisoned("noncontiguous chain sequence"));
+                }
+                ChainStep::HeadMismatch => return Err(poisoned("chain head mismatch")),
+                ChainStep::Exhausted => return Err(poisoned("chain sequence exhausted")),
+            },
+        };
+        resume = Some((Seq(next_seq), chain_hash(&previous, seq, &record.value)));
     }
-    let (seq, prev) = (seq?, prev?);
-    let head = chain_hash(&prev, seq, &rec.value);
-    Some((Seq(seq + 1), head))
+    Ok(resume)
+}
+
+fn chain_headers(record: &AuditRecord) -> Result<(u64, [u8; 32]), AuditError> {
+    let seq = record
+        .headers
+        .iter()
+        .find(|(key, _)| key == HEADER_SEQ)
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse().ok());
+    let previous = record
+        .headers
+        .iter()
+        .find(|(key, _)| key == HEADER_PREV_HASH)
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())
+        .and_then(from_hex32);
+    seq.zip(previous)
+        .ok_or_else(|| poisoned("missing or invalid chain headers"))
 }
 
 #[cfg(test)]
@@ -85,5 +108,35 @@ mod tests {
         // after seq 1; the hex projection also checks r1's chain math.
         check!((next_seq, head, to_hex(&head)) == (2, head1, to_hex(&head1)));
         let _ = (HEADER_SEQ, HEADER_PREV_HASH); // used by impl
+    }
+
+    #[test]
+    fn resume_rejects_a_malformed_or_disconnected_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let record = chained_record(0, &GENESIS_HEAD, b"valid");
+        let mut malformed = chained_record(1, &chain_hash(&GENESIS_HEAD, 0, b"valid"), b"bad");
+        malformed.headers.retain(|(key, _)| key != HEADER_SEQ);
+        spool.append(&record).unwrap();
+        spool.append(&malformed).unwrap();
+        check!(matches!(spool.resume_point(), Err(AuditError::Poisoned(_))));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool.append(&record).unwrap();
+        spool
+            .append(&chained_record(2, &GENESIS_HEAD, b"gap"))
+            .unwrap();
+        check!(matches!(spool.resume_point(), Err(AuditError::Poisoned(_))));
+    }
+
+    #[test]
+    fn resume_rejects_sequence_exhaustion() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        spool
+            .append(&chained_record(u64::MAX - 1, &GENESIS_HEAD, b"last"))
+            .unwrap();
+        check!(matches!(spool.resume_point(), Err(AuditError::Poisoned(_))));
     }
 }

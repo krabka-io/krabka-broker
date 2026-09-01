@@ -108,7 +108,7 @@ pub(super) fn start_audit_pipeline(
         })
         .find(|(_, record)| record.leader == config.node_id)
         .map(|(index, _)| PartitionIndex(index));
-    let (spool, replay_poisoned) = if led_partition.is_some() {
+    let (spool, mut replay_poisoned) = if led_partition.is_some() {
         match open_audit_spool(config) {
             Ok(spool) => (Some(spool), false),
             Err(error @ krabka_audit::AuditError::Poisoned(_)) => {
@@ -122,6 +122,19 @@ pub(super) fn start_audit_pipeline(
         }
     } else {
         (None, false)
+    };
+    let spool_resume = if replay_poisoned {
+        None
+    } else {
+        match spool.as_ref().map(krabka_audit::Spool::resume_point) {
+            Some(Ok(resume)) => resume,
+            Some(Err(error)) => {
+                tracing::error!(%error, "audit writer disabled pending explicit spool recovery");
+                replay_poisoned = true;
+                None
+            }
+            None => None,
+        }
     };
     let (log, receiver) = spool.as_ref().map_or_else(
         || {
@@ -149,20 +162,17 @@ pub(super) fn start_audit_pipeline(
             config.node_id,
             metrics.clone(),
         ));
-        let resume = spool
-            .as_ref()
-            .and_then(|spool| spool.resume_point().ok().flatten())
-            .or_else(|| {
-                partitions
-                    .get(&config.audit_topic, partition_index)
-                    .and_then(|partition| {
-                        crate::audit_recovery::recover_from_partition_tail(
-                            &partition,
-                            config.audit_tail_window_offsets,
-                            config.audit_tail_read_max,
-                        )
-                    })
-            });
+        let resume = spool_resume.or_else(|| {
+            partitions
+                .get(&config.audit_topic, partition_index)
+                .and_then(|partition| {
+                    crate::audit_recovery::recover_from_partition_tail(
+                        &partition,
+                        config.audit_tail_window_offsets,
+                        config.audit_tail_read_max,
+                    )
+                })
+        });
         let chain = resume.map_or_else(krabka_audit::ChainState::new, |(sequence, head)| {
             krabka_audit::ChainState::resume(sequence, head)
         });

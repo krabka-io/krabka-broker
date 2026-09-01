@@ -63,7 +63,10 @@ pub mod voter_set;
 pub mod wal;
 pub mod worm;
 
-pub use audit::{SpoolAppendDecision, spool_append_decision};
+pub use audit::{
+    AuditCheckpointAdmission, AuditLossMarkerAdmission, SpoolAppendDecision,
+    audit_checkpoint_admission, audit_loss_marker_admission, spool_append_decision,
+};
 pub use authz::{
     AclDecision, AclOperationKind, AclPatternKind, acl_decision, acl_identity_match,
     acl_operation_match, acl_resource_match,

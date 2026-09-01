@@ -9,7 +9,10 @@
 //! same way.
 
 use krabka_protocol::records::Record;
-use krabka_verified::{ChainStep, chain_step};
+use krabka_verified::{
+    AuditCheckpointAdmission, AuditLossMarkerAdmission, ChainStep, audit_checkpoint_admission,
+    audit_loss_marker_admission, chain_step,
+};
 
 use super::{TrustedKeys, VerifyBreak, VerifyLoss, VerifyReport};
 use crate::{
@@ -54,6 +57,7 @@ pub(super) struct WalkState {
     pub(super) losses: Vec<VerifyLoss>,
     /// The `seq_high` of the most-recently validated checkpoint, if any.
     pub(super) last_checkpoint_seq_high: Option<Seq>,
+    last_loss_generation: u64,
 }
 
 impl WalkState {
@@ -65,6 +69,7 @@ impl WalkState {
             checkpoints: CheckpointCount(0),
             losses: Vec::new(),
             last_checkpoint_seq_high: None,
+            last_loss_generation: 0,
         }
     }
 }
@@ -94,24 +99,32 @@ pub(super) fn check_checkpoint(
             &format!("no trusted key for key_id '{}'", cp.key_id),
         ));
     };
-    if !cp.verify(pubkey) {
-        return Err(broke(state, offset, None, "checkpoint signature invalid"));
-    }
-    if cp.chain_head != state.head {
-        return Err(broke(
-            state,
-            offset,
-            None,
-            "checkpoint chain_head does not match recomputed chain",
-        ));
-    }
-    if cp.seq_high != Seq(state.expected_seq.0.saturating_sub(1)) {
-        return Err(broke(
-            state,
-            offset,
-            None,
-            "checkpoint seq_high does not match record count",
-        ));
+    match audit_checkpoint_admission(
+        cp.verify(pubkey),
+        cp.chain_head == state.head,
+        state.expected_seq.0,
+        cp.seq_high.0,
+    ) {
+        AuditCheckpointAdmission::Admit => {}
+        AuditCheckpointAdmission::RejectSignature => {
+            return Err(broke(state, offset, None, "checkpoint signature invalid"));
+        }
+        AuditCheckpointAdmission::RejectHead => {
+            return Err(broke(
+                state,
+                offset,
+                None,
+                "checkpoint chain_head does not match recomputed chain",
+            ));
+        }
+        AuditCheckpointAdmission::RejectSequence => {
+            return Err(broke(
+                state,
+                offset,
+                None,
+                "checkpoint seq_high does not match record count",
+            ));
+        }
     }
     state.last_checkpoint_seq_high = Some(cp.seq_high);
     Ok(())
@@ -172,7 +185,7 @@ pub(super) fn check_records_lost(
 ) -> Result<(), VerifyReport> {
     let header_matches =
         header(rec, "event_class") == Some(AuditEventClass::RecordsLost.as_header().as_bytes());
-    let (true, Some(count)) = (header_matches, records_lost_count_from_body(rec)) else {
+    let Some(fields) = records_lost_fields(rec) else {
         return Err(broke(
             state,
             offset,
@@ -180,12 +193,33 @@ pub(super) fn check_records_lost(
             "records-lost body/event_class header mismatch",
         ));
     };
+    match audit_loss_marker_admission(
+        header_matches,
+        fields.field_count,
+        fields.count,
+        fields.generation.is_some(),
+        fields.generation.unwrap_or(0),
+        state.last_loss_generation,
+    ) {
+        AuditLossMarkerAdmission::AdmitLegacy => {}
+        AuditLossMarkerAdmission::AdmitPersisted => {
+            state.last_loss_generation = fields.generation.unwrap_or(0);
+        }
+        AuditLossMarkerAdmission::Reject => {
+            return Err(broke(
+                state,
+                offset,
+                None,
+                "records-lost body/event_class header mismatch",
+            ));
+        }
+    }
 
     check_chained(rec, offset, state)?;
     state.losses.push(VerifyLoss {
         offset,
         seq: Seq(state.expected_seq.0 - 1),
-        records: RecordCount(count),
+        records: RecordCount(fields.count),
     });
     Ok(())
 }
@@ -194,22 +228,37 @@ pub(super) fn check_records_lost(
 ///
 /// The legacy shape contains only `records_lost`. Persisted loss state adds a
 /// positive `loss_generation`; no other fields are part of the reserved shape.
-pub(super) fn records_lost_count_from_body(rec: &Record) -> Option<u64> {
+struct LossMarkerFields {
+    field_count: u64,
+    count: u64,
+    generation: Option<u64>,
+}
+
+fn records_lost_fields(rec: &Record) -> Option<LossMarkerFields> {
     let value = rec.value.as_deref()?;
     let json = serde_json::from_slice::<serde_json::Value>(value).ok()?;
     let object = json.as_object()?;
     let count = object
         .get("records_lost")
         .and_then(serde_json::Value::as_u64)
-        .filter(|count| *count > 0)?;
+        .unwrap_or(0);
+    let generation = object
+        .get("loss_generation")
+        .and_then(serde_json::Value::as_u64);
+    Some(LossMarkerFields {
+        field_count: u64::try_from(object.len()).unwrap_or(u64::MAX),
+        count,
+        generation,
+    })
+}
 
-    match object.len() {
-        1 => Some(count),
-        2 => object
-            .get("loss_generation")
-            .and_then(serde_json::Value::as_u64)
-            .filter(|generation| *generation > 0)
-            .map(|_| count),
-        _ => None,
-    }
+pub(super) fn records_lost_body_has_field(rec: &Record) -> bool {
+    rec.value
+        .as_deref()
+        .and_then(|value| serde_json::from_slice::<serde_json::Value>(value).ok())
+        .and_then(|json| {
+            json.as_object()
+                .map(|object| object.contains_key("records_lost"))
+        })
+        .unwrap_or(false)
 }
