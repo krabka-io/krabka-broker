@@ -52,6 +52,20 @@ impl BrokerHandle {
         self.broker.controller.current_image()
     }
 
+    /// Test-only: the node ids this broker's committed image reports as
+    /// fenced, through the same `broker.fenced` resolution the offline-replica
+    /// projection uses. The role-separation suite reads it on every node,
+    /// because the fencing state is replicated: a controller that fences a
+    /// broker it never hears from publishes that to every image in the
+    /// cluster.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn fenced_broker_ids_for_test(&self) -> std::collections::BTreeSet<u64> {
+        crate::config_keys::fenced_node_ids(&self.broker.controller.current_image())
+            .into_iter()
+            .collect()
+    }
+
     /// Test-only: the raft voter set this node's metadata source reports.
     /// A controller/combined node returns the openraft membership; a
     /// broker-only (observer) node returns an empty set because it never

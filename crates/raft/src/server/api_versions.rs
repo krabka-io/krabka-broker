@@ -195,9 +195,14 @@ mod tests {
             assert2::assert!(resp.error_code == 0);
             let keys: std::collections::BTreeSet<i16> =
                 resp.api_keys.iter().map(|k| k.api_key).collect();
-            for want in [1i16, 18, 52, 53, 54, 59, 62, 63, 70] {
+            for want in [1i16, 18, 52, 53, 54, 59, 62, 70] {
                 assert2::assert!(keys.contains(&want));
             }
+            // `BrokerHeartbeat` reaches the controller listener through the
+            // Admin router, so the native table must not advertise it on its
+            // own. `an_admin_router_contributes_its_own_api_versions` covers
+            // the other half: with a router bound, the key is advertised.
+            assert2::assert!(!keys.contains(&63i16));
             // Vote is pinned to the one version the engine's codec speaks, so
             // the advertised range is that version on both ends.
             let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
@@ -229,6 +234,51 @@ mod tests {
                 assert2::assert!(resp.finalized_features_epoch == image.finalized_features_epoch());
             }
         }
+    }
+
+    /// The controller listener advertises what a bound Admin router serves, on
+    /// top of the APIs it answers itself. `BrokerHeartbeat` is the case that
+    /// matters: a broker reads this table to learn where to send it.
+    #[test]
+    fn an_admin_router_contributes_its_own_api_versions() {
+        use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
+
+        struct HeartbeatRouter;
+        impl crate::ControllerAdminRouter for HeartbeatRouter {
+            fn api_versions(&self) -> &[crate::ControllerApiVersion] {
+                use krabka_protocol::owned::broker_heartbeat_request;
+                &[crate::ControllerApiVersion {
+                    api_key: broker_heartbeat_request::API_KEY,
+                    min_version: broker_heartbeat_request::MIN_VERSION,
+                    max_version: broker_heartbeat_request::MAX_VERSION,
+                    flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
+                }]
+            }
+
+            fn route(
+                &self,
+                _request: crate::ControllerAdminRequest,
+            ) -> crate::ControllerAdminRouteFuture<'_> {
+                Box::pin(async { Ok(None) })
+            }
+        }
+
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        let body = super::api_versions_response_body(4, &image, Some(&HeartbeatRouter), 0);
+        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
+
+        let heartbeat = resp
+            .api_keys
+            .iter()
+            .find(|key| key.api_key == 63)
+            .expect("BrokerHeartbeat advertised through the Admin router");
+        assert2::assert!(
+            (heartbeat.min_version, heartbeat.max_version)
+                == (
+                    krabka_protocol::owned::broker_heartbeat_request::MIN_VERSION,
+                    krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
+                )
+        );
     }
 
     #[test]
