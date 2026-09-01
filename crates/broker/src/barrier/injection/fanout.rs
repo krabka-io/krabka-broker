@@ -212,9 +212,10 @@ mod tests {
     use krabka_units::{millis, secs};
     use tempfile::tempdir;
 
-    use super::MarkerFanout;
+    use super::{MarkerFanout, RemoteMarkerWriter};
     use crate::{
         barrier::{
+            config::BarrierConfig,
             injection::{
                 MarkerPlacement, MockRemoteMarkerWriter,
                 test_support::{at, fast_config, marker, source},
@@ -224,6 +225,7 @@ mod tests {
             test_support::{open_partition, topic_records},
         },
         error::BrokerError,
+        partition_registry::PartitionRegistry,
     };
 
     #[tokio::test]

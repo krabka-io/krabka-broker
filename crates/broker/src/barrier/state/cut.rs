@@ -117,6 +117,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use assert2::{assert, check};
+    use krabka_ids::PartitionIndex;
     use krabka_log::Offset;
 
     use super::{build_cut, expand_targets};

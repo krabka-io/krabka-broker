@@ -239,7 +239,9 @@ mod tests {
     use krabka_ids::{NodeId, PartitionIndex};
     use krabka_log::Offset;
     use krabka_metadata::{MetadataImage, MetadataRecord};
-    use krabka_protocol::krabka::barrier::WritableBarrierPartition;
+    use krabka_protocol::krabka::barrier::{
+        WritableBarrierPartition, WritableBarrierTopic, WrittenBarrierTopic,
+    };
     use krabka_units::mebibytes;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -247,7 +249,7 @@ mod tests {
     /// A malformed epoch value that the receiving broker must fence.
     const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
 
-    use super::{NO_OFFSET, mark, row};
+    use super::{NO_OFFSET, mark, refused_topic, row};
     use crate::{
         barrier::{
             marker::{BarrierMarker, parse_barrier_marker},
