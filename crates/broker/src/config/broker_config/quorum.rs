@@ -46,6 +46,16 @@ macro_rules! quorum_fields {
             /// generate a random UUID for each call through [`Self::for_tests`].
             pub incarnation_id: uuid::Uuid,
 
+            /// KIP-966 clean-shutdown proof: the broker epoch this node held
+            /// when it last stopped gracefully, recovered from
+            /// `{log_dir}/clean_shutdown` at boot and offered back at
+            /// registration. Kafka carries the same value as
+            /// `BrokerRegistrationRequest.previousBrokerEpoch`. It is
+            /// `clean_shutdown::UNPROVEN` when this node cannot prove
+            /// it stopped gracefully, which is what a crash leaves behind and
+            /// what a first-ever boot has.
+            pub previous_broker_epoch: i64,
+
             /// KIP-853: when true, an observer issues `AddVoter` for itself once it
             /// has caught up to the leader. The observer joins the quorum without
             /// operator action. Maps to Kafka's `controller.quorum.auto.join.enable`.
