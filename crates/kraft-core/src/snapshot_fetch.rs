@@ -10,6 +10,7 @@
 
 use bytes::{Bytes, BytesMut};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, gibibytes};
+use krabka_verified::{SnapshotChunkDecision, snapshot_chunk_admission};
 use refined_type::rule::MinMaxU64;
 
 use crate::types::NodeId;
@@ -129,35 +130,32 @@ impl SnapshotFetchState {
         position: i64,
         chunk: &[u8],
     ) -> SnapshotFetchStep {
-        // A negative declared total is rejected outright; the declared total must
-        // also stay under the hard cap so a hostile leader cannot make us
-        // reassemble unbounded bytes (finding M-3).
-        if id != self.snapshot_id
-            || position != self.next_position()
-            || size < 0
-            || size > self.max_size.byte_size().bytes_i64()
-        {
+        let Ok(received) = i64::try_from(self.buf.len()) else {
             return SnapshotFetchStep::Restart;
-        }
-        match self.size {
-            Some(s) if s != size => return SnapshotFetchStep::Restart,
-            _ => self.size = Some(size),
-        }
-        // Reject chunk overshoot: a well-behaved leader never sends bytes beyond
-        // its declared `size`. Without this a leader could declare a tiny `size`
-        // yet stream a giant chunk, pushing `buf` past `size` and still
-        // Completing. With this guard `buf` is bounded by `min(size, cap)`.
-        // `size - position >= 0` here (position == buf.len() <= size, checked
-        // each call), so the comparison is well-defined.
-        if i64::try_from(chunk.len()).unwrap_or(i64::MAX) > size - position {
+        };
+        let Ok(chunk_len) = i64::try_from(chunk.len()) else {
             return SnapshotFetchStep::Restart;
-        }
-        self.buf.extend_from_slice(chunk);
-        if self.next_position() >= size {
-            SnapshotFetchStep::Complete(self.buf.split().freeze())
-        } else {
-            SnapshotFetchStep::Continue {
-                next_position: self.next_position(),
+        };
+        let decision = snapshot_chunk_admission(
+            id == self.snapshot_id,
+            self.size,
+            received,
+            size,
+            position,
+            chunk_len,
+            self.max_size.byte_size().bytes_i64(),
+        );
+        match decision {
+            SnapshotChunkDecision::Restart => SnapshotFetchStep::Restart,
+            SnapshotChunkDecision::Continue { next_position } => {
+                self.size = Some(size);
+                self.buf.extend_from_slice(chunk);
+                SnapshotFetchStep::Continue { next_position }
+            }
+            SnapshotChunkDecision::Complete => {
+                self.size = Some(size);
+                self.buf.extend_from_slice(chunk);
+                SnapshotFetchStep::Complete(self.buf.split().freeze())
             }
         }
     }
@@ -262,6 +260,35 @@ mod tests {
         // buf must not have been blown past the declared size.
         assert2::assert!(step == SnapshotFetchStep::Restart);
         assert2::assert!(s.next_position() == 0);
+    }
+
+    #[test]
+    fn rejected_retries_do_not_change_progress_or_latch_size() {
+        let mut s = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(
+            s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
+        );
+        for (id, size, position, chunk) in [
+            ((10, 1), 6, 0, b"abc".as_slice()),
+            ((10, 1), 6, 2, b"cde".as_slice()),
+            ((10, 1), 6, 4, b"ef".as_slice()),
+            ((11, 1), 6, 3, b"def".as_slice()),
+            ((10, 1), 7, 3, b"def".as_slice()),
+        ] {
+            assert2::assert!(s.on_chunk(id, size, position, chunk) == SnapshotFetchStep::Restart);
+            assert2::assert!(s.next_position() == 3);
+        }
+        assert2::assert!(
+            s.on_chunk((10, 1), 6, 3, b"def")
+                == SnapshotFetchStep::Complete(Bytes::from_static(b"abcdef"))
+        );
+
+        let mut fresh = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(fresh.on_chunk((10, 1), 3, 0, b"toolong") == SnapshotFetchStep::Restart);
+        assert2::assert!(
+            fresh.on_chunk((10, 1), 7, 0, b"toolong")
+                == SnapshotFetchStep::Complete(Bytes::from_static(b"toolong"))
+        );
     }
 
     #[test]

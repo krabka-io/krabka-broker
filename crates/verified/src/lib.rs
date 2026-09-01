@@ -33,6 +33,7 @@ pub mod remote_txn;
 pub mod restore;
 pub mod retention;
 pub mod schema;
+pub mod snapshot;
 pub mod storage;
 pub mod stretch;
 pub mod throttle;
@@ -95,6 +96,7 @@ pub use retention::{
     RetentionPrefix, local_retention_prefix, retention_delete_target, retention_prefix,
 };
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
+pub use snapshot::{SnapshotChunkDecision, snapshot_chunk_admission};
 pub use storage::future_log_swap_admission;
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
