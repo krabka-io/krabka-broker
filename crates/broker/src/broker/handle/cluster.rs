@@ -279,23 +279,6 @@ impl BrokerHandle {
         self.wait_for_image(|img| img.brokers().count() >= n).await;
     }
 
-    /// Test-only: the brokers this node currently treats as fenced or past
-    /// their heartbeat deadline, as
-    /// [`crate::handlers::offline_replicas::unavailable_brokers`] computes it
-    /// for `Metadata`, `DescribeCluster` and `DescribeTopicPartitions`.
-    ///
-    /// On the controller leader this is registry truth, which the replicated
-    /// `broker.fenced` config only catches up to a tick later. A test that
-    /// must know the controller has finished unfencing a freshly registered
-    /// broker — rather than that it has not fenced it *yet* — polls this on
-    /// the controller before it looks at any other node's image.
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn unavailable_brokers_for_test(&self) -> std::collections::HashSet<u64> {
-        let image = self.broker.controller.current_image();
-        crate::handlers::offline_replicas::unavailable_brokers(&self.broker, &image).await
-    }
-
     /// Test-only: await until `topic-partition` is present in the metadata image.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]

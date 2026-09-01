@@ -347,3 +347,46 @@ async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
         assert!(echoed.cluster_id == resp.cluster_id);
     }
 }
+
+/// The controller-only node serves the client APIs on its own data listener
+/// too, and must not name itself there either: it is the quorum leader and
+/// still has no broker endpoint to offer.
+///
+/// [`assert_metadata_names_a_reachable_controller`] asks the observers, which
+/// answer out of a replicated image. This asks the node that *is* the
+/// controller, where the leader's id is the one value most obviously to hand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_only_node_never_advertises_itself_as_controller() {
+    support::init_tracing();
+
+    let cluster = start_role_separated(2).await;
+    assert_settled_unfenced(&cluster).await;
+    let controller_node_id = i32::try_from(cluster.controller.node_id()).unwrap();
+
+    let client = Client::builder()
+        .bootstrap(cluster.controller.listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    let resp = client.send(MetadataRequest::default()).await.unwrap();
+
+    let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
+    assert!(
+        resp.controller_id != controller_node_id,
+        "a controller-only node has no broker endpoint and must not name itself; \
+         it advertised {controller_node_id} out of {listed:?}"
+    );
+    let named = resp
+        .brokers
+        .iter()
+        .find(|row| row.node_id == resp.controller_id);
+    assert!(
+        named.is_some(),
+        "the controller-only node advertised controller_id {}, which is absent from {listed:?}",
+        resp.controller_id
+    );
+    let endpoint = named.unwrap();
+    assert!(!endpoint.host.is_empty() && endpoint.port > 0);
+
+    cluster.shutdown().await;
+}
