@@ -11,7 +11,10 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::records::Record;
-use krabka_verified::{ReplayCursorDecision, replay_batch_cursor_decision};
+use krabka_verified::{
+    BarrierRecoveryFinalizeDecision, ReplayCursorDecision, barrier_recovery_finalize_decision,
+    replay_batch_cursor_decision,
+};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -20,7 +23,9 @@ use crate::{
     barrier::{
         STATE_TOPIC,
         error::BarrierError,
-        persistence::{RecordKind, decode_cut, decode_group, decode_injection_start, decode_key},
+        persistence::{
+            CutStatus, RecordKind, decode_cut, decode_group, decode_injection_start, decode_key,
+        },
         state::{GroupEntry, StateRecord, apply_record, build_cut, schedule_next},
     },
     time_util::now_ms,
@@ -78,22 +83,47 @@ impl BarrierCoordinator {
 
         for (group, handle) in open {
             let mut entry = handle.lock().await;
-            let Some(pending) = entry.pending.clone() else {
-                continue;
+            let pending = entry.pending.clone();
+            let frozen_coordinator_epoch = pending
+                .as_ref()
+                .map_or(-1, |pending| pending.start.coordinator_epoch);
+            let targets_valid = pending.as_ref().is_some_and(|pending| {
+                !pending.start.targets.is_empty()
+                    && pending
+                        .start
+                        .targets
+                        .iter()
+                        .all(|target| !target.topic.is_empty() && target.partition_count > 0)
+            });
+            let decision = barrier_recovery_finalize_decision(
+                pending.is_some(),
+                self.coordinator_epoch(&group, image),
+                frozen_coordinator_epoch,
+                targets_valid,
+            );
+            let pending = match decision {
+                BarrierRecoveryFinalizeDecision::NoPending
+                | BarrierRecoveryFinalizeDecision::UnknownCoordinator => continue,
+                BarrierRecoveryFinalizeDecision::MalformedPending => {
+                    warn!(
+                        group,
+                        epoch = pending.as_ref().map(|pending| pending.epoch),
+                        "malformed interrupted barrier injection remains fenced open"
+                    );
+                    continue;
+                }
+                BarrierRecoveryFinalizeDecision::FencedCoordinator => {
+                    warn!(
+                        group,
+                        epoch = pending.as_ref().map(|pending| pending.epoch),
+                        frozen_at = frozen_coordinator_epoch,
+                        "the current coordinator epoch is stale; leaving the injection open"
+                    );
+                    continue;
+                }
+                BarrierRecoveryFinalizeDecision::FinalizePartial => pending
+                    .expect("the verified finalization decision requires a pending injection"),
             };
-            let Some(current) = self.coordinator_epoch(&group, image) else {
-                continue;
-            };
-            if current < pending.start.coordinator_epoch {
-                warn!(
-                    group,
-                    epoch = pending.epoch,
-                    coordinator_epoch = current,
-                    frozen_at = pending.start.coordinator_epoch,
-                    "a newer coordinator owns this injection; leaving it open"
-                );
-                continue;
-            }
 
             let completed_at = now_ms();
             let cut = build_cut(
@@ -102,6 +132,14 @@ impl BarrierCoordinator {
                 &pending.start.targets,
                 &BTreeMap::new(),
             );
+            if cut.status != CutStatus::Partial {
+                warn!(
+                    group,
+                    epoch = pending.epoch,
+                    "recovery refused to publish an interrupted injection as complete"
+                );
+                continue;
+            }
             warn!(
                 group,
                 epoch = pending.epoch,
@@ -241,19 +279,25 @@ fn keep_decoded<T>(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use std::sync::Arc;
 
-    use super::*;
+    use assert2::assert;
+    use krabka_ids::PartitionIndex;
+    use tokio::sync::Mutex;
+
     use crate::barrier::{
+        STATE_TOPIC,
         coordinator::{
             GroupDescription, RetainedCut,
             test_support::{Fixture, GROUP, spec},
         },
+        error::BarrierError,
         persistence::{
             CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
             encode_injection_start,
         },
     };
+    use crate::metadata_source::MetadataSource;
 
     #[tokio::test]
     async fn recovery_rebuilds_the_group_and_its_cuts() {
@@ -370,5 +414,146 @@ mod tests {
             .await
             .expect("the injection runs");
         assert!(next.epoch == 2);
+    }
+
+    #[tokio::test]
+    async fn recovery_leaves_malformed_and_stale_injections_fenced_open() {
+        for (group, start) in [
+            (
+                "malformed-cut",
+                InjectionStartValue {
+                    coordinator_epoch: 3,
+                    triggered_at: 1_000,
+                    targets: Vec::new(),
+                },
+            ),
+            (
+                "stale-cut",
+                InjectionStartValue {
+                    coordinator_epoch: 4,
+                    triggered_at: 1_000,
+                    targets: vec![crate::barrier::persistence::TopicTarget {
+                        topic: "orders".to_owned(),
+                        partition_count: 2,
+                    }],
+                },
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let coordinator = fixture.coordinator().await;
+            coordinator
+                .create_group(group, spec(&["orders"], None, 4))
+                .await
+                .expect("the group is created");
+            coordinator
+                .append_records(
+                    group,
+                    vec![(
+                        RecordKey::injection_start(group, 1),
+                        Some(encode_injection_start(&start).into()),
+                    )],
+                )
+                .await
+                .expect("the injection-start record lands");
+
+            let replayed = fixture.recovered().await;
+            let description = replayed.describe_groups(&[group.to_owned()]).await;
+            assert!(description[0].pending_epoch == Some(1), "{group}");
+            assert!(
+                replayed
+                    .list_cuts(group)
+                    .await
+                    .expect("the group is live")
+                    .is_empty(),
+                "{group}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_consumes_the_maximum_epoch_without_wrapping() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        coordinator
+            .create_group(GROUP, spec(&["orders"], None, 4))
+            .await
+            .expect("the group is created");
+        let start = InjectionStartValue {
+            coordinator_epoch: 3,
+            triggered_at: 1_000,
+            targets: vec![crate::barrier::persistence::TopicTarget {
+                topic: "orders".to_owned(),
+                partition_count: 1,
+            }],
+        };
+        coordinator
+            .append_records(
+                GROUP,
+                vec![(
+                    RecordKey::injection_start(GROUP, i64::MAX),
+                    Some(encode_injection_start(&start).into()),
+                )],
+            )
+            .await
+            .expect("the maximum-epoch start lands");
+
+        let replayed = fixture.recovered().await;
+        let cuts = replayed.list_cuts(GROUP).await.expect("the group is live");
+        assert!(cuts.len() == 1);
+        assert!(cuts[0].epoch == i64::MAX);
+        assert!(cuts[0].cut.status == CutStatus::Partial);
+        assert!(matches!(
+            replayed.trigger_injection(GROUP, None).await,
+            Err(BarrierError::EpochExhausted { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_recovery_append_keeps_the_injection_pending() {
+        let fixture = Fixture::new();
+        let writer = fixture.coordinator().await;
+        writer
+            .create_group(GROUP, spec(&["orders"], None, 4))
+            .await
+            .expect("the group is created");
+        let start = InjectionStartValue {
+            coordinator_epoch: 3,
+            triggered_at: 1_000,
+            targets: vec![crate::barrier::persistence::TopicTarget {
+                topic: "orders".to_owned(),
+                partition_count: 1,
+            }],
+        };
+        writer
+            .append_records(
+                GROUP,
+                vec![(
+                    RecordKey::injection_start(GROUP, 1),
+                    Some(encode_injection_start(&start).into()),
+                )],
+            )
+            .await
+            .expect("the injection-start record lands");
+
+        let recovering = fixture.coordinator().await;
+        for (group, entry) in recovering.replay_led_partitions().await {
+            recovering.groups.insert(group, Arc::new(Mutex::new(entry)));
+        }
+        let partition = recovering.state_partition_for(GROUP);
+        fixture.registry.remove(STATE_TOPIC, partition);
+
+        let result = recovering
+            .finalize_open_injections(&fixture.source.current_image())
+            .await;
+        assert!(matches!(result, Err(BarrierError::StateNotLocal { .. })));
+        let handle = recovering
+            .groups
+            .get(GROUP)
+            .expect("the replayed group remains")
+            .value()
+            .clone();
+        let entry = handle.lock().await;
+        assert!(entry.pending.as_ref().map(|pending| pending.epoch) == Some(1));
+        assert!(entry.cuts.is_empty());
     }
 }

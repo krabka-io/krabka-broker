@@ -135,8 +135,10 @@ pub use reconfiguration::{
     voter_reconfiguration_decision,
 };
 pub use recovery::{
-    ReplayCursorDecision, ReplayRecordDecision, replay_batch_cursor_decision,
-    replay_cursor_decision, replay_record_decision, should_capture_first_downgrade,
+    BarrierRecoveryFinalizeDecision, BarrierRecoveryFoldAction, BarrierRecoveryRecordKind,
+    ReplayCursorDecision, ReplayRecordDecision, barrier_recovery_finalize_decision,
+    barrier_recovery_fold_action, replay_batch_cursor_decision, replay_cursor_decision,
+    replay_record_decision, should_capture_first_downgrade,
 };
 pub use registration::{
     BrokerHeartbeatDecision, BrokerRegistrationDecision, broker_heartbeat_decision,
