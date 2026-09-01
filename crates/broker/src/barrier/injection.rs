@@ -29,7 +29,7 @@ mod test_support;
 #[cfg(test)]
 pub(crate) use self::transport::MockRemoteMarkerWriter;
 pub(crate) use self::{
-    append::append_marker,
+    append::{MarkerAppendError, append_marker},
     fanout::MarkerFanout,
     plan::{backoff_for, freeze_targets, group_by_leader},
     transport::{MarkerPlacement, RemoteMarkerWriter},

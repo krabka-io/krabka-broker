@@ -8,6 +8,7 @@
 
 pub mod audit;
 pub mod authz;
+pub mod barrier;
 pub mod break_glass;
 pub mod broker;
 pub mod chain;
@@ -61,6 +62,11 @@ pub use audit::{SpoolAppendDecision, spool_append_decision};
 pub use authz::{
     AclDecision, AclOperationKind, AclPatternKind, acl_decision, acl_identity_match,
     acl_operation_match, acl_resource_match,
+};
+pub use barrier::{
+    BarrierCutClassification, BarrierMarkerFenceDecision, BarrierMarkerFenceFacts,
+    BarrierPlacementDecision, BarrierTargetCountDecision, barrier_cut_classification,
+    barrier_marker_fence_decision, barrier_placement_decision, barrier_target_count_decision,
 };
 pub use break_glass::{BreakGlassAdmission, break_glass_admission, select_break_glass_candidate};
 pub use broker::{

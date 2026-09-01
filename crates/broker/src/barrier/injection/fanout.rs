@@ -10,6 +10,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, NodeId};
 use krabka_units::{Time, convert::TimeExt as _};
+use krabka_verified::{BarrierPlacementDecision, barrier_placement_decision};
 use tokio::time::Instant;
 use tracing::warn;
 
@@ -69,7 +70,7 @@ impl MarkerFanout<'_> {
                 match leader {
                     None => {}
                     Some(leader) if leader == self.node_id => {
-                        self.place_local(marker, &group, &mut placed).await;
+                        self.place_local(marker, &image, &group, &mut placed).await;
                     }
                     Some(leader) => {
                         self.place_remote(leader, marker, &group, &mut placed).await;
@@ -102,10 +103,17 @@ impl MarkerFanout<'_> {
     async fn place_local(
         &self,
         marker: &BarrierMarker,
+        image: &MetadataImage,
         targets: &[TargetPartition],
         placed: &mut BTreeMap<TargetPartition, Offset>,
     ) {
         for target in targets {
+            if placed.contains_key(target) {
+                continue;
+            }
+            let Some(metadata) = image.partition(&target.topic, target.partition.get()) else {
+                continue;
+            };
             let Some(partition) = self.partitions.get(&target.topic, target.partition) else {
                 warn!(
                     topic = target.topic,
@@ -116,7 +124,14 @@ impl MarkerFanout<'_> {
                     .marker_append_failed(&target.topic, target.partition);
                 continue;
             };
-            match append_marker(&partition, marker).await {
+            match append_marker(
+                &partition,
+                marker,
+                self.node_id,
+                metadata.leader_epoch.get(),
+            )
+            .await
+            {
                 Ok(offset) => {
                     self.metrics.marker_written(&target.topic);
                     placed.insert(target.clone(), offset);
@@ -158,8 +173,21 @@ impl MarkerFanout<'_> {
         match remote.write_markers(leader, marker, targets).await {
             Ok(placements) => {
                 for placement in placements {
-                    self.metrics.marker_written(&placement.target.topic);
-                    placed.insert(placement.target, placement.offset);
+                    let requested = targets.contains(&placement.target)
+                        && !placed.contains_key(&placement.target);
+                    if barrier_placement_decision(requested, placement.offset.get())
+                        == BarrierPlacementDecision::Accept
+                    {
+                        self.metrics.marker_written(&placement.target.topic);
+                        placed.insert(placement.target, placement.offset);
+                    } else {
+                        warn!(
+                            topic = placement.target.topic,
+                            partition = placement.target.partition.get(),
+                            offset = placement.offset.get(),
+                            "ignored an invalid barrier marker placement"
+                        );
+                    }
                 }
             }
             Err(error) => {
@@ -175,12 +203,16 @@ impl MarkerFanout<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::BTreeMap, sync::Arc};
+
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_metadata::NodeId;
     use krabka_units::{millis, secs};
     use tempfile::tempdir;
 
-    use super::*;
+    use super::MarkerFanout;
     use crate::{
         barrier::{
             injection::{
@@ -200,6 +232,11 @@ mod tests {
         let registry = PartitionRegistry::new();
         for p in 0..2 {
             open_partition(&registry, dir.path(), "orders", p);
+            registry
+                .get("orders", PartitionIndex(p))
+                .expect("the partition is open")
+                .install_leader_change(NodeId(1).get(), 3)
+                .await;
         }
         let controller = source(&topic_records("orders", 2, NodeId(1)));
         let metrics = NoBarrierMetrics;
@@ -244,6 +281,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
         open_partition(&registry, dir.path(), "orders", 0);
+        registry
+            .get("orders", PartitionIndex(0))
+            .expect("the partition is open")
+            .install_leader_change(NodeId(1).get(), 3)
+            .await;
         let controller = source(&topic_records("orders", 2, NodeId(1)));
         let metrics = NoBarrierMetrics;
         let config = fast_config();
@@ -301,6 +343,47 @@ mod tests {
             .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
             .await;
         assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(77)});
+    }
+
+    #[tokio::test]
+    async fn invalid_remote_placements_do_not_enter_the_cut() {
+        let registry = PartitionRegistry::new();
+        let controller = source(&topic_records("orders", 1, NodeId(2)));
+        let metrics = NoBarrierMetrics;
+        let config = fast_config();
+
+        let mut remote = MockRemoteMarkerWriter::new();
+        remote
+            .expect_write_markers()
+            .times(1)
+            .returning(|_leader, _marker, _targets| {
+                Ok(vec![
+                    MarkerPlacement {
+                        target: at("orders", 0),
+                        offset: Offset(-1),
+                    },
+                    MarkerPlacement {
+                        target: at("unrequested", 0),
+                        offset: Offset(9),
+                    },
+                ])
+            });
+        let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
+        let fanout = MarkerFanout {
+            node_id: NodeId(1),
+            partitions: &registry,
+            controller: &controller,
+            remote: Some(&remote),
+            metrics: &metrics,
+            config: &config,
+        };
+        let mut placed = BTreeMap::new();
+
+        fanout
+            .place_remote(NodeId(2), &marker(), &[at("orders", 0)], &mut placed)
+            .await;
+
+        assert!(placed.is_empty());
     }
 
     #[tokio::test]

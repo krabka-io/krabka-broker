@@ -14,10 +14,9 @@
 //! - A partition that this broker does not lead takes
 //!   `NOT_LEADER_OR_FOLLOWER` (6). The coordinator then reads a fresh metadata
 //!   image and retries against the new leader.
-//! - A partition whose locally-installed leader epoch is below the epoch of
-//!   the metadata image takes `FENCED_LEADER_EPOCH` (74). This broker has not
-//!   applied the newest leadership change yet, so the marker batch would carry
-//!   a stale `partition_leader_epoch` in its header.
+//! - A partition whose installed leader or epoch differs from the metadata
+//!   image takes a leadership error. This broker has not applied that exact
+//!   generation, so the marker batch would carry a false leader epoch.
 //!
 //! The refusal is per partition. One request that names both a led and an
 //! unled partition marks the first and refuses the second.
@@ -28,8 +27,7 @@
 //! when it froze the target set. This broker refuses a mismatch with
 //! `FENCED_LEADER_EPOCH`, because a marker written under one leadership and
 //! stamped with another's epoch puts a false epoch in the batch header. A
-//! request that carries -1 says the coordinator had no epoch, and this broker
-//! does not fence on it.
+//! negative or missing epoch is malformed and is fenced too.
 
 use std::sync::atomic::Ordering;
 
@@ -43,10 +41,17 @@ use krabka_protocol::{
         WrittenBarrierPartition, WrittenBarrierTopic,
     },
 };
+use krabka_verified::{
+    BarrierMarkerFenceDecision, BarrierMarkerFenceFacts, barrier_marker_fence_decision,
+};
 use tracing::warn;
 
 use crate::{
-    barrier::{handlers::cluster_action_denied, injection::append_marker, marker::BarrierMarker},
+    barrier::{
+        handlers::cluster_action_denied,
+        injection::{MarkerAppendError, append_marker},
+        marker::BarrierMarker,
+    },
     broker::Broker,
     codes,
     error::BrokerError,
@@ -141,9 +146,10 @@ async fn mark(
     ) {
         return row(index, code, NO_OFFSET);
     }
-    match append_marker(&partition, marker).await {
+    match append_marker(&partition, marker, node_id, expected_leader_epoch).await {
         Ok(offset) => row(index, codes::NONE, offset.get()),
-        Err(error) => {
+        Err(MarkerAppendError::Fence(decision)) => row(index, fence_code(decision), NO_OFFSET),
+        Err(MarkerAppendError::Broker(error)) => {
             warn!(
                 topic,
                 partition = index.get(),
@@ -167,23 +173,33 @@ fn leadership_fault(
     index: PartitionIndex,
     expected_leader_epoch: i32,
 ) -> Option<i16> {
-    if partition.current_leader.load(Ordering::Acquire) != node_id.get() {
-        return Some(codes::NOT_LEADER_OR_FOLLOWER);
-    }
     let local_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-    // The coordinator built this request against an older leadership than the
-    // one installed here, so the marker would carry an epoch that has already
-    // been superseded. Refusing sends the coordinator back for a fresh image.
-    if expected_leader_epoch >= 0 && expected_leader_epoch != local_epoch {
-        return Some(codes::FENCED_LEADER_EPOCH);
+    let local_leader = partition.current_leader.load(Ordering::Acquire);
+    let image_partition = image.partition(topic, index.get());
+    let decision = barrier_marker_fence_decision(BarrierMarkerFenceFacts {
+        image_present: image_partition.is_some(),
+        expected_leader: node_id.get(),
+        expected_epoch: expected_leader_epoch,
+        image_leader: image_partition.map_or(0, |record| record.leader.get()),
+        image_epoch: image_partition.map_or(-1, |record| record.leader_epoch.get()),
+        current_leader: local_leader,
+        current_epoch: local_epoch,
+    });
+    if decision == BarrierMarkerFenceDecision::Append {
+        None
+    } else {
+        Some(fence_code(decision))
     }
-    let image_epoch = image
-        .partition(topic, index.get())
-        .map_or(local_epoch, |record| record.leader_epoch.get());
-    if local_epoch < image_epoch {
-        return Some(codes::FENCED_LEADER_EPOCH);
+}
+
+fn fence_code(decision: BarrierMarkerFenceDecision) -> i16 {
+    match decision {
+        BarrierMarkerFenceDecision::NotLeader => codes::NOT_LEADER_OR_FOLLOWER,
+        BarrierMarkerFenceDecision::Malformed | BarrierMarkerFenceDecision::FencedEpoch => {
+            codes::FENCED_LEADER_EPOCH
+        }
+        BarrierMarkerFenceDecision::Append => codes::NONE,
     }
-    None
 }
 
 /// One partition row of the response.
@@ -219,22 +235,26 @@ fn response(topics: Vec<WrittenBarrierTopic>) -> WriteBarrierMarkersResponse {
 
 #[cfg(test)]
 mod tests {
-    use krabka_protocol::krabka::barrier::WritableBarrierPartition;
-
-    /// The epoch value that asks the receiving broker not to fence a partition.
-    const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
-
     use assert2::check;
+    use krabka_ids::{NodeId, PartitionIndex};
     use krabka_log::Offset;
-    use krabka_metadata::MetadataRecord;
+    use krabka_metadata::{MetadataImage, MetadataRecord};
+    use krabka_protocol::krabka::barrier::WritableBarrierPartition;
     use krabka_units::mebibytes;
     use tempfile::tempdir;
     use uuid::Uuid;
 
-    use super::*;
-    use crate::barrier::{
-        marker::parse_barrier_marker,
-        test_support::{open_partition, topic_records},
+    /// A malformed epoch value that the receiving broker must fence.
+    const NO_EXPECTED_LEADER_EPOCH: i32 = -1;
+
+    use super::{NO_OFFSET, mark, row};
+    use crate::{
+        barrier::{
+            marker::{BarrierMarker, parse_barrier_marker},
+            test_support::{open_partition, topic_records},
+        },
+        codes,
+        partition_registry::PartitionRegistry,
     };
 
     const LOCAL: NodeId = NodeId(1);
@@ -276,25 +296,25 @@ mod tests {
     #[tokio::test]
     async fn a_stale_expected_leader_epoch_is_fenced() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let registry = registry_with_leader(dir.path(), LOCAL, 9).await;
+        let registry = registry_with_leader(dir.path(), LOCAL, 3).await;
         let image = image(&topic_records("orders", 1, LOCAL));
 
         let cases = [
             (
                 "the epoch the coordinator saw is older",
-                8,
+                2,
                 codes::FENCED_LEADER_EPOCH,
             ),
             (
                 "the epoch the coordinator saw is newer",
-                10,
+                4,
                 codes::FENCED_LEADER_EPOCH,
             ),
-            ("the epoch matches", 9, codes::NONE),
+            ("the epoch matches", 3, codes::NONE),
             (
-                "the coordinator had no epoch",
+                "the coordinator supplied a malformed epoch",
                 NO_EXPECTED_LEADER_EPOCH,
-                codes::NONE,
+                codes::FENCED_LEADER_EPOCH,
             ),
         ];
         for (case, expected_epoch, code) in cases {
@@ -323,7 +343,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
-            NO_EXPECTED_LEADER_EPOCH,
+            3,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
@@ -341,7 +361,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
-            NO_EXPECTED_LEADER_EPOCH,
+            3,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NOT_LEADER_OR_FOLLOWER, NO_OFFSET));
@@ -379,7 +399,7 @@ mod tests {
             &marker(),
             "orders",
             PartitionIndex(0),
-            NO_EXPECTED_LEADER_EPOCH,
+            3,
         )
         .await;
         check!(written == row(PartitionIndex(0), codes::NONE, 0));

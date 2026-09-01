@@ -318,7 +318,7 @@ Step 4 groups the frozen targets by their current leader. A partition this broke
 
 The remote leg is not an optimisation. Without it a coordinator marks only the partitions it leads, every remote partition lands in the `missing` list, and a multi-broker cluster cannot make a complete cut at all.
 
-Each requested partition carries the leader epoch the coordinator resolved when it froze the target set, and the receiver refuses a mismatch with `FENCED_LEADER_EPOCH`. The reason is the batch header. A marker stamps `partition_leader_epoch` into its own header, so a request built against a stale image would write a false epoch into the log. A -1 says the coordinator had no epoch, and the receiver does not fence on it.
+Each requested partition carries the leader epoch that the coordinator resolved when it froze the target set. The receiver requires that epoch to match both its metadata image and its installed partition state. It returns `FENCED_LEADER_EPOCH` for a mismatch or a missing epoch. This protects the batch header: a marker stamps `partition_leader_epoch` into its own header, so a stale or unknown generation must not enter the log.
 
 The refusal is per partition. One request that names a led partition and an unled one marks the first and refuses the second, and the coordinator retries only what came back unmarked.
 
