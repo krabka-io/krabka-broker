@@ -73,18 +73,10 @@ pub(crate) async fn handle(
         return encode_top_level(version, error_code);
     }
 
-    let Some(persister) = ng_opt.as_ref().and_then(|ng| ng.share_persister().cloned()) else {
-        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE);
-    };
-
-    // Empty-group check: only an empty group may have its offsets reset. An
-    // absent actor is treated as empty.
-    if !group_is_empty(ng_opt.as_ref(), &gid).await {
-        return encode_top_level(version, codes::NON_EMPTY_GROUP);
-    }
-
     let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
         Vec::with_capacity(req.topics.len());
+    let mut actor_requests = Vec::new();
+    let mut actor_response_slots = Vec::new();
 
     for rt in req.topics {
         let topic_name = rt.topic_name;
@@ -94,7 +86,8 @@ pub(crate) async fn handle(
             Vec::with_capacity(rt.partitions.len());
 
         for rp in rt.partitions {
-            let Some(topic_id) = topic_id else {
+            let partition_record = image.partition(&topic_name, rp.partition_index);
+            let Some((topic_id, partition_record)) = topic_id.zip(partition_record) else {
                 partitions.push(AlterShareGroupOffsetsResponsePartition {
                     partition_index: rp.partition_index,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
@@ -103,31 +96,17 @@ pub(crate) async fn handle(
                 continue;
             };
 
-            // Bump the state epoch off the current durable value, then
-            // re-initialize at the requested start offset. On success drop the
-            // local acquisition-state cell so the next ShareFetch re-reads the
-            // new SPSO.
-            let error_code = match reset_partition(
-                &persister,
-                &gid,
+            actor_response_slots.push((responses.len(), partitions.len()));
+            actor_requests.push(crate::coordinator::unified::share::actor::ResetPartition {
                 topic_id,
-                rp.partition_index,
-                rp.start_offset,
-            )
-            .await
-            {
-                Ok(()) => {
-                    broker
-                        .share_partition_leaders
-                        .invalidate(&gid, topic_id, rp.partition_index);
-                    codes::NONE
-                }
-                Err(()) => codes::COORDINATOR_NOT_AVAILABLE,
-            };
-
+                topic_name: topic_name.clone(),
+                partition: rp.partition_index,
+                start_offset: rp.start_offset,
+                observed_leader_epoch: partition_record.leader_epoch.0,
+            });
             partitions.push(AlterShareGroupOffsetsResponsePartition {
                 partition_index: rp.partition_index,
-                error_code,
+                error_code: codes::NONE,
                 ..Default::default()
             });
         }
@@ -140,6 +119,48 @@ pub(crate) async fn handle(
         });
     }
 
+    // The actor checks emptiness and applies the complete requested batch in
+    // one mailbox turn, so a heartbeat cannot join between the gate and a
+    // reset. Its seed message is queued first when this is a recovered group.
+    let actor = ng_opt
+        .as_ref()
+        .expect("group coordinator is installed")
+        .get_or_create_share(&gid);
+    let (tx, rx) = oneshot::channel();
+    if actor
+        .tx
+        .send(ShareGroupActorMessage::ResetOffsets {
+            requests: actor_requests,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE);
+    }
+    let actor_result = rx
+        .await
+        .map_err(|_| BrokerError::Share("share-group reset actor stopped".into()))?;
+    let result_codes = match actor_result {
+        Ok(result_codes) => result_codes,
+        Err(error_code) => return encode_top_level(version, error_code),
+    };
+    if result_codes.len() != actor_response_slots.len() {
+        return encode_top_level(version, codes::COORDINATOR_NOT_AVAILABLE);
+    }
+    for ((topic_slot, partition_slot), error_code) in
+        actor_response_slots.into_iter().zip(result_codes)
+    {
+        let topic_id = uuid::Uuid::from_bytes(responses[topic_slot].topic_id.0);
+        let partition = &mut responses[topic_slot].partitions[partition_slot];
+        partition.error_code = error_code;
+        if error_code == codes::NONE {
+            broker
+                .share_partition_leaders
+                .invalidate(&gid, topic_id, partition.partition_index);
+        }
+    }
+
     let resp = AlterShareGroupOffsetsResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
@@ -147,36 +168,6 @@ pub(crate) async fn handle(
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
-}
-
-/// Reads the current durable state epoch for `(group, topic_id, partition)`,
-/// then initializes the share state again at `start_offset` with epoch+1.
-///
-/// It returns `Err(())` on any persister failure, which the caller maps to
-/// `COORDINATOR_NOT_AVAILABLE`.
-async fn reset_partition(
-    persister: &crate::share_coordinator::persister_client::SharePersister,
-    gid: &str,
-    topic_id: uuid::Uuid,
-    partition: i32,
-    start_offset: i64,
-) -> Result<(), ()> {
-    let cur_epoch = persister
-        .read_state(gid, topic_id, partition)
-        .await
-        .map_err(|_| ())?
-        .map_or(0, |s| s.state_epoch);
-    let next_epoch = crate::metadata_epoch::next_i32(cur_epoch).ok_or(())?;
-    persister
-        .initialize(
-            gid,
-            topic_id,
-            partition,
-            next_epoch,
-            krabka_log::Offset(start_offset),
-        )
-        .await
-        .map_err(|_| ())
 }
 
 fn encode_top_level(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
@@ -189,32 +180,6 @@ fn encode_top_level(version: i16, error_code: i16) -> Result<Bytes, BrokerError>
     crate::handlers::encode_response(&resp, version)
 }
 
-/// Returns `true` when the share group has no live members, and also when it
-/// has no actor at all. It drives the empty-group gate for an offset reset or
-/// delete.
-pub(crate) async fn group_is_empty(
-    ng: Option<&std::sync::Arc<crate::coordinator::unified::GroupCoordinator>>,
-    gid: &str,
-) -> bool {
-    let Some(handle) = ng.and_then(|ng| ng.find_share(gid)) else {
-        return true;
-    };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(ShareGroupActorMessage::Describe { reply: tx })
-        .await
-        .is_err()
-    {
-        // Actor gone → no live members.
-        return true;
-    }
-    match rx.await {
-        Ok(view) => view.members.is_empty(),
-        Err(_) => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, sync::Arc};
@@ -224,17 +189,24 @@ mod tests {
         UnknownTaggedFields,
         owned::{
             alter_share_group_offsets_request::{
-                AlterShareGroupOffsetsRequestPartition, AlterShareGroupOffsetsRequestTopic,
+                AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
+                AlterShareGroupOffsetsRequestTopic,
             },
-            alter_share_group_offsets_response,
+            alter_share_group_offsets_response::{
+                self, AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
+                AlterShareGroupOffsetsResponseTopic,
+            },
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+            create_topics_response::{self, CreateTopicsResponse},
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         },
+        primitives::uuid::Uuid,
     };
     use krabka_security::Principal;
 
-    use super::*;
+    use super::{encode_top_level, handle};
     use crate::{
-        authorizer::Authorizer, coordinator::unified::share::actor::ShareGroupActorMessage,
+        authorizer::Authorizer, codes, coordinator::unified::share::actor::ShareGroupActorMessage,
         test_support::DenyAll,
     };
 
@@ -281,6 +253,37 @@ mod tests {
 
     fn principal() -> Principal {
         crate::test_support::principal("alice")
+    }
+
+    async fn create_topic(
+        broker_handle: &crate::broker::BrokerHandle,
+        broker: &crate::broker::Broker,
+        topic_name: &str,
+        ctx: &crate::handlers::RequestContext<'_>,
+    ) {
+        let version = create_topics_response::MAX_VERSION;
+        let bytes = crate::test_support::encode_request(
+            &CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: topic_name.into(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+            version,
+        );
+        let response = crate::handlers::create_topics::handle(broker, version, 1, &bytes, ctx)
+            .await
+            .expect("create topic");
+        let response: CreateTopicsResponse =
+            crate::test_support::decode_response(&response, version);
+        assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
+        broker_handle
+            .wait_until_partition_present(topic_name, 0)
+            .await;
     }
 
     #[test]
@@ -394,13 +397,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_is_empty_distinguishes_absent_and_live_share_groups() {
+    async fn active_group_rejects_the_whole_reset_batch() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = broker.group_coordinator.clone();
-
-        assert!(group_is_empty(Some(&coordinator), "absent").await);
 
         coordinator.mark_share("busy");
         let actor = coordinator.get_or_create_share("busy");
@@ -424,15 +425,35 @@ mod tests {
         let resp = rx.await.expect("heartbeat response");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        assert!(!group_is_empty(Some(&coordinator), "busy").await);
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let response = handle(
+            &broker,
+            alter_share_group_offsets_response::MAX_VERSION,
+            1,
+            &encode_request(&request("busy", "missing", &[0])),
+            &ctx,
+        )
+        .await
+        .expect("handle reset");
+        let response = decode_response(&response);
+        assert!(
+            response.error_code == codes::NON_EMPTY_GROUP,
+            "{response:?}"
+        );
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
-    async fn reset_partition_bumps_existing_state_epoch_and_start_offset() {
+    async fn reset_mutates_only_requested_valid_partitions_and_retry_is_exact() {
         let (broker_handle, dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
         let broker = broker_handle.broker_arc_for_test();
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::open_all_state_partitions(
             &broker.partitions,
             dir.path(),
@@ -447,33 +468,92 @@ mod tests {
             .share_persister()
             .cloned()
             .expect("share persister");
-        let topic_id = uuid::Uuid::from_u128(0xABCD);
-
-        let initial_epoch = if let Some(state) = persister
-            .read_state("g-reset", topic_id, 0)
+        let topic_id = broker
+            .controller
+            .current_image()
+            .topic("reset-topic")
+            .expect("topic metadata")
+            .topic_id;
+        persister
+            .initialize("g-reset", topic_id, 0, 4, krabka_log::Offset(10))
             .await
-            .expect("read initial share state")
-        {
-            state.state_epoch
-        } else {
-            persister
-                .initialize("g-reset", topic_id, 0, 4, krabka_log::Offset(10))
+            .expect("seed share state");
+
+        let reset_request = request("g-reset", "reset-topic", &[0, 9]);
+        for expected_epoch in [5, 5] {
+            let response = handle(
+                &broker,
+                alter_share_group_offsets_response::MAX_VERSION,
+                1,
+                &encode_request(&reset_request),
+                &ctx,
+            )
+            .await
+            .expect("handle reset");
+            let response = decode_response(&response);
+            assert!(response.error_code == codes::NONE, "{response:?}");
+            assert!(response.responses[0].partitions[0].error_code == codes::NONE);
+            assert!(
+                response.responses[0].partitions[1].error_code == codes::UNKNOWN_TOPIC_OR_PARTITION
+            );
+
+            let state = persister
+                .read_state("g-reset", topic_id, 0)
                 .await
-                .expect("seed share state");
-            4
-        };
-
-        reset_partition(&persister, "g-reset", topic_id, 0, 33)
+                .expect("read state")
+                .expect("state present");
+            assert!(state.state_epoch == expected_epoch);
+            assert!(state.start_offset == krabka_log::Offset(42));
+        }
+        let leader_epoch = broker
+            .controller
+            .current_image()
+            .partition("reset-topic", 0)
+            .expect("partition metadata")
+            .leader_epoch
+            .0;
+        let actor = broker.group_coordinator.get_or_create_share("g-reset");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        actor
+            .tx
+            .send(ShareGroupActorMessage::ResetOffsets {
+                requests: vec![crate::coordinator::unified::share::actor::ResetPartition {
+                    topic_id,
+                    topic_name: "reset-topic".into(),
+                    partition: 0,
+                    start_offset: 99,
+                    observed_leader_epoch: leader_epoch + 1,
+                }],
+                reply: tx,
+            })
             .await
-            .expect("reset partition");
+            .expect("send stale reset");
+        assert!(rx.await.expect("stale reset reply") == Ok(vec![codes::FENCED_LEADER_EPOCH]));
+
+        persister
+            .initialize("g-overflow", topic_id, 0, i32::MAX, krabka_log::Offset(10))
+            .await
+            .expect("seed exhausted state epoch");
+        let overflow_response = handle(
+            &broker,
+            alter_share_group_offsets_response::MAX_VERSION,
+            1,
+            &encode_request(&request("g-overflow", "reset-topic", &[0])),
+            &ctx,
+        )
+        .await
+        .expect("handle overflow reset");
+        let overflow_response = decode_response(&overflow_response);
+        assert!(
+            overflow_response.responses[0].partitions[0].error_code
+                == codes::COORDINATOR_NOT_AVAILABLE
+        );
+
         let state = persister
-            .read_state("g-reset", topic_id, 0)
+            .read_state("g-reset", topic_id, 9)
             .await
-            .expect("read state")
-            .expect("state present");
-
-        assert!(state.state_epoch == initial_epoch + 1);
-        assert!(state.start_offset == krabka_log::Offset(33));
+            .expect("read unrequested state");
+        assert!(state.is_none());
         broker_handle.shutdown().await;
     }
 }

@@ -22,6 +22,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod admin_offsets;
 mod assignment;
 mod describe;
 mod heartbeat;
@@ -38,8 +39,10 @@ mod test_support;
 #[path = "actor/share_group_model.rs"]
 mod share_group_model;
 
+pub(crate) use self::admin_offsets::{DeleteTopic, ResetPartition};
 pub use self::describe::{ShareDescribeMember, ShareDescribeView};
 use self::{
+    admin_offsets::{delete_offsets, reset_offsets},
     describe::build_describe,
     heartbeat::handle_heartbeat,
     records::{PendingShareRecords, chrono_now_ms, flush_pending, state_partition_metadata_from},
@@ -63,14 +66,13 @@ pub enum ShareGroupActorMessage {
     Describe {
         reply: oneshot::Sender<ShareDescribeView>,
     },
-    /// KIP-932 lifecycle: a `DeleteShareGroupOffsets` removed every initialized
-    /// partition of `topic_id`. Drop the topic from `state.initialized` and
-    /// rewrite the `ShareGroupStatePartitionMetadata` (key v14) so the topic no
-    /// longer appears after a restart. `topic_id` is the metadata-image
-    /// (`uuid::Uuid`) id, which matches the persister's delete key.
-    DropTopicMetadata {
-        topic_id: uuid::Uuid,
-        reply: oneshot::Sender<()>,
+    ResetOffsets {
+        requests: Vec<ResetPartition>,
+        reply: oneshot::Sender<Result<Vec<i16>, i16>>,
+    },
+    DeleteOffsets {
+        requests: Vec<DeleteTopic>,
+        reply: oneshot::Sender<Result<Vec<i16>, i16>>,
     },
     Seed(super::super::ShareGroupSeed),
     Shutdown(oneshot::Sender<()>),
@@ -154,31 +156,13 @@ async fn actor_loop(
                     ShareGroupActorMessage::Describe { reply } => {
                         let _ = reply.send(build_describe(&state));
                     }
-                    ShareGroupActorMessage::DropTopicMetadata { topic_id, reply } => {
-                        state
-                            .initialized
-                            .retain(|(tid, _)| uuid::Uuid::from_bytes(tid.0) != topic_id);
-                        let pending = PendingShareRecords {
-                            state_partition_metadata: Some(state_partition_metadata_from(&state)),
-                            ..Default::default()
-                        };
-                        if let Err(e) = flush_pending(
-                            &state,
-                            pending,
-                            &*offsets_log,
-                            &coordinator,
-                            chrono_now_ms(),
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                group_id = %state.group_id,
-                                topic_id = %topic_id,
-                                error = %e,
-                                "rewriting ShareGroupStatePartitionMetadata after topic delete failed; in-memory set updated",
-                            );
-                        }
-                        let _ = reply.send(());
+                    ShareGroupActorMessage::ResetOffsets { requests, reply } => {
+                        let result = reset_offsets(&state, &coordinator, requests).await;
+                        let _ = reply.send(result);
+                    }
+                    ShareGroupActorMessage::DeleteOffsets { requests, reply } => {
+                        let result = delete_offsets(&mut state, &coordinator, requests).await;
+                        let _ = reply.send(result);
                     }
                     ShareGroupActorMessage::Seed(seed) => {
                         apply_seed(&mut state, seed);
