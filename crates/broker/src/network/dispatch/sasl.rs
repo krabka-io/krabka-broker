@@ -70,15 +70,7 @@ async fn handle_sasl_frame(
             // (KIP-368 in-band re-auth: a SaslHandshake just ran on an
             // already-authenticated connection). Any other state returns
             // ILLEGAL_SASL_STATE (34) and closes.
-            let mech_opt = match auth {
-                crate::network::auth::ConnectionAuth::Negotiating { mechanism, .. } => {
-                    Some(*mechanism)
-                }
-                crate::network::auth::ConnectionAuth::Reauthenticating { previous, .. } => {
-                    Some(previous.mechanism)
-                }
-                _ => None,
-            };
+            let mech_opt = auth.negotiated_mechanism();
             let resp = if let Some(mech) = mech_opt {
                 match mech {
                     krabka_security::SaslMechanism::Plain => {

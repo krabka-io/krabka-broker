@@ -221,9 +221,6 @@ pub(super) fn supervisor_fixture(
     let partitions = Arc::new(PartitionRegistry::new());
     let reporter = Arc::new(CountingAssignDirsReporter::default());
     let mut supervisor = ReplicatorSupervisor::new(ReplicatorSupervisorConfig {
-        client_dispatch_queue_capacity:
-            krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-        client_frame_max: krabka_client_core::ClientFrameMax::default(),
         node_id: NodeId(2),
         broker_id: 2,
         controller: Arc::new(StaticMetadataSource::new(image)),
@@ -238,6 +235,9 @@ pub(super) fn supervisor_fixture(
         inter_broker_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
         inter_broker_server_name: "localhost".into(),
         inter_broker_listener_name: "INTERNAL".into(),
+        controller_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+        controller_server_name: "localhost".into(),
+        controller_quorum_voters: Vec::new(),
         replication: ReplicationRuntimeConfig::default(),
         throttle_state: Arc::new(ThrottleState::new()),
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),

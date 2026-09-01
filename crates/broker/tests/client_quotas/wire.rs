@@ -35,6 +35,35 @@ pub async fn round_trip(
     flexible: bool,
     body: &[u8],
 ) -> Result<Vec<u8>, io::Error> {
+    round_trip_split_header(
+        stream,
+        api_key,
+        api_version,
+        corr_id,
+        flexible,
+        flexible,
+        body,
+    )
+    .await
+}
+
+/// [`round_trip`] with the request and the response header flexibility chosen
+/// independently, and returning the body with the response header stripped.
+///
+/// The two differ on the unsupported-version reply path. A request below a
+/// flexible-from-v0 API's minimum version parses with a non-flexible request
+/// header, because the broker resolves flexibility from the version the client
+/// asked for, while the reply is encoded at the nearest supported version and
+/// so carries the flexible response header with its tagged-fields byte.
+pub async fn round_trip_split_header(
+    stream: &mut TcpStream,
+    api_key: i16,
+    api_version: i16,
+    corr_id: i32,
+    request_flexible: bool,
+    response_flexible: bool,
+    body: &[u8],
+) -> Result<Vec<u8>, io::Error> {
     let mut frame = BytesMut::with_capacity(16 + body.len());
     frame.put_i16(api_key);
     frame.put_i16(api_version);
@@ -42,7 +71,7 @@ pub async fn round_trip(
     let client_id = "krabka-quota-test";
     frame.put_i16(i16::try_from(client_id.len()).expect("client_id fits"));
     frame.put_slice(client_id.as_bytes());
-    if flexible {
+    if request_flexible {
         frame.put_u8(0); // empty header tagged-fields byte
     }
     frame.put_slice(body);
@@ -59,14 +88,19 @@ pub async fn round_trip(
 
     let mut cur = &resp[..];
     let _resp_corr_id = cur.get_i32();
-    let uses_v1_header = flexible && api_key != 18;
+    let uses_v1_header = response_flexible && api_key != 18;
     if uses_v1_header {
         if cur.is_empty() {
             return Err(io::Error::other(
                 "flexible response missing tagged-fields byte",
             ));
         }
-        let _tagged = cur.get_u8();
+        let tagged = cur.get_u8();
+        if tagged != 0 {
+            return Err(io::Error::other(format!(
+                "response header tagged-fields byte is {tagged}, expected 0"
+            )));
+        }
     }
     Ok(cur.to_vec())
 }

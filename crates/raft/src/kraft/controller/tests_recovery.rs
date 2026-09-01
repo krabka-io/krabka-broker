@@ -50,6 +50,33 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
 }
 
 #[test]
+fn control_replay_stops_inside_a_partially_committed_batch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let initial = voter_set(&[NodeId(1)]);
+    let committed = voter_set(&[NodeId(1), NodeId(2)]);
+    let uncommitted = voter_set(&[NodeId(1), NodeId(3)]);
+    {
+        let mut log = KraftLog::open(dir.path()).expect("open log");
+        let mut batch = typed_control_batch(
+            1,
+            &[
+                ControlRecord::Voters(voter_set_to_wire(&committed)),
+                ControlRecord::Voters(voter_set_to_wire(&uncommitted)),
+            ],
+        )
+        .expect("mixed-commit voter batch");
+        log.append(&mut batch).expect("append voter batch");
+        log.advance_hwm(Offset(1));
+    }
+
+    let log = KraftLog::open(dir.path()).expect("reopen log");
+    let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
+    replay_control_records(&log, &mut state, MetadataRaftFetchMax::default());
+
+    assert2::assert!(state.voters == committed);
+}
+
+#[test]
 fn replay_committed_rebuilds_image_from_log_records() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     elect_single_voter_engine(&mut engine);

@@ -1,0 +1,93 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 44 0 44 64 *)
+
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sremote_metadata = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 45 45 45 47
+let%span sremote_metadata'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 45 32 45 48
+let%span sremote_metadata'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 48 19 48 24
+let%span sremote_metadata'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 50 22 50 24
+let%span sremote_metadata'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 49 11 50 25
+let%span sremote_metadata'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 51 22 51 60
+let%span sremote_metadata'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 49 11 51 61
+let%span sremote_metadata'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 53 22 53 24
+let%span sremote_metadata'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 52 11 53 25
+let%span sremote_metadata'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 54 22 54 59
+let%span sremote_metadata'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 52 11 54 60
+let%span sremote_metadata'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 22 55 24
+let%span sremote_metadata'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 4 55 25
+let%span sremote_metadata'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 4 55 54
+let%span sremote_metadata'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 38 12 38 71
+let%span sremote_metadata'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 14 28 14 64
+let%span sremote_metadata'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 28 8 28 63
+let%span sremote_metadata'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 11 16 11 47
+
+use creusot.int.Int32
+use creusot.int.UInt128
+use creusot.int.UInt64
+use creusot.int.UInt32
+use creusot.prelude.Any
+
+let wrapping_mul (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_mul ensures] [%#snum] result = Int32.mul self_ rhs}
+    (! return {result}) ]
+
+function java_long_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 10 0 10 41] (bits: UInt64.t) : Int32.t
+ =
+  [%#sremote_metadata'16] Int32.of_int (UInt64.t'int (UInt64.bw_xor bits (UInt64.shr bits (UInt64.of_int (UInt32.t'int (32: UInt32.t))))))
+
+let java_long_hash (bits: UInt64.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:java_long_hash ensures] [%#sremote_metadata'14] result
+    = java_long_hash_model bits}
+    (! return {result}) ]
+
+let wrapping_add (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_add ensures] [%#snum'0] result = Int32.add self_ rhs}
+    (! return {result}) ]
+
+function java_objects_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 26 0 26 70] (topic_id: UInt128.t) (user_partition: Int32.t) : Int32.t
+ =
+  [%#sremote_metadata'15] let most_significant_bits = UInt64.of_int (UInt128.t'int (UInt128.shr topic_id (UInt128.of_int (UInt32.t'int (64: UInt32.t))))) in let least_significant_bits = UInt64.of_int (UInt128.t'int topic_id) in let first = Int32.add (Int32.mul (1: Int32.t) (31: Int32.t)) (java_long_hash_model least_significant_bits) in let second = Int32.add (Int32.mul first (31: Int32.t)) (java_long_hash_model most_significant_bits) in Int32.add (Int32.mul second (31: Int32.t)) user_partition
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let java_objects_hash [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 44 0 44 64]
+  (topic_id: UInt128.t) (user_partition: Int32.t) (return (x: Int32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = UInt128.shr [%#sremote_metadata'0] {topic_id} {Int32.to_int ([%#sremote_metadata] (64: Int32.t))}
+        (fun (_x: UInt128.t) -> [ &_7 <- _x ] s1)
+    | s1 = [ &most_significant_bits <- UInt64.of_int (UInt128.t'int _7) ] s2
+    | s2 = [ &least_significant_bits <- UInt64.of_int (UInt128.t'int topic_id) ] s3
+    | s3 = [ &hash <- [%#sremote_metadata'1] (1: Int32.t) ] s4
+    | s4 = wrapping_mul [%#sremote_metadata'3] {hash} {[%#sremote_metadata'2] (31: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_13 <- _x ] s5)
+    | s5 = java_long_hash [%#sremote_metadata'4] {least_significant_bits} (fun (_x: Int32.t) -> [ &_15 <- _x ] s6)
+    | s6 = wrapping_add [%#sremote_metadata'5] {_13} {_15} (fun (_x: Int32.t) -> [ &_12 <- _x ] s7)
+    | s7 = [ &hash <- _12 ] s8
+    | s8 = wrapping_mul [%#sremote_metadata'7] {hash} {[%#sremote_metadata'6] (31: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_18 <- _x ] s9)
+    | s9 = java_long_hash [%#sremote_metadata'8] {most_significant_bits} (fun (_x: Int32.t) -> [ &_20 <- _x ] s10)
+    | s10 = wrapping_add [%#sremote_metadata'9] {_18} {_20} (fun (_x: Int32.t) -> [ &_17 <- _x ] s11)
+    | s11 = [ &hash <- _17 ] s12
+    | s12 = wrapping_mul [%#sremote_metadata'11] {hash} {[%#sremote_metadata'10] (31: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_22 <- _x ] s13)
+    | s13 = wrapping_add [%#sremote_metadata'12] {_22} {user_partition} (fun (_x: Int32.t) -> [ &_ret <- _x ] s14)
+    | s14 = return {_ret} ] ]
+  [ & _ret: Int32.t = Any.any_l ()
+  | & topic_id: UInt128.t = topic_id
+  | & user_partition: Int32.t = user_partition
+  | & most_significant_bits: UInt64.t = Any.any_l ()
+  | & _7: UInt128.t = Any.any_l ()
+  | & least_significant_bits: UInt64.t = Any.any_l ()
+  | & hash: Int32.t = Any.any_l ()
+  | & _12: Int32.t = Any.any_l ()
+  | & _13: Int32.t = Any.any_l ()
+  | & _15: Int32.t = Any.any_l ()
+  | & _17: Int32.t = Any.any_l ()
+  | & _18: Int32.t = Any.any_l ()
+  | & _20: Int32.t = Any.any_l ()
+  | & _22: Int32.t = Any.any_l () ])
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:java_objects_hash ensures] [%#sremote_metadata'13] result
+    = java_objects_hash_model topic_id user_partition}
+    (! return {result}) ]

@@ -241,6 +241,7 @@ mod tests {
                     payload: PartitionPayload::Slice(payload),
                 },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 topic_name: "orders".into(),
                 topic_denied: false,
@@ -263,6 +264,7 @@ mod tests {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
             },
         )
         .await

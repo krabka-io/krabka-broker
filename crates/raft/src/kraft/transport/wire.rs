@@ -15,14 +15,17 @@
 //! encodes a byte-faithful `VoteResponse` and the core infers the round itself
 //! (KIP-996).
 //!
-//! The shared constants and integer conversions live in [`codec`], the request
-//! bodies in [`request`], and the response bodies in [`response`].
+//! The shared constants and integer conversions live in `codec`, the request
+//! bodies in `request`, and the response bodies in `response`.
 
 mod codec;
 mod request;
 mod response;
 
-pub(crate) use self::codec::NOT_LEADER_OR_FOLLOWER;
+pub(crate) use self::codec::{
+    FETCH_SNAPSHOT_VERSION, FETCH_VERSION, NOT_LEADER_OR_FOLLOWER, QUORUM_EPOCH_VERSION,
+    VOTE_VERSION,
+};
 pub use self::{
     request::{
         PeerRequest, decode_begin, decode_end, decode_fetch, decode_fetch_snapshot, decode_vote,

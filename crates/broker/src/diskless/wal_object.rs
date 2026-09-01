@@ -191,7 +191,7 @@ pub fn parse_wal_object(obj: &Bytes) -> Result<Vec<WalObjectEntry>, WalObjectErr
     }
 
     let mut entries = Vec::with_capacity(footer_len / ENTRY_LEN);
-    for entry_bytes in obj[footer_start..trailer_start].chunks_exact(ENTRY_LEN) {
+    for entry_bytes in obj[footer_start..trailer_start].as_chunks::<ENTRY_LEN>().0 {
         let topic_id =
             Uuid::from_slice(&entry_bytes[..16]).map_err(|_| WalObjectError::BadManifest)?;
         let partition = i32::from_le_bytes(

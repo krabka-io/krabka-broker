@@ -28,6 +28,28 @@ pub(crate) const BROKER_WITNESS: &str = "broker.witness";
 /// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
 pub(crate) const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
 
+/// KIP-211: how long a committed offset outlives the group that owns it, in
+/// whole minutes. The value is static for the life of the process, so
+/// `DescribeConfigs` reports it read-only against `STATIC_BROKER_CONFIG`.
+pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
+
+/// Cadence of the offset-retention sweep, in milliseconds. Static and
+/// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
+pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
+
+/// How long a client connection may go without a complete frame before the
+/// broker closes it. The process reads it from its static configuration at
+/// startup, so `DescribeConfigs` reports it read-only, at
+/// `STATIC_BROKER_CONFIG` when an operator named it and `DEFAULT_CONFIG` when
+/// they did not.
+///
+/// A per-listener override is spelled
+/// `listener.name.<name>.connections.max.idle.ms`, which is a key per listener
+/// rather than a registry row. `DescribeConfigs` reports each override under
+/// this row's type and documentation, because it is the same config under
+/// Kafka's `ListenerName.configPrefix`.
+pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
+
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
 pub(crate) const WITNESS_TRUE: &str = "true";
 
@@ -134,6 +156,22 @@ pub(crate) fn resolve_preferred_leader_site(
         .get(STRETCH_PREFERRED_LEADER_SITE)
         .map(String::as_str)
 }
+
+/// KIP-98: how long a transactional id may sit in a terminal or idle state
+/// before the transaction coordinator tombstones it out of
+/// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).
+///
+/// The key is static in Kafka: `kafka-configs --alter` refuses it with
+/// `Cannot update these configs dynamically`, and `DescribeConfigs` reports it
+/// read-only from the node's own configuration. krabka reports it the same
+/// way, out of [`crate::config::BrokerConfig::txn_id_expiration`].
+pub(crate) const TRANSACTIONAL_ID_EXPIRATION_MS: &str = "transactional.id.expiration.ms";
+
+/// KIP-98: how often the transactional-id expiry sweep runs. Kafka defaults it
+/// to 3600000 ms (1 hour). Static and read-only, like
+/// [`TRANSACTIONAL_ID_EXPIRATION_MS`].
+pub(crate) const TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS: &str =
+    "transaction.remove.expired.transaction.cleanup.interval.ms";
 
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker

@@ -4,7 +4,8 @@
 //! react to specific codes, so a substitution changes client behavior. Every
 //! constant in the Kafka range comes from `Errors.values()` in the
 //! `kafka-clients` jar of the pinned `apache/kafka:4.3.1` image, and a guard
-//! test in [`tests`] re-checks each one against that extracted table.
+//! test in the private `tests` module re-checks each one against that extracted
+//! table.
 //!
 //! One fenced block at the end of this file holds the krabka-private codes at
 //! 1000 and above. A broker returns those only on a krabka-private api key.
@@ -238,6 +239,14 @@ kafka_codes! {
     /// write, or the write timed out.
     FEATURE_UPDATE_FAILED = 96;
 
+    /// `PRINCIPAL_DESERIALIZATION_FAILURE` (97, KIP-590): the controller could
+    /// not read the `request_principal` a forwarding node put in an
+    /// `Envelope`. `kafka.server.EnvelopeUtils` raises it whenever the
+    /// configured `KafkaPrincipalSerde` throws, which covers an absent
+    /// principal, a schema version outside the supported range, and a
+    /// truncated `DefaultPrincipalData` body.
+    PRINCIPAL_DESERIALIZATION_FAILURE = 97;
+
     // KIP-853 voter-reconfiguration codes. Kafka assigns exactly three, at
     // 125 to 127; there is no separate code for a malformed voter update.
     /// `INVALID_VOTER_KEY` (125, KIP-853): a raft RPC carried a voter key
@@ -320,6 +329,7 @@ kafka_codes! {
     DELEGATION_TOKEN_OWNER_MISMATCH = 63;
     DELEGATION_TOKEN_REQUEST_NOT_ALLOWED = 64;
     DELEGATION_TOKEN_AUTHORIZATION_FAILED = 65;
+    DELEGATION_TOKEN_EXPIRED = 66;
 
     // KIP-630 FetchSnapshot (api_key 59) codes.
     /// `SNAPSHOT_NOT_FOUND` (98): the requested `__cluster_metadata` snapshot

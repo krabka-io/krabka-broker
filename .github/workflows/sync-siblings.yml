@@ -47,7 +47,7 @@ jobs:
           token: ${{ secrets.SIBLING_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.0"
 
       - id: bump
         env:

@@ -51,7 +51,7 @@ mod sync_observer {
 
 impl Log {
     /// Flush and `fsync` the active segment to stable storage, independent of
-    /// [`LogConfig::flush_on_append`].
+    /// [`crate::LogConfig::flush_on_append`].
     ///
     /// This method also fsyncs the log directory after it creates a new
     /// segment file. The segment therefore stays reachable after a crash on

@@ -3,12 +3,15 @@
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_protocol::records::Record;
+use krabka_protocol::records::{Record, RecordsError};
 
 use super::{
-    test_support::{BASE_TIMESTAMP, batch, decide, header, partition, predicates, record},
+    test_support::{
+        BASE_TIMESTAMP, batch, decide, header, partition, predicates, record, try_decide,
+    },
     *,
 };
+use crate::error::RestoreError;
 
 #[test]
 fn no_predicates_keep_everything() {
@@ -357,4 +360,56 @@ fn non_utf8_key_bytes_never_match_and_do_not_panic() {
 
     check!(batch_decision == BatchDecision::Keep);
     check!(records == [RecordDecision::Keep]);
+}
+
+#[test]
+fn record_offset_outside_the_declared_batch_is_an_integrity_error() {
+    let predicates = predicates(&["--exclude-key", "never"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(1, vec![record(1)]);
+    owned.last_offset_delta = 0;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
+}
+
+#[test]
+fn record_offset_overflow_is_an_integrity_error() {
+    let predicates = predicates(&["--exclude-key", "never"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(1, vec![record(1)]);
+    owned.base_offset = i64::MAX;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
+}
+
+#[test]
+fn record_timestamp_overflow_is_an_integrity_error() {
+    let predicates = predicates(&["--to-timestamp", "0"]);
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(
+        1,
+        vec![Record {
+            timestamp_delta: 1,
+            ..record(0)
+        }],
+    );
+    owned.base_timestamp = i64::MAX;
+    owned.max_timestamp = i64::MAX;
+
+    let error = try_decide(&predicates, &orders_0, &owned).unwrap_err();
+
+    check!(matches!(
+        error,
+        RestoreError::Records(RecordsError::RecordParse(_))
+    ));
 }

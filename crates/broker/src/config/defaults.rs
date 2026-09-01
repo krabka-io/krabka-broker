@@ -30,7 +30,8 @@ use crate::{
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
         DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
         DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
-        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
+        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
+        DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
         ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
@@ -120,6 +121,8 @@ impl Default for BrokerConfig {
             default_min_insync_replicas: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
+            offsets_retention_override: None,
+            offsets_retention_check_interval_override: None,
             offsets_topic_replication_factor: 3,
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),
@@ -149,6 +152,7 @@ impl Default for BrokerConfig {
             bootstrap_servers: vec![],
             directory_id: uuid::Uuid::from_u128(1),
             incarnation_id: uuid::Uuid::nil(),
+            previous_broker_epoch: crate::clean_shutdown::UNPROVEN,
             auto_join: false,
             observer_lag_bound: DEFAULT_OBSERVER_LAG_BOUND,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
@@ -197,6 +201,12 @@ impl Default for BrokerConfig {
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's
             // `transaction.abort.timed.out.transaction.cleanup.interval.ms`).
             txn_abort_cleanup_interval: DEFAULT_TXN_ABORT_CLEANUP_INTERVAL,
+            // KIP-98 transactional-id expiry (Kafka's
+            // `transactional.id.expiration.ms` and
+            // `transaction.remove.expired.transaction.cleanup.interval.ms`).
+            txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
+            txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),
@@ -231,6 +241,11 @@ impl Default for BrokerConfig {
             // max.connections / max.connections.per.ip (Integer.MAX_VALUE).
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
+            // Unset: the broker runs Kafka's connections.max.idle.ms default
+            // and reports the key at DEFAULT_CONFIG. No per-listener override
+            // until an operator writes one.
+            connections_max_idle: None,
+            connections_max_idle_overrides: std::collections::BTreeMap::new(),
             // Master key off by default. Operators flip this on
             // via `KRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
             // `[delegation_token] secret_key` TOML stanza.

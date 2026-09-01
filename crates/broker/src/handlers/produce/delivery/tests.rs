@@ -337,6 +337,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "before the delivery time the partition already holds",
@@ -346,6 +347,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "further ahead than delivery.max.delay.ms",
@@ -373,6 +375,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                     ))),
                 },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery,
                 topic_name: "sched".into(),
                 topic_denied: false,
@@ -395,6 +398,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
             },
         )
         .await

@@ -64,9 +64,9 @@ fn of_topic_reads_the_published_config_and_defaults_to_no_elr() {
     assert!(TopicElr::of_topic(&image, "payments").partition(0) == elr(&[], &[]));
 }
 
-/// A broker that has come back as a new process stops being eligible and
-/// becomes last-known, for every partition that named it, and a partition
-/// that never named it is untouched.
+/// A broker that can no longer be trusted to hold every committed record
+/// stops being eligible and becomes last-known, for every partition that
+/// named it, and a partition that never named it is untouched.
 #[test]
 fn demote_node_moves_it_to_the_last_known_set() {
     for (label, value, node, moved, want) in [

@@ -1,0 +1,69 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 34 0 39 29 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sremote_txn = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 22 10 23 62
+let%span sremote_txn'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 24 10 28 38
+let%span sremote_txn'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 29 10 32 67
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_RemoteTxnOverlapDecision = Invalid | Disjoint | Overlap
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_txn_overlap_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 34 0 39 29]
+  (entry_start: Int64.t) (entry_last: Int64.t) (query_from: Int64.t) (query_to: Int64.t)
+  (return (x: t_RemoteTxnOverlapDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_20 <- Int64.gt entry_start entry_last ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb2) | br1 -> {_20} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_23 <- Int64.gt query_from query_to ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb5) | br1 -> {_23} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_26 <- Int64.le entry_start query_to ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb10) | br1 -> {_26} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = [ &_29 <- Int64.ge entry_last query_from ] s1
+    | s1 = any [ br0 -> {_29 = false} (! bb10) | br1 -> {_29} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- Overlap ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- Disjoint ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RemoteTxnOverlapDecision = Any.any_l ()
+  | & entry_start: Int64.t = entry_start
+  | & entry_last: Int64.t = entry_last
+  | & query_from: Int64.t = query_from
+  | & query_to: Int64.t = query_to
+  | & _20: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _29: bool = Any.any_l () ])
+  [ return (result: t_RemoteTxnOverlapDecision) ->
+  {[@stop_split] [@expl:remote_txn_overlap_decision ensures] ([@stop_split] [@expl:remote_txn_overlap_decision ensures #0] [%#sremote_txn] (result
+        = Invalid)
+      = (gt_log_Int (Int64.to_int entry_start) (Int64.to_int entry_last)
+      \/ gt_log_Int (Int64.to_int query_from) (Int64.to_int query_to)))
+    /\ ([@stop_split] [@expl:remote_txn_overlap_decision ensures #1] [%#sremote_txn'0] (result = Overlap)
+      = (Int64.to_int entry_start <= Int64.to_int entry_last
+      /\ Int64.to_int query_from <= Int64.to_int query_to
+      /\ Int64.to_int entry_start <= Int64.to_int query_to
+      /\ ge_log_Int (Int64.to_int entry_last) (Int64.to_int query_from)))
+    /\ ([@stop_split] [@expl:remote_txn_overlap_decision ensures #2] [%#sremote_txn'1] (result = Disjoint)
+    = (Int64.to_int entry_start <= Int64.to_int entry_last
+    /\ Int64.to_int query_from <= Int64.to_int query_to
+    /\ (gt_log_Int (Int64.to_int entry_start) (Int64.to_int query_to)
+    \/ Int64.to_int entry_last < Int64.to_int query_from)))}
+    (! return {result}) ]

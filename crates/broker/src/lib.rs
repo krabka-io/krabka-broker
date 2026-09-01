@@ -165,6 +165,7 @@ pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
 pub mod bootstrap;
 pub(crate) mod break_glass;
 mod broker;
+pub(crate) mod clean_shutdown;
 pub(crate) mod cleaner;
 mod client_metrics;
 /// Client-visible failover model: producer retry/routing composed with broker
@@ -176,6 +177,7 @@ pub mod config;
 pub(crate) mod config_keys;
 pub mod config_value;
 mod controller_admin;
+pub(crate) mod controller_endpoint;
 pub mod coordinator;
 /// Compositional end-to-end data-path verification model (produce → replicate →
 /// commit → fetch across clean and unclean failover). It wraps the real
@@ -190,6 +192,7 @@ mod diskless;
 #[cfg(test)]
 mod diskless_crash_model;
 pub(crate) mod elr;
+mod envelope;
 mod error;
 mod features;
 pub mod fetch_session;
@@ -200,6 +203,7 @@ mod handlers;
 pub(crate) mod heartbeat;
 pub(crate) mod host_port;
 pub(crate) mod incarnation;
+pub(crate) mod internal_topics;
 pub(crate) mod isr_maintenance;
 pub(crate) mod kafka_hash;
 pub(crate) mod leader_election;

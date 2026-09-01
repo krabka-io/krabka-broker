@@ -5,7 +5,7 @@
 
 use bytes::{Bytes, BytesMut};
 use clap::Parser as _;
-use krabka_ids::{Offset, ProducerId};
+use krabka_ids::ProducerId;
 use krabka_protocol::{
     DecodeBorrow as _,
     records::{Attributes, Record, RecordBatch, RecordBatchBorrowed, RecordHeader},
@@ -13,7 +13,8 @@ use krabka_protocol::{
 
 use crate::{
     args::{PartitionRef, RestoreArgs},
-    bound::{BatchDecision, Predicates, RecordDecision},
+    bound::{BatchDecision, Predicates, RecordDecision, record_coordinates},
+    error::RestoreError,
 };
 
 const BASE_OFFSET: i64 = 1_000;
@@ -104,22 +105,27 @@ pub(super) fn decide(
     partition: &PartitionRef,
     owned: &RecordBatch,
 ) -> (BatchDecision, Vec<RecordDecision>) {
+    try_decide(predicates, partition, owned).expect("valid record coordinates")
+}
+
+pub(super) fn try_decide(
+    predicates: &Predicates,
+    partition: &PartitionRef,
+    owned: &RecordBatch,
+) -> Result<(BatchDecision, Vec<RecordDecision>), RestoreError> {
     let encoded = encode(owned);
     let borrowed = borrow(&encoded);
     let header = borrowed.header();
-    let base_offset = header.base_offset.get();
-    let base_timestamp = header.base_timestamp.get();
     let producer_id = ProducerId(header.producer_id.get());
 
-    let batch_decision = predicates.decide_batch(partition, &borrowed);
+    let batch_decision = predicates.decide_batch(partition, &borrowed)?;
     let record_decisions = borrowed
         .iter()
         .map(|parsed| {
-            let record = parsed.expect("parse record");
-            let offset = Offset(base_offset + i64::from(record.offset_delta));
-            let timestamp_ms = base_timestamp + record.timestamp_delta;
-            predicates.decide_record(partition, offset, timestamp_ms, producer_id, &record)
+            let record = parsed?;
+            let (offset, timestamp_ms) = record_coordinates(header, &record)?;
+            Ok(predicates.decide_record(partition, offset, timestamp_ms, producer_id, &record))
         })
-        .collect();
-    (batch_decision, record_decisions)
+        .collect::<Result<Vec<_>, RestoreError>>()?;
+    Ok((batch_decision, record_decisions))
 }

@@ -29,10 +29,13 @@ impl Engine {
         // produced reply back onto the oneshot.
         match inbound {
             Inbound::Vote { req, reply } => {
-                if let Some(wire::PeerRequest::Vote {
+                let response = if let Some(wire::PeerRequest::Vote {
+                    cluster_id,
                     voter_id,
+                    voter_directory_id,
                     candidate_epoch,
                     candidate,
+                    candidate_directory_id,
                     last_epoch,
                     last_offset,
                     pre_vote,
@@ -40,18 +43,27 @@ impl Engine {
                 {
                     let event = Event::ReceiveVoteRequest {
                         from: candidate,
+                        cluster_id,
                         voter_id,
+                        voter_directory_id,
                         candidate_epoch,
                         candidate,
+                        candidate_directory_id,
                         candidate_log_end: LogEnd {
                             last_epoch,
                             last_offset,
                         },
                         pre_vote,
                     };
-                    let resp = self.run_inbound_reply(event);
-                    let _ = reply.send(resp);
-                }
+                    self.run_inbound_reply(event)
+                } else {
+                    wire::PeerResponse::Vote {
+                        epoch: self.core.quorum_state().leader_epoch,
+                        granted: false,
+                    }
+                    .encode()
+                };
+                let _ = reply.send(response);
             }
             Inbound::BeginQuorumEpoch { req, reply } => {
                 if let Some(wire::PeerRequest::BeginQuorumEpoch {

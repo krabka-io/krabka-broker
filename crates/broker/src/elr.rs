@@ -45,18 +45,21 @@
 //! record.
 //!
 //! That is also why the state has to be withdrawn when it stops being true.
-//! [`records_for_restarted_broker`] withdraws the published half of it for the
-//! one event that ends a membership without any partition changing: a broker
-//! returning under a new incarnation id, whose current log need not be the log
-//! that made it eligible. Its own docs carry what that leaves open.
+//! [`unclean_restart`] withdraws the published half of it for the one event
+//! that ends a membership without any partition changing: a broker rejoining
+//! without proving it stopped gracefully, whose current log need not be the
+//! log that made it eligible. A broker that *can* prove it -- the
+//! clean-shutdown record [`crate::clean_shutdown`] keeps, offered back as
+//! `previousBrokerEpoch` -- keeps its membership, because its log is still the
+//! log the claim was about.
 
 pub(crate) mod maintain;
 pub(crate) mod state;
+pub(crate) mod unclean_restart;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use self::{
-    maintain::{ElrPublisher, records_for_restarted_broker},
-    state::TopicElr,
+    maintain::ElrPublisher, state::TopicElr, unclean_restart::withdraw_elr_membership,
 };

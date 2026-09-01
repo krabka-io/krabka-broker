@@ -720,17 +720,26 @@ async fn a_witness_never_wins_the_election_however_the_elr_reads() {
     }
 }
 
-/// KIP-966 meets a broker that came back as a new process: membership said
-/// that the log broker 3 held when it left the ISR held every committed
-/// record, and the registration that replaces broker 3's withdraws the
-/// statement, because the log the returning process holds is not that one.
+/// KIP-966 meets a broker that rejoined without proving it stopped
+/// gracefully: membership said that the log broker 3 held when it left the ISR
+/// held every committed record, and
+/// [`withdraw_elr_membership`](crate::elr::withdraw_elr_membership) takes the
+/// statement back, because the log the returning process holds need not be
+/// that one.
 ///
 /// Both halves are the same partition and the same poll. Broker 3 wins on its
 /// membership while the membership stands, and broker 2's longer log wins once
 /// it does not -- as the most complete surviving log, which is the answer that
 /// meters, audits and, under `require`, refuses.
+///
+/// This is the half of the composition that reads the withdrawal. The half
+/// that decides whether to write it lives in
+/// `handlers::broker_registration`, which calls the withdrawal only for a
+/// restart that `clean_shutdown` cannot vouch for; its `wire_tests` pin both
+/// answers. A provably clean restart writes none of these records, so the
+/// election it faces is the first half of this test rather than the second.
 #[tokio::test]
-async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
+async fn an_unproven_restart_loses_its_eligible_leader_priority() {
     let mut img = image_with_partition(1, &[1, 2, 3]);
     img.apply(&MetadataRecord::V1BrokerRegistration(broker_record(
         3,
@@ -747,10 +756,7 @@ async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
             })
     );
 
-    for record in crate::handlers::broker_registration::registration_records(
-        &img,
-        broker_record(3, Uuid::from_u128(2)),
-    ) {
+    for record in crate::elr::withdraw_elr_membership(&img, NodeId(3)) {
         img.apply(&record);
     }
 

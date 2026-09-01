@@ -20,10 +20,15 @@
 use std::collections::{HashMap, HashSet};
 
 use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::{RecordBatchBorrowed, RecordBorrowed};
+use krabka_protocol::records::{
+    RecordBatchBorrowed, RecordBatchHeader, RecordBorrowed, RecordsError,
+};
 use regex::Regex;
 
-use crate::args::{HeaderPattern, PartitionRef};
+use crate::{
+    args::{HeaderPattern, PartitionRef},
+    error::RestoreError,
+};
 
 mod compile;
 
@@ -109,20 +114,16 @@ impl Predicates {
     /// judges the exclude predicates against a batch that is within bound, so
     /// its answer is never [`BatchDecision::Empty`] on that account alone.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if a record inside `batch` fails to parse. A batch reaches this
-    /// method only after `crate::verify::verify_segment` has checked its CRC
-    /// over the raw body, and a body whose CRC matches the bytes the
-    /// producer wrote parses record by record without error; a parse failure
-    /// here would mean corruption the CRC check missed, which its own
-    /// guarantee rules out.
-    #[must_use]
+    /// While evaluating an applicable record predicate, returns an integrity
+    /// error if a record fails to parse, lies outside the batch's declared
+    /// offset range, or its absolute offset or timestamp cannot be represented.
     pub fn decide_batch(
         &self,
         partition: &PartitionRef,
         batch: &RecordBatchBorrowed<'_>,
-    ) -> BatchDecision {
+    ) -> Result<BatchDecision, RestoreError> {
         // A control batch carries a transaction commit or abort marker, not
         // operator data -- no exclude predicate is about transaction
         // bookkeeping, and an operator writing `--exclude-producer-id` for a
@@ -136,27 +137,21 @@ impl Predicates {
         // calling this, so a control batch past that bound is still dropped
         // by not being written at all, exactly like any other batch.
         if batch.attributes().is_control_batch() {
-            return BatchDecision::Keep;
+            return Ok(BatchDecision::Keep);
         }
 
         if self.keeps_everything_in(partition) {
-            return BatchDecision::Keep;
+            return Ok(BatchDecision::Keep);
         }
 
         let header = batch.header();
         let producer_id = ProducerId(header.producer_id.get());
-        let base_offset = header.base_offset.get();
-        let base_timestamp = header.base_timestamp.get();
 
         let mut saw_keep = false;
         let mut saw_drop = false;
         for parsed in batch {
-            let record = parsed.expect(
-                "a batch already checked by verify_segment's CRC parses record by record \
-                 without error",
-            );
-            let offset = Offset(base_offset + i64::from(record.offset_delta));
-            let timestamp_ms = base_timestamp + record.timestamp_delta;
+            let record = parsed?;
+            let (offset, timestamp_ms) = record_coordinates(header, &record)?;
             match self.decide_record(partition, offset, timestamp_ms, producer_id, &record) {
                 RecordDecision::Keep => saw_keep = true,
                 RecordDecision::Drop => saw_drop = true,
@@ -166,15 +161,15 @@ impl Predicates {
             // record during the actual rewrite either way, so nothing here is
             // worth precomputing.
             if saw_keep && saw_drop {
-                return BatchDecision::Filter;
+                return Ok(BatchDecision::Filter);
             }
         }
         if saw_drop {
-            BatchDecision::Empty
+            Ok(BatchDecision::Empty)
         } else {
             // Covers both "no record was dropped" and "the batch holds no
             // records", which filter_batch also treats as unchanged.
-            BatchDecision::Keep
+            Ok(BatchDecision::Keep)
         }
     }
 
@@ -256,6 +251,34 @@ impl Predicates {
             RecordDecision::Keep
         }
     }
+}
+
+/// Validate and adapt one decoded record's primitive coordinates at the
+/// verified boundary.
+pub(crate) fn record_coordinates(
+    header: &RecordBatchHeader,
+    record: &RecordBorrowed<'_>,
+) -> Result<(Offset, i64), RestoreError> {
+    krabka_verified::restore_record_coordinates(
+        header.base_offset.get(),
+        header.last_offset_delta.get(),
+        header.base_timestamp.get(),
+        record.offset_delta,
+        record.timestamp_delta,
+    )
+    .map(|(offset, timestamp)| (Offset(offset), timestamp))
+    .ok_or_else(|| {
+        RecordsError::RecordParse(format!(
+            "record coordinates are outside the batch: base offset {}, last offset delta {}, \
+             record offset delta {}, base timestamp {}, record timestamp delta {}",
+            header.base_offset.get(),
+            header.last_offset_delta.get(),
+            record.offset_delta,
+            header.base_timestamp.get(),
+            record.timestamp_delta,
+        ))
+        .into()
+    })
 }
 
 /// Whether `bytes` is valid UTF-8 and `pattern` matches the decoded text.

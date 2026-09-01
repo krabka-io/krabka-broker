@@ -14,21 +14,50 @@ use crate::{
     kraft::types::{Epoch, NodeId},
 };
 
-pub fn metadata_record_batch(leader_epoch: Epoch, blobs: &[bytes::Bytes]) -> RecordBatch {
+pub fn metadata_record_batch(
+    leader_epoch: Epoch,
+    blobs: &[bytes::Bytes],
+) -> Result<RecordBatch, RaftError> {
+    if blobs.is_empty() {
+        return Ok(RecordBatch {
+            partition_leader_epoch: i32::try_from(leader_epoch).unwrap_or(i32::MAX),
+            ..Default::default()
+        });
+    }
+
     let records: Vec<Record> = blobs
         .iter()
-        .map(|blob| Record {
-            value: Some(blob.clone()),
-            ..Default::default()
+        .enumerate()
+        .map(|(index, blob)| {
+            let (offset_delta, _) =
+                krabka_verified::metadata_record_coordinates(blobs.len(), index).ok_or_else(
+                    || {
+                        RaftError::ChangeRejected(
+                            "metadata batch record coordinates exceed i32".to_string(),
+                        )
+                    },
+                )?;
+            Ok(Record {
+                offset_delta,
+                value: Some(blob.clone()),
+                ..Default::default()
+            })
         })
-        .collect();
+        .collect::<Result<_, RaftError>>()?;
+    let (_, last_offset_delta) = krabka_verified::metadata_record_coordinates(
+        blobs.len(),
+        blobs.len() - 1,
+    )
+    .ok_or_else(|| {
+        RaftError::ChangeRejected("metadata batch record coordinates exceed i32".to_string())
+    })?;
 
-    RecordBatch {
+    Ok(RecordBatch {
         partition_leader_epoch: i32::try_from(leader_epoch).unwrap_or(i32::MAX),
-        last_offset_delta: i32::try_from(blobs.len().saturating_sub(1)).unwrap_or(0),
+        last_offset_delta,
         records,
         ..Default::default()
-    }
+    })
 }
 
 pub fn typed_control_batch(
@@ -170,4 +199,41 @@ pub fn next_batch_offset(batches: &[RecordBatch]) -> Option<Offset> {
                 .saturating_add(1),
         )
     })
+}
+
+#[cfg(test)]
+mod metadata_record_batch_tests {
+    use assert2::check;
+
+    use super::*;
+
+    #[test]
+    fn metadata_record_coordinates_cover_empty_single_and_multiple_batches() {
+        let empty = metadata_record_batch(1, &[]).expect("empty batch");
+        check!(empty.records.is_empty());
+        check!(empty.last_offset_delta == 0);
+
+        for (blobs, expected_deltas) in [
+            (vec![bytes::Bytes::from_static(b"a")], vec![0]),
+            (
+                vec![
+                    bytes::Bytes::from_static(b"a"),
+                    bytes::Bytes::from_static(b"b"),
+                    bytes::Bytes::from_static(b"c"),
+                ],
+                vec![0, 1, 2],
+            ),
+        ] {
+            let batch = metadata_record_batch(1, &blobs).expect("metadata batch");
+            check!(
+                batch
+                    .records
+                    .iter()
+                    .map(|record| record.offset_delta)
+                    .collect::<Vec<_>>()
+                    == expected_deltas
+            );
+            check!(batch.last_offset_delta == *expected_deltas.last().expect("non-empty"));
+        }
+    }
 }

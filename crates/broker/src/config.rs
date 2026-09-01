@@ -16,10 +16,12 @@ mod freeze;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
+mod offset_retention;
 mod record_decompression;
 mod replication;
 mod roles;
 mod scalar_checks;
+mod static_origins;
 mod stretch;
 mod test_defaults;
 #[cfg(test)]
@@ -35,6 +37,7 @@ pub use self::{
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
+    static_origins::StaticConfigOrigins,
     stretch::StretchProfile,
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };
@@ -93,8 +96,21 @@ pub const DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT: Time = secs(20);
 /// Default idle-transaction abort cleanup interval.
 pub const DEFAULT_TXN_ABORT_CLEANUP_INTERVAL: Time = secs(10);
 
+/// Default transactional-id expiry, matching Kafka's
+/// `transactional.id.expiration.ms` default of 604800000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION: Time = days(7);
+
+/// Default cadence of the transactional-id expiry sweep, matching Kafka's
+/// `transaction.remove.expired.transaction.cleanup.interval.ms` default of
+/// 3600000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL: Time = hours(1);
+
 /// Default TLS material reload polling interval.
 pub const DEFAULT_TLS_RELOAD_INTERVAL: Time = secs(30);
+
+/// Default connection idle window. Matches Apache Kafka's
+/// `connections.max.idle.ms`, whose default is 600000.
+pub const DEFAULT_CONNECTIONS_MAX_IDLE: Time = minutes(10);
 
 /// Default `RemoteLogManager` copy / retention cadence.
 pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
@@ -160,6 +176,15 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// renew period when `RenewDelegationToken.renew_period_ms == -1`.
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
+
+/// KIP-211: default retention for a committed consumer-group offset after the
+/// group that owns it becomes empty. 7 days, matching Kafka's
+/// `offsets.retention.minutes` default of 10080.
+pub const DEFAULT_OFFSETS_RETENTION: Time = minutes(10_080);
+
+/// Default cadence of the background offset-retention sweep. 10 minutes,
+/// matching Kafka's `offsets.retention.check.interval.ms` default of 600000.
+pub const DEFAULT_OFFSETS_RETENTION_CHECK_INTERVAL: Time = minutes(10);
 
 /// Default ceiling on live entries in the topic write-freeze registry.
 ///

@@ -28,6 +28,7 @@ pub(crate) struct ReplicaState {
     pub(crate) per_follower: HashMap<NodeId, FollowerStats>,
     pub(crate) hw: Offset,
     pub(crate) current_leader_epoch: LeaderEpoch,
+    leader: Option<NodeId>,
 }
 
 impl ReplicaState {
@@ -37,6 +38,7 @@ impl ReplicaState {
             per_follower: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
+            leader: None,
         }
     }
 
@@ -62,7 +64,9 @@ impl ReplicaState {
         leader: NodeId,
         now: Instant,
     ) {
+        self.leader = Some(leader);
         self.isr = isr.iter().copied().collect();
+        self.per_follower.remove(&leader);
         // Seed only ISR members: seeding a non-ISR replica with
         // `last_caught_up = now` would let `isr_maintenance` falsely
         // re-admit a replica that has not actually fetched up to the LEO.
@@ -77,6 +81,11 @@ impl ReplicaState {
         }
         let keep: HashSet<NodeId> = replicas.iter().copied().collect();
         self.per_follower.retain(|k, _| keep.contains(k));
+    }
+
+    pub(crate) fn reset_for_leader(&mut self, leader: NodeId) {
+        self.leader = Some(leader);
+        self.per_follower.clear();
     }
 
     // Deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
@@ -145,18 +154,20 @@ impl ReplicaState {
     // compute the same minimum. No test can distinguish them.
     #[cfg_attr(test, mutants::skip)]
     fn compute_hw(&self, leader_leo: Offset) -> Offset {
-        if self.isr.is_empty() {
-            return leader_leo;
-        }
-        let mut min_leo = leader_leo;
-        for follower in &self.isr {
-            if let Some(stats) = self.per_follower.get(follower)
-                && stats.leo < min_leo
-            {
-                min_leo = stats.leo;
-            }
-        }
-        min_leo
+        let isr_follower_leos = self
+            .isr
+            .iter()
+            .filter(|replica| self.leader != Some(**replica))
+            .map(|replica| {
+                self.per_follower
+                    .get(replica)
+                    .map_or(0, |stats| stats.leo.0)
+            })
+            .collect::<Vec<_>>();
+        Offset(krabka_verified::isr::isr_high_watermark(
+            leader_leo.0,
+            &isr_follower_leos,
+        ))
     }
 }
 
@@ -189,6 +200,7 @@ mod tests {
             per_follower: HashMap::new(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
+            leader: None,
         };
         assert!(s == expected);
     }
@@ -217,6 +229,7 @@ mod tests {
                 .collect(),
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
+            leader: Some(NodeId(1)),
         };
         assert!(s == expected);
     }
@@ -398,6 +411,37 @@ mod tests {
         let mut s = fresh();
         let hw = s.recompute_hw_for_leader_append(o(50));
         assert!(hw == o(50));
+    }
+
+    #[test]
+    fn missing_isr_replica_progress_pins_high_watermark() {
+        let mut s = fresh();
+        s.install_isr(
+            &[NodeId(1), NodeId(2), NodeId(3)],
+            &[NodeId(1), NodeId(2), NodeId(3)],
+            NodeId(1),
+            now(),
+        );
+        s.update_follower_leo(NodeId(2), o(30), o(100), now());
+        s.per_follower.remove(&NodeId(3));
+
+        assert!(s.recompute_hw_for_leader_append(o(100)) == o(0));
+    }
+
+    #[test]
+    fn leadership_change_gap_pins_high_watermark() {
+        let mut s = fresh();
+        s.install_isr(
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2)],
+            NodeId(1),
+            now(),
+        );
+        s.update_follower_leo(NodeId(2), o(30), o(100), now());
+
+        s.reset_for_leader(NodeId(2));
+
+        assert!(s.recompute_hw_for_leader_append(o(100)) == o(0));
     }
 
     #[test]

@@ -178,9 +178,12 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         partitions.insert(topic.to_string(), krabka_ids::PartitionIndex(0), part);
     }
 
+    // `base_offset` is spelled out because the refusal happens before any
+    // append, and the wire sentinel for that is -1, not the struct default 0.
     let refused = |scope: &str| PartitionProduceResponse {
         index: 0,
         error_code: crate::codes::POLICY_VIOLATION,
+        base_offset: -1,
         error_message: Some(verdict(scope, PatternType::Literal, "DR cutover").error_message()),
         ..Default::default()
     };
@@ -218,6 +221,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             PartitionInput {
                 part_data: FramedPartition { index: 0, payload },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 schema: None,
                 topic_name: topic.into(),
@@ -240,6 +244,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
                 schema_validator: None,
             },
         )

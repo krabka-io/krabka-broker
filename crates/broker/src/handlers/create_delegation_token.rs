@@ -32,6 +32,7 @@ use krabka_protocol::owned::{
     create_delegation_token_response::CreateDelegationTokenResponse,
 };
 use krabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
@@ -45,7 +46,7 @@ mod test_support;
 mod tests;
 
 use self::{
-    lifetime::{chosen_lifetime_ms, token_deadlines},
+    lifetime::{TokenCreateDecision, create_token_deadlines},
     owner::resolve_owner,
     wire::{err_response, minted_response},
 };
@@ -73,19 +74,13 @@ pub(crate) async fn handle<S: BuildHasher>(
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     };
 
-    let ConnectionAuth::Authenticated {
-        principal,
-        authenticated_via_token,
-        ..
-    } = auth
-    else {
-        return err_response(crate::codes::INVALID_REQUEST);
-    };
-    if *authenticated_via_token {
-        // KIP-48: a delegation-token-authed caller cannot create more
-        // delegation tokens (no token-creating-token chains).
+    if auth.token_api_admission(TokenApi::Create) == TokenApiAdmission::Reject {
         return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     }
+
+    let ConnectionAuth::Authenticated { principal, .. } = auth else {
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    };
 
     let image = controller.current_image();
     // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
@@ -105,12 +100,16 @@ pub(crate) async fn handle<S: BuildHasher>(
         Err(code) => return err_response(code),
     };
 
-    // Validate + clamp `max_lifetime_ms`.
-    let Some(chosen_lifetime) = chosen_lifetime_ms(req.max_lifetime_ms, max_lifetime_ms) else {
-        return err_response(crate::codes::INVALID_REQUEST);
-    };
-
     let now = now_ms();
+    let deadlines = match create_token_deadlines(
+        now,
+        req.max_lifetime_ms,
+        max_lifetime_ms,
+        default_renew_period_ms,
+    ) {
+        TokenCreateDecision::Create(deadlines) => deadlines,
+        TokenCreateDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
+    };
     let token_id = uuid::Uuid::new_v4().to_string();
     let hmac = krabka_security::compute_token_hmac(secret_key.as_bytes(), &token_id);
 
@@ -122,8 +121,6 @@ pub(crate) async fn handle<S: BuildHasher>(
             name: r.principal_name.clone(),
         })
         .collect();
-
-    let deadlines = token_deadlines(now, chosen_lifetime, default_renew_period_ms);
 
     let record = DelegationTokenRecord {
         token_id: token_id.clone(),
