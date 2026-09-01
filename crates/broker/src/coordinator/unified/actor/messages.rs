@@ -5,12 +5,15 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use krabka_protocol::owned::{
-    consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-    consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-    heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
-    leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
-    sync_group_request::SyncGroupRequest,
+use krabka_protocol::{
+    owned::{
+        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+        heartbeat_request::HeartbeatRequest, join_group_request::JoinGroupRequest,
+        leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
+        sync_group_request::SyncGroupRequest,
+    },
+    records::RecordBatch,
 };
 use tokio::sync::oneshot;
 
@@ -90,6 +93,21 @@ pub enum GroupActorMessage {
     },
 
     // ── committed offsets (protocol-agnostic; on `Group.committed_offsets`) ──
+    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and apply
+    /// them to the group, both inside the actor.
+    ///
+    /// The append cannot happen outside the mailbox. The KIP-211 sweep decides
+    /// what to tombstone from the in-memory map and appends its tombstones in
+    /// the same turn, so a commit that wrote its record first and queued the
+    /// in-memory update afterwards could have the sweep read the stale map,
+    /// tombstone the offset it had just acknowledged, and stop the actor
+    /// before the update was ever applied. One message keeps the two appends
+    /// in one order.
+    CommitOffsets {
+        batch: RecordBatch,
+        entries: Vec<((String, i32), OffsetEntry)>,
+        reply: oneshot::Sender<Result<(), ErrorCode>>,
+    },
     UpdateCommitted {
         entries: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
@@ -110,6 +128,11 @@ pub enum GroupActorMessage {
         now_ms: i64,
         /// `offsets.retention.minutes` in milliseconds.
         retention_ms: i64,
+        /// How long a group must have been memberless before the sweep may
+        /// delete it for holding no offsets at all —
+        /// `offsets.retention.check.interval.ms`, so a group an actor has just
+        /// been spawned for gets its first message in before it is judged.
+        empty_grace_ms: i64,
         reply: oneshot::Sender<ReapOutcome>,
     },
 

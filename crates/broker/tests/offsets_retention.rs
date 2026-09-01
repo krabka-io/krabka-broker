@@ -1,9 +1,11 @@
 //! KIP-211 `offsets.retention.minutes`, end to end over the wire.
 //!
-//! One case reads the two retention knobs back through `DescribeConfigs`, the
-//! way `kafka-configs --entity-type brokers --describe` does. The other lets
-//! the broker's own background sweep run against a one-millisecond retention
-//! and watches a dead group disappear from `ListGroups`.
+//! Two cases read the retention knobs back through `DescribeConfigs`, the way
+//! `kafka-configs --entity-type brokers --describe` does: an untuned broker
+//! reports both at `DEFAULT_CONFIG`, and a broker whose configuration names a
+//! key reports that key at `STATIC_BROKER_CONFIG`. The third lets the broker's
+//! own background sweep run and watches a dead group disappear from
+//! `ListGroups`.
 
 use std::{sync::Arc, time::Duration};
 
@@ -17,8 +19,11 @@ use krabka_protocol::owned::{
     offset_commit_request::{
         OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
+    offset_delete_request::{
+        OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
+    },
 };
-use krabka_units::millis;
+use krabka_units::{millis, minutes};
 
 /// `ConfigResource.Type.BROKER`.
 const RESOURCE_TYPE_BROKER: i8 = 4;
@@ -26,6 +31,13 @@ const RESOURCE_TYPE_BROKER: i8 = 4;
 /// `apache/kafka:4.3.1`: `kafka-configs --describe --all` reports both keys
 /// with `DEFAULT_CONFIG` on a broker whose properties do not set them.
 const CONFIG_SOURCE_DEFAULT: i8 = 5;
+/// `ConfigEntry.ConfigSource.STATIC_BROKER_CONFIG`. Verified against
+/// `apache/kafka:4.3.1`: a broker whose properties carry
+/// `offsets.retention.minutes=10080` — Kafka's own default — reports that key
+/// with `STATIC_BROKER_CONFIG` at the head of its synonym chain, because the
+/// source says where the value came from, not whether it differs from the
+/// default.
+const CONFIG_SOURCE_STATIC_BROKER: i8 = 4;
 const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
 
@@ -94,17 +106,77 @@ async fn describe_configs_reports_the_retention_knobs() {
     broker.shutdown().await;
 }
 
-/// A group that only ever committed offsets — the simple consumer that never
-/// joins — is empty from birth, so the broker's own sweep reaps it and drops
-/// it from `ListGroups` without an operator running `DeleteGroups`.
+/// A knob the broker's configuration names reports `STATIC_BROKER_CONFIG`,
+/// even at Kafka's own default value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_configs_reports_a_named_knob_as_static() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    // The same number Kafka defaults to, named explicitly.
+    config.offsets_retention_override = Some(minutes(10_080));
+    let broker = Broker::start(config).await.unwrap();
+    let client = client_for(&broker).await;
+
+    let described = client
+        .send(DescribeConfigsRequest {
+            resources: vec![DescribeConfigsResource {
+                resource_type: RESOURCE_TYPE_BROKER,
+                resource_name: "1".to_string(),
+                configuration_keys: Some(vec![
+                    OFFSETS_RETENTION_MINUTES.to_string(),
+                    OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_string(),
+                ]),
+                ..Default::default()
+            }],
+            include_synonyms: false,
+            include_documentation: false,
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeConfigs");
+
+    let result = &described.results[0];
+    check!(result.error_code == codes::NONE);
+    check!(
+        result.configs
+            == vec![
+                DescribeConfigsResourceResult {
+                    name: OFFSETS_RETENTION_CHECK_INTERVAL_MS.into(),
+                    value: Some("600000".into()),
+                    read_only: true,
+                    // Untouched, so still inherited.
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    ..Default::default()
+                },
+                DescribeConfigsResourceResult {
+                    name: OFFSETS_RETENTION_MINUTES.into(),
+                    value: Some("10080".into()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_STATIC_BROKER,
+                    ..Default::default()
+                },
+            ]
+    );
+
+    broker.shutdown().await;
+}
+
+/// A group with no members and no committed offsets is dead, and the broker's
+/// own sweep drops it from `ListGroups` without an operator running
+/// `DeleteGroups`.
+///
+/// This is the shape a CI job or an ad-hoc `kafka-console-consumer` leaves
+/// behind once its offsets are gone. Verified against `apache/kafka:4.3.1`:
+/// a group left memberless by `kafka-consumer-groups --delete-offsets`
+/// disappears from `--list` after one `offsets.retention.check.interval.ms`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     const GROUP: &str = "leaked-by-ci";
+    const TOPIC: &str = "orders";
 
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.offsets_retention = millis(1);
-    config.offsets_retention_check_interval = millis(25);
+    config.offsets_retention_check_interval_override = Some(millis(25));
     let broker = Broker::start(config).await.unwrap();
     let client = client_for(&broker).await;
 
@@ -114,7 +186,7 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
             topics: vec![OffsetCommitRequestTopic {
-                name: "orders".to_string(),
+                name: TOPIC.to_string(),
                 partitions: vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: 5,
@@ -139,6 +211,26 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
             .any(|group| group.group_id == GROUP)
     };
     assert!(listed(Arc::clone(&client)).await, "the group starts listed");
+
+    // Take the group's last offset away, the way `kafka-consumer-groups
+    // --delete-offsets` does. What is left is a memberless group holding
+    // nothing.
+    let deleted = client
+        .send(OffsetDeleteRequest {
+            group_id: GROUP.to_string(),
+            topics: vec![OffsetDeleteRequestTopic {
+                name: TOPIC.to_string(),
+                partitions: vec![OffsetDeleteRequestPartition {
+                    partition_index: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("OffsetDelete");
+    assert!(deleted.error_code == codes::NONE);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while listed(Arc::clone(&client)).await {

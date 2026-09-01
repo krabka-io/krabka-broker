@@ -16,6 +16,7 @@ mod freeze;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
+mod offset_retention;
 mod record_decompression;
 mod replication;
 mod roles;

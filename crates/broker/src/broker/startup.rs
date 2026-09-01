@@ -245,8 +245,8 @@ impl Broker {
             config.node_id,
             Arc::clone(&controller),
             Arc::clone(&group_coordinator),
-            config.offsets_retention_check_interval,
-            config.offsets_retention,
+            config.offsets_retention_check_interval(),
+            config.offsets_retention(),
             runtime.supervisor_shutdown.child_token(),
         );
 

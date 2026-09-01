@@ -63,7 +63,6 @@
 //! The synthesised key obeys that filter like every stored key.
 
 use bytes::Bytes;
-use krabka_units::convert::TimeExt as _;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -71,6 +70,7 @@ use krabka_protocol::{
         describe_configs_response::{DescribeConfigsResponse, DescribeConfigsResult},
     },
 };
+use krabka_units::convert::TimeExt as _;
 
 mod authz;
 mod entry;
@@ -106,12 +106,14 @@ pub(crate) fn handle(
 
         let image = controller.current_image();
         let options = EntryOptions::from_request(&req);
+        // What the operator named, not what the broker runs: the source a
+        // key reports is provenance, so a key set to its own default is still
+        // `STATIC_BROKER_CONFIG`.
         let static_broker = StaticBrokerConfigs {
-            offsets_retention_minutes: broker.config.offsets_retention.millis_i64() / 60_000,
-            offsets_retention_check_interval_ms: broker
+            offsets_retention: broker.config.offsets_retention_override,
+            offsets_retention_check_interval: broker
                 .config
-                .offsets_retention_check_interval
-                .millis_i64(),
+                .offsets_retention_check_interval_override,
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →

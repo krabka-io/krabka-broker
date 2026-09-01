@@ -139,6 +139,24 @@ pub(super) async fn handle_actor_message(
             }
             true
         }
+        GroupActorMessage::CommitOffsets {
+            batch,
+            entries,
+            reply,
+        } => {
+            let result = match services.offsets_log.append(&group.group_id, batch).await {
+                Ok(()) => {
+                    group.committed_offsets.extend(entries);
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!(group_id = %group.group_id, %error, "OffsetCommit append failed");
+                    Err(codes::from_broker_error(&error))
+                }
+            };
+            let _ = reply.send(result);
+            true
+        }
         GroupActorMessage::UpdateCommitted { entries, reply } => {
             group.committed_offsets.extend(entries);
             let _ = reply.send(());
@@ -158,6 +176,7 @@ pub(super) async fn handle_actor_message(
         GroupActorMessage::ReapExpiredOffsets {
             now_ms,
             retention_ms,
+            empty_grace_ms,
             reply,
         } => {
             handle_reap_message(
@@ -166,6 +185,7 @@ pub(super) async fn handle_actor_message(
                 services.coordinator,
                 now_ms,
                 retention_ms,
+                empty_grace_ms,
                 reply,
             )
             .await

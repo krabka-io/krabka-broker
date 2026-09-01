@@ -34,7 +34,6 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::{
-        bootstrap::OFFSETS_TOPIC,
         partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
@@ -43,8 +42,6 @@ use crate::{
         },
     },
     error::BrokerError,
-    partition::{ProduceData, ProduceJob, WriterMessage},
-    partition_registry::PartitionRegistry,
 };
 
 // ACL preamble (group + per-topic) + commit pipeline; splitting hurts readability
@@ -93,10 +90,10 @@ pub(crate) async fn handle(
         }
     }
 
-    let offsets_partition = {
+    {
         let image = broker.controller.current_image();
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(partition) => partition,
+            Ok(_) => {}
             Err(GroupRoutingError::Unavailable) => {
                 return finalize(
                     version,
@@ -112,7 +109,7 @@ pub(crate) async fn handle(
                 );
             }
         }
-    };
+    }
 
     let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
@@ -163,36 +160,25 @@ pub(crate) async fn handle(
 
         // Only proceed with allowed topics (append + update).
         let allowed_req = allowed_request(&req, &topic_decisions);
-        if !allowed_req.topics.is_empty() {
-            if let Err(code) = append_batch(
+        if !allowed_req.topics.is_empty()
+            && let Err(code) = commit_through_actor(
+                &handle,
                 &allowed_req,
-                &broker.partitions,
-                offsets_partition,
                 Commit {
                     now_ms,
                     expire_timestamp_ms,
                 },
             )
             .await
-            {
-                // If append fails, overwrite allowed topics with the error code.
-                let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
-                let resp = OffsetCommitResponse {
-                    topics: topics_out_err,
-                    throttle_time_ms: 0,
-                    ..Default::default()
-                };
-                return finalize(version, resp, unknown_id_topics.clone());
-            }
-            update_committed(
-                &allowed_req,
-                &handle,
-                Commit {
-                    now_ms,
-                    expire_timestamp_ms,
-                },
-            )
-            .await;
+        {
+            // If the commit fails, overwrite allowed topics with the error code.
+            let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
+            let resp = OffsetCommitResponse {
+                topics: topics_out_err,
+                throttle_time_ms: 0,
+                ..Default::default()
+            };
+            return finalize(version, resp, unknown_id_topics.clone());
         }
 
         let resp = OffsetCommitResponse {
@@ -203,20 +189,17 @@ pub(crate) async fn handle(
         return finalize(version, resp, unknown_id_topics.clone());
     }
 
-    // 2. Append a RecordBatch into this group's offsets partition.
+    // 2. Append this commit's RecordBatch and apply it, inside the actor.
     let commit = Commit {
         now_ms,
         expire_timestamp_ms,
     };
-    if let Err(code) = append_batch(&req, &broker.partitions, offsets_partition, commit).await {
+    if let Err(code) = commit_through_actor(&handle, &req, commit).await {
         let resp = build_response_all(&req, code);
         return finalize(version, resp, unknown_id_topics.clone());
     }
 
-    // 3. Update in-memory state.
-    update_committed(&req, &handle, commit).await;
-
-    // 4. Uniform per-(topic, partition) success.
+    // 3. Uniform per-(topic, partition) success.
     let resp = build_response_all(&req, codes::NONE);
     finalize(version, resp, unknown_id_topics)
 }
@@ -376,19 +359,21 @@ async fn validate(handle: &Arc<GroupActorHandle>, req: &OffsetCommitRequest) -> 
     .await
 }
 
-/// Append a single `RecordBatch` covering every (topic, partition) in `req`
-/// to the selected `__consumer_offsets` writer. Returns `Err(error_code)` on
-/// failure to either find the partition or hear back from the writer.
-async fn append_batch(
+/// The `__consumer_offsets` records for every `(topic, partition)` in `req`,
+/// and the in-memory entries that mirror them.
+///
+/// Both halves of one commit are built together and travel to the group's
+/// actor together, because the actor is what orders them against the KIP-211
+/// retention sweep.
+fn commit_records(
     req: &OffsetCommitRequest,
-    partitions: &Arc<PartitionRegistry>,
-    offsets_partition: i32,
     commit: Commit,
-) -> Result<(), i16> {
+) -> (RecordBatch, Vec<((String, i32), OffsetEntry)>) {
     let mut batch = RecordBatch {
         max_timestamp: commit.now_ms,
         ..RecordBatch::default()
     };
+    let mut entries = Vec::new();
     let mut delta: i32 = 0;
     for topic in &req.topics {
         for part in &topic.partitions {
@@ -410,49 +395,6 @@ async fn append_batch(
                 value: Some(value.encode_value()),
                 ..Default::default()
             });
-            delta += 1;
-        }
-    }
-    batch.last_offset_delta = (delta - 1).max(0);
-
-    let Some(part_handle) =
-        partitions.get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(offsets_partition))
-    else {
-        return Err(codes::UNKNOWN_SERVER_ERROR);
-    };
-    let (ack_tx, ack_rx) = oneshot::channel();
-    if part_handle
-        .writer_tx
-        .send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(batch),
-            ack: ack_tx,
-        }))
-        .await
-        .is_err()
-    {
-        return Err(codes::UNKNOWN_SERVER_ERROR);
-    }
-    match ack_rx.await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => {
-            tracing::error!(error = %e, "OffsetCommit writer returned error");
-            Err(codes::from_broker_error(&e))
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "OffsetCommit writer ack dropped");
-            Err(codes::UNKNOWN_SERVER_ERROR)
-        }
-    }
-}
-
-async fn update_committed(
-    req: &OffsetCommitRequest,
-    handle: &Arc<GroupActorHandle>,
-    commit: Commit,
-) {
-    let mut entries: Vec<((String, i32), OffsetEntry)> = Vec::new();
-    for topic in &req.topics {
-        for part in &topic.partitions {
             entries.push((
                 (topic.name.clone(), part.partition_index),
                 OffsetEntry {
@@ -463,16 +405,47 @@ async fn update_committed(
                     expire_timestamp_ms: commit.expire_timestamp_ms,
                 },
             ));
+            delta += 1;
         }
     }
-    let (tx, rx) = oneshot::channel();
+    batch.last_offset_delta = (delta - 1).max(0);
+    (batch, entries)
+}
+
+/// Append the commit and apply it to the group, both inside the group's actor.
+///
+/// The append cannot run outside the mailbox. `coordinator::retention` decides
+/// what to tombstone from the actor's in-memory offsets and writes the
+/// tombstones in the same turn, so a commit that appended its record first and
+/// queued the in-memory update afterwards could be acknowledged and then
+/// deleted by a sweep that never saw it — the sweep would read the stale map,
+/// tombstone the offset behind the newer record, and stop the actor with the
+/// queued update still in flight. Sending both halves as one message puts the
+/// commit and the sweep in one order.
+///
+/// Returns `Err(error_code)` when the append failed or the actor is gone.
+async fn commit_through_actor(
+    handle: &Arc<GroupActorHandle>,
+    req: &OffsetCommitRequest,
+    commit: Commit,
+) -> Result<(), i16> {
+    let (batch, entries) = commit_records(req, commit);
+    let (reply, result) = oneshot::channel();
     if handle
         .tx
-        .send(GroupActorMessage::UpdateCommitted { entries, reply: tx })
+        .send(GroupActorMessage::CommitOffsets {
+            batch,
+            entries,
+            reply,
+        })
         .await
-        .is_ok()
+        .is_err()
     {
-        let _ = rx.await;
+        return Err(codes::UNKNOWN_SERVER_ERROR);
+    }
+    match result.await {
+        Ok(result) => result,
+        Err(_) => Err(codes::UNKNOWN_SERVER_ERROR),
     }
 }
 

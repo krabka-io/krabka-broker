@@ -258,6 +258,15 @@ pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, acc: &mut Rep
         } => {
             if let Some(offsets) = acc.committed.get_mut(&group_id) {
                 offsets.remove(&(topic, partition));
+                // The outer entry has to go with the last offset under it.
+                // `finalize` reads `committed`'s keys as "this group survived
+                // replay", so a group id left behind with an empty map spawns
+                // a classic actor for a group the log has already tombstoned,
+                // and `ListGroups` reports a reaped group again after every
+                // restart.
+                if offsets.is_empty() {
+                    acc.committed.remove(&group_id);
+                }
             }
         }
         Key::GroupMetadata { group_id } => {

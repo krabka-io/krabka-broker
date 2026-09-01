@@ -177,7 +177,10 @@ impl ConfigKey {
     pub(crate) fn is_stored(&self) -> bool {
         !matches!(
             self.name,
-            WRITE_FREEZE | NODE_ID | OFFSETS_RETENTION_MINUTES | OFFSETS_RETENTION_CHECK_INTERVAL_MS
+            WRITE_FREEZE
+                | NODE_ID
+                | OFFSETS_RETENTION_MINUTES
+                | OFFSETS_RETENTION_CHECK_INTERVAL_MS
         )
     }
 

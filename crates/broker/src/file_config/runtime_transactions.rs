@@ -65,12 +65,16 @@ impl RuntimeFileConfig {
             cfg.offsets_topic_replication_factor =
                 positive_i16("offsets_topic_replication_factor", value)?;
         }
-        set_runtime_time_millis!(runtime, offsets_retention, cfg.offsets_retention);
-        set_runtime_time_millis!(
-            runtime,
-            offsets_retention_check_interval,
-            cfg.offsets_retention_check_interval
-        );
+        // These two carry the operator's intent, not just a value: `Some`
+        // means the key was named, which is what `DescribeConfigs` reports as
+        // `STATIC_BROKER_CONFIG`.
+        if let Some(value) = runtime.offsets_retention {
+            cfg.offsets_retention_override = Some(positive_time("offsets_retention", value)?);
+        }
+        if let Some(value) = runtime.offsets_retention_check_interval {
+            cfg.offsets_retention_check_interval_override =
+                Some(positive_time("offsets_retention_check_interval", value)?);
+        }
         set_runtime_i32!(
             runtime,
             transaction_state_num_partitions,

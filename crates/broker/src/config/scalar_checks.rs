@@ -149,13 +149,33 @@ impl BrokerConfig {
                 "delegation_token_default_renew_period",
                 self.delegation_token_default_renew_period,
             ),
-            ("offsets_retention", self.offsets_retention),
-            (
-                "offsets_retention_check_interval",
-                self.offsets_retention_check_interval,
-            ),
         ] {
             require_positive_time(name, value)?;
+        }
+        self.validate_offset_retention()?;
+        Ok(())
+    }
+
+    /// The two KIP-211 knobs, which only have a value when the operator set
+    /// one.
+    ///
+    /// `offsets.retention.minutes` is a whole number of minutes on Kafka —
+    /// `GroupCoordinatorConfig` declares it `INT` and multiplies by 60000 — so
+    /// a duration krabka cannot state in whole minutes is refused rather than
+    /// silently truncated. Truncating would make `DescribeConfigs` advertise a
+    /// retention the sweep does not enforce.
+    fn validate_offset_retention(&self) -> Result<(), BrokerError> {
+        if let Some(retention) = self.offsets_retention_override {
+            require_positive_time("offsets_retention", retention)?;
+            if retention.millis_i64() % 60_000 != 0 {
+                return Err(BrokerError::InvalidRuntimeConfig(format!(
+                    "offsets_retention must be a whole number of minutes, got {}ms",
+                    retention.millis_i64()
+                )));
+            }
+        }
+        if let Some(interval) = self.offsets_retention_check_interval_override {
+            require_positive_time("offsets_retention_check_interval", interval)?;
         }
         Ok(())
     }

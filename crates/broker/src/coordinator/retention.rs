@@ -1,8 +1,10 @@
 //! KIP-211 offset retention: the periodic sweep.
 //!
 //! Apache Kafka drops a group's committed offsets `offsets.retention.minutes`
-//! after the group loses its last member, and drops the group with them once
-//! it holds no offsets. Without that, anything that mints group ids — a
+//! after the group loses its last member, and drops any memberless group that
+//! holds no offsets — whether the sweep just took its last one, an
+//! `OffsetDelete` did, or it never committed at all. Without that, anything
+//! that mints group ids — a
 //! per-deployment group id, a Connect task rebalance, an ad-hoc
 //! `kafka-console-consumer`, a CI job — leaks one `__consumer_offsets` entry
 //! per partition per group forever: the topic never compacts to a steady
@@ -91,7 +93,14 @@ async fn run(
                 let owned = |group_id: &str| {
                     local_partition_for_group(&image, node_id, group_id).is_ok()
                 };
-                sweep(&coordinator, owned, crate::time_util::now_ms(), retention_ms).await;
+                sweep(
+                    &coordinator,
+                    owned,
+                    crate::time_util::now_ms(),
+                    retention_ms,
+                    interval.millis_i64(),
+                )
+                .await;
             }
             () = shutdown.cancelled() => {
                 tracing::info!("offset-retention sweep shutting down");
@@ -105,14 +114,16 @@ async fn run(
 ///
 /// `owned` answers whether this broker leads the `__consumer_offsets`
 /// partition that hosts a group id; production reads it from the metadata
-/// image, and a test answers it directly. The returned rows name every group
-/// the pass changed, which is what a test asserts on and what the caller
-/// logs.
+/// image, and a test answers it directly. `empty_grace_ms` is how long a group
+/// must have been memberless before the pass may delete it for holding no
+/// offsets at all. The returned rows name every group the pass changed, which
+/// is what a test asserts on and what the caller logs.
 pub(crate) async fn sweep(
     coordinator: &GroupCoordinator,
     owned: impl Fn(&str) -> bool,
     now_ms: i64,
     retention_ms: i64,
+    empty_grace_ms: i64,
 ) -> Vec<(String, ReapOutcome)> {
     let group_ids: Vec<String> = coordinator
         .groups
@@ -133,6 +144,7 @@ pub(crate) async fn sweep(
             .send(GroupActorMessage::ReapExpiredOffsets {
                 now_ms,
                 retention_ms,
+                empty_grace_ms,
                 reply,
             })
             .await
@@ -146,7 +158,7 @@ pub(crate) async fn sweep(
         if outcome.group_deleted {
             forget_group(coordinator, &group_id, &handle);
         }
-        if !outcome.reaped.is_empty() {
+        if outcome.group_deleted || !outcome.reaped.is_empty() {
             changed.push((group_id, outcome));
         }
     }
@@ -168,15 +180,23 @@ fn sweepable(coordinator: &GroupCoordinator, group_id: &str) -> bool {
 ///
 /// The registry entry goes only while it still holds `handle`. A request that
 /// arrived between the actor's exit and this call has already replaced the
-/// dead entry with a fresh actor, and that one is serving somebody.
+/// dead entry with a fresh actor, and that one is serving somebody — so the
+/// auxiliary state goes only when the conditional removal actually took the
+/// reaped handle out. Clearing it unconditionally would strip the
+/// replacement's protocol-type lock, which routing and KIP-848 migration read,
+/// and its durable seed, which a later respawn replays from.
 fn forget_group(
     coordinator: &GroupCoordinator,
     group_id: &str,
     handle: &Arc<crate::coordinator::unified::actor::GroupActorHandle>,
 ) {
-    coordinator
+    if coordinator
         .groups
-        .remove_if(group_id, |_, live| Arc::ptr_eq(live, handle));
+        .remove_if(group_id, |_, live| Arc::ptr_eq(live, handle))
+        .is_none()
+    {
+        return;
+    }
     coordinator.group_types.remove(group_id);
     coordinator.seeds.remove(group_id);
     coordinator.seeds_cache.remove(group_id);

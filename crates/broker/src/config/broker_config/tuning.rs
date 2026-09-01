@@ -166,15 +166,23 @@ macro_rules! tuning_fields {
             /// Partition count for the consumer-offsets internal topic.
             pub offsets_topic_num_partitions: i32,
             /// KIP-211: how long a committed offset survives after the group
-            /// that owns it loses its last member. Kafka's
-            /// `offsets.retention.minutes`, default 10080 (7 days). The
-            /// retention sweep tombstones an empty group's offsets once this
-            /// much time has passed, and then tombstones the group itself.
-            pub offsets_retention: Time,
-            /// Cadence of the offset-retention sweep. Kafka's
-            /// `offsets.retention.check.interval.ms`, default 600000 (10
-            /// minutes).
-            pub offsets_retention_check_interval: Time,
+            /// that owns it loses its last member, when the operator set it.
+            /// Kafka's `offsets.retention.minutes`, whose default is 10080
+            /// (7 days). The retention sweep tombstones an empty group's
+            /// offsets once this much time has passed, and then tombstones the
+            /// group itself.
+            ///
+            /// `None` means the operator named nothing, so the broker runs
+            /// [`BrokerConfig::offsets_retention`] — and `DescribeConfigs`
+            /// reports the key at `DEFAULT_CONFIG` rather than
+            /// `STATIC_BROKER_CONFIG`, which is the distinction Kafka draws by
+            /// asking whether the key appears in `KafkaConfig.originals`.
+            pub offsets_retention_override: Option<Time>,
+            /// Cadence of the offset-retention sweep, when the operator set
+            /// it. Kafka's `offsets.retention.check.interval.ms`, whose
+            /// default is 600000 (10 minutes). `None` carries the same meaning
+            /// as on [`offsets_retention_override`](Self::offsets_retention_override).
+            pub offsets_retention_check_interval_override: Option<Time>,
             /// Desired replication factor for the consumer-offsets internal topic.
             pub offsets_topic_replication_factor: i16,
             /// Partition count for the transaction-state internal topic.

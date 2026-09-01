@@ -280,3 +280,81 @@ fn replay_honours_offset_and_group_tombstones() {
     check!(!replayed.empty_since.contains_key("g"));
     check!(replayed.committed["g"][&("t".to_string(), 1)].offset == 101);
 }
+
+/// A group the retention sweep reaped in full — every offset tombstoned and
+/// then the group's own record — must not come back as a live group after a
+/// restart.
+///
+/// The sweep writes both tombstones in one batch, so replay reads the offset
+/// tombstones first. Leaving the group id behind with an empty offsets map is
+/// enough for `finalize` to spawn a classic actor for it, which puts a group
+/// the operator already reaped back on `ListGroups` after every restart.
+#[tokio::test]
+async fn a_fully_reaped_group_does_not_come_back_after_replay() {
+    use krabka_log::Offset;
+    use krabka_protocol::records::Record;
+
+    use super::replay::finalize;
+    use crate::coordinator::{
+        persistence::GroupMetadataValue,
+        unified::{
+            GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
+        },
+    };
+
+    #[derive(Debug)]
+    struct EmptyMeta;
+    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
+        fn snapshot(&self) -> ReconcileInput {
+            ReconcileInput::default()
+        }
+    }
+
+    let coordinator = Arc::new(GroupCoordinator::new(
+        crate::coordinator::unified::config::NextGenConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        Arc::new(EmptyMeta),
+        Arc::new(InMemoryOffsetsLog::default()),
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    ));
+    let tombstone = |key: bytes::Bytes| Record {
+        key: Some(key),
+        value: None,
+        ..Default::default()
+    };
+
+    let dir = tempdir().unwrap();
+    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    for record in [
+        Record {
+            key: Some(OffsetCommitValue::encode_key("reaped", "t", 0)),
+            value: Some(
+                OffsetCommitValue {
+                    offset: Offset(100),
+                    leader_epoch: -1,
+                    metadata: String::new(),
+                    commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
+                }
+                .encode_value(),
+            ),
+            ..Default::default()
+        },
+        // The sweep's batch: the last offset, then the group itself.
+        tombstone(OffsetCommitValue::encode_key("reaped", "t", 0)),
+        tombstone(GroupMetadataValue::encode_key("reaped")),
+    ] {
+        let mut batch = RecordBatch {
+            records: vec![record],
+            ..RecordBatch::default()
+        };
+        log.append(&mut batch).unwrap();
+    }
+
+    let replayed = replay_records(&log, &coordinator).unwrap();
+    check!(!replayed.committed.contains_key("reaped"));
+    check!(!replayed.classic.contains_key("reaped"));
+
+    finalize(&coordinator, replayed);
+    check!(coordinator.find("reaped").is_none());
+}

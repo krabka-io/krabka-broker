@@ -44,8 +44,8 @@ const VALUES_ONLY: EntryOptions = EntryOptions {
 /// A process that names neither KIP-211 retention knob, which is what every
 /// case but the two retention cases runs as.
 const UNTUNED: StaticBrokerConfigs = StaticBrokerConfigs {
-    offsets_retention_minutes: 10_080,
-    offsets_retention_check_interval_ms: 600_000,
+    offsets_retention: None,
+    offsets_retention_check_interval: None,
 };
 
 fn describe(
@@ -850,8 +850,8 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
         Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
         EVERYTHING,
         StaticBrokerConfigs {
-            offsets_retention_minutes: 60,
-            offsets_retention_check_interval_ms: 600_000,
+            offsets_retention: Some(krabka_units::minutes(60)),
+            offsets_retention_check_interval: None,
         },
     );
 
@@ -884,5 +884,72 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
                 ),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }]
+    );
+}
+
+/// Source is provenance, not a comparison. A key the operator wrote down at
+/// Kafka's own default value still reports `STATIC_BROKER_CONFIG`, above the
+/// `DEFAULT_CONFIG` synonym that carries the same number.
+///
+/// Verified against `apache/kafka:4.3.1` with `offsets.retention.minutes=10080`
+/// in the broker's properties: `kafka-configs --entity-type brokers
+/// --entity-name 1 --describe --all` answers
+/// `synonyms={STATIC_BROKER_CONFIG:offsets.retention.minutes=10080,
+/// DEFAULT_CONFIG:offsets.retention.minutes=10080}`.
+#[test]
+fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
+    let described = |static_broker| {
+        describe_with_static(
+            &MetadataImage::new(Uuid::nil()),
+            RESOURCE_TYPE_BROKER,
+            "1",
+            Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
+            EVERYTHING,
+            static_broker,
+        )
+        .configs
+    };
+    let default_synonym = synonym(
+        config_keys::OFFSETS_RETENTION_MINUTES,
+        "10080",
+        CONFIG_SOURCE_DEFAULT,
+    );
+    let entry = |config_source, synonyms| DescribeConfigsResourceResult {
+        name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+        value: Some("10080".to_owned()),
+        read_only: true,
+        config_source,
+        is_sensitive: false,
+        synonyms,
+        config_type: ConfigType::Int.wire(),
+        documentation: Some(
+            registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+                .expect("offsets.retention.minutes")
+                .doc
+                .to_owned(),
+        ),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+
+    check!(
+        described(UNTUNED) == vec![entry(CONFIG_SOURCE_DEFAULT, vec![default_synonym.clone()])],
+        "a broker that names neither key"
+    );
+    check!(
+        described(StaticBrokerConfigs {
+            offsets_retention: Some(krabka_units::minutes(10_080)),
+            offsets_retention_check_interval: None,
+        }) == vec![entry(
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym(
+                    config_keys::OFFSETS_RETENTION_MINUTES,
+                    "10080",
+                    CONFIG_SOURCE_STATIC_BROKER
+                ),
+                default_synonym,
+            ]
+        )],
+        "a broker whose properties name the key at that same value"
     );
 }

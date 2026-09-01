@@ -24,8 +24,10 @@
 //!
 //! # What the batch carries
 //!
-//! One tombstone for each expired offset, and — when the sweep expired the
-//! last offset the group held — the group's own tombstone in the same batch,
+//! One tombstone for each expired offset, and — when the group keeps no
+//! offset after the pass, including the group that never held one and has
+//! been memberless for a whole sweep interval — the group's own tombstone in
+//! the same batch,
 //! so a reader of `__consumer_offsets` never sees a group record with no
 //! offsets and no members hanging behind a partial write. The group record is
 //! the classic k2 `GroupMetadata` for a classic group, and the next-gen k3
@@ -61,9 +63,18 @@ pub(super) async fn handle_reap_message(
     coordinator: &GroupCoordinator,
     now_ms: i64,
     retention_ms: i64,
+    empty_grace_ms: i64,
     reply: oneshot::Sender<ReapOutcome>,
 ) -> bool {
-    let outcome = reap_expired_offsets(group, offsets_log, coordinator, now_ms, retention_ms).await;
+    let outcome = reap_expired_offsets(
+        group,
+        offsets_log,
+        coordinator,
+        now_ms,
+        retention_ms,
+        empty_grace_ms,
+    )
+    .await;
     let keep_running = !outcome.group_deleted;
     let _ = reply.send(outcome);
     keep_running
@@ -82,6 +93,7 @@ async fn reap_expired_offsets(
     coordinator: &GroupCoordinator,
     now_ms: i64,
     retention_ms: i64,
+    empty_grace_ms: i64,
 ) -> ReapOutcome {
     // A live group keeps every offset, whatever its commit age.
     if group.has_members() {
@@ -94,11 +106,20 @@ async fn reap_expired_offsets(
         .filter(|(_, entry)| entry.is_expired(now_ms, empty_since_ms, retention_ms))
         .map(|(key, _)| key.clone())
         .collect();
-    if expired.is_empty() {
+    // Once the sweep has taken the expired offsets the group keeps none, and
+    // an empty group that keeps no offsets is a dead group. Kafka's
+    // `GroupMetadataManager.cleanupGroupMetadata` transitions exactly that
+    // group to `Dead` and appends its tombstone whether or not this pass
+    // expired anything, which is why a group that never committed, or whose
+    // last offset an `OffsetDelete` already removed, still goes. Verified on
+    // `apache/kafka:4.3.1`: a group left memberless by
+    // `kafka-consumer-groups --delete-offsets` disappears from `--list` at the
+    // next `offsets.retention.check.interval.ms`.
+    let delete_group = expired.len() == group.committed_offsets.len();
+    if expired.is_empty() && !(delete_group && settled_empty(group, now_ms, empty_grace_ms)) {
         return ReapOutcome::default();
     }
     expired.sort_unstable();
-    let delete_group = expired.len() == group.committed_offsets.len();
     let batch = tombstone_batch(
         &group.group_id,
         &expired,
@@ -129,6 +150,26 @@ async fn reap_expired_offsets(
         reaped: expired,
         group_deleted: delete_group,
     }
+}
+
+/// `true` when this group has been memberless for a whole sweep interval.
+///
+/// The zero-offset deletion path needs it. Everything that puts a group in the
+/// registry spawns the actor first and populates it a message later — an
+/// `OffsetCommit` for an unknown id, the `WriteTxnMarkers` materialisation, a
+/// `JoinGroup` — so a group that holds nothing right now may simply be one
+/// whose first message has not landed yet. Kafka has no such window: its
+/// coordinator creates and fills a group under one lock. Waiting one
+/// `offsets.retention.check.interval.ms` gives every such caller its own
+/// mailbox turn and still deletes the group on the pass after it truly went
+/// idle, which is the timing `apache/kafka:4.3.1` shows.
+///
+/// A group whose offsets all aged out does not consult this: those offsets are
+/// themselves proof that the group is older than its retention.
+fn settled_empty(group: &CoordinatorGroup, now_ms: i64, empty_grace_ms: i64) -> bool {
+    group
+        .empty_since_ms
+        .is_some_and(|since| now_ms >= since.saturating_add(empty_grace_ms))
 }
 
 /// The moment this group went empty, when that is the clock Kafka measures

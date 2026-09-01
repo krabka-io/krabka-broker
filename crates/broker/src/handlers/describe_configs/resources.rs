@@ -18,7 +18,7 @@
 use krabka_protocol::owned::describe_configs_response::{
     DescribeConfigsResourceResult, DescribeConfigsResult,
 };
-use krabka_units::convert::TimeExt as _;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -45,34 +45,41 @@ mod tests;
 use self::write_freeze::write_freeze_override;
 
 /// The broker-scoped values that live in the process's static configuration
-/// rather than in the metadata image. `DescribeConfigs` synthesises one entry
-/// for each against the registry row, the way it synthesises `node.id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// rather than in the metadata image, as the operator named them.
+///
+/// `None` is the operator naming nothing: the broker runs the built-in default
+/// and the key reports `DEFAULT_CONFIG`. `Some` is a value that reached the
+/// process through its file, CLI, or environment overlay, which Kafka reports
+/// at `STATIC_BROKER_CONFIG` whatever the value is — `ConfigHelper` asks
+/// whether the key appears in `KafkaConfig.originals`, never whether it
+/// differs from the default. Verified against `apache/kafka:4.3.1`, where a
+/// broker whose properties carry `offsets.retention.minutes=10080` — Kafka's
+/// own default — answers `synonyms={STATIC_BROKER_CONFIG:...=10080,
+/// DEFAULT_CONFIG:...=10080}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct StaticBrokerConfigs {
-    /// `offsets.retention.minutes`, in whole minutes.
-    pub(super) offsets_retention_minutes: i64,
-    /// `offsets.retention.check.interval.ms`, in whole milliseconds.
-    pub(super) offsets_retention_check_interval_ms: i64,
+    /// `offsets.retention.minutes`. The configuration refuses a retention that
+    /// is not a whole number of minutes, so the reported value is exact.
+    pub(super) offsets_retention: Option<Time>,
+    /// `offsets.retention.check.interval.ms`.
+    pub(super) offsets_retention_check_interval: Option<Time>,
 }
 
 impl StaticBrokerConfigs {
-    /// The `(key, value, retuned)` triples, in the order `DescribeConfigs`
-    /// builds them before the final sort. `retuned` is `true` for a value the
-    /// operator moved off the built-in default, which is the layer
-    /// `STATIC_BROKER_CONFIG` reports.
-    fn entries(self) -> [(&'static str, String, bool); 2] {
+    /// The `(key, operator value)` pairs, in the order `DescribeConfigs`
+    /// builds them before the final sort. A `None` value is a key the operator
+    /// never named.
+    fn entries(self) -> [(&'static str, Option<String>); 2] {
         [
             (
                 config_keys::OFFSETS_RETENTION_MINUTES,
-                self.offsets_retention_minutes.to_string(),
-                self.offsets_retention_minutes
-                    != crate::config::DEFAULT_OFFSETS_RETENTION.millis_i64() / 60_000,
+                self.offsets_retention
+                    .map(|retention| (retention.millis_i64() / 60_000).to_string()),
             ),
             (
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-                self.offsets_retention_check_interval_ms.to_string(),
-                self.offsets_retention_check_interval_ms
-                    != crate::config::DEFAULT_OFFSETS_RETENTION_CHECK_INTERVAL.millis_i64(),
+                self.offsets_retention_check_interval
+                    .map(|interval| interval.millis_i64().to_string()),
             ),
         ]
     }
@@ -121,7 +128,13 @@ pub(super) fn describe_one(
             };
             Some(krabka_metadata::NodeId(node_id))
         };
-        return ok(broker_configs(image, node_id, &wanted, options, static_broker));
+        return ok(broker_configs(
+            image,
+            node_id,
+            &wanted,
+            options,
+            static_broker,
+        ));
     }
 
     if r.resource_type == RESOURCE_TYPE_CLIENT_METRICS {
@@ -297,9 +310,9 @@ fn broker_configs(
 
 /// The keys the process reads once at startup and no alter path can change.
 ///
-/// A key the operator named reports its value at `STATIC_BROKER_CONFIG`; one
-/// it left alone reports the registry default at `DEFAULT_CONFIG`, with the
-/// default on the synonym chain. Both are read-only because Kafka refuses to
+/// A key the operator named reports its value at `STATIC_BROKER_CONFIG` above
+/// the default it displaced; one the operator left alone reports the registry
+/// default at `DEFAULT_CONFIG`. Both are read-only because Kafka refuses to
 /// reconfigure them: `kafka-configs --alter --add-config
 /// offsets.retention.minutes=100` answers `InvalidRequestException: Cannot
 /// update these configs dynamically` on `apache/kafka:4.3.1`.
@@ -311,16 +324,16 @@ fn static_broker_configs(
     static_broker
         .entries()
         .into_iter()
-        .filter(|(key, _, _)| wanted(key))
-        .map(|(key, value, retuned)| {
+        .filter(|(key, _)| wanted(key))
+        .map(|(key, set_by_operator)| {
             let row = registry::lookup(ConfigScope::Broker, key);
-            let layers: Vec<Layer<'_>> = retuned
-                .then(|| Layer {
+            let layers: Vec<Layer<'_>> = set_by_operator
+                .iter()
+                .map(|value| Layer {
                     source: CONFIG_SOURCE_STATIC_BROKER,
                     name: key,
                     value: value.as_str(),
                 })
-                .into_iter()
                 .collect();
             config_entry(
                 row,
