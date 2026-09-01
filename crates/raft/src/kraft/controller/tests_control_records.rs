@@ -6,10 +6,41 @@ use assert2::{assert, check};
 
 use super::*;
 use crate::kraft::controller::{
-    control_state::voter_set_to_wire,
+    control_state::{voter_set_from_wire, voter_set_to_wire},
     records::leader_change_batch,
     test_support::{build_engine_only, elect_single_voter_engine, voter_set},
 };
+
+fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
+    use krabka_protocol::owned::voters_record::{Endpoint, KRaftVersionFeature, Voter};
+
+    Voter {
+        voter_id: id,
+        voter_directory_id: krabka_protocol::primitives::uuid::Uuid([directory_byte; 16]),
+        endpoints: vec![Endpoint {
+            name: "CONTROLLER".into(),
+            host: "controller.example".into(),
+            port: 9_093,
+            ..Default::default()
+        }],
+        k_raft_version_feature: KRaftVersionFeature {
+            min_supported_version: 0,
+            max_supported_version: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn wire_voter_record(
+    voters: Vec<krabka_protocol::owned::voters_record::Voter>,
+) -> krabka_protocol::owned::voters_record::VotersRecord {
+    krabka_protocol::owned::voters_record::VotersRecord {
+        version: 0,
+        voters,
+        ..Default::default()
+    }
+}
 
 #[test]
 fn control_state_applies_before_commit_and_restores_on_truncation() {
@@ -34,6 +65,112 @@ fn control_state_applies_before_commit_and_restores_on_truncation() {
     assert!(controls.latest_voters() == &two_voters);
     assert!(!controls.commit_to(8));
     assert!(controls.committed_voters == two_voters);
+}
+
+#[test]
+fn voter_set_wire_admission_preserves_boundary_identities_exactly() {
+    let mut zero = wire_voter(0, 0);
+    zero.k_raft_version_feature.max_supported_version = i16::MAX;
+    let maximum = wire_voter(i32::MAX, 0xff);
+
+    let voters = voter_set_from_wire(&wire_voter_record(vec![zero, maximum]))
+        .expect("valid boundary voter set");
+    let zero = voters.get(NodeId(0)).expect("zero voter");
+    let maximum = voters.get(NodeId(i32::MAX as u64)).expect("maximum voter");
+
+    check!(zero.directory_id == uuid::Uuid::nil());
+    check!(zero.kraft_version.max == i16::MAX as u16);
+    check!(zero.endpoints[0].name == "CONTROLLER");
+    check!(maximum.directory_id.as_bytes() == &[0xff; 16]);
+    check!(maximum.id == NodeId(i32::MAX as u64));
+}
+
+#[test]
+fn voter_set_wire_admission_rejects_every_malformed_shape() {
+    let base = wire_voter(1, 1);
+    let mut cases = Vec::new();
+
+    let mut unsupported = wire_voter_record(vec![base.clone()]);
+    unsupported.version = 1;
+    cases.push(("unsupported record version", unsupported));
+    cases.push(("empty voter set", wire_voter_record(vec![])));
+    let mut negative_id = base.clone();
+    negative_id.voter_id = -1;
+    cases.push(("negative voter id", wire_voter_record(vec![negative_id])));
+    cases.push((
+        "duplicate voter id",
+        wire_voter_record(vec![base.clone(), wire_voter(1, 2)]),
+    ));
+    let mut no_endpoints = base.clone();
+    no_endpoints.endpoints.clear();
+    cases.push(("empty endpoint set", wire_voter_record(vec![no_endpoints])));
+    let mut nameless = base.clone();
+    nameless.endpoints[0].name.clear();
+    cases.push(("nameless endpoint", wire_voter_record(vec![nameless])));
+    let mut hostless = base.clone();
+    hostless.endpoints[0].host.clear();
+    cases.push(("hostless endpoint", wire_voter_record(vec![hostless])));
+    let mut zero_port = base.clone();
+    zero_port.endpoints[0].port = 0;
+    cases.push(("zero endpoint port", wire_voter_record(vec![zero_port])));
+    let mut duplicate_endpoint = base.clone();
+    duplicate_endpoint
+        .endpoints
+        .push(duplicate_endpoint.endpoints[0].clone());
+    cases.push((
+        "duplicate endpoint name",
+        wire_voter_record(vec![duplicate_endpoint]),
+    ));
+    let mut negative_min = base.clone();
+    negative_min.k_raft_version_feature.min_supported_version = -1;
+    cases.push((
+        "negative minimum version",
+        wire_voter_record(vec![negative_min]),
+    ));
+    let mut negative_max = base.clone();
+    negative_max.k_raft_version_feature.max_supported_version = -1;
+    cases.push((
+        "negative maximum version",
+        wire_voter_record(vec![negative_max]),
+    ));
+    let mut inverted = base;
+    inverted.k_raft_version_feature.min_supported_version = 1;
+    inverted.k_raft_version_feature.max_supported_version = 0;
+    cases.push(("inverted version range", wire_voter_record(vec![inverted])));
+
+    for (what, record) in cases {
+        check!(
+            matches!(
+                voter_set_from_wire(&record),
+                Err(RaftError::InvalidVoterUpdate(_))
+            ),
+            "{what}"
+        );
+    }
+}
+
+#[test]
+fn failed_voter_record_does_not_replace_state_and_can_be_retried() {
+    let initial = voter_set(&[NodeId(1)]);
+    let mut controls = KraftControlState::new(initial.clone(), 1);
+    let duplicate = wire_voter_record(vec![wire_voter(2, 2), wire_voter(2, 3)]);
+
+    check!(
+        controls
+            .apply(5, &ControlRecord::Voters(duplicate))
+            .is_err()
+    );
+    check!(controls.latest_voters() == &initial);
+    check!(controls.voter_history.len() == 1);
+
+    controls
+        .apply(
+            5,
+            &ControlRecord::Voters(wire_voter_record(vec![wire_voter(2, 2)])),
+        )
+        .expect("corrected record retries at the same offset");
+    check!(controls.latest_voters().contains(NodeId(2)));
+    check!(!controls.latest_voters().contains(NodeId(1)));
 }
 
 #[test]
