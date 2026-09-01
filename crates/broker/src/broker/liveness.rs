@@ -146,6 +146,7 @@ pub(super) fn start_liveness_services(
                 .controller_server_name
                 .clone()
                 .unwrap_or_else(|| "localhost".to_owned()),
+            controller_quorum_voters: config.controller_quorum_voters.clone(),
             want_shutdown: want_shutdown_rx,
             should_shutdown: Arc::clone(&should_shutdown),
             log_dir_status: log_dirs.0.clone(),

@@ -129,7 +129,8 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                         "controller-admin",
                         false,
                         "CONTROLLER",
-                    );
+                    )
+                    .listener_authorized_for_cluster_action();
                     handler(
                         &broker,
                         request.api_version,
