@@ -644,14 +644,21 @@ fn sync_parent(path: &Path) -> Result<(), AuditError> {
 }
 
 #[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> Result<(), AuditError> {
-    Ok(())
+fn sync_parent(path: &Path) -> Result<(), AuditError> {
+    // Windows exposes no directory handle to fsync, so the directory entry is
+    // already durable by the time the file write returns. Stat the parent so a
+    // vanished spool directory still surfaces here rather than silently later.
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .metadata()
+        .map_err(io)
+        .map(drop)
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
+    use krabka_units::prelude::ByteSize;
 
     use super::*;
     use crate::{
