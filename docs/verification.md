@@ -181,10 +181,26 @@ The current model entry points are:
 | Log | [`compact_model`](../crates/log/src/compact_model.rs) and [`leader_epoch_model`](../crates/log/src/leader_epoch_model.rs). |
 | KRaft | [`kraft_model`](../crates/raft/tests/kraft_model.rs). |
 | Throttle | [`bucket_model`](../crates/throttle/tests/bucket_model.rs). |
+| Audit | [`spool_model`](../crates/audit/src/spool_model.rs). |
 
 Some models drive a production kernel directly. Other models compose real
 decision functions with a small environment. Read the model's `DRIVEN` and
 `MODELED` notes before you treat its property as a production guarantee.
+
+The audit spool model drives the production append planner, loss-state update,
+and replay-recovery classifier. It checks two records, two loss events, a
+two-record spool, sync cadence two, at most two crashes, and every reachable
+ordering through depth 25. The pinned run reached 11,184 unique states and
+generated 23,498 transitions, below its depth-48 and 500,000-state truncation
+guards. Properties require every durably admitted record to remain delivered
+or durably pending, at-most-once automatic delivery, nondecreasing loss-marker
+generations, and complete loss accounting. Reachability witnesses cover torn
+append recovery, retry after a definite sink failure, fail-stop poison after an
+uncertain delivery, cleanup after a committed cursor, and loss-marker
+reconciliation after reopen. Filesystem and directory-sync semantics, storage
+hardware, sink durability, explicit operator recovery of poisoned replay, and
+behavior beyond the stated bounds remain outside the model. Adapter tests cover
+malformed, missing, stale, and committed poison plus loss-counter saturation.
 
 The share-group membership model drives the production [`ShareGroupState`](../crates/broker/src/coordinator/unified/share/state.rs) join, leave, and timeout transitions; the production [assignment reconciler](../crates/broker/src/coordinator/unified/share/actor/assignment.rs) and share assignor; the shared member-epoch fence; and the production [snapshot/apply replay adapters](../crates/broker/src/coordinator/unified/share/actor/seed.rs). It exhaustively checks two member IDs, one topic with one or two partitions, four logical timeout ticks, epochs through five, and one crash/replay in every reachable ordering. The pinned run reached 23,084 unique states and generated 164,361 transitions at depth 16, below its depth-64 and one-million-state truncation guards. Properties require unique `(member, topic, partition)` coordinates, bounded assignments for members at the target epoch, nonnegative fenced epochs, and exact durable replay projection; reachability witnesses cover unknown-member, stale, and forward heartbeat rejection, timeout, metadata reassignment, replay, and two-member membership. Cross-member partition overlap remains intentional KIP-932 behavior when members outnumber partitions. Request decoding, actor mailbox delivery, offsets-log append durability, cache publication, wall-clock scheduling, metadata snapshot consistency, and share-state persister I/O remain outside the model. A failed offsets-log append is covered by an adapter test: the actor returns `COORDINATOR_LOAD_IN_PROGRESS`, publishes no partial batch, and relies on durable replay after restart.
 

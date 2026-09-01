@@ -59,6 +59,33 @@ struct LossState {
     count: u64,
 }
 
+pub(crate) fn add_loss_state(generation: u64, count: u64, added: u64) -> (u64, u64) {
+    let generation = if count == 0 {
+        generation.saturating_add(1)
+    } else {
+        generation
+    };
+    (generation, count.saturating_add(added))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayRecovery {
+    ClearPoison,
+    RequireExplicitRecovery,
+}
+
+pub(crate) fn replay_recovery(
+    valid_frame: bool,
+    poison_offset: Option<u64>,
+    replay_offset: u64,
+) -> ReplayRecovery {
+    if valid_frame && poison_offset.is_some_and(|offset| offset < replay_offset) {
+        ReplayRecovery::ClearPoison
+    } else {
+        ReplayRecovery::RequireExplicitRecovery
+    }
+}
+
 /// Writer-persisted count of fail-open records awaiting a chain marker.
 #[derive(Debug)]
 pub(crate) struct PendingLosses {
@@ -104,10 +131,7 @@ impl PendingLosses {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.count == 0 {
-            state.generation = state.generation.saturating_add(1);
-        }
-        state.count = state.count.saturating_add(count);
+        (state.generation, state.count) = add_loss_state(state.generation, state.count, count);
     }
 
     #[cfg(test)]
@@ -462,10 +486,12 @@ impl Spool {
             .map(u32::from_be_bytes)
             .and_then(|len| usize::try_from(len).ok())
             .is_some_and(|len| len.checked_add(12) == Some(bytes.len()));
-        if !valid_frame || poison_offset.is_none_or(|offset| offset >= self.replay_offset) {
-            return Err(AuditError::Poisoned(path.display().to_string()));
+        match replay_recovery(valid_frame, poison_offset, self.replay_offset) {
+            ReplayRecovery::ClearPoison => self.clear_replay_poison(),
+            ReplayRecovery::RequireExplicitRecovery => {
+                Err(AuditError::Poisoned(path.display().to_string()))
+            }
         }
-        self.clear_replay_poison()
     }
 
     fn append_inner(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
