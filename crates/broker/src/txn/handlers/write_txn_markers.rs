@@ -295,4 +295,121 @@ mod tests {
         assert!(entry.metadata == "txn");
         broker_handle.shutdown().await;
     }
+
+    /// An abort marker publishes nothing, so a group whose actor has already
+    /// exited has nothing left to resolve: its KIP-447 pending marks died with
+    /// it. The marker is durable by the time the coordinator is consulted, so
+    /// reporting a failure would only make the transaction coordinator retry a
+    /// marker that has already landed.
+    #[tokio::test]
+    async fn abort_marker_succeeds_when_the_groups_actor_has_exited() {
+        use krabka_log::Offset;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        use crate::coordinator::unified::actor::GroupKindTag;
+
+        let (broker_handle, _dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let group_id = "abort-after-actor-exit";
+        let offsets_partition = crate::coordinator::partitioner::partition_for_group(
+            &broker.controller.current_image(),
+            group_id,
+        );
+        let part = broker
+            .partitions
+            .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
+            .expect("local offsets partition");
+        part.produce_batch(RecordBatch {
+            producer_id: 91,
+            producer_epoch: 4,
+            attributes: Attributes::default().with_transactional(true),
+            records: vec![Record {
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 2)),
+                value: Some(
+                    OffsetCommitValue {
+                        offset: Offset(42),
+                        leader_epoch: 3,
+                        metadata: "txn".into(),
+                        commit_timestamp_ms: 123,
+                    }
+                    .encode_value(),
+                ),
+                ..Default::default()
+            }],
+            ..RecordBatch::default()
+        })
+        .await
+        .expect("append transactional offset");
+
+        // The actor takes the transaction's pending marks and then exits,
+        // leaving a closed handle behind in the registry.
+        let handle = broker
+            .group_coordinator
+            .get_or_create_group(group_id, GroupKindTag::Classic);
+        let (reply, ack) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::AddPendingTxnOffsets {
+                producer_id: 91,
+                keys: vec![("orders".to_string(), 2)],
+                reply,
+            })
+            .await
+            .expect("send AddPendingTxnOffsets");
+        ack.await.expect("AddPendingTxnOffsets ack");
+        let (reply, ack) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Shutdown(reply))
+            .await
+            .expect("send Shutdown");
+        ack.await.expect("Shutdown ack");
+        for _ in 0..1000 {
+            if handle.tx.is_closed() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert!(handle.tx.is_closed());
+
+        let req = WriteTxnMarkersRequest {
+            markers: vec![WritableTxnMarker {
+                producer_id: 91,
+                producer_epoch: 4,
+                transaction_result: false,
+                transaction_version: 1,
+                topics: vec![WritableTxnMarkerTopic {
+                    name: OFFSETS_TOPIC.into(),
+                    partition_indexes: vec![offsets_partition],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let response = super::handle(&broker, VERSION, 1, &encode_request(&req))
+            .await
+            .expect("abort marker");
+        let response = decode_response(&response);
+        assert!(
+            response
+                == WriteTxnMarkersResponse {
+                    markers: vec![WritableTxnMarkerResult {
+                        producer_id: 91,
+                        topics: vec![WritableTxnMarkerTopicResult {
+                            name: OFFSETS_TOPIC.into(),
+                            partitions: vec![WritableTxnMarkerPartitionResult {
+                                partition_index: offsets_partition,
+                                error_code: codes::NONE,
+                                unknown_tagged_fields: UnknownTaggedFields::default(),
+                            }],
+                            unknown_tagged_fields: UnknownTaggedFields::default(),
+                        }],
+                        unknown_tagged_fields: UnknownTaggedFields::default(),
+                    }],
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }
+        );
+        broker_handle.shutdown().await;
+    }
 }

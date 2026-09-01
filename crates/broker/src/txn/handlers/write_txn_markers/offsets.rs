@@ -97,8 +97,12 @@ pub(super) fn pending_offset_entries(
 /// closed actor: the offsets have to become visible even if the actor failed
 /// since the transaction began, without waiting for a marker retry the durable
 /// commit marker will never trigger. An abort has nothing to publish, so it
-/// only touches an actor that already exists and never resurrects a group that
-/// went away with its marks.
+/// only touches a live actor that already exists: it never resurrects a group
+/// that went away with its marks, and it never fails the marker over one. The
+/// marker is already durable by the time this runs, and an actor that is gone
+/// took its pending marks with it, so a failed hand-off leaves nothing
+/// unresolved -- only a commit, whose offsets would otherwise be lost from
+/// memory, still reports the failure.
 pub(super) async fn resolve_pending_offsets(
     coordinator: &Arc<GroupCoordinator>,
     producer_id: krabka_log::ProducerId,
@@ -110,13 +114,13 @@ pub(super) async fn resolve_pending_offsets(
         let handle = if commit {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
         } else {
-            coordinator.find(&group_id)
+            coordinator.find(&group_id).filter(|h| !h.tx.is_closed())
         };
         let Some(handle) = handle else {
             continue;
         };
         let (reply, response) = tokio::sync::oneshot::channel();
-        if handle
+        let resolved = handle
             .tx
             .send(GroupActorMessage::ResolveTxnOffsets {
                 producer_id: producer_id.get(),
@@ -124,16 +128,18 @@ pub(super) async fn resolve_pending_offsets(
                 reply,
             })
             .await
-            .is_err()
-            || response.await.is_err()
-        {
+            .is_ok()
+            && response.await.is_ok();
+        if !resolved {
             tracing::warn!(
                 group = %group_id,
                 "WriteTxnMarkers: could not resolve the transaction's offset commits"
             );
-            return Err(BrokerError::Txn(format!(
-                "could not resolve transactional offset commits for group {group_id}"
-            )));
+            if commit {
+                return Err(BrokerError::Txn(format!(
+                    "could not resolve transactional offset commits for group {group_id}"
+                )));
+            }
         }
     }
     Ok(())
