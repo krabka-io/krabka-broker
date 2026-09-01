@@ -66,7 +66,9 @@ pub(crate) fn freeze_target(pattern_type: PatternType, scope: &str) -> String {
 /// [`crate::internal_topics::INTERNAL_TOPICS`], because the convention is the
 /// wider of the two: every name in that set carries the prefix, and a name an
 /// operator invented for the prefix is one they should not freeze either.
-/// `a_freeze_scope_covers_every_internal_topic` holds the two together.
+/// `a_freeze_scope_covers_every_internal_topic` holds the two together, and
+/// [`crate::internal_topics::validate_audit_topic_name`] does the same for the
+/// audit log, whose name is configured rather than fixed.
 pub(crate) fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bool {
     if scope.starts_with(INTERNAL_TOPIC_PREFIX) {
         return true;

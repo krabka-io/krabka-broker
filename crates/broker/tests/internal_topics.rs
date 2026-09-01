@@ -7,7 +7,11 @@
 //! without anyone asking it to, so every such topic is pinned here.
 //!
 //! `Metadata` and `DescribeTopicPartitions` are both covered, because a client
-//! must get the same answer whichever RPC it asks with.
+//! must get the same answer whichever RPC it asks with. The audit log is
+//! covered twice over, because `krabka.audit.topic` renames it: the flag has to
+//! land on the name the broker is auditing to, and a name outside the `__`
+//! convention has to be refused at startup rather than left internal on one
+//! rule and freezable on the other.
 //!
 //! # The one name the `__` convention gets wrong
 //!
@@ -26,6 +30,8 @@
 use assert2::{assert, check};
 mod support;
 
+use krabka_broker::{Broker, BrokerConfig};
+use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -219,4 +225,60 @@ async fn describe_topic_partitions_agrees_with_metadata() {
     }
 
     p.broker.shutdown().await;
+}
+
+/// The audit log is the one broker-owned topic an operator can rename, so the
+/// flag has to follow `krabka.audit.topic` rather than the default name.
+/// Renaming it and still having a `.*` subscription pick it up is the exact
+/// leak the flag exists to prevent.
+#[tokio::test]
+async fn a_renamed_audit_topic_is_the_internal_one() {
+    const RENAMED: &str = "__house_audit";
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.audit_topic = RENAMED.to_string();
+    let broker = Broker::start(config).await.expect("broker start");
+    let client = Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .client_id("krabka-broker-test-renamed-audit")
+        .build()
+        .await
+        .expect("client build");
+
+    broker.wait_until_partition_present(RENAMED, 0).await;
+    let resp = client
+        .send(MetadataRequest {
+            topics: None,
+            ..Default::default()
+        })
+        .await
+        .expect("Metadata");
+
+    let internal: Vec<&str> = resp
+        .topics
+        .iter()
+        .filter(|t| t.is_internal)
+        .filter_map(|t| t.name.as_deref())
+        .collect();
+    check!(internal.contains(&RENAMED), "{internal:?}");
+    check!(
+        !internal.contains(&"__krabka_audit"),
+        "the default name is not the audit log on this broker: {internal:?}"
+    );
+
+    broker.shutdown().await;
+}
+
+/// An audit topic named outside the `__` convention would be internal to
+/// `Metadata` and freezable at the same time, so the broker refuses to start
+/// on one rather than carrying the inconsistency.
+#[tokio::test]
+async fn a_broker_refuses_an_audit_topic_outside_the_convention() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    config.audit_topic = "house_audit".to_string();
+    let failure = Broker::start(config).await.err();
+    assert!(let Some(error) = failure);
+    check!(error.to_string().contains("audit_topic"), "{error}");
 }

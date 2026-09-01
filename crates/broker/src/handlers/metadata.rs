@@ -292,7 +292,7 @@ fn success_topic_row(
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
-        is_internal: crate::internal_topics::is_internal_topic(name),
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
         topic_authorized_operations,
         ..Default::default()
     }

@@ -169,7 +169,7 @@ pub(crate) fn handle(
             error_code: codes::NONE,
             name: Some(name.clone()),
             topic_id: WireUuid(t.topic_id.into_bytes()),
-            is_internal: is_internal_topic(name),
+            is_internal: is_internal_topic(&broker.config, name),
             partitions: row_partitions,
             topic_authorized_operations,
             ..Default::default()
