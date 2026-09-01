@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate the checked-in Kafka on-disk compatibility evidence matrix."""
+"""Generate the checked-in Kafka compatibility evidence matrix."""
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -9,8 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "crates/log/tests/integration.rs"
 LOG_BUILD = ROOT / "crates/log/BUILD.bazel"
+BROKER_BUILD = ROOT / "crates/broker/BUILD.bazel"
 IMAGES = ROOT / "bazel/images/BUILD.bazel"
 MODULE = ROOT / "MODULE.bazel"
+API_VERSIONS = ROOT / "crates/broker/tests/fixtures/api_versions/divergence.json"
+API_VERSIONS_ORACLE = ROOT / "crates/broker/tests/api_versions_differential/oracle.rs"
 THROTTLE_AUDIT = ROOT / "crates/broker/src/network/dispatch/throttle_audit.rs"
 ROWS = (
     (
@@ -24,6 +28,13 @@ ROWS = (
         "jvm_consumes_rust_written_log_dir",
     ),
 )
+# How `divergence.json` labels a row, and how the matrix says it.
+VERDICTS = {
+    "same": "match",
+    "range_differs": "range differs",
+    "krabka_only": "krabka only",
+    "kafka_only": "Kafka only",
+}
 
 
 # KIP-219 (throttle-then-respond) responses whose `ThrottleTimeMs` is not the
@@ -123,7 +134,26 @@ def match(pattern: str, text: str, source: Path) -> str:
     return found.group(1)
 
 
-def render() -> str:
+def image_for(key: str) -> str:
+    """The tag //bazel/images loads image `key` under."""
+    return match(
+        rf'^\s*"{re.escape(key)}"\s*:\s*"([^"]+)"',
+        IMAGES.read_text(),
+        IMAGES,
+    )
+
+
+def digest_for(key: str) -> str:
+    """The digest //MODULE.bazel pins image `key` to."""
+    return match(
+        rf'^\s*\("{re.escape(key)}",\s*"[^"]+",\s*"([^"]+)"\)',
+        MODULE.read_text(),
+        MODULE,
+    )
+
+
+def log_contract() -> tuple[str, str]:
+    """The on-disk log evidence rows, and the image that produced them."""
     tests = TESTS.read_text()
     for _, _, test in ROWS:
         match(rf"^async fn ({re.escape(test)})\(\)", tests, TESTS)
@@ -133,23 +163,63 @@ def render() -> str:
         LOG_BUILD.read_text(),
         LOG_BUILD,
     )
-    image = match(
-        rf'^\s*"{re.escape(image_key)}"\s*:\s*"([^"]+)"',
-        IMAGES.read_text(),
-        IMAGES,
-    )
+    image = image_for(image_key)
     test_image = match(r'^const KAFKA_IMAGE: &str = "([^"]+)";', tests, TESTS)
     test_tag = match(r'^const KAFKA_TAG: &str = "([^"]+)";', tests, TESTS)
     if f"{test_image}:{test_tag}" != image:
         raise SystemExit(
             f"test image {test_image}:{test_tag} does not match Bazel image {image}"
         )
-    digest = match(
-        rf'^\s*\("{re.escape(image_key)}",\s*"[^"]+",\s*"([^"]+)"\)',
-        MODULE.read_text(),
-        MODULE,
-    )
+    pinned = f"{image}@{digest_for(image_key)}"
 
+    rows = "\n".join(
+        f"| {direction} | Implemented | {contract} | "
+        f"[`crates/log`](../crates/log) | "
+        f"[`{test}`](../crates/log/tests/integration.rs) | `{pinned}` |"
+        for direction, contract, test in ROWS
+    )
+    return rows, pinned
+
+
+def api_versions() -> tuple[str, str]:
+    """The advertised-version rows, and the oracle image they were read from.
+
+    Both version columns come from `divergence.json`, which
+    `//crates/broker:api_versions_differential` writes from a live krabka broker
+    beside a live Kafka broker. Nothing here re-derives them; what this checks is
+    that the oracle the file names is still the one the suite drives and the one
+    Bazel pins, so a stale recording cannot pass itself off as current evidence.
+    """
+    report = json.loads(API_VERSIONS.read_text())
+
+    image_key = match(
+        r'"api_versions_differential":\s*\["([^"]+)"\]',
+        BROKER_BUILD.read_text(),
+        BROKER_BUILD,
+    )
+    image = image_for(image_key)
+    suite_image = match(
+        r'^pub\(crate\) const ORACLE_IMAGE: &str = "([^"]+)";',
+        API_VERSIONS_ORACLE.read_text(),
+        API_VERSIONS_ORACLE,
+    )
+    for whose, named in (("suite", suite_image), ("recorded", report["oracle_image"])):
+        if named != image:
+            raise SystemExit(f"{whose} oracle {named} does not match Bazel image {image}")
+
+    def span(versions: dict | None) -> str:
+        return "not advertised" if versions is None else f"{versions['min']}-{versions['max']}"
+
+    rows = "\n".join(
+        f"| {row['name']} | {row['api_key']} | {span(row['krabka'])} | "
+        f"{span(row['kafka'])} | {VERDICTS[row['verdict']]} |"
+        for row in report["apis"]
+    )
+    return rows, f"{image}@{digest_for(image_key)}"
+
+
+def throttle_echo() -> str:
+    """The KIP-219 throttle-echo divergence rows."""
     audit = THROTTLE_AUDIT.read_text()
     match(rf"^fn ({re.escape(THROTTLE_AUDIT_TEST)})\(\)", audit, THROTTLE_AUDIT)
     match(rf"^fn ({re.escape(THROTTLE_REACH_TEST)})\(\)", audit, THROTTLE_AUDIT)
@@ -163,33 +233,67 @@ def render() -> str:
             f"recorded but unrendered {missing}, rendered but unrecorded {extra}"
         )
 
-    throttle_rows = "\n".join(
+    return "\n".join(
         f"| {THROTTLE_ECHO_ROWS[(key, versions)][0]} | {key} | {versions} | "
         f"{THROTTLE_ECHO_ROWS[(key, versions)][1]} | {QUOTA_REACH_EFFECT[reach]} |"
         for key, versions, reach in divergences
     )
 
-    rows = "\n".join(
-        f"| {direction} | Implemented | {contract} | "
-        f"[`crates/log`](../crates/log) | "
-        f"[`{test}`](../crates/log/tests/integration.rs) | `{image}@{digest}` |"
-        for direction, contract, test in ROWS
-    )
+
+def render() -> str:
+    log_rows, log_image = log_contract()
+    api_rows, api_image = api_versions()
+    throttle_rows = throttle_echo()
     return f"""# Kafka KIP compatibility matrix
 
 <!-- Generated by tools/generate-kip-matrix.py; do not edit by hand. -->
 
-This matrix records the repository's JVM differential evidence for the Kafka
-on-disk log contract. The suite covers timestamped record batches (KIP-32),
-segment and index discovery, and record key/value recovery in both directions.
+This matrix records the repository's JVM differential evidence: the Kafka
+on-disk log contract, and the `ApiVersions` table every client negotiates
+against.
+
+## On-disk log contract
+
+The suite covers timestamped record batches (KIP-32), segment and index
+discovery, and record key/value recovery in both directions. It ran against
+`{log_image}`.
 
 | Direction | Status | Contract | Owner | Differential test | Kafka image |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-{rows}
+{log_rows}
 
-The Bazel Docker lane supplies the image from a digest-pinned OCI repository.
+## Advertised API versions
+
+`kafka-broker-api-versions` read both tables below.
+[`api_versions_differential`](../crates/broker/tests/api_versions_differential.rs)
+asserts krabka's against
+[`api_catalog`](../crates/broker/src/api_catalog.rs) and records the join in
+[`divergence.json`](../crates/broker/tests/fixtures/api_versions/divergence.json),
+which is where these two version columns come from. A range that moves, or a key
+that appears on one side only, changes that file and so changes this table.
+
+The oracle is `{api_image}`.
+
+It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
+Both facts shape the Kafka column, so a `krabka only` verdict means "that broker
+did not advertise the key there", not "Kafka does not have the API". Two reasons
+account for every such row:
+
+- Kafka scopes an `ApiVersions` response to the listener it arrives on
+  (`ApiVersionsResponse.filterApis` takes a `ListenerType`), and answers the
+  controller-plane APIs on the controller listener, which this table does not
+  read. krabka runs both roles behind one listener and advertises the union.
+- Kafka advertises `GetTelemetrySubscriptions` and `PushTelemetry` only while a
+  client-telemetry exporter is configured, and this oracle configures none.
+  krabka advertises them unconditionally.
+
+| API | Key | krabka | Kafka | Verdict |
+| :--- | ---: | :--- | :--- | :--- |
+{api_rows}
+
+The Bazel Docker lane supplies each image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
-or checked-in output drift.
+recorded API versions, or checked-in output drift.
 
 ## KIP-219 throttle-echo divergences
 

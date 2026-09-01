@@ -31,6 +31,9 @@ crate_tests(
     ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
+        # One image, used twice: as the client that reads krabka's advertised
+        # table and as the Kafka broker that table is compared against.
+        "api_versions_differential": ["apache_kafka_4_3_1"],
         "jvm_acceptance_cli": [
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
