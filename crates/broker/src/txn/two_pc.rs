@@ -12,7 +12,7 @@
 //!
 //! Krabka follows Apache Kafka exactly, so 2PC is NOT a new persisted field.
 //! The already-persisted `TransactionTimeoutMs` encodes it as the sentinel
-//! [`NO_TIMEOUT_MS`] (`i32::MAX`). Kafka's
+//! `i32::MAX`. Kafka's
 //! `TransactionMetadata.isDistributedTwoPhaseCommitTxn()` is literally
 //! `txnTimeoutMs == Integer.MAX_VALUE`, and `InitProducerId` resolves the
 //! stored timeout to `Int.MaxValue` when `enable2Pc` is set. Because the
@@ -24,16 +24,19 @@
 //! guarantees bind production behaviour. The callers are the idle-transaction
 //! reaper in [`super::expiration`] and the `InitProducerId` handler.
 
+use krabka_verified::transaction::{
+    IdleTransactionState, resolve_transaction_timeout, should_abort_idle_transaction,
+};
+
 use super::state::TxnState;
 
-/// Sentinel `TransactionTimeoutMs` marking a 2PC transaction: the coordinator's
-/// idle-transaction reaper never auto-aborts it. Mirrors Apache Kafka's
-/// `Integer.MAX_VALUE` 2PC marker (`isDistributedTwoPhaseCommitTxn`).
-pub(crate) const NO_TIMEOUT_MS: i32 = i32::MAX;
+/// Test alias for the persisted 2PC timeout sentinel.
+#[cfg(test)]
+pub(crate) const NO_TIMEOUT_MS: i32 = krabka_verified::transaction::NO_TRANSACTION_TIMEOUT_MS;
 
 /// Resolve the `TransactionTimeoutMs` to persist for an `InitProducerId`.
 ///
-/// * `enable_2pc` → [`NO_TIMEOUT_MS`]: the external coordinator owns the
+/// * `enable_2pc` → `i32::MAX`: the external coordinator owns the
 ///   commit decision, so the broker never times the transaction out. This
 ///   function ignores the client-requested timeout. That timeout is irrelevant
 ///   under 2PC, and Kafka's `transaction.max.timeout.ms` cap does not apply.
@@ -46,17 +49,14 @@ pub(crate) fn resolve_txn_timeout(
     min_timeout_ms: i32,
     max_timeout_ms: i32,
 ) -> i32 {
-    if enable_2pc {
-        NO_TIMEOUT_MS
-    } else {
-        requested_ms.clamp(min_timeout_ms, max_timeout_ms)
-    }
+    resolve_transaction_timeout(enable_2pc, requested_ms, min_timeout_ms, max_timeout_ms)
 }
 
 /// Reports whether this persisted timeout marks a 2PC (externally-coordinated)
-/// transaction. The [`NO_TIMEOUT_MS`] sentinel identifies it, exactly like
+/// transaction. The `i32::MAX` sentinel identifies it, exactly like
 /// Kafka's `isDistributedTwoPhaseCommitTxn`.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn is_two_phase_commit(txn_timeout_ms: i32) -> bool {
     txn_timeout_ms == NO_TIMEOUT_MS
 }
@@ -89,16 +89,12 @@ pub(crate) fn should_abort_idle_txn(
     start_ms: i64,
     now_ms: i64,
 ) -> bool {
-    if state != TxnState::Ongoing {
-        return false;
-    }
-    if is_two_phase_commit(txn_timeout_ms) {
-        // KIP-939: a 2PC transaction has no timeout. Skip it unconditionally,
-        // BEFORE the elapsed-time arithmetic, so even a far-future `now_ms`
-        // (or a future where `i32::MAX` ms has genuinely elapsed) can't reap it.
-        return false;
-    }
-    now_ms.saturating_sub(start_ms) >= i64::from(txn_timeout_ms)
+    let state = if state == TxnState::Ongoing {
+        IdleTransactionState::Ongoing
+    } else {
+        IdleTransactionState::Other
+    };
+    should_abort_idle_transaction(state, txn_timeout_ms, start_ms, now_ms)
 }
 
 #[cfg(test)]

@@ -33,6 +33,8 @@ pub(crate) mod signing;
 
 use krabka_metadata::PatternType;
 
+use crate::internal_topics::INTERNAL_TOPIC_PREFIX;
+
 /// The name a scope's pattern type takes in an operator-facing string.
 ///
 /// It is the lowercase spelling of Kafka's ACL pattern type, so an operator
@@ -59,10 +61,14 @@ pub(crate) fn freeze_target(pattern_type: PatternType, scope: &str) -> String {
 ///
 /// An internal topic is never freezable. A prefix scope of `""`, `"_"`, or
 /// `"__"` would otherwise cover `__consumer_offsets` and take the cluster
-/// down, and a literal scope can name one directly. The `__` convention is the
-/// test rather than the three-name internal-topic list that
-/// [`crate::handlers::is_internal_topic`] carries, because that list is stale
-/// and a new internal topic would be freezable the day it lands.
+/// down, and a literal scope can name one directly. The test is the
+/// [`INTERNAL_TOPIC_PREFIX`] convention rather than membership of
+/// [`crate::internal_topics::INTERNAL_TOPICS`], because the convention is the
+/// wider of the two: every name in that set carries the prefix, and a name an
+/// operator invented for the prefix is one they should not freeze either.
+/// `a_freeze_scope_covers_every_internal_topic` holds the two together, and
+/// [`crate::internal_topics::validate_audit_topic_name`] does the same for the
+/// audit log, whose name is configured rather than fixed.
 pub(crate) fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bool {
     if scope.starts_with(INTERNAL_TOPIC_PREFIX) {
         return true;
@@ -70,9 +76,6 @@ pub(crate) fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str
     // A prefix shorter than `__` still covers every `__` name that extends it.
     pattern_type == PatternType::Prefixed && INTERNAL_TOPIC_PREFIX.starts_with(scope)
 }
-
-/// The name prefix that marks a broker-owned topic.
-const INTERNAL_TOPIC_PREFIX: &str = "__";
 
 #[cfg(test)]
 mod tests {
@@ -159,6 +162,23 @@ mod tests {
             check!(
                 scope_covers_internal_topic(pattern_type, scope) == expected,
                 "{label}"
+            );
+        }
+    }
+
+    /// The two internal-topic rules have to stay in step: a topic the broker
+    /// owns must be unfreezable under both a literal scope that names it and a
+    /// prefix scope that reaches it.
+    #[test]
+    fn a_freeze_scope_covers_every_internal_topic() {
+        for name in crate::internal_topics::INTERNAL_TOPICS {
+            check!(
+                scope_covers_internal_topic(PatternType::Literal, name),
+                "literal {name}"
+            );
+            check!(
+                scope_covers_internal_topic(PatternType::Prefixed, name),
+                "prefixed {name}"
             );
         }
     }

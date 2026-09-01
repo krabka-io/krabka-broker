@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_len_tup3_i64_u64_u64": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_select_break_glass_candidate": { "prover": "z3", "time": 0.015 }
+    }
+  }
+}

@@ -5,6 +5,7 @@
 use bytes::Bytes;
 use krabka_protocol::{
     Encode,
+    api_key::ApiKey,
     owned::create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
 };
 use krabka_units::{Time, convert::TimeExt};
@@ -79,6 +80,14 @@ pub(super) async fn finish_response(
         broker.audit_log.as_ref(),
         context,
         created_topic_resources(&results),
+    );
+    // The KIP-599 delay is the only throttle this api applies — the dispatch
+    // loop marks it quota-exempt and never charges it the request quota — so
+    // resolving it through the metric records the throttle phase and the quota
+    // that caused it exactly once per request.
+    let delay = broker.metrics.record_applied_throttle(
+        ApiKey::CreateTopics as i16,
+        &[(crate::metrics::QuotaType::ControllerMutation, delay)],
     );
     let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
     if delay > <Time as TimeExt>::ZERO {

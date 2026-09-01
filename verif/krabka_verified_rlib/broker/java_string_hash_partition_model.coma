@@ -1,0 +1,50 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 272 0 272 81 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 271 11 271 31
+let%span sbroker'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 242 11 242 45
+let%span sbroker'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 243 10 243 15
+let%span sbroker'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 246 8 251 9
+let%span sbroker'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 259 8 265 9
+
+use creusot.int.UInt16
+use seq.Seq
+use creusot.int.Int32
+use int.ComputerDivision
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function java_string_hash_prefix_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 244 0 244 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+
+axiom java_string_hash_prefix_model_def:
+  forall units: Seq.seq UInt16.t, limit: int [java_string_hash_prefix_model units limit]. ([%#sbroker'0] 0 <= limit
+      /\ limit <= Seq.length units)
+    -> java_string_hash_prefix_model units limit
+    = ([%#sbroker'2] if limit <= 0 then
+      (0: Int32.t)
+    else
+      Int32.add (Int32.mul (java_string_hash_prefix_model units (limit
+      - 1)) (31: Int32.t)) (Int32.of_int (UInt16.t'int (Seq.get units (limit - 1))))
+    )
+
+constant const_MIN: Int32.t = (-2147483648: Int32.t)
+
+function java_string_abs_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 257 0 257 42] (hash: Int32.t) : Int32.t
+ = [%#sbroker'3] if hash = const_MIN then (0: Int32.t) else if Int32.lt hash (0: Int32.t) then Int32.neg hash else hash
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant units : Seq.seq UInt16.t
+
+constant partition_count : Int32.t
+
+function java_string_hash_partition_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 272 0 272 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
+
+goal vc_java_string_hash_partition_model: ([%#sbroker] gt_log_Int (Int32.to_int partition_count) 0)
+  -> ([@stop_split] [@expl:java_string_hash_prefix_model requires] [%#sbroker'0] 0 <= Seq.length units
+  /\ Seq.length units <= Seq.length units)

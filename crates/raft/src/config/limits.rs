@@ -182,7 +182,7 @@ impl fmt::Display for MetadataRaftFetchMax {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{ByteSizeExt as _, mebibytes};
+    use krabka_units::prelude::mebibytes;
 
     use super::*;
 

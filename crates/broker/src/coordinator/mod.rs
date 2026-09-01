@@ -9,6 +9,7 @@
 pub(crate) mod bootstrap;
 pub(crate) mod leadership;
 pub(crate) mod partitioner;
+pub(crate) mod retention;
 
 pub use bootstrap::AUDIT_TOPIC;
 pub mod unified;

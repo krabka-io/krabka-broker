@@ -82,6 +82,7 @@ pub(super) fn completing_classic_group(member_ids: &[&str]) -> CoordinatorGroup 
     state.resolve_selected_protocol_metadata("range");
     state.complete_rebalance("range");
     CoordinatorGroup {
+        empty_since_ms: None,
         group_id: "g".into(),
         kind: GroupKind::Classic(state),
         committed_offsets: HashMap::new(),
@@ -216,6 +217,7 @@ pub(super) async fn seed_and_upgrade(
         vec![("range".into(), subscription_blob(&[topic]))],
     ));
     let group = Box::new(CoordinatorGroup {
+        empty_since_ms: None,
         group_id: "g".into(),
         kind: GroupKind::Classic(cs),
         committed_offsets: HashMap::new(),
@@ -322,6 +324,7 @@ pub(super) fn seed_classic_member(
         .with_instance_id(instance_id.map(str::to_string)),
     );
     let group = Box::new(CoordinatorGroup {
+        empty_since_ms: None,
         group_id: "g".into(),
         kind: GroupKind::Classic(cs),
         committed_offsets: HashMap::new(),

@@ -1,5 +1,6 @@
 //! The static broker configs `DescribeConfigs` reports beside a node's
-//! dynamic overrides.
+//! dynamic overrides: the two KIP-98 transactional-id expiry keys and the two
+//! KIP-211 offset-retention keys.
 //!
 //! Kafka answers `kafka-configs --entity-type brokers --entity-name <id>
 //! --describe --all` from the node's own `server.properties`, so a key the
@@ -50,8 +51,19 @@
 //! table every config surface reads. Both keys are `ConfigDef.Type::INT` with
 //! an `atLeast(1)` validator there, read out of the image's
 //! `kafka-transaction-coordinator-4.3.1.jar`.
+//!
+//! The KIP-211 pair -- `offsets.retention.minutes` and
+//! `offsets.retention.check.interval.ms` -- reaches this module already
+//! reduced to what the operator named, as an [`Option`]: `None` is a key the
+//! process never saw and so reports its registry default alone, and `Some` is
+//! a value that arrived through the file, CLI, or environment overlay, which
+//! Kafka reports at `STATIC_BROKER_CONFIG` whatever the value is. Verified
+//! against the same image, where a broker whose properties carry
+//! `offsets.retention.minutes=10080` -- Kafka's own default -- answers
+//! `synonyms={STATIC_BROKER_CONFIG:...=10080, DEFAULT_CONFIG:...=10080}`.
 
 use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult;
+use krabka_units::{Time, convert::TimeExt as _};
 
 use super::super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -81,13 +93,19 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerSetting {
 
 /// The static broker configs this node reports. The handler fills it from
 /// [`crate::config::BrokerConfig`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs {
     /// `transactional.id.expiration.ms`.
     pub(in crate::handlers::describe_configs) txn_id_expiration: StaticBrokerSetting,
     /// `transaction.remove.expired.transaction.cleanup.interval.ms`.
     pub(in crate::handlers::describe_configs) txn_id_expiration_cleanup_interval:
         StaticBrokerSetting,
+    /// `offsets.retention.minutes`, as the operator named it. The
+    /// configuration refuses a retention that is not a whole number of
+    /// minutes, so the reported value is exact.
+    pub(in crate::handlers::describe_configs) offsets_retention: Option<Time>,
+    /// `offsets.retention.check.interval.ms`, as the operator named it.
+    pub(in crate::handlers::describe_configs) offsets_retention_check_interval: Option<Time>,
 }
 
 /// One static broker entry.
@@ -129,6 +147,39 @@ fn static_entry(
     )
 }
 
+/// One static broker entry the caller has already reduced to what the
+/// operator named.
+///
+/// `Some` heads the chain at `STATIC_BROKER_CONFIG` with the registry default
+/// beneath it; `None` reports that default alone. This is the same rule
+/// [`static_entry`] applies, stated over a provenance the caller resolved
+/// rather than over a value the node runs with.
+fn named_entry(
+    key: &'static str,
+    set_by_operator: Option<String>,
+    options: EntryOptions,
+) -> DescribeConfigsResourceResult {
+    let row = registry::lookup(ConfigScope::Broker, key);
+    let layers: Vec<Layer<'_>> = set_by_operator
+        .iter()
+        .map(|value| Layer {
+            source: CONFIG_SOURCE_STATIC_BROKER,
+            name: key,
+            value: value.as_str(),
+        })
+        .collect();
+    config_entry(
+        row,
+        key,
+        &layers,
+        DefaultLayer {
+            value: row.and_then(|row| row.default),
+            name: Some(key),
+        },
+        options,
+    )
+}
+
 /// Every static broker entry for one node, filtered by the request's
 /// `configuration_keys`.
 pub(super) fn static_broker_entries(
@@ -136,7 +187,7 @@ pub(super) fn static_broker_entries(
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
-    [
+    let mut entries: Vec<DescribeConfigsResourceResult> = [
         (
             config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
             configs.txn_id_expiration,
@@ -149,7 +200,27 @@ pub(super) fn static_broker_entries(
     .into_iter()
     .filter(|(key, _)| wanted(key))
     .map(|(key, setting)| static_entry(key, setting, options))
-    .collect()
+    .collect();
+    entries.extend(
+        [
+            (
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                configs
+                    .offsets_retention
+                    .map(|retention| (retention.millis_i64() / 60_000).to_string()),
+            ),
+            (
+                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                configs
+                    .offsets_retention_check_interval
+                    .map(|interval| interval.millis_i64().to_string()),
+            ),
+        ]
+        .into_iter()
+        .filter(|(key, _)| wanted(key))
+        .map(|(key, set_by_operator)| named_entry(key, set_by_operator, options)),
+    );
+    entries
 }
 
 /// The values a broker that never touched either key runs with. The
@@ -166,6 +237,8 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker() -> St
             value_ms: 3_600_000,
             supplied: false,
         },
+        offsets_retention: None,
+        offsets_retention_check_interval: None,
     }
 }
 

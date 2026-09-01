@@ -19,10 +19,12 @@ const NEITHER: EntryOptions = EntryOptions {
     include_documentation: false,
 };
 
-/// Every key wanted, which is what a request with no `configuration_keys`
-/// asks for.
-fn all_keys(_: &str) -> bool {
-    true
+/// Both KIP-98 keys wanted. The module's subject is that pair, so the cases
+/// below ask for it and leave the KIP-211 pair `static_broker_entries` also
+/// reports to [`super::super::tests`].
+fn both_expiry_keys(key: &str) -> bool {
+    key == config_keys::TRANSACTIONAL_ID_EXPIRATION_MS
+        || key == config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
 }
 
 fn doc_for(key: &str) -> String {
@@ -46,6 +48,7 @@ fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs
             value_ms: cleanup_interval_ms,
             supplied: true,
         },
+        ..kafka_default_static_broker()
     }
 }
 
@@ -53,7 +56,7 @@ fn supplied(expiration_ms: i32, cleanup_interval_ms: i32) -> StaticBrokerConfigs
 /// `DEFAULT_CONFIG`, with the default as their one synonym.
 #[test]
 fn kafka_defaults_report_at_default_config_source() {
-    let entries = static_broker_entries(kafka_default_static_broker(), &all_keys, BOTH);
+    let entries = static_broker_entries(kafka_default_static_broker(), &both_expiry_keys, BOTH);
 
     assert!(
         entries
@@ -102,7 +105,7 @@ fn kafka_defaults_report_at_default_config_source() {
 /// under it as a `DEFAULT_CONFIG` synonym.
 #[test]
 fn an_operator_override_heads_the_chain_over_the_retained_default() {
-    let entries = static_broker_entries(supplied(120_000, 60_000), &all_keys, BOTH);
+    let entries = static_broker_entries(supplied(120_000, 60_000), &both_expiry_keys, BOTH);
 
     assert!(
         entries
@@ -167,7 +170,7 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
 /// and still gets the value and the typed metadata.
 #[test]
 fn a_bare_request_carries_the_value_without_synonyms_or_documentation() {
-    let entries = static_broker_entries(kafka_default_static_broker(), &all_keys, NEITHER);
+    let entries = static_broker_entries(kafka_default_static_broker(), &both_expiry_keys, NEITHER);
 
     assert!(
         entries
@@ -239,9 +242,10 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
             value_ms: 3_600_000,
             supplied: false,
         },
+        ..kafka_default_static_broker()
     };
 
-    let entries = static_broker_entries(configs, &all_keys, BOTH);
+    let entries = static_broker_entries(configs, &both_expiry_keys, BOTH);
 
     assert!(
         entries

@@ -14,7 +14,10 @@ use crate::{BrokerError, config::BrokerConfig};
 mod tests;
 
 impl BrokerConfig {
-    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+    /// The broker-wide time knobs. They sit in their own pass, apart from the
+    /// replication timings and the size and count limits, because one function
+    /// holding all three lists outgrows the length limit.
+    fn validate_positive_broker_times(&self) -> Result<(), BrokerError> {
         for (name, value) in [
             (
                 "startup_leader_wait_timeout",
@@ -149,6 +152,36 @@ impl BrokerConfig {
         ] {
             require_positive_time(name, value)?;
         }
+        self.validate_offset_retention()?;
+        Ok(())
+    }
+
+    /// The two KIP-211 knobs, which only have a value when the operator set
+    /// one.
+    ///
+    /// `offsets.retention.minutes` is a whole number of minutes on Kafka —
+    /// `GroupCoordinatorConfig` declares it `INT` and multiplies by 60000 — so
+    /// a duration krabka cannot state in whole minutes is refused rather than
+    /// silently truncated. Truncating would make `DescribeConfigs` advertise a
+    /// retention the sweep does not enforce.
+    fn validate_offset_retention(&self) -> Result<(), BrokerError> {
+        if let Some(retention) = self.offsets_retention_override {
+            require_positive_time("offsets_retention", retention)?;
+            if retention.millis_i64() % 60_000 != 0 {
+                return Err(BrokerError::InvalidRuntimeConfig(format!(
+                    "offsets_retention must be a whole number of minutes, got {}ms",
+                    retention.millis_i64()
+                )));
+            }
+        }
+        if let Some(interval) = self.offsets_retention_check_interval_override {
+            require_positive_time("offsets_retention_check_interval", interval)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+        self.validate_positive_broker_times()?;
         for (name, value) in [
             (
                 "replication.fetch_max_wait",

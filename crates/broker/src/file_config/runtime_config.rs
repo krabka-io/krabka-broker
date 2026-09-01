@@ -268,6 +268,12 @@ pub struct RuntimeFileConfig {
     pub share_state_replication_factor: Option<i16>,
     pub offsets_topic_num_partitions: Option<i32>,
     pub offsets_topic_replication_factor: Option<i16>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub offsets_retention: Option<Time>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub offsets_retention_check_interval: Option<Time>,
     pub transaction_state_num_partitions: Option<i32>,
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<String>")]

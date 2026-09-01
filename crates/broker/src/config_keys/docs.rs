@@ -22,7 +22,7 @@ pub struct TopicConfigDoc {
 /// The full whitelist documented on the topic-configs reference page.
 ///
 /// Synthesised keys stay off the page: they are not stored, so no operator can
-/// set one. [`super::WRITE_FREEZE`] is the only such topic key.
+/// set one. `WRITE_FREEZE` is the only such topic key.
 #[must_use]
 pub fn topic_config_docs() -> Vec<TopicConfigDoc> {
     registry::keys_in(ConfigScope::Topic)

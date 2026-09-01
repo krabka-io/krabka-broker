@@ -7,6 +7,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use krabka_ids::{ApiKey, ApiVersion};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::api_versions::table;
 use crate::{
     error::RaftError,
     wire::{API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
@@ -37,42 +38,29 @@ fn require_remaining(available: usize, required: usize) -> Result<(), RaftError>
     }
 }
 
+/// Whether a request frame for `api_key` at `version` carries tagged fields.
+///
+/// The minimum comes from the advertised API table, so an API the listener
+/// serves reads its own generated `FLEXIBLE_MIN` and nothing else. Note that
+/// this is asked of every version a peer may send, not only the advertised
+/// range: a request outside that range still has to have its header parsed
+/// before the handler can refuse it.
 fn request_is_flexible(
     api_key: i16,
     version: i16,
     admin_router: Option<&dyn crate::ControllerAdminRouter>,
 ) -> bool {
-    use krabka_protocol::owned::{
-        add_raft_voter_request, api_versions_request, begin_quorum_epoch_request,
-        broker_heartbeat_request, broker_registration_request, controller_registration_request,
-        describe_cluster_request, describe_quorum_request, end_quorum_epoch_request, fetch_request,
-        fetch_snapshot_request, remove_raft_voter_request, update_raft_voter_request, vote_request,
-    };
-
     let flexible_min = match api_key {
-        api_versions_request::API_KEY => Some(api_versions_request::FLEXIBLE_MIN),
-        fetch_request::API_KEY => Some(fetch_request::FLEXIBLE_MIN),
-        vote_request::API_KEY => Some(vote_request::FLEXIBLE_MIN),
-        begin_quorum_epoch_request::API_KEY => Some(begin_quorum_epoch_request::FLEXIBLE_MIN),
-        end_quorum_epoch_request::API_KEY => Some(end_quorum_epoch_request::FLEXIBLE_MIN),
-        fetch_snapshot_request::API_KEY => Some(fetch_snapshot_request::FLEXIBLE_MIN),
-        describe_quorum_request::API_KEY => Some(describe_quorum_request::FLEXIBLE_MIN),
-        describe_cluster_request::API_KEY => Some(describe_cluster_request::FLEXIBLE_MIN),
-        broker_registration_request::API_KEY => Some(broker_registration_request::FLEXIBLE_MIN),
-        broker_heartbeat_request::API_KEY => Some(broker_heartbeat_request::FLEXIBLE_MIN),
-        controller_registration_request::API_KEY => {
-            Some(controller_registration_request::FLEXIBLE_MIN)
-        }
-        add_raft_voter_request::API_KEY => Some(add_raft_voter_request::FLEXIBLE_MIN),
-        remove_raft_voter_request::API_KEY => Some(remove_raft_voter_request::FLEXIBLE_MIN),
-        update_raft_voter_request::API_KEY => Some(update_raft_voter_request::FLEXIBLE_MIN),
+        // Krabka-private RPCs are always framed flexible, at every version.
         API_KEY_SUBMIT_CHANGE | API_KEY_METADATA_FETCH => Some(i16::MIN),
-        _ => admin_router.and_then(|router| {
-            router
-                .api_versions()
-                .iter()
-                .find(|api| api.api_key == api_key)
-                .map(|api| api.flexible_min)
+        _ => table::flexible_min(api_key).or_else(|| {
+            admin_router.and_then(|router| {
+                router
+                    .api_versions()
+                    .iter()
+                    .find(|api| api.api_key == api_key)
+                    .map(|api| api.flexible_min)
+            })
         }),
     };
     flexible_min.is_some_and(|minimum| version >= minimum)
@@ -255,6 +243,23 @@ mod tests {
 
         // An API this server does not route, with no admin extension to claim it.
         check!(!request_is_flexible(i16::MAX, 0, None));
+    }
+
+    /// A KIP-919 Admin router that declares one API surface and routes nothing.
+    /// The framing path only ever asks it which versions it serves.
+    struct StubAdminRouter(Vec<crate::ControllerApiVersion>);
+
+    impl crate::ControllerAdminRouter for StubAdminRouter {
+        fn api_versions(&self) -> &[crate::ControllerApiVersion] {
+            &self.0
+        }
+
+        fn route(
+            &self,
+            _request: crate::ControllerAdminRequest,
+        ) -> crate::ControllerAdminRouteFuture<'_> {
+            Box::pin(std::future::ready(Ok(None)))
+        }
     }
 
     fn length_prefixed(frame: &[u8]) -> Vec<u8> {
@@ -453,5 +458,124 @@ mod tests {
         assert2::assert!(body.as_ref() == &[1, b'p', b'a', b'y']);
         assert2::assert!(!flexible);
         writer.await.unwrap();
+    }
+
+    /// `CreateTopics` is a KIP-919 Admin API: the listener's own table says
+    /// nothing about it, so the flexibility minimum has to come from the
+    /// attached router's table instead. Reading it from the wrong table means
+    /// consuming a tagged-fields byte a v4 frame never carried, which eats the
+    /// first byte of the body, or skipping the one a v5 frame did carry.
+    ///
+    /// The router is a fallback, not an override: it also declares `Vote`, an
+    /// API the listener owns, at a minimum no version could reach. The
+    /// listener's own table has to win that one, or a broker-side table could
+    /// silently change how a KIP-595 peer frame is split.
+    #[tokio::test]
+    async fn an_admin_router_api_is_framed_from_the_routers_own_minimum() {
+        use krabka_protocol::owned::{create_topics_request, vote_request};
+
+        let router = StubAdminRouter(vec![
+            crate::ControllerApiVersion {
+                api_key: create_topics_request::API_KEY,
+                min_version: create_topics_request::MIN_VERSION,
+                max_version: create_topics_request::MAX_VERSION,
+                flexible_min: create_topics_request::FLEXIBLE_MIN,
+            },
+            crate::ControllerApiVersion {
+                api_key: vote_request::API_KEY,
+                min_version: vote_request::MIN_VERSION,
+                max_version: vote_request::MAX_VERSION,
+                flexible_min: i16::MAX,
+            },
+        ]);
+        let key = ApiKey(create_topics_request::API_KEY);
+        let flexible_min = create_topics_request::FLEXIBLE_MIN;
+        // An api key no Kafka message uses, so neither table claims it.
+        let unclaimed = ApiKey(i16::MAX);
+        let client_id = "admin-tool";
+        let id_len = i16::try_from(client_id.len()).expect("client id length");
+
+        let cases = [
+            (
+                "at the router's flexible minimum, the tagged-fields byte is consumed",
+                key,
+                ApiVersion(flexible_min),
+                request_frame(key, ApiVersion(flexible_min), 7, client_id, b"body"),
+                true,
+            ),
+            (
+                "below it, the frame carries no tagged fields",
+                key,
+                ApiVersion(flexible_min - 1),
+                raw_request_frame(
+                    key,
+                    ApiVersion(flexible_min - 1),
+                    7,
+                    id_len,
+                    client_id.as_bytes(),
+                    b"body",
+                ),
+                false,
+            ),
+            (
+                "the listener's own table outranks the router's entry for it",
+                ApiKey(vote_request::API_KEY),
+                ApiVersion(vote_request::FLEXIBLE_MIN),
+                request_frame(
+                    ApiKey(vote_request::API_KEY),
+                    ApiVersion(vote_request::FLEXIBLE_MIN),
+                    7,
+                    client_id,
+                    b"body",
+                ),
+                true,
+            ),
+            (
+                "an api neither the listener nor the router declares is never flexible",
+                unclaimed,
+                ApiVersion(flexible_min),
+                raw_request_frame(
+                    unclaimed,
+                    ApiVersion(flexible_min),
+                    7,
+                    id_len,
+                    client_id.as_bytes(),
+                    b"body",
+                ),
+                false,
+            ),
+        ];
+
+        for (case, want_key, want_version, frame, want_flexible) in cases {
+            let (mut client, mut server) = tokio::io::duplex(128);
+            let writer = tokio::spawn(async move {
+                client.write_all(&frame).await.unwrap();
+            });
+
+            let (api_key, api_version, correlation_id, decoded_client_id, body, flexible) =
+                super::read_one_request(&mut server, Some(&router))
+                    .await
+                    .expect("decode");
+
+            check!(
+                (
+                    api_key,
+                    api_version,
+                    correlation_id,
+                    decoded_client_id.as_deref(),
+                    body.as_ref(),
+                    flexible,
+                ) == (
+                    want_key,
+                    want_version,
+                    7,
+                    Some(client_id),
+                    b"body".as_slice(),
+                    want_flexible,
+                ),
+                "case: {case}"
+            );
+            writer.await.unwrap();
+        }
     }
 }

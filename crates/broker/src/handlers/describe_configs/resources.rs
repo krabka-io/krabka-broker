@@ -63,7 +63,13 @@ pub(super) fn describe_one(
         configs,
         ..Default::default()
     };
-    let key_filter: Option<&[String]> = r.configuration_keys.as_deref();
+    // An empty key list asks for every key, not for none: Kafka's
+    // `ConfigHelperUtils.toDescribeConfigsResult` filters with
+    // `keys == null || keys.isEmpty() || keys.contains(name)`.
+    let key_filter: Option<&[String]> = r
+        .configuration_keys
+        .as_deref()
+        .filter(|keys| !keys.is_empty());
     let wanted = |key: &str| key_filter.is_none_or(|keys| keys.iter().any(|f| f == key));
 
     if r.resource_type == RESOURCE_TYPE_TOPIC {
@@ -272,7 +278,9 @@ fn broker_configs(
                     name: Some(key.as_str()),
                 })
                 .unwrap_or_default();
-            config_entry(row, key, &layers, default, options)
+            let mut entry = config_entry(row, key, &layers, default, options);
+            entry.read_only |= config_keys::is_controller_managed_broker_config(key);
+            entry
         })
         .collect();
 

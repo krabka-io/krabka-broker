@@ -118,6 +118,8 @@ impl RuntimeArgs {
             producer_id_expiration_scan_interval,
             transaction_min_timeout,
             transaction_max_timeout,
+            offsets_retention,
+            offsets_retention_check_interval,
             audit_tail_read_max,
             future_log_move_read_chunk,
             transaction_recovery_read_max,

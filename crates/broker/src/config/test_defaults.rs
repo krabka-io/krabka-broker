@@ -127,6 +127,8 @@ impl BrokerConfig {
             default_min_insync_replicas: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
+            offsets_retention_override: None,
+            offsets_retention_check_interval_override: None,
             offsets_topic_replication_factor: 3,
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),

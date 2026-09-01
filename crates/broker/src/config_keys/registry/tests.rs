@@ -78,6 +78,10 @@ fn broker_key_types_match_apache_kafka() {
         ),
         (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
         (REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long),
+        // `GroupCoordinatorConfig`: `offsets.retention.minutes` is `INT` and
+        // `offsets.retention.check.interval.ms` is `LONG`.
+        (OFFSETS_RETENTION_MINUTES, ConfigType::Int),
+        (OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long),
         (NODE_ID, ConfigType::Int),
         (TRANSACTIONAL_ID_EXPIRATION_MS, ConfigType::Int),
         (
@@ -187,6 +191,8 @@ fn the_synthesised_keys_are_the_only_unstored_rows() {
         unstored
             == vec![
                 WRITE_FREEZE,
+                OFFSETS_RETENTION_MINUTES,
+                OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                 TRANSACTIONAL_ID_EXPIRATION_MS,
                 TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
                 NODE_ID,

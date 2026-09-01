@@ -11,6 +11,7 @@ use krabka_metadata::{MetadataRecord, PartitionRecord};
 use krabka_protocol::{
     UnknownTaggedFields, owned::alter_partition_response::PartitionData as RespPartitionData,
 };
+use krabka_verified::isr::{IsrAdmission, isr_admission};
 
 use crate::codes;
 
@@ -56,18 +57,6 @@ pub(super) fn handle_partition(
         .map(|n| i32::try_from(n.0).unwrap_or(0))
         .collect();
 
-    // Leader-epoch fencing. `req_leader_epoch` is the raw wire epoch; compare
-    // against the metadata `LeaderEpoch`'s inner value.
-    if req_leader_epoch != part_rec.leader_epoch {
-        return error_part(
-            partition_index,
-            codes::FENCED_LEADER_EPOCH,
-            leader_i32,
-            part_rec.leader_epoch.0,
-            &current_isr_i32,
-        );
-    }
-
     // Resolve the effective ISR from the request. Protocol v2 sends
     // `new_isr: Vec<i32>`; v3 sends `new_isr_with_epochs` instead and
     // leaves `new_isr` empty. Fall back to extracting broker_ids from
@@ -82,33 +71,51 @@ pub(super) fn handle_partition(
     };
 
     // Validate proposed ISR: non-empty + subset of replicas.
-    let proposed_isr: Vec<krabka_metadata::NodeId> = effective_isr_i32
+    let proposed_isr: Option<Vec<krabka_metadata::NodeId>> = effective_isr_i32
         .iter()
-        .map(|&n| krabka_metadata::NodeId(u64::try_from(n).unwrap_or(0)))
+        .map(|&n| u64::try_from(n).ok().map(krabka_metadata::NodeId))
         .collect();
     let replicas_set: std::collections::HashSet<krabka_metadata::NodeId> =
         part_rec.replicas.iter().copied().collect();
-    let valid = !proposed_isr.is_empty() && proposed_isr.iter().all(|n| replicas_set.contains(n));
-    if !valid {
-        return error_part(
-            partition_index,
-            codes::INVALID_REQUEST,
-            leader_i32,
-            part_rec.leader_epoch.0,
-            &current_isr_i32,
-        );
-    }
+    let proposed_subset = proposed_isr
+        .as_ref()
+        .is_some_and(|isr| isr.iter().all(|n| replicas_set.contains(n)));
 
     // KIP-903: fence ineligible replicas. A broker in the proposed ISR is
     // ineligible if it is not currently registered, or if its stamped broker
     // epoch is non-sentinel (-1) and disagrees with the controller's
     // registration epoch. Any ineligible replica fails the whole partition.
-    for bstate in new_isr_with_epochs {
+    let replicas_eligible = new_isr_with_epochs.iter().all(|bstate| {
         let node = krabka_metadata::NodeId(u64::try_from(bstate.broker_id).unwrap_or(u64::MAX));
         let registered = image.broker_epoch(node);
-        let ineligible = registered.is_none()
-            || (bstate.broker_epoch != -1 && registered != Some(bstate.broker_epoch));
-        if ineligible {
+        registered.is_some()
+            && (bstate.broker_epoch == -1 || registered == Some(bstate.broker_epoch))
+    });
+    let proposed_isr = match isr_admission(
+        req_leader_epoch == part_rec.leader_epoch,
+        !effective_isr_i32.is_empty(),
+        proposed_subset,
+        replicas_eligible,
+    ) {
+        IsrAdmission::FencedLeaderEpoch => {
+            return error_part(
+                partition_index,
+                codes::FENCED_LEADER_EPOCH,
+                leader_i32,
+                part_rec.leader_epoch.0,
+                &current_isr_i32,
+            );
+        }
+        IsrAdmission::InvalidProposal => {
+            return error_part(
+                partition_index,
+                codes::INVALID_REQUEST,
+                leader_i32,
+                part_rec.leader_epoch.0,
+                &current_isr_i32,
+            );
+        }
+        IsrAdmission::IneligibleReplica => {
             return error_part(
                 partition_index,
                 codes::INELIGIBLE_REPLICA,
@@ -117,7 +124,8 @@ pub(super) fn handle_partition(
                 &current_isr_i32,
             );
         }
-    }
+        IsrAdmission::Admit => proposed_isr.expect("verified ISR proposal contains valid IDs"),
+    };
 
     // Success: submit the ISR change.
     let new_partition_epoch = part_rec.partition_epoch + 1;
@@ -318,5 +326,25 @@ mod tests {
         let resp = handle_partition(&image, Some("t"), 0, 5, &[1, 2, 3], &[], &mut changes);
         assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
         assert!(changes.len() == 1);
+    }
+
+    #[test]
+    fn negative_replica_id_is_invalid_even_when_node_zero_is_a_replica() {
+        let image = image_with_partition(
+            &PartitionFixture {
+                partition: 0,
+                leader: 1,
+                replicas: &[0, 1],
+                isr: &[1],
+                leader_epoch: 5,
+                partition_epoch: 0,
+            },
+            &[(0, 0), (1, 10)],
+        );
+        let mut changes = Vec::new();
+        let resp = handle_partition(&image, Some("t"), 0, 5, &[-1], &[], &mut changes);
+
+        assert!(resp.error_code == codes::INVALID_REQUEST);
+        assert!(changes.is_empty());
     }
 }
