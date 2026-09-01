@@ -25,6 +25,10 @@ use tokio_util::sync::CancellationToken;
 use super::fetch_jwks;
 use crate::time_util;
 
+/// Names this cadence loop in the timer-failure logs that [`time_util::arm`]
+/// and [`time_util::fired`] emit.
+const TASK: &str = "JWKS refresher";
+
 #[cfg(test)]
 mod tests;
 
@@ -152,8 +156,6 @@ impl JwksRefresher {
         // a timer that keeps refusing would spin the task, so it gives up the
         // way the two start-up failures above do. `arm` and `fired` have
         // already logged which loop went away.
-        const TASK: &str = "JWKS refresher";
-
         let timer = Arc::clone(&self.timer);
         let Some(mut tick) = time_util::arm(&*timer, Duration::ZERO, TASK) else {
             return;
