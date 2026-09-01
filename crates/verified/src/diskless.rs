@@ -24,6 +24,95 @@ pub enum DisklessBatchStep {
     Stop,
 }
 
+/// Mutation selected by one WAL-index replay event.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum DisklessWalReplayAction {
+    Ignore,
+    Store,
+    Remove,
+}
+
+/// One WAL-index replay step and its dominance markers.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct DisklessWalReplayDecision {
+    pub action: DisklessWalReplayAction,
+    pub keyed_range: bool,
+    pub replay_tombstone: bool,
+}
+
+/// Classify one WAL-index replay event.
+///
+/// Event tags are `0 = legacy value`, `1 = keyed value`, and
+/// `2 = keyed tombstone`. Keyed values and tombstones dominate legacy values
+/// while the cross-partition legacy replay is active. A keyed value may follow
+/// a tombstone because equal Kafka keys share a partition and retain order.
+#[ensures(result.action == if event@ == 1
+    || (event@ == 0 && !current_keyed && !current_tombstone) {
+    DisklessWalReplayAction::Store
+} else if event@ == 2 {
+    DisklessWalReplayAction::Remove
+} else {
+    DisklessWalReplayAction::Ignore
+})]
+#[ensures(result.keyed_range == if event@ == 1 {
+    true
+} else if event@ == 2 {
+    false
+} else {
+    current_keyed
+})]
+#[ensures(result.replay_tombstone == if event@ == 1 {
+    false
+} else if event@ == 2 {
+    !legacy_replay_finished
+} else {
+    current_tombstone
+})]
+#[must_use]
+pub const fn diskless_wal_replay_decision(
+    event: u8,
+    current_keyed: bool,
+    current_tombstone: bool,
+    legacy_replay_finished: bool,
+) -> DisklessWalReplayDecision {
+    match event {
+        0 => DisklessWalReplayDecision {
+            action: if current_keyed || current_tombstone {
+                DisklessWalReplayAction::Ignore
+            } else {
+                DisklessWalReplayAction::Store
+            },
+            keyed_range: current_keyed,
+            replay_tombstone: current_tombstone,
+        },
+        1 => DisklessWalReplayDecision {
+            action: DisklessWalReplayAction::Store,
+            keyed_range: true,
+            replay_tombstone: false,
+        },
+        2 => DisklessWalReplayDecision {
+            action: DisklessWalReplayAction::Remove,
+            keyed_range: false,
+            replay_tombstone: !legacy_replay_finished,
+        },
+        _ => DisklessWalReplayDecision {
+            action: DisklessWalReplayAction::Ignore,
+            keyed_range: current_keyed,
+            replay_tombstone: current_tombstone,
+        },
+    }
+}
+
+/// Permit object deletion only after the grace period and with no index
+/// reference in the projection protected by the caller's cache lock.
+#[ensures(result == (!referenced && grace_elapsed))]
+#[must_use]
+pub const fn diskless_object_reclaimable(referenced: bool, grace_elapsed: bool) -> bool {
+    !referenced && grace_elapsed
+}
+
 /// Select the covering logical range, or the first successor after a gap.
 #[requires(forall<i: Int> 0 <= i && i < entries@.len()
     ==> entries@[i].0@ <= entries@[i].1@)]
@@ -226,6 +315,40 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn wal_replay_dominance_and_reclaim_are_total() {
+        use DisklessWalReplayAction::{Ignore, Remove, Store};
+
+        for keyed in [false, true] {
+            for tombstone in [false, true] {
+                let legacy = diskless_wal_replay_decision(0, keyed, tombstone, false);
+                check!(legacy.action == if keyed || tombstone { Ignore } else { Store });
+                check!(legacy.keyed_range == keyed);
+                check!(legacy.replay_tombstone == tombstone);
+
+                let keyed_value = diskless_wal_replay_decision(1, keyed, tombstone, false);
+                check!(keyed_value.action == Store);
+                check!(keyed_value.keyed_range);
+                check!(!keyed_value.replay_tombstone);
+
+                let tombstone_event = diskless_wal_replay_decision(2, keyed, tombstone, false);
+                check!(tombstone_event.action == Remove);
+                check!(!tombstone_event.keyed_range);
+                check!(tombstone_event.replay_tombstone);
+
+                let invalid = diskless_wal_replay_decision(u8::MAX, keyed, tombstone, false);
+                check!(invalid.action == Ignore);
+                check!(invalid.keyed_range == keyed);
+                check!(invalid.replay_tombstone == tombstone);
+            }
+        }
+
+        check!(!diskless_wal_replay_decision(2, true, false, true).replay_tombstone);
+        check!(diskless_object_reclaimable(false, true));
+        check!(!diskless_object_reclaimable(true, true));
+        check!(!diskless_object_reclaimable(false, false));
+    }
 
     #[test]
     fn trim_is_bounded_non_regressing_and_overflow_safe() {

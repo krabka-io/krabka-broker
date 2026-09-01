@@ -3,7 +3,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::Bytes;
-use krabka_verified::{diskless_logical_range, diskless_span_extension};
+use krabka_verified::{
+    DisklessWalReplayAction, diskless_logical_range, diskless_span_extension,
+    diskless_wal_replay_decision,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -104,22 +107,51 @@ impl WalIndexCache {
     pub fn apply(&mut self, record: &WalFlushRecord) {
         for entry in &record.entries {
             let key = WalIndexKey::from(entry);
-            if self.keyed_ranges.contains(&key) || self.replay_tombstones.contains(&key) {
-                continue;
+            let decision = diskless_wal_replay_decision(
+                0,
+                self.keyed_ranges.contains(&key),
+                self.replay_tombstones.contains(&key),
+                self.legacy_replay_finished,
+            );
+            if decision.action == DisklessWalReplayAction::Store {
+                self.insert(record, entry);
             }
-            self.insert(record, entry);
         }
     }
 
     /// Apply a keyed record, which remains authoritative over legacy replay
     /// regardless of cross-partition delivery order during upgrades.
     pub(crate) fn apply_keyed(&mut self, key: WalIndexKey, record: &WalFlushRecord) {
-        self.keyed_ranges.insert(key);
-        self.replay_tombstones.remove(&key);
-        for entry in &record.entries {
-            if WalIndexKey::from(entry) == key {
-                self.insert(record, entry);
+        let decision = diskless_wal_replay_decision(
+            1,
+            self.keyed_ranges.contains(&key),
+            self.replay_tombstones.contains(&key),
+            self.legacy_replay_finished,
+        );
+        self.set_replay_markers(key, decision.keyed_range, decision.replay_tombstone);
+        if decision.action == DisklessWalReplayAction::Store {
+            // A decoded keyed event is authoritative even when its payload is
+            // malformed and does not contain the key. Remove any legacy value
+            // first so malformed input fails closed instead of exposing it.
+            self.remove_projected(key);
+            for entry in &record.entries {
+                if WalIndexKey::from(entry) == key {
+                    self.insert(record, entry);
+                }
             }
+        }
+    }
+
+    fn set_replay_markers(&mut self, key: WalIndexKey, keyed: bool, tombstone: bool) {
+        if keyed {
+            self.keyed_ranges.insert(key);
+        } else {
+            self.keyed_ranges.remove(&key);
+        }
+        if tombstone {
+            self.replay_tombstones.insert(key);
+        } else {
+            self.replay_tombstones.remove(&key);
         }
     }
 
@@ -135,16 +167,27 @@ impl WalIndexCache {
 
     /// Remove one compacted range after its Kafka tombstone is committed.
     pub(crate) fn remove(&mut self, key: WalIndexKey) {
-        self.keyed_ranges.remove(&key);
-        if !self.legacy_replay_finished {
-            self.replay_tombstones.insert(key);
+        let decision = diskless_wal_replay_decision(
+            2,
+            self.keyed_ranges.contains(&key),
+            self.replay_tombstones.contains(&key),
+            self.legacy_replay_finished,
+        );
+        self.set_replay_markers(key, decision.keyed_range, decision.replay_tombstone);
+        if decision.action == DisklessWalReplayAction::Remove {
+            self.remove_projected(key);
         }
+    }
+
+    fn remove_projected(&mut self, key: WalIndexKey) {
         let partition = (key.topic_id, key.partition);
-        let mut empty = false;
-        if let Some(entries) = self.by_topic_partition.get_mut(&partition) {
-            entries.remove(&key.first_offset);
-            empty = entries.is_empty();
-        }
+        let empty = self
+            .by_topic_partition
+            .get_mut(&partition)
+            .is_some_and(|entries| {
+                entries.remove(&key.first_offset);
+                entries.is_empty()
+            });
         if empty {
             self.by_topic_partition.remove(&partition);
         }
@@ -191,6 +234,15 @@ impl WalIndexCache {
             .flat_map(BTreeMap::values)
             .map(|(object_key, _)| object_key.clone())
             .collect()
+    }
+
+    /// Whether at least one projected range still names this object.
+    #[must_use]
+    pub(crate) fn references_object(&self, object_key: &str) -> bool {
+        self.by_topic_partition
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|(candidate, _)| candidate == object_key)
     }
 
     /// Return whether every entry from this flush record is present in the
@@ -271,7 +323,7 @@ impl WalIndexCache {
         entries
             .values()
             .next_back()
-            .map(|(_, entry)| entry.last_offset + 1)
+            .and_then(|(_, entry)| entry.last_offset.checked_add(1))
     }
 
     /// Return the smallest first offset covered by object storage for the partition.
@@ -550,5 +602,72 @@ mod tests {
         });
 
         assert!(cache.lookup(Uuid::from_u128(1), 0, 0).is_none());
+    }
+
+    #[test]
+    fn keyed_tombstone_dominates_legacy_in_both_replay_orders_and_on_retry() {
+        let entry = entry(0, 0, 4);
+        let key = WalIndexKey::from(&entry);
+        let legacy = WalFlushRecord {
+            object_key: "legacy".into(),
+            format_version: 1,
+            entries: vec![entry],
+        };
+
+        let mut legacy_first = WalIndexCache::default();
+        legacy_first.apply(&legacy);
+        legacy_first.remove(key);
+        legacy_first.remove(key);
+        assert!(legacy_first.lookup(Uuid::from_u128(1), 0, 0).is_none());
+
+        let mut tombstone_first = WalIndexCache::default();
+        tombstone_first.remove(key);
+        tombstone_first.apply(&legacy);
+        tombstone_first.remove(key);
+        assert!(tombstone_first.lookup(Uuid::from_u128(1), 0, 0).is_none());
+    }
+
+    #[test]
+    fn malformed_keyed_value_fails_closed_against_legacy_replay() {
+        let expected = entry(0, 0, 4);
+        let key = WalIndexKey::from(&expected);
+        let wrong = entry(0, 1, 4);
+        let mut cache = WalIndexCache::default();
+
+        cache.apply(&WalFlushRecord {
+            object_key: "legacy".into(),
+            format_version: 1,
+            entries: vec![expected.clone()],
+        });
+
+        cache.apply_keyed(
+            key,
+            &WalFlushRecord {
+                object_key: "wrong".into(),
+                format_version: 1,
+                entries: vec![wrong],
+            },
+        );
+        cache.apply(&WalFlushRecord {
+            object_key: "late-legacy".into(),
+            format_version: 1,
+            entries: vec![expected],
+        });
+
+        assert!(cache.lookup(Uuid::from_u128(1), 0, 0).is_none());
+    }
+
+    #[test]
+    fn frontier_fails_closed_when_the_successor_overflows() {
+        let mut cache = WalIndexCache::default();
+        cache.apply(&WalFlushRecord {
+            object_key: "overflow".into(),
+            format_version: 1,
+            entries: vec![entry(0, i64::MAX, i64::MAX)],
+        });
+
+        assert!(cache.flushed_frontier(Uuid::from_u128(1), 0).is_none());
+        assert!(cache.references_object("overflow"));
+        assert!(!cache.references_object("missing"));
     }
 }
