@@ -45,6 +45,16 @@
   ],
   "packageRules": [
     {
+      "description": "object_store is pinned in lock-step with the DataFusion git revision and its Arrow/Parquet versions. Updating it alone creates incompatible ObjectStore and Path types at the DataFusion boundary; move the complete stack by hand instead.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "object_store"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Pinned by `git_override` to a commit past v0.0.1, for the `//mutants:config` support the sweep needs. The `bazel_dep` version beside it selects nothing, and the Bazel Central Registry does not serve this module at all -- a registry bump here would be a no-op that reads like a real one.",
       "matchManagers": [
         "bazel-module"
