@@ -2,6 +2,67 @@
 
 use creusot_std::prelude::*;
 
+/// Decide whether one decoded time-index offset belongs to the usable prefix.
+///
+/// The first entry is usable. Every later entry must strictly advance the
+/// relative offset; otherwise it is the padding terminator.
+#[ensures(result == match previous_relative_offset {
+    Some(previous) => previous@ < relative_offset@,
+    None => true,
+})]
+#[must_use]
+pub const fn remote_time_index_offset_usable(
+    previous_relative_offset: Option<u32>,
+    relative_offset: u32,
+) -> bool {
+    match previous_relative_offset {
+        Some(previous) => previous < relative_offset,
+        None => true,
+    }
+}
+
+/// Return the length of the usable strict-predecessor prefix of a remote time
+/// index.
+///
+/// Relative offsets must increase throughout the usable prefix. The first
+/// non-increasing offset is padding and terminates the search. Timestamps are
+/// nondecreasing within that prefix. The returned count therefore selects the
+/// last usable entry whose timestamp is strictly below `target_timestamp`.
+#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
+    && (forall<k: Int> 1 <= k && k <= j ==> entries@[k - 1].1@ < entries@[k].1@)
+    ==> entries@[i].0@ <= entries@[j].0@)]
+#[ensures(result@ <= entries@.len())]
+#[ensures(forall<i: Int> 0 <= i && i < result@
+    ==> entries@[i].0@ < target_timestamp@)]
+#[ensures(forall<i: Int> 1 <= i && i < result@
+    ==> entries@[i - 1].1@ < entries@[i].1@)]
+#[ensures(forall<j: Int> result@ <= j && j < entries@.len()
+    && (forall<k: Int> 1 <= k && k <= j ==> entries@[k - 1].1@ < entries@[k].1@)
+    ==> entries@[j].0@ >= target_timestamp@)]
+#[ensures(result@ < entries@.len() ==> result@ == 0
+    || entries@[result@].1@ <= entries@[result@ - 1].1@
+    || entries@[result@].0@ >= target_timestamp@)]
+#[must_use]
+pub fn remote_time_index_candidate_count(entries: &[(i64, u32)], target_timestamp: i64) -> usize {
+    let mut count = 0usize;
+    #[invariant(count@ <= entries@.len())]
+    #[invariant(forall<i: Int> 0 <= i && i < count@
+        ==> entries@[i].0@ < target_timestamp@)]
+    #[invariant(forall<i: Int> 1 <= i && i < count@
+        ==> entries@[i - 1].1@ < entries@[i].1@)]
+    #[variant(entries@.len() - count@)]
+    while count < entries.len() {
+        if count > 0 && entries[count].1 <= entries[count - 1].1 {
+            break;
+        }
+        if entries[count].0 >= target_timestamp {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
 /// Compute the inclusive end of a capped remote-segment fetch.
 ///
 /// A zero cap means read to the segment end. A finite end exists only when the
@@ -124,6 +185,32 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn remote_time_index_selects_strict_predecessor_prefix() {
+        let entries = [(1_000, 0), (2_000, 10), (2_000, 20), (3_000, 30)];
+        for (target, expected) in [
+            (500, 0),
+            (1_000, 0),
+            (1_500, 1),
+            (2_000, 1),
+            (2_500, 3),
+            (4_000, 4),
+        ] {
+            check!(remote_time_index_candidate_count(&entries, target) == expected);
+        }
+    }
+
+    #[test]
+    fn remote_time_index_stops_at_padding() {
+        let entries = [(1_000, 0), (2_000, 10), (0, 0), (9_000, 20)];
+        check!(remote_time_index_candidate_count(&entries, i64::MAX) == 2);
+        check!(remote_time_index_candidate_count(&[], i64::MAX) == 0);
+        check!(remote_time_index_offset_usable(None, 0));
+        check!(remote_time_index_offset_usable(Some(0), 10));
+        check!(!remote_time_index_offset_usable(Some(10), 10));
+        check!(!remote_time_index_offset_usable(Some(10), 0));
+    }
 
     #[test]
     fn fetch_end_position_handles_exact_and_overflow_boundaries() {

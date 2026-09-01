@@ -89,7 +89,9 @@ pub use recovery::{
     replay_cursor_decision, replay_record_decision, should_capture_first_downgrade,
 };
 pub use remote_metadata::remote_metadata_partition;
-pub use remote_read::remote_read_relative_offset;
+pub use remote_read::{
+    remote_read_relative_offset, remote_time_index_candidate_count, remote_time_index_offset_usable,
+};
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{restore_batch_step, restore_record_coordinates};
 pub use retention::{
