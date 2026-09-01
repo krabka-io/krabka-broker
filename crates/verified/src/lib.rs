@@ -136,7 +136,8 @@ pub use restore::{
     RESTORE_SNAPSHOT_DELETE_FINISHED, RESTORE_SNAPSHOT_DELETE_STARTED, RESTORE_SNAPSHOT_LIVE,
     RESTORE_SNAPSHOT_MISSING, RestoreFilterDecision, restore_archive_reconcile,
     restore_batch_filter_decision, restore_batch_past_offset_bound, restore_batch_step,
-    restore_record_coordinates, restore_record_selected,
+    restore_record_coordinates, restore_record_selected, restore_rewritten_batch_header,
+    restore_rewritten_record,
 };
 pub use restore_sidecar::{
     restore_index_frontier, restore_leader_epoch_entry_valid, restore_offset_index_entry_valid,
