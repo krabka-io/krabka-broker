@@ -33,6 +33,7 @@ pub mod remote_txn;
 pub mod restore;
 pub mod retention;
 pub mod schema;
+pub mod share;
 pub mod snapshot;
 pub mod storage;
 pub mod stretch;
@@ -99,6 +100,7 @@ pub use retention::{
     retention_prefix,
 };
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
+pub use share::share_prune_frontier;
 pub use snapshot::{SnapshotChunkDecision, snapshot_chunk_admission};
 pub use storage::{
     future_log_swap_admission, remote_partition_delete_transition, remote_segment_transition,
