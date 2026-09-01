@@ -11,6 +11,7 @@ use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::records::Record;
+use krabka_verified::{ReplayCursorDecision, replay_batch_cursor_decision};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -129,7 +130,8 @@ impl BarrierCoordinator {
                 continue;
             };
             let mut offset = partition.log_start_offset();
-            loop {
+            let end = partition.log_end_offset();
+            'partition_replay: while offset < end {
                 let read = match partition.read_log(offset, self.config.recovery_read_max) {
                     Ok(read) => read,
                     Err(error) => {
@@ -145,12 +147,24 @@ impl BarrierCoordinator {
                     break;
                 }
                 for batch in &read.batches {
+                    let ReplayCursorDecision::Advance(batch_end) = replay_batch_cursor_decision(
+                        offset.0,
+                        end.0,
+                        Some((batch.base_offset, batch.last_offset_delta)),
+                    ) else {
+                        warn!(
+                            partition = index.get(),
+                            base_offset = batch.base_offset,
+                            "malformed __barrier_state replay batch; stopping partition replay"
+                        );
+                        break 'partition_replay;
+                    };
                     for record in &batch.records {
                         if let Some(decoded) = decode_state_record(index, record) {
                             apply_record(&mut state, decoded);
                         }
                     }
-                    offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
+                    offset = Offset(batch_end);
                 }
             }
         }

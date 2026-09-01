@@ -74,6 +74,53 @@ pub fn replay_cursor_decision(cursor: i64, next: Option<i64>) -> ReplayCursorDec
     }
 }
 
+/// Validate one decoded replay batch and compute its exclusive next cursor.
+///
+/// Compacted logs may contain forward gaps. Overlap, malformed spans, batches
+/// outside the captured replay bound, and an unrepresentable successor stop
+/// replay without advancing.
+#[ensures(match result {
+    ReplayCursorDecision::Advance(next_offset) => match batch {
+        Some((base, last_delta)) => cursor@ < end@
+            && last_delta@ >= 0
+            && base@ >= cursor@
+            && next_offset@ == base@ + last_delta@ + 1
+            && next_offset@ > cursor@
+            && next_offset@ <= end@
+            && next_offset@ <= i64::MAX@,
+        None => false,
+    },
+    ReplayCursorDecision::Stop => match batch {
+        None => true,
+        Some((base, last_delta)) => cursor@ >= end@
+            || last_delta@ < 0
+            || base@ < cursor@
+            || base@ + last_delta@ + 1 > i64::MAX@
+            || base@ + last_delta@ + 1 > end@,
+    },
+})]
+#[must_use]
+pub fn replay_batch_cursor_decision(
+    cursor: i64,
+    end: i64,
+    batch: Option<(i64, i32)>,
+) -> ReplayCursorDecision {
+    if cursor >= end {
+        return ReplayCursorDecision::Stop;
+    }
+    let Some((base, last_delta)) = batch else {
+        return ReplayCursorDecision::Stop;
+    };
+    let Some(next) = crate::restore::restore_batch_step(cursor, base, last_delta) else {
+        return ReplayCursorDecision::Stop;
+    };
+    if next > end {
+        ReplayCursorDecision::Stop
+    } else {
+        ReplayCursorDecision::Advance(next)
+    }
+}
+
 #[ensures(result == (!pending_exists && is_downgrade))]
 #[must_use]
 pub const fn should_capture_first_downgrade(pending_exists: bool, is_downgrade: bool) -> bool {
@@ -106,5 +153,29 @@ mod tests {
         assert2::assert!(replay_cursor_decision(10, None) == Stop);
         assert2::assert!(should_capture_first_downgrade(false, true));
         assert2::assert!(!should_capture_first_downgrade(true, true));
+    }
+
+    #[test]
+    fn batch_cursor_is_bounded_progress_or_stop() {
+        use ReplayCursorDecision::{Advance, Stop};
+
+        for (cursor, end, batch, expected) in [
+            (10, 20, None, Stop),
+            (10, 20, Some((10, 2)), Advance(13)),
+            (10, 20, Some((15, 1)), Advance(17)),
+            (10, 20, Some((9, 2)), Stop),
+            (10, 20, Some((10, -1)), Stop),
+            (10, 12, Some((10, 2)), Stop),
+            (20, 20, Some((20, 0)), Stop),
+            (
+                i64::MAX - 1,
+                i64::MAX,
+                Some((i64::MAX - 1, 0)),
+                Advance(i64::MAX),
+            ),
+            (i64::MAX - 1, i64::MAX, Some((i64::MAX - 1, 1)), Stop),
+        ] {
+            assert2::assert!(replay_batch_cursor_decision(cursor, end, batch) == expected);
+        }
     }
 }

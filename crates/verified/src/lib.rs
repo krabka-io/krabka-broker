@@ -76,8 +76,8 @@ pub use reconfiguration::{
     voter_reconfiguration_decision,
 };
 pub use recovery::{
-    ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
-    should_capture_first_downgrade,
+    ReplayCursorDecision, ReplayRecordDecision, replay_batch_cursor_decision,
+    replay_cursor_decision, replay_record_decision, should_capture_first_downgrade,
 };
 pub use remote_metadata::remote_metadata_partition;
 pub use remote_read::remote_read_relative_offset;
