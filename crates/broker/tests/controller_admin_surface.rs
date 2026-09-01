@@ -88,10 +88,10 @@ const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
 ///   the listener speaks them without listing them.
 /// - `AlterPartition` (56) and `AllocateProducerIds` (67) have broker handlers,
 ///   but krabka's brokers send both to a controller's *broker* endpoint rather
-///   than to its controller listener, which is where Kafka takes them.
-/// - `Envelope` (58) is Kafka's request-forwarding wrapper, which krabka
-///   implements nowhere.
-const KEYS_KRABKA_DOES_NOT_ANSWER: [i16; 5] = [17, 36, 56, 58, 67];
+///   than to its controller listener, which is where Kafka takes them. A
+///   forwarded `AllocateProducerIds` does reach its handler, through
+///   `Envelope` (58) rather than through a key of its own.
+const KEYS_KRABKA_DOES_NOT_ANSWER: [i16; 4] = [17, 36, 56, 67];
 
 /// Start a one-node broker whose controller listener is reachable on its own
 /// port, and return the handle. Both listeners are bound before the broker
@@ -182,6 +182,7 @@ fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
         describe_user_scram_credentials_request,
         alter_user_scram_credentials_request,
         update_features_request,
+        envelope_request,
         unregister_broker_request,
         assign_replicas_to_dirs_request,
     )

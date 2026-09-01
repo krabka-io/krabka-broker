@@ -57,6 +57,57 @@ Compose and environment setup in `gssapi_e2e.rs`, then run:
 cargo test -p krabka-broker --test gssapi_e2e --test auth_handlers gssapi -- --ignored --test-threads=1
 ```
 
+## `jvm_role_separated_admin`: broker liveness in a role-separated cluster
+
+`jvm_role_separated_admin` is a manual Bazel target, not a `container ·` CI
+suite, because the broker cannot yet keep a broker-only node alive when the
+only voter is a controller-only node.
+
+`heartbeat::client::run` resolves the controller leader's address out of that
+leader's `BrokerRegistrationRecord`:
+
+```rust
+let Some(broker_rec) = image.broker(leader_id) else {
+    debug!("heartbeat: controller leader not in metadata image yet");
+    continue;
+};
+```
+
+`registration::register_broker` returns early for a node whose roles do not
+include `Broker`, so a controller-only node writes no such record and that
+lookup never resolves. A broker-only node therefore never sends a single
+`BrokerHeartbeat`. The controller's liveness registry seeds every registered
+broker `fenced = true` in `track_registered`, and only the broker-side
+`BrokerHeartbeat` handler clears that fence, so within one liveness tick both
+broker-only nodes are fenced, and one `heartbeat_timeout` later they are
+`DEAD`. `Metadata` then lists no live broker and every JVM tool reports
+`Timed out waiting for a node assignment`, whatever it was asked to do.
+
+`assign_replicas_to_dirs` (KIP-858) fails in the same cluster for the same
+reason, and logs `controller leader not in image` on every reconcile.
+
+Reproduce it with:
+
+```sh
+RUST_LOG='warn,krabka_broker::heartbeat=debug' \
+  cargo test -p krabka-broker --test jvm_role_separated_admin -- --ignored --nocapture
+```
+
+`heartbeat: controller leader not in metadata image yet` repeats for the whole
+run.
+
+`role_separation_observer` boots the same topology and passes only because it
+finishes in well under a second — before the first liveness tick fences
+anything. It is not evidence that the heartbeat path works.
+
+The fix is a routing change, not a test change: Kafka sends `BrokerHeartbeat`
+to the controller quorum over the *controller* listener, and krabka's own
+controller listener already advertises and answers api key 63
+(`crates/raft/src/server/registration/heartbeat.rs`). That handler answers from
+the image alone and never touches `ControllerLivenessState`, so moving the
+client onto it also needs the controller's liveness registry wired into the
+raft listener. That is its own change, so the suite stays manual until then.
+
 ## Windows validation
 
 Docker on Windows with the bridge-gateway pattern is not reliable. The
