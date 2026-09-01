@@ -51,7 +51,7 @@ macro_rules! quorum_fields {
             /// `{log_dir}/clean_shutdown` at boot and offered back at
             /// registration. Kafka carries the same value as
             /// `BrokerRegistrationRequest.previousBrokerEpoch`. It is
-            /// [`crate::clean_shutdown::UNPROVEN`] when this node cannot prove
+            /// `clean_shutdown::UNPROVEN` when this node cannot prove
             /// it stopped gracefully, which is what a crash leaves behind and
             /// what a first-ever boot has.
             pub previous_broker_epoch: i64,
