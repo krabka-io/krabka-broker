@@ -10,9 +10,11 @@
 //! The cases here cover the keys the bridge did not route before: the topic
 //! lifecycle (`CreateTopics`, `CreatePartitions`, `DeleteTopics`), the three
 //! writing delegation-token RPCs, the SCRAM write path, and
-//! `AssignReplicasToDirs`. The keys the bridge already routed keep their
-//! coverage in `client_admin_controller_bootstrap`, and the official Kafka
-//! tools drive the listener in `jvm_bootstrap_controller`.
+//! `AssignReplicasToDirs`. Of the keys the bridge already routed,
+//! `client_admin_controller_bootstrap` drives `DescribeConfigs`, and the
+//! official Kafka tools in `jvm_bootstrap_controller` drive `DescribeConfigs`,
+//! `IncrementalAlterConfigs`, the three ACL RPCs and
+//! `ListPartitionReassignments`.
 
 use assert2::{assert, check};
 use bytes::Bytes;
@@ -63,6 +65,30 @@ const DELEGATION_TOKEN_AUTH_DISABLED: i16 = 61;
 /// `SCRAM-SHA-256` as KIP-554 numbers the mechanisms on the wire.
 const SCRAM_SHA_256: i8 = 1;
 
+/// Every api key a Kafka 4.x controller listener accepts, in key order.
+///
+/// Read off a live `mirror.gcr.io/apache/kafka:4.3.1` controller with a raw
+/// `ApiVersions` v0 request, and identical to the set the `listeners` tag on
+/// the request schemas in `kafka-clients-4.3.1.jar` marks `controller`.
+const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
+    1, 17, 18, 19, 20, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 52,
+    53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82,
+];
+
+/// The keys from [`KAFKA_CONTROLLER_LISTENER_KEYS`] krabka's controller
+/// listener does not advertise, and why each is out of the Admin bridge's
+/// reach:
+///
+/// - `SaslHandshake` (17) and `SaslAuthenticate` (36) are consumed by
+///   `BrokerRaftHandshake` before the controller server sees the stream, so
+///   the listener speaks them without listing them.
+/// - `AlterPartition` (56) and `AllocateProducerIds` (67) have broker handlers,
+///   but krabka's brokers send both to a controller's *broker* endpoint rather
+///   than to its controller listener, which is where Kafka takes them.
+/// - `Envelope` (58) is Kafka's request-forwarding wrapper, which krabka
+///   implements nowhere.
+const KEYS_KRABKA_DOES_NOT_ANSWER: [i16; 5] = [17, 36, 56, 58, 67];
+
 /// Start a one-node broker whose controller listener is reachable on its own
 /// port, and return the handle. Both listeners are bound before the broker
 /// starts so the test knows the ports without racing the bind.
@@ -108,9 +134,10 @@ async fn dial_controller(broker: &BrokerHandle) -> Connection {
 ///
 /// The keys are the ones a live `mirror.gcr.io/apache/kafka:4.3.1` controller
 /// advertises in `ApiVersions` (the same set 4.0.0's request schemas tag
-/// `controller`), minus the RPCs `krabka-raft` serves without the Admin
-/// bridge. `DescribeClientQuotas` (48) is tagged `broker` only, so it is
-/// absent there, absent here, and asserted absent below.
+/// `controller`), minus the RPCs the controller listener serves without the
+/// Admin bridge and the [`KEYS_KRABKA_DOES_NOT_ANSWER`] shortfall.
+/// `DescribeClientQuotas` (48) is tagged `broker` only, so it is absent there,
+/// absent here, and asserted absent below.
 fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
     macro_rules! range {
         ($($request:ident),+ $(,)?) => {
@@ -177,6 +204,40 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
             .iter()
             .any(|api| api.api_key
                 == krabka_protocol::owned::describe_client_quotas_request::API_KEY)
+    );
+    broker.shutdown().await;
+}
+
+/// The whole key set the controller listener advertises, measured against the
+/// Kafka oracle rather than against krabka's own tables.
+///
+/// [`controller_api_versions_advertises_the_kafka_controller_admin_surface`]
+/// only inspects the keys the Admin bridge routes, so it cannot see a key
+/// krabka offers that no Kafka controller does, nor record which of Kafka's
+/// the listener still does not answer. This case pins both directions: nothing
+/// outside [`KAFKA_CONTROLLER_LISTENER_KEYS`] is advertised, and the shortfall
+/// is exactly [`KEYS_KRABKA_DOES_NOT_ANSWER`]. Closing one of those gaps has to
+/// come here and delete its entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_advertises_no_key_kafka_does_not() {
+    let (broker, _dir) = start_broker().await;
+    let connection = dial_controller(&broker).await;
+
+    let response = connection
+        .send(ApiVersionsRequest::default())
+        .await
+        .expect("ApiVersions over the controller listener");
+    connection.close();
+
+    let advertised: std::collections::BTreeSet<i16> =
+        response.api_keys.iter().map(|api| api.api_key).collect();
+    let kafka: std::collections::BTreeSet<i16> =
+        KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
+
+    check!(advertised.difference(&kafka).copied().collect::<Vec<_>>() == Vec::<i16>::new());
+    check!(
+        kafka.difference(&advertised).copied().collect::<Vec<_>>()
+            == KEYS_KRABKA_DOES_NOT_ANSWER.to_vec()
     );
     broker.shutdown().await;
 }

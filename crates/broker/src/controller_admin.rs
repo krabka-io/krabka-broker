@@ -32,15 +32,25 @@ macro_rules! api_version {
 /// `ApiVersions` with 1, 17-20, 29-33, 36-41, 43-46, 49-60, 62-64, 67, 70, 73
 /// and 80-82; 4.0.0's schemas carry the same tags.
 ///
-/// This table is that set minus the RPCs `krabka-raft` serves itself: `Fetch`,
-/// `ApiVersions`, the SASL handshake pair, the KIP-595 quorum RPCs,
-/// `AlterPartition`, `Envelope`, `FetchSnapshot`, `DescribeCluster`,
-/// `AllocateProducerIds`, broker and controller registration, and the KIP-853
-/// voter RPCs. What remains is the subset that reuses a broker handler, which
-/// is what this router bridges to.
+/// This table is that set minus the RPCs the controller listener already
+/// answers without a broker handler: `Fetch`, `ApiVersions`, the KIP-595
+/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, broker and controller
+/// registration, and the KIP-853 voter RPCs. What remains is the subset that
+/// reuses a broker handler, which is what this router bridges to.
 ///
-/// `DescribeClientQuotas` is deliberately absent: its schema is tagged
-/// `broker` only, so a Kafka controller neither advertises nor answers it.
+/// Five of Kafka's keys are in neither list, so krabka's controller listener
+/// advertises 36 of the 41. `SaslHandshake` and `SaslAuthenticate` are
+/// consumed by `BrokerRaftHandshake` before the controller server sees the
+/// stream, so the listener speaks them without listing them. `AlterPartition`
+/// and `AllocateProducerIds` do have broker handlers, but krabka's brokers
+/// send both to a controller's *broker* endpoint rather than to its controller
+/// listener, so routing them here would advertise a path nothing takes.
+/// `Envelope`, Kafka's request-forwarding wrapper, krabka implements nowhere.
+/// `controller_listener_advertises_no_key_kafka_does_not` pins that shortfall.
+///
+/// `DescribeClientQuotas` is deliberately absent for a different reason: its
+/// schema is tagged `broker` only, so a Kafka controller neither advertises
+/// nor answers it, and neither does this listener.
 const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(create_topics_request),
     api_version!(delete_topics_request),
@@ -207,8 +217,9 @@ mod tests {
 
     /// The Kafka 4.x controller-listener set, as a live
     /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
-    /// set the 4.0.0 request schemas tag `controller`), minus the keys
-    /// `krabka-raft` answers without this router.
+    /// set the 4.0.0 request schemas tag `controller`), minus the keys the
+    /// controller listener answers without this router and the five it does
+    /// not answer at all.
     #[test]
     fn supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
