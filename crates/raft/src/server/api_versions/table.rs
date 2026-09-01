@@ -276,9 +276,12 @@ mod tests {
                 "vote",
                 api_key::VOTE,
                 PeerRequest::Vote {
+                    cluster_id: None,
                     voter_id: NodeId(1),
+                    voter_directory_id: uuid::Uuid::nil(),
                     candidate_epoch: 3,
                     candidate: NodeId(2),
+                    candidate_directory_id: uuid::Uuid::nil(),
                     last_epoch: 2,
                     last_offset: 9,
                     pre_vote: true,
@@ -454,9 +457,12 @@ mod tests {
             .find(|api| api.api_key == vote_request::API_KEY)
             .expect("Vote is advertised");
         let pinned_body: Bytes = PeerRequest::Vote {
+            cluster_id: None,
             voter_id: NodeId(1),
+            voter_directory_id: uuid::Uuid::nil(),
             candidate_epoch: 3,
             candidate: NodeId(2),
+            candidate_directory_id: uuid::Uuid::nil(),
             last_epoch: 2,
             last_offset: 9,
             pre_vote: true,
