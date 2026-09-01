@@ -27,7 +27,7 @@ asserts krabka's against
 which is where these two version columns come from. A range that moves, or a key
 that appears on one side only, changes that file and so changes this table.
 
-The oracle is `mirror.gcr.io/apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837`.
+The oracle is `mirror.gcr.io/apache/kafka:4.3.1@sha256:ccd1314e47ec76909e01f86308b4dcf2064f19f7c89759234322314b0e319e26`.
 
 It is a stock single-node KRaft broker, read on its PLAINTEXT *broker* listener.
 Both facts shape the Kafka column, so a `krabka only` verdict means "that broker

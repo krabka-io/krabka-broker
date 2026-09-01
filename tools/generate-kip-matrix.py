@@ -146,7 +146,7 @@ def image_for(key: str) -> str:
 def digest_for(key: str) -> str:
     """The digest //MODULE.bazel pins image `key` to."""
     return match(
-        rf'^\s*\("{re.escape(key)}",\s*"[^"]+",\s*"([^"]+)"\)',
+        rf'^\s*\("{re.escape(key)}",\s*"[^"]+",\s*"[^"]+",\s*"[^"]+",\s*"([^"]+)"\)',
         MODULE.read_text(),
         MODULE,
     )
