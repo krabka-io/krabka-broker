@@ -1032,13 +1032,11 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
 
 /// The idle-window doc string, which both the broker-wide key and every
 /// per-listener override report.
-fn idle_documentation() -> Option<String> {
-    Some(
-        registry::lookup(ConfigScope::Broker, config_keys::CONNECTIONS_MAX_IDLE_MS)
-            .expect("connections.max.idle.ms")
-            .doc
-            .to_owned(),
-    )
+fn idle_documentation() -> String {
+    registry::lookup(ConfigScope::Broker, config_keys::CONNECTIONS_MAX_IDLE_MS)
+        .expect("connections.max.idle.ms")
+        .doc
+        .to_owned()
 }
 
 /// A named broker resource reports the idle window beside the static
@@ -1135,7 +1133,7 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
                     is_sensitive: false,
                     synonyms: vec![broker_wide_static.clone(), broker_wide_default.clone()],
                     config_type: ConfigType::Long.wire(),
-                    documentation: idle_documentation(),
+                    documentation: Some(idle_documentation()),
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
                 DescribeConfigsResourceResult {
@@ -1150,7 +1148,7 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
                         broker_wide_default,
                     ],
                     config_type: ConfigType::Long.wire(),
-                    documentation: idle_documentation(),
+                    documentation: Some(idle_documentation()),
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
             ]
