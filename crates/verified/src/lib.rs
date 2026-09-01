@@ -97,7 +97,9 @@ pub use retention::{
 };
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
 pub use snapshot::{SnapshotChunkDecision, snapshot_chunk_admission};
-pub use storage::future_log_swap_admission;
+pub use storage::{
+    future_log_swap_admission, remote_partition_delete_transition, remote_segment_transition,
+};
 pub use stretch::{
     min_insync_is_site_loss_safe, quorum_survives_any_single_site_loss, site_loss_survivors,
 };
