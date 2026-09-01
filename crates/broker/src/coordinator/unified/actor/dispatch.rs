@@ -156,20 +156,22 @@ pub(super) async fn handle_actor_message(
         }
         GroupActorMessage::AddPendingTxnOffsets {
             producer_id,
+            written_at,
             keys,
             reply,
         } => {
-            group.add_pending_txn_offsets(producer_id, keys);
+            group.add_pending_txn_offsets(producer_id, written_at, keys);
             let _ = reply.send(());
             true
         }
         GroupActorMessage::ResolveTxnOffsets {
             producer_id,
+            resolved_through,
             committed,
             reply,
         } => {
             group.committed_offsets.extend(committed);
-            group.clear_pending_txn_offsets(producer_id);
+            group.resolve_pending_txn_offsets(producer_id, resolved_through);
             let _ = reply.send(());
             true
         }

@@ -36,7 +36,7 @@ mod response;
 mod test_support;
 
 use self::{
-    batch::append_txn_batch,
+    batch::{AppendedTxnOffsets, append_txn_batch},
     response::{build_response, encode_err_all, encode_resp},
 };
 use crate::{
@@ -218,7 +218,7 @@ pub(crate) async fn handle(
     //    Topics denied by the per-topic Read ACL are skipped from the
     //    batch and surfaced as TOPIC_AUTHORIZATION_FAILED in the response.
     let now_ms = now_millis();
-    let pending_keys = match append_txn_batch(
+    let appended = match append_txn_batch(
         &req,
         &partitions,
         offsets_partition,
@@ -227,7 +227,7 @@ pub(crate) async fn handle(
     )
     .await
     {
-        Ok(keys) => keys,
+        Ok(appended) => appended,
         Err(code) => return encode_resp(version, &build_response(&req, code, &denied_topics)),
     };
 
@@ -236,10 +236,13 @@ pub(crate) async fn handle(
     //    UNSTABLE_OFFSET_COMMIT for them until the transaction's marker
     //    resolves. Marking after the durable append is what guarantees the
     //    marker path can rediscover the same keys in the log and clear them;
-    //    a mark placed before a failed append would never be cleared.
-    if !pending_keys.is_empty()
+    //    a mark placed before a failed append would never be cleared. The
+    //    append's log position travels with the mark, because the marker for
+    //    this very transaction can be resolved on the actor in between, and
+    //    the log order is what tells the actor that it was.
+    if let Some(appended) = appended
         && let Err(code) =
-            mark_offsets_pending(&handle, req.producer_id, pending_keys, &req.group_id).await
+            mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
     {
         return encode_resp(version, &build_response(&req, code, &denied_topics));
     }
@@ -259,7 +262,7 @@ pub(crate) async fn handle(
 async fn mark_offsets_pending(
     handle: &crate::coordinator::unified::actor::GroupActorHandle,
     producer_id: i64,
-    keys: Vec<(String, i32)>,
+    appended: AppendedTxnOffsets,
     group_id: &str,
 ) -> Result<(), i16> {
     let (reply, ack) = tokio::sync::oneshot::channel();
@@ -267,7 +270,8 @@ async fn mark_offsets_pending(
         .tx
         .send(GroupActorMessage::AddPendingTxnOffsets {
             producer_id,
-            keys,
+            written_at: appended.written_at,
+            keys: appended.keys,
             reply,
         })
         .await
@@ -282,4 +286,75 @@ async fn mark_offsets_pending(
         return Err(codes::COORDINATOR_NOT_AVAILABLE);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use assert2::check;
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::coordinator::unified::test_support::make_coord;
+
+    /// The mark is what makes a later `require_stable` `OffsetFetch` answer
+    /// `UNSTABLE_OFFSET_COMMIT`, so a group actor that cannot take it must not
+    /// leave the commit reporting success: the consumer would read the
+    /// pre-transaction offset and reprocess the records the transaction had
+    /// already handled. A live actor takes it and reports it; a departed one
+    /// makes the commit answer `COORDINATOR_NOT_AVAILABLE`.
+    #[tokio::test]
+    async fn a_live_actor_takes_the_mark_and_a_departed_one_fails_the_commit() {
+        let coord = make_coord();
+        let handle = coord.get_or_create_group("g", GroupKindTag::Classic);
+
+        mark_offsets_pending(
+            &handle,
+            7,
+            AppendedTxnOffsets {
+                written_at: 4,
+                keys: vec![("orders".to_string(), 0)],
+            },
+            "g",
+        )
+        .await
+        .expect("a live actor takes the mark");
+
+        let (reply, offsets) = oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::FetchOffsets { reply })
+            .await
+            .expect("send FetchOffsets");
+        check!(
+            offsets.await.expect("FetchOffsets reply").pending_txn
+                == HashSet::from([("orders".to_string(), 0)])
+        );
+
+        let (reply, ack) = oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Shutdown(reply))
+            .await
+            .expect("send Shutdown");
+        ack.await.expect("Shutdown ack");
+        crate::coordinator::unified::test_support::await_until("the actor's handle closes", || {
+            handle.tx.is_closed()
+        })
+        .await;
+
+        let refused = mark_offsets_pending(
+            &handle,
+            7,
+            AppendedTxnOffsets {
+                written_at: 5,
+                keys: vec![("orders".to_string(), 1)],
+            },
+            "g",
+        )
+        .await
+        .expect_err("a departed actor cannot take the mark");
+        check!(refused == codes::COORDINATOR_NOT_AVAILABLE);
+    }
 }

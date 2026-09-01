@@ -57,7 +57,42 @@ pub struct CoordinatorGroup {
     ///
     /// Grouping by producer is what lets one producer's marker resolve its own
     /// keys while another producer's in-flight transaction keeps its own.
-    pending_txn_offsets: HashMap<i64, HashSet<(String, i32)>>,
+    pending_txn_offsets: HashMap<i64, ProducerTxnOffsets>,
+}
+
+/// One producer's KIP-447 state on this group: the keys of its open
+/// transaction, and the offsets-log position of the newest marker that has
+/// already resolved a transaction of the same producer.
+///
+/// The watermark is what puts two out-of-band updates back into the log order
+/// that decides them. `TxnOffsetCommit` records its mark only once its records
+/// are durable, so the producer's marker can be appended -- and resolved on
+/// this actor -- in the window between that append and that mark. The log
+/// settles which came first: records written below a marker belong to the
+/// transaction the marker ends, so a mark whose records sit at or below
+/// `resolved_through` is already resolved and is dropped. Without the
+/// watermark such a mark would never be cleared and the partition would answer
+/// `UNSTABLE_OFFSET_COMMIT` for ever.
+///
+/// A resolved producer keeps its (empty) entry, because the watermark is what
+/// rejects the late mark. That is one `i64` per producer that has ever
+/// committed transactional offsets to this group.
+#[derive(Debug, Clone)]
+struct ProducerTxnOffsets {
+    keys: HashSet<(String, i32)>,
+    /// Offsets-log position of the newest marker resolved for this producer,
+    /// or `-1` when no marker has been. Log offsets start at zero, so `-1`
+    /// accepts every mark.
+    resolved_through: i64,
+}
+
+impl Default for ProducerTxnOffsets {
+    fn default() -> Self {
+        Self {
+            keys: HashSet::new(),
+            resolved_through: -1,
+        }
+    }
 }
 
 /// A group's offset state as `OffsetFetch` needs to see it: the stable
@@ -158,27 +193,36 @@ impl CoordinatorGroup {
         &mut self.kind
     }
 
-    /// Marks `keys` as written by `producer_id`'s open transaction.
+    /// Marks `keys` as written by `producer_id`'s open transaction at
+    /// offsets-log position `written_at`.
     ///
     /// The caller must have made the offset-commit records durable first, so
     /// that the transaction's marker can always find the same keys again and
-    /// clear them.
+    /// clear them. `written_at` is the offset those records landed at, and a
+    /// marker already resolved at or above it has resolved them: the mark is
+    /// stale and is dropped rather than left behind for ever.
     pub fn add_pending_txn_offsets(
         &mut self,
         producer_id: i64,
+        written_at: i64,
         keys: impl IntoIterator<Item = (String, i32)>,
     ) {
-        self.pending_txn_offsets
-            .entry(producer_id)
-            .or_default()
-            .extend(keys);
+        let entry = self.pending_txn_offsets.entry(producer_id).or_default();
+        if written_at <= entry.resolved_through {
+            return;
+        }
+        entry.keys.extend(keys);
     }
 
     /// Drops every pending mark `producer_id`'s transaction holds, whether its
-    /// marker committed or aborted. Publishing the committed offsets is a
-    /// separate step, because an abort publishes nothing.
-    pub fn clear_pending_txn_offsets(&mut self, producer_id: i64) {
-        self.pending_txn_offsets.remove(&producer_id);
+    /// marker committed or aborted, and records the marker's offsets-log
+    /// position so that a mark for records below it cannot come back.
+    /// Publishing the committed offsets is a separate step, because an abort
+    /// publishes nothing.
+    pub fn resolve_pending_txn_offsets(&mut self, producer_id: i64, resolved_through: i64) {
+        let entry = self.pending_txn_offsets.entry(producer_id).or_default();
+        entry.keys.clear();
+        entry.resolved_through = entry.resolved_through.max(resolved_through);
     }
 
     /// The group's offset state for `OffsetFetch`, with every open
@@ -189,8 +233,7 @@ impl CoordinatorGroup {
             pending_txn: self
                 .pending_txn_offsets
                 .values()
-                .flatten()
-                .cloned()
+                .flat_map(|producer| producer.keys.iter().cloned())
                 .collect(),
         }
     }
@@ -229,8 +272,12 @@ mod tests {
         let mut g = CoordinatorGroup::new_classic("g");
         check!(g.offsets().pending_txn.is_empty());
 
-        g.add_pending_txn_offsets(7, [("orders".to_string(), 0), ("orders".to_string(), 1)]);
-        g.add_pending_txn_offsets(9, [("payments".to_string(), 3)]);
+        g.add_pending_txn_offsets(
+            7,
+            10,
+            [("orders".to_string(), 0), ("orders".to_string(), 1)],
+        );
+        g.add_pending_txn_offsets(9, 11, [("payments".to_string(), 3)]);
         check!(
             g.offsets().pending_txn
                 == HashSet::from([
@@ -240,10 +287,37 @@ mod tests {
                 ])
         );
 
-        g.clear_pending_txn_offsets(7);
+        g.resolve_pending_txn_offsets(7, 12);
         check!(g.offsets().pending_txn == HashSet::from([("payments".to_string(), 3)]));
 
-        g.clear_pending_txn_offsets(9);
+        g.resolve_pending_txn_offsets(9, 13);
         check!(g.offsets().pending_txn.is_empty());
+    }
+
+    /// `TxnOffsetCommit` marks its keys only after the append is durable, so
+    /// the producer's marker can resolve on this group in between. The log
+    /// order decides: a mark for records below an applied marker belongs to
+    /// the transaction that marker ended, and taking it would leave the
+    /// partition answering `UNSTABLE_OFFSET_COMMIT` with nothing left to
+    /// clear it. Records above the marker are a new transaction and still
+    /// count.
+    #[test]
+    fn a_mark_for_records_below_an_applied_marker_is_dropped() {
+        let mut g = CoordinatorGroup::new_classic("g");
+
+        // The abort marker for the producer's records at offset 40 lands at
+        // offset 55 while its `TxnOffsetCommit` is still in flight.
+        g.resolve_pending_txn_offsets(7, 55);
+        g.add_pending_txn_offsets(7, 40, [("orders".to_string(), 0)]);
+        check!(g.offsets().pending_txn.is_empty());
+
+        // The producer's next transaction writes above the marker and is
+        // pending as usual.
+        g.add_pending_txn_offsets(7, 60, [("orders".to_string(), 1)]);
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
+
+        // Another producer's marker cannot resolve it.
+        g.resolve_pending_txn_offsets(9, 70);
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
     }
 }

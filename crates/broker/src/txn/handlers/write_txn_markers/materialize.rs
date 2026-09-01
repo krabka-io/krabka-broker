@@ -76,22 +76,32 @@ pub(crate) async fn append_marker_and_materialize(
     marker.partition_leader_epoch = partition
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
-    if let Some(stamp) = commit_stamp {
+    let marker_offset = if let Some(stamp) = commit_stamp {
         if marker_type != MarkerType::Commit {
             return Err(BrokerError::Txn(
                 "a transaction commit stamp cannot be attached to an abort marker".into(),
             ));
         }
-        partition.produce_commit_marker(marker, stamp).await?;
+        partition.produce_commit_marker(marker, stamp).await?
     } else {
         // A control batch takes the control append path, which applies no
         // compression rewrite. Kafka never compresses a control batch that
         // arrived uncompressed.
-        partition.produce_control_batch(marker).await?;
-    }
+        partition.produce_control_batch(marker).await?
+    };
 
     if let (Some(coordinator), offsets) = committed_offsets {
-        resolve_pending_offsets(coordinator, producer_id, marker_type, offsets).await?;
+        // The marker's own log position resolves the KIP-447 marks: it is what
+        // tells a group actor that a mark still on its way, for records below
+        // it, belongs to the transaction this marker ends.
+        resolve_pending_offsets(
+            coordinator,
+            producer_id,
+            marker_type,
+            marker_offset.get(),
+            offsets,
+        )
+        .await?;
     }
     Ok(())
 }

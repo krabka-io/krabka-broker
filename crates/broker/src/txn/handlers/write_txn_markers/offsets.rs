@@ -103,13 +103,27 @@ pub(super) fn pending_offset_entries(
 /// took its pending marks with it, so a failed hand-off leaves nothing
 /// unresolved -- only a commit, whose offsets would otherwise be lost from
 /// memory, still reports the failure.
+///
+/// One transaction can hold offset commits for several groups on the same
+/// offsets partition, and every one of them has to be resolved. The marker is
+/// durable before this runs and it ended the log's pending transaction, so a
+/// retry would find nothing to rescan: a group skipped here keeps its pending
+/// marks for ever. The loop therefore visits every group and reports a
+/// failure only once it has, rather than returning at the first one.
+///
+/// `resolved_through` is the marker's own offset in the offsets log. It goes
+/// to the actor with the resolution because a `TxnOffsetCommit` marks its keys
+/// after its append is durable, so a mark for this very transaction can still
+/// be in flight; the actor compares the two log positions and drops it.
 pub(super) async fn resolve_pending_offsets(
     coordinator: &Arc<GroupCoordinator>,
     producer_id: krabka_log::ProducerId,
     marker_type: MarkerType,
+    resolved_through: i64,
     offsets: CommittedOffsets,
 ) -> Result<(), BrokerError> {
     let commit = marker_type == MarkerType::Commit;
+    let mut unresolved: Vec<String> = Vec::new();
     for (group_id, entries) in offsets {
         let handle = if commit {
             Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
@@ -124,6 +138,7 @@ pub(super) async fn resolve_pending_offsets(
             .tx
             .send(GroupActorMessage::ResolveTxnOffsets {
                 producer_id: producer_id.get(),
+                resolved_through,
                 committed: if commit { entries } else { Vec::new() },
                 reply,
             })
@@ -135,12 +150,14 @@ pub(super) async fn resolve_pending_offsets(
                 group = %group_id,
                 "WriteTxnMarkers: could not resolve the transaction's offset commits"
             );
-            if commit {
-                return Err(BrokerError::Txn(format!(
-                    "could not resolve transactional offset commits for group {group_id}"
-                )));
-            }
+            unresolved.push(group_id);
         }
+    }
+    if commit && !unresolved.is_empty() {
+        return Err(BrokerError::Txn(format!(
+            "could not resolve transactional offset commits for groups {}",
+            unresolved.join(", ")
+        )));
     }
     Ok(())
 }

@@ -108,20 +108,29 @@ pub enum GroupActorMessage {
 
     // ── in-flight transactional offsets (KIP-447) ──
     /// Record that `producer_id`'s open transaction has durably written
-    /// offset commits for `keys`. Until its marker arrives, an `OffsetFetch`
-    /// with `require_stable = true` answers `UNSTABLE_OFFSET_COMMIT` for them.
+    /// offset commits for `keys` at offsets-log position `written_at`. Until
+    /// its marker arrives, an `OffsetFetch` with `require_stable = true`
+    /// answers `UNSTABLE_OFFSET_COMMIT` for them.
+    ///
+    /// `written_at` orders the mark against the producer's markers, which the
+    /// sender cannot do for itself: it marks after its append is durable, so a
+    /// marker for the very transaction it is marking can be resolved here in
+    /// between.
     AddPendingTxnOffsets {
         producer_id: i64,
+        written_at: i64,
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
     },
-    /// Resolve `producer_id`'s transaction: publish `committed` and drop the
+    /// Resolve `producer_id`'s transaction, whose marker is at offsets-log
+    /// position `resolved_through`: publish `committed` and drop the
     /// producer's pending marks in the same turn. An abort marker sends an
     /// empty `committed`, which leaves the group's stable offsets as they
     /// were. Doing both in one message is what stops a `require_stable` fetch
     /// from seeing a partition that is neither pending nor yet updated.
     ResolveTxnOffsets {
         producer_id: i64,
+        resolved_through: i64,
         committed: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
     },

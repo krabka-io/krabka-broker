@@ -105,12 +105,18 @@ async fn named_topic_fetch_returns_committed_offset() {
     broker_handle.shutdown().await;
 }
 
+// The offsets-log positions the two halves of a transaction occupy in these
+// tests: its offset-commit records, and the marker that lands above them.
+const TXN_RECORDS_AT: i64 = 10;
+const TXN_MARKER_AT: i64 = 11;
+
 // Mark (topic, partition) keys as written by an unresolved transaction, the
 // way `TxnOffsetCommit` does once its records are durable.
 async fn seed_pending_txn_offsets(
     broker: &Broker,
     group: &str,
     producer_id: i64,
+    written_at: i64,
     keys: Vec<(String, i32)>,
 ) {
     let h = broker
@@ -119,6 +125,7 @@ async fn seed_pending_txn_offsets(
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::AddPendingTxnOffsets {
         producer_id,
+        written_at,
         keys,
         reply: tx,
     })
@@ -127,12 +134,14 @@ async fn seed_pending_txn_offsets(
     rx.await.expect("AddPendingTxnOffsets ack");
 }
 
-// Resolve the transaction the way a commit marker does: publish its offsets
-// and drop its pending marks.
-async fn commit_pending_txn_offsets(
+// Resolve the transaction the way its marker does: publish the offsets a
+// commit carries (an abort carries none) and drop the producer's pending
+// marks, stamped with the marker's own position in the offsets log.
+async fn resolve_pending_txn_offsets(
     broker: &Broker,
     group: &str,
     producer_id: i64,
+    resolved_through: i64,
     committed: Vec<((String, i32), OffsetEntry)>,
 ) {
     let h = broker
@@ -141,6 +150,7 @@ async fn commit_pending_txn_offsets(
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::ResolveTxnOffsets {
         producer_id,
+        resolved_through,
         committed,
         reply: tx,
     })
@@ -181,7 +191,14 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
     seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
-    seed_pending_txn_offsets(&broker, "grp", PRODUCER_ID, vec![("orders".to_string(), 0)]).await;
+    seed_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_RECORDS_AT,
+        vec![("orders".to_string(), 0)],
+    )
+    .await;
 
     let request = |require_stable| OffsetFetchRequest {
         group_id: "grp".into(),
@@ -234,10 +251,11 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
             ])
     );
 
-    commit_pending_txn_offsets(
+    resolve_pending_txn_offsets(
         &broker,
         "grp",
         PRODUCER_ID,
+        TXN_MARKER_AT,
         vec![(
             ("orders".to_string(), 0),
             OffsetEntry {
@@ -266,7 +284,14 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
     seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
-    seed_pending_txn_offsets(&broker, "grp", PRODUCER_ID, vec![("orders".to_string(), 0)]).await;
+    seed_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_RECORDS_AT,
+        vec![("orders".to_string(), 0)],
+    )
+    .await;
 
     let request = |require_stable| OffsetFetchRequest {
         groups: vec![
@@ -330,10 +355,11 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
             ])
     );
 
-    commit_pending_txn_offsets(
+    resolve_pending_txn_offsets(
         &broker,
         "grp",
         PRODUCER_ID,
+        TXN_MARKER_AT,
         vec![(
             ("orders".to_string(), 0),
             OffsetEntry {
@@ -348,5 +374,98 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
 
     let resolved = fetch(&broker, VERSION, &request(true)).await;
     assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
+    broker_handle.shutdown().await;
+}
+
+// A `TxnOffsetCommit` records its KIP-447 mark only after its records are
+// durable, so the transaction's own marker can be resolved on the group actor
+// in the window in between — the idle-transaction reaper aborts without any
+// client involved at all. The late mark then describes a transaction that is
+// already over, and taking it would leave `orders-0` answering
+// UNSTABLE_OFFSET_COMMIT with nothing left to clear it: an EOS consumer would
+// retry that fetch for ever.
+//
+// The offsets log settles which came first. A mark for records below an
+// applied marker is dropped; a mark for records above it is a new transaction
+// and is honoured.
+#[tokio::test]
+async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partition() {
+    const VERSION: i16 = 7;
+    const PRODUCER_ID: i64 = 91;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
+
+    let request = OffsetFetchRequest {
+        group_id: "grp".into(),
+        topics: Some(vec![
+            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                name: "orders".into(),
+                partition_indexes: vec![0],
+                ..Default::default()
+            },
+        ]),
+        require_stable: true,
+        ..Default::default()
+    };
+    let expect = |partition| OffsetFetchResponse {
+        throttle_time_ms: 0,
+        topics: vec![OffsetFetchResponseTopic {
+            name: "orders".into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }],
+        error_code: codes::NONE,
+        groups: Vec::new(),
+        ..Default::default()
+    };
+
+    // The abort marker for the records at TXN_RECORDS_AT lands first and
+    // publishes nothing; the commit's own mark arrives after it.
+    resolve_pending_txn_offsets(&broker, "grp", PRODUCER_ID, TXN_MARKER_AT, Vec::new()).await;
+    seed_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_RECORDS_AT,
+        vec![("orders".to_string(), 0)],
+    )
+    .await;
+
+    let after_late_mark = fetch(&broker, VERSION, &request).await;
+    assert!(
+        after_late_mark
+            == expect(OffsetFetchResponsePartition {
+                partition_index: 0,
+                committed_offset: 42,
+                committed_leader_epoch: 5,
+                metadata: Some(String::new()),
+                error_code: codes::NONE,
+                ..Default::default()
+            })
+    );
+
+    // The producer's next transaction writes above that marker, and is
+    // reported unstable as usual.
+    seed_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_MARKER_AT + 1,
+        vec![("orders".to_string(), 0)],
+    )
+    .await;
+    let next_transaction = fetch(&broker, VERSION, &request).await;
+    assert!(
+        next_transaction
+            == expect(OffsetFetchResponsePartition {
+                partition_index: 0,
+                committed_offset: -1,
+                committed_leader_epoch: -1,
+                metadata: Some(String::new()),
+                error_code: codes::UNSTABLE_OFFSET_COMMIT,
+                ..Default::default()
+            })
+    );
     broker_handle.shutdown().await;
 }

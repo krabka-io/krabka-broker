@@ -18,8 +18,18 @@ use crate::{
     coordinator::{bootstrap::OFFSETS_TOPIC, persistence::OffsetCommitValue},
 };
 
+/// What one `TxnOffsetCommit` durably wrote: the offsets-log position of its
+/// records, and the `(topic, partition)` keys they cover.
+#[derive(Debug)]
+pub(super) struct AppendedTxnOffsets {
+    /// Base offset the batch was assigned in `__consumer_offsets`.
+    pub(super) written_at: i64,
+    pub(super) keys: Vec<(String, i32)>,
+}
+
 /// Append the transactional offset records to `__consumer_offsets`, and
-/// report the `(topic, partition)` keys the append covered.
+/// report where they landed and which `(topic, partition)` keys they cover.
+/// `None` means every topic was denied and nothing was appended.
 ///
 /// The offsets partition's `WriteTxnMarkers` handler materializes these records
 /// into the owning group actor after the commit marker is durable. This keeps
@@ -29,14 +39,15 @@ use crate::{
 /// The returned keys are the ones the caller marks pending on the group actor
 /// for KIP-447. They come from the same walk that builds the batch, so a key
 /// can never be marked pending without a durable record behind it for the
-/// transaction's marker to find again.
+/// transaction's marker to find again. The base offset travels with them
+/// because it is what orders the mark against that marker.
 pub(super) async fn append_txn_batch(
     req: &TxnOffsetCommitRequest,
     partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     offsets_partition: i32,
     now_ms: i64,
     denied_topics: &std::collections::HashSet<String>,
-) -> Result<Vec<(String, i32)>, i16> {
+) -> Result<Option<AppendedTxnOffsets>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
         max_timestamp: now_ms,
@@ -75,7 +86,7 @@ pub(super) async fn append_txn_batch(
 
     // If every topic was denied, there's nothing to append; succeed silently.
     if batch.records.is_empty() {
-        return Ok(keys);
+        return Ok(None);
     }
 
     batch.last_offset_delta = (delta - 1).max(0);
@@ -84,12 +95,17 @@ pub(super) async fn append_txn_batch(
         // __consumer_offsets not hosted here — report NOT_COORDINATOR.
         return Err(codes::NOT_COORDINATOR);
     };
-    // `produce_batch` drives the single-writer task and returns the
-    // assigned base_offset; we don't need it here.
+    // `produce_batch` drives the single-writer task and returns the assigned
+    // base offset, which is the log position the KIP-447 mark is ordered by.
     part_handle
         .produce_batch(batch)
         .await
-        .map(|_| keys)
+        .map(|written_at| {
+            Some(AppendedTxnOffsets {
+                written_at: written_at.get(),
+                keys,
+            })
+        })
         .map_err(|e| {
             tracing::error!(
                 group = %req.group_id,
@@ -141,9 +157,13 @@ mod tests {
         open_offsets_partition(&registry, dir.path());
         let req = request();
 
-        append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &HashSet::new())
-            .await
-            .expect("append batch");
+        let appended =
+            append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &HashSet::new())
+                .await
+                .expect("append batch")
+                .expect("records appended");
+        check!(appended.written_at == 0);
+        check!(appended.keys == vec![("orders".to_string(), 2), ("orders".to_string(), 3)]);
 
         let part = registry
             .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
@@ -182,9 +202,10 @@ mod tests {
         let req = request();
         let denied = maplit::hashset! {"orders".to_string()};
 
-        append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &denied)
+        let appended = append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &denied)
             .await
             .expect("all denied succeeds");
+        check!(appended.is_none());
         let part = registry
             .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
             .expect("offsets partition");

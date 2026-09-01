@@ -217,12 +217,16 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
     let replayed = replay_records(&log, &coordinator).unwrap();
     check!(!replayed.committed.contains_key("g"));
     check!(
-        replayed.pending_txn["g"][&7] == std::collections::HashSet::from([("t".to_string(), 4)])
+        replayed.pending_txn["g"][&7]
+            == super::replay::PendingTxnKeys {
+                written_at: 0,
+                keys: std::collections::HashSet::from([("t".to_string(), 4)]),
+            }
     );
 
     // The group is offset-only and open-transaction-only, so `finalize` still
     // has to spawn an actor for it and hand it the marks.
-    finalize(&coordinator, replayed);
+    finalize(&coordinator, replayed).await;
     let handle = coordinator.find("g").expect("seeded classic actor");
     let (reply, offsets) = oneshot::channel();
     handle
@@ -233,4 +237,69 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
     let offsets = offsets.await.unwrap();
     check!(offsets.committed.is_empty());
     check!(offsets.pending_txn == std::collections::HashSet::from([("t".to_string(), 4)]));
+}
+
+/// A group can have more producers with open transactions than its actor's
+/// mailbox holds, and every one of their marks has to reach the actor. A mark
+/// that goes missing is a partition that answers a `require_stable`
+/// `OffsetFetch` with the stale committed offset the transaction is replacing,
+/// until some later replay recovers it -- the duplicate processing KIP-447
+/// exists to prevent.
+///
+/// The test runs on the current-thread runtime, where the freshly spawned
+/// actor cannot drain a single message while `finalize` holds the thread. A
+/// seed that does not await therefore loses everything past the mailbox
+/// capacity, deterministically.
+#[tokio::test]
+async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
+    use std::collections::{HashMap, HashSet};
+
+    use tokio::sync::oneshot;
+
+    use super::{
+        replay::{PendingTxnKeys, Replayed, finalize},
+        test_support::bare_coordinator_with_mailbox,
+    };
+    use crate::coordinator::unified::{GroupSeed, actor::GroupActorMessage};
+
+    const MAILBOX: usize = 2;
+    const PRODUCERS: i64 = 8;
+
+    let coordinator = bare_coordinator_with_mailbox(MAILBOX);
+    // A next-gen group: `finalize` spawns its actor and hands it the recovered
+    // state by message, rather than building the group in process the way it
+    // does for a classic one.
+    coordinator
+        .seeds
+        .insert("g".to_string(), GroupSeed::default());
+
+    let mut by_producer: HashMap<i64, PendingTxnKeys> = HashMap::new();
+    for producer_id in 0..PRODUCERS {
+        by_producer.insert(
+            producer_id,
+            PendingTxnKeys {
+                written_at: producer_id,
+                keys: HashSet::from([("t".to_string(), i32::try_from(producer_id).unwrap())]),
+            },
+        );
+    }
+    let replayed = Replayed {
+        pending_txn: HashMap::from([("g".to_string(), by_producer)]),
+        ..Replayed::default()
+    };
+
+    finalize(&coordinator, replayed).await;
+
+    let handle = coordinator.find("g").expect("seeded consumer actor");
+    let (reply, offsets) = oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::FetchOffsets { reply })
+        .await
+        .unwrap();
+    let offsets = offsets.await.unwrap();
+    let expected: HashSet<(String, i32)> = (0..PRODUCERS)
+        .map(|producer_id| ("t".to_string(), i32::try_from(producer_id).unwrap()))
+        .collect();
+    check!(offsets.pending_txn == expected);
 }

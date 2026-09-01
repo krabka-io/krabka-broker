@@ -351,6 +351,7 @@ mod tests {
             .tx
             .send(GroupActorMessage::AddPendingTxnOffsets {
                 producer_id: 91,
+                written_at: 0,
                 keys: vec![("orders".to_string(), 2)],
                 reply,
             })
@@ -410,6 +411,130 @@ mod tests {
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }
         );
+        broker_handle.shutdown().await;
+    }
+
+    /// One transaction can carry offset commits for several groups on the same
+    /// offsets partition, and its marker has to resolve every one of them. The
+    /// marker is durable before the coordinator is consulted, and it ended the
+    /// log's pending transaction, so a group the resolution skips keeps its
+    /// KIP-447 marks and loses its offsets for good: no marker retry can
+    /// rediscover them.
+    #[tokio::test]
+    async fn a_commit_marker_resolves_every_group_in_the_transaction() {
+        use krabka_log::Offset;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        use crate::coordinator::unified::actor::GroupKindTag;
+
+        let (broker_handle, _dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let first = "marker-two-groups-a";
+        let second = "marker-two-groups-b";
+        // Both groups' records go into one batch on one partition, which is
+        // what a single marker resolves; the group ids come off the record
+        // keys, not from the partition.
+        let offsets_partition = crate::coordinator::partitioner::partition_for_group(
+            &broker.controller.current_image(),
+            first,
+        );
+        let part = broker
+            .partitions
+            .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
+            .expect("local offsets partition");
+        let row = |group_id, topic, partition, offset, delta| Record {
+            offset_delta: delta,
+            key: Some(OffsetCommitValue::encode_key(group_id, topic, partition)),
+            value: Some(
+                OffsetCommitValue {
+                    offset: Offset(offset),
+                    leader_epoch: 3,
+                    metadata: "txn".into(),
+                    commit_timestamp_ms: 123,
+                }
+                .encode_value(),
+            ),
+            ..Default::default()
+        };
+        part.produce_batch(RecordBatch {
+            producer_id: 91,
+            producer_epoch: 4,
+            attributes: Attributes::default().with_transactional(true),
+            last_offset_delta: 1,
+            records: vec![
+                row(first, "orders", 2, 42, 0),
+                row(second, "payments", 5, 7, 1),
+            ],
+            ..RecordBatch::default()
+        })
+        .await
+        .expect("append transactional offsets");
+
+        // Both groups hold the transaction's pending marks, the way
+        // `TxnOffsetCommit` leaves them.
+        for (group_id, topic, partition) in [(first, "orders", 2), (second, "payments", 5)] {
+            let handle = broker
+                .group_coordinator
+                .get_or_create_group(group_id, GroupKindTag::Classic);
+            let (reply, ack) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(GroupActorMessage::AddPendingTxnOffsets {
+                    producer_id: 91,
+                    written_at: 0,
+                    keys: vec![(topic.to_string(), partition)],
+                    reply,
+                })
+                .await
+                .expect("send AddPendingTxnOffsets");
+            ack.await.expect("AddPendingTxnOffsets ack");
+        }
+
+        let req = WriteTxnMarkersRequest {
+            markers: vec![WritableTxnMarker {
+                producer_id: 91,
+                producer_epoch: 4,
+                transaction_result: true,
+                transaction_version: 1,
+                topics: vec![WritableTxnMarkerTopic {
+                    name: OFFSETS_TOPIC.into(),
+                    partition_indexes: vec![offsets_partition],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let response = super::handle(&broker, VERSION, 1, &encode_request(&req))
+            .await
+            .expect("commit marker");
+        assert!(
+            decode_response(&response).markers[0].topics[0].partitions[0].error_code == codes::NONE
+        );
+
+        for (group_id, topic, partition, offset) in
+            [(first, "orders", 2, 42), (second, "payments", 5, 7)]
+        {
+            let handle = broker
+                .group_coordinator
+                .find(group_id)
+                .expect("offset home actor");
+            let (reply, result) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(GroupActorMessage::FetchOffsets { reply })
+                .await
+                .expect("send FetchOffsets");
+            let offsets = result.await.expect("FetchOffsets reply");
+            assert!(
+                offsets
+                    .committed
+                    .get(&(topic.to_string(), partition))
+                    .map(|entry| entry.offset)
+                    == Some(krabka_log::Offset(offset))
+            );
+            assert!(offsets.pending_txn.is_empty());
+        }
         broker_handle.shutdown().await;
     }
 }
