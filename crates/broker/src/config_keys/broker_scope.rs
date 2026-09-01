@@ -37,6 +37,19 @@ pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 /// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
 pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
 
+/// How long a client connection may go without a complete frame before the
+/// broker closes it. The process reads it from its static configuration at
+/// startup, so `DescribeConfigs` reports it read-only, at
+/// `STATIC_BROKER_CONFIG` when an operator named it and `DEFAULT_CONFIG` when
+/// they did not.
+///
+/// A per-listener override is spelled
+/// `listener.name.<name>.connections.max.idle.ms`, which is a key per listener
+/// rather than a registry row. `DescribeConfigs` reports each override under
+/// this row's type and documentation, because it is the same config under
+/// Kafka's `ListenerName.configPrefix`.
+pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
+
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
 pub(crate) const WITNESS_TRUE: &str = "true";
 
