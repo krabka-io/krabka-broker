@@ -42,12 +42,18 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // ElectLeaders is a controller operation. Send it to the current raft
     // leader, whose liveness registry receives the broker heartbeats.
     let controller_id = cluster[0].0.wait_until_controller_leader().await;
-    let addr = cluster
+    let leader_index = cluster
         .iter()
-        .find(|(_, cfg, _)| cfg.node_id == controller_id)
-        .expect("raft leader must be one of the brokers")
-        .1
-        .listen_addr;
+        .position(|(_, cfg, _)| cfg.node_id == controller_id)
+        .expect("raft leader must be one of the brokers");
+    let addr = cluster[leader_index].1.listen_addr;
+    // The UNCLEAN election promotes "the first alive replica", read out of the
+    // raft leader's liveness registry. A committed registration record does
+    // not put a broker there: the entry appears on the leader's first received
+    // heartbeat and starts fenced until the handler confirms metadata
+    // catch-up. Waiting only on registration would race an
+    // ELIGIBLE_LEADERS_NOT_AVAILABLE answer, so settle on liveness itself.
+    cluster[leader_index].0.wait_until_broker_alive(1).await;
     // Keep named references to avoid chained index+tuple accesses that
     // confuse the Rust 1.95 borrow-checker span computation.
     let h0 = &cluster[0].0;

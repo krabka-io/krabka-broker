@@ -31,10 +31,12 @@ use krabka_protocol::{
         delete_share_group_state_request::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePartitionData,
         },
+        delete_share_group_state_response::DeleteShareGroupStateResponse,
         initialize_share_group_state_request::{
             InitializeShareGroupStateRequest, InitializeStateData,
             PartitionData as InitPartitionData,
         },
+        initialize_share_group_state_response::InitializeShareGroupStateResponse,
         read_share_group_state_request::{
             PartitionData as ReadPartitionData, ReadShareGroupStateRequest, ReadStateData,
         },
@@ -42,6 +44,7 @@ use krabka_protocol::{
             PartitionData as WritePartitionData, StateBatch as ProtoStateBatch,
             WriteShareGroupStateRequest, WriteStateData,
         },
+        write_share_group_state_response::WriteShareGroupStateResponse,
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -154,7 +157,8 @@ impl SharePersister {
             }],
             ..Default::default()
         };
-        self.send_to_leader(state_partition, req).await
+        self.send_to_leader(state_partition, req, "InitializeShareGroupState", partition)
+            .await
     }
 
     /// Delete the share state for `(group, topic_id, partition)`. The call is
@@ -199,7 +203,8 @@ impl SharePersister {
             }],
             ..Default::default()
         };
-        self.send_to_leader(state_partition, req).await
+        self.send_to_leader(state_partition, req, "DeleteShareGroupState", partition)
+            .await
     }
 
     /// Make sure `__share_group_state` exists, and refresh this broker's view
@@ -389,7 +394,8 @@ impl SharePersister {
             }],
             ..Default::default()
         };
-        self.send_to_leader(state_partition, req).await
+        self.send_to_leader(state_partition, req, "WriteShareGroupState", partition)
+            .await
     }
 
     /// Resolve the leader of `__share_group_state`-`state_partition` from the
@@ -439,22 +445,34 @@ impl SharePersister {
             .map_err(|e| BrokerError::Share(format!("share-state connect to {host}:{port}: {e}")))
     }
 
-    /// Send `req` to the `state_partition` leader and discard the response.
+    /// Send `req` to the `state_partition` leader and turn the leader's answer
+    /// for `partition` into a `Result`. `what` names the RPC for the error
+    /// message.
+    ///
+    /// A transport-level `Ok` says only that the bytes made the round trip.
+    /// The leader reports whether it accepted the call in the per-partition
+    /// `error_code`, and a rejection there has to reach the caller: the
+    /// lifecycle hook records a partition as initialized on `Ok(())` and never
+    /// looks at it again, so an unread `COORDINATOR_NOT_AVAILABLE` leaves the
+    /// group permanently believing in share state that was never written.
     async fn send_to_leader<R>(
         &self,
         state_partition: PartitionIndex,
         req: R,
+        what: &str,
+        partition: i32,
     ) -> Result<(), BrokerError>
     where
         R: krabka_client_core::ProtocolRequest,
+        R::Response: PartitionResults,
     {
         let conn = self.connect_to_leader(state_partition).await?;
-        let _resp = conn
+        let resp = conn
             .send(req)
             .await
             .map_err(|e| BrokerError::Share(format!("share-state RPC: {e}")))?;
         conn.close();
-        Ok(())
+        check_partition_result(resp, what, partition)
     }
 
     /// Send `req` to the `state_partition` leader and return the typed
@@ -477,17 +495,126 @@ impl SharePersister {
     }
 }
 
+/// The three share-state write RPCs — `InitializeShareGroupState`,
+/// `WriteShareGroupState` and `DeleteShareGroupState` — answer with the same
+/// shape: one result per topic, each holding one `PartitionResult` per
+/// partition. This trait is the one thing [`SharePersister::send_to_leader`]
+/// needs from all three, so the remote path can read the leader's verdict
+/// without a copy of the send per RPC.
+trait PartitionResults {
+    /// `(partition, error_code, error_message)` for every partition the leader
+    /// answered for.
+    fn partition_results(self) -> Vec<(i32, i16, Option<String>)>;
+}
+
+macro_rules! impl_partition_results {
+    ($($response:ty),+ $(,)?) => {
+        $(impl PartitionResults for $response {
+            fn partition_results(self) -> Vec<(i32, i16, Option<String>)> {
+                self.results
+                    .into_iter()
+                    .flat_map(|topic| topic.partitions)
+                    .map(|p| (p.partition, p.error_code, p.error_message))
+                    .collect()
+            }
+        })+
+    };
+}
+
+impl_partition_results!(
+    InitializeShareGroupStateResponse,
+    WriteShareGroupStateResponse,
+    DeleteShareGroupStateResponse,
+);
+
+/// `Ok(())` only when the leader answered for `partition` with error code 0.
+///
+/// A non-zero code is the leader refusing the call — it is still loading, it
+/// is no longer the coordinator, the state epoch is fenced. A missing entry is
+/// no better: the caller asked about exactly one partition and got no verdict
+/// for it, so there is no evidence the write landed. Both become an error, and
+/// the lifecycle hook retries on the next heartbeat.
+fn check_partition_result<R: PartitionResults>(
+    resp: R,
+    what: &str,
+    partition: i32,
+) -> Result<(), BrokerError> {
+    let results = resp.partition_results();
+    let Some((_, error_code, error_message)) =
+        results.into_iter().find(|(p, _, _)| *p == partition)
+    else {
+        return Err(BrokerError::Share(format!(
+            "{what} for partition {partition}: leader answered for no such partition"
+        )));
+    };
+    if error_code == 0 {
+        return Ok(());
+    }
+    let detail = error_message.unwrap_or_else(|| "no error message".to_string());
+    Err(BrokerError::Share(format!(
+        "{what} for partition {partition} refused by the leader (code {error_code}): {detail}"
+    )))
+}
+
 fn initialized_start_offset(raw: i64) -> Option<Offset> {
     (raw >= 0).then_some(Offset(raw))
 }
 
 #[cfg(test)]
 mod tests {
+    use krabka_protocol::owned::initialize_share_group_state_response::{
+        InitializeStateResult, PartitionResult,
+    };
+
     use super::*;
+
+    fn response(partitions: &[(i32, i16)]) -> InitializeShareGroupStateResponse {
+        InitializeShareGroupStateResponse {
+            results: vec![InitializeStateResult {
+                topic_id: ProtoUuid([7; 16]),
+                partitions: partitions
+                    .iter()
+                    .map(|&(partition, error_code)| PartitionResult {
+                        partition,
+                        error_code,
+                        error_message: None,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn negative_start_offset_is_uninitialized_state() {
         assert2::assert!(initialized_start_offset(-1).is_none());
         assert2::assert!((initialized_start_offset(0)) == (Some(Offset(0))));
+    }
+
+    #[test]
+    fn leader_accepting_the_partition_is_success() {
+        assert2::assert!(check_partition_result(response(&[(0, 0)]), "Initialize", 0).is_ok());
+    }
+
+    /// The bug this guards: the group-coordinator lifecycle hook records a
+    /// partition as initialized whenever the persister answers `Ok(())` and
+    /// never revisits it. A refusal that reads as success therefore strands
+    /// the share group without the state it believes it has, permanently.
+    #[test]
+    fn leader_refusing_the_partition_is_an_error() {
+        // 16 is NOT_COORDINATOR: the state-partition leader has not caught up
+        // with its own leadership yet. It is transient, and the caller only
+        // retries if it hears about it.
+        let error = check_partition_result(response(&[(0, 16)]), "Initialize", 0)
+            .expect_err("a refused partition must not read as success");
+        assert2::assert!(error.to_string().contains("16"));
+    }
+
+    #[test]
+    fn a_leader_silent_about_the_partition_is_an_error() {
+        assert2::assert!(check_partition_result(response(&[(1, 0)]), "Initialize", 0).is_err());
+        assert2::assert!(check_partition_result(response(&[]), "Initialize", 0).is_err());
     }
 }
