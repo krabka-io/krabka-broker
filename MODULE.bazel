@@ -22,7 +22,13 @@ bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
-    patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
+    patches = [
+        "//bazel/patches:rules-rs-target-has-atomic.patch",
+        # Ubuntu rotated zlib1g out of pool/ and the pinned URL 404s, which
+        # kills toolchain fetch during analysis. Drop when a rules_rs release
+        # pins a file Ubuntu still serves.
+        "//bazel/patches:rules-rs-zlib-deb-rotation.patch",
+    ],
     version = "0.0.107",
 )
 
