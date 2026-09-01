@@ -20,11 +20,12 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::{authz::group_authorized, committed::fetch_committed};
+use super::{authz::group_authorized, committed::fetch_offsets, unstable};
 use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
+    coordinator::unified::group::GroupOffsets,
     error::BrokerError,
 };
 
@@ -36,6 +37,10 @@ use crate::{
 /// The offset storage keys by name, so at v10 this function resolves each
 /// requested `topic_id` to a name and echoes the id back. An unknown id gives
 /// `UNKNOWN_TOPIC_ID` for each partition.
+///
+/// `require_stable` is a top-level request field, not a per-group one, so one
+/// request either asks every group it names for stable offsets or none of
+/// them.
 // per-group loop: ACL + id→name resolve + named/fetch-all branches
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
@@ -71,17 +76,24 @@ pub(super) async fn handle_groups(
             continue;
         }
 
-        // Fetch the group's committed offsets from its actor (a classic actor
+        // Fetch the group's offset state from its actor (a classic actor
         // is created for an unknown id; offsets are protocol-agnostic, so an
-        // existing actor of either kind serves `FetchCommitted` the same way).
-        let committed = fetch_committed(broker, &grp.group_id).await;
+        // existing actor of either kind serves `FetchOffsets` the same way).
+        let offsets = fetch_offsets(broker, &grp.group_id).await;
         let image = broker.controller.current_image();
 
         // Named/id'd topics: resolve id→name (v10) and read each requested
         // partition from the name-keyed store. `None` topics → fetch-all.
         let topics_out: Vec<OffsetFetchResponseTopics> =
             if let Some(req_topics) = grp.topics.as_deref() {
-                group_named_topics(broker, ctx, &image, req_topics, &committed)
+                group_named_topics(
+                    broker,
+                    ctx,
+                    &image,
+                    req_topics,
+                    &offsets,
+                    req.require_stable,
+                )
             } else {
                 // fetch-all: every committed offset for the group, grouped by
                 // topic name. Echo each topic's id (required at v10, where the
@@ -90,8 +102,11 @@ pub(super) async fn handle_groups(
                     String,
                     Vec<OffsetFetchResponsePartitions>,
                 > = std::collections::HashMap::new();
-                for ((topic, pid), entry) in &committed {
-                    by_topic.entry(topic.clone()).or_default().push(
+                for (key, entry) in &offsets.committed {
+                    let (topic, pid) = key;
+                    let row = if req.require_stable && offsets.pending_txn.contains(key) {
+                        unstable::group_row(*pid)
+                    } else {
                         OffsetFetchResponsePartitions {
                             partition_index: *pid,
                             committed_offset: entry.offset.0,
@@ -99,8 +114,9 @@ pub(super) async fn handle_groups(
                             metadata: Some(entry.metadata.clone()),
                             error_code: codes::NONE,
                             ..Default::default()
-                        },
-                    );
+                        }
+                    };
+                    by_topic.entry(topic.clone()).or_default().push(row);
                 }
 
                 let discovered: Vec<String> = by_topic.keys().cloned().collect();
@@ -171,15 +187,19 @@ pub(super) async fn handle_groups(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// Builds one group's rows for an explicit topic list on the KIP-516 shape.
+///
+/// The per-partition precedence is the same one Kafka applies: an unknown
+/// topic id or a denied `Read` replaces the whole topic's rows, and within an
+/// allowed topic a partition an unresolved transaction has written reports
+/// `UNSTABLE_OFFSET_COMMIT` under `require_stable` before any offset is read.
 fn group_named_topics(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     image: &krabka_metadata::MetadataImage,
     requested: &[krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics],
-    committed: &std::collections::HashMap<
-        (String, i32),
-        crate::coordinator::unified::classic_state::OffsetEntry,
-    >,
+    offsets: &GroupOffsets,
+    require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopics> {
     let resolved: Vec<_> = requested
         .iter()
@@ -220,9 +240,17 @@ fn group_named_topics(
                 .partition_indexes
                 .iter()
                 .map(|partition| {
+                    let key = name.as_ref().map(|name| (name.clone(), *partition));
+                    if error == codes::NONE
+                        && require_stable
+                        && key
+                            .as_ref()
+                            .is_some_and(|key| offsets.pending_txn.contains(key))
+                    {
+                        return unstable::group_row(*partition);
+                    }
                     let entry = if error == codes::NONE {
-                        name.as_ref()
-                            .and_then(|name| committed.get(&(name.clone(), *partition)))
+                        key.as_ref().and_then(|key| offsets.committed.get(key))
                     } else {
                         None
                     };

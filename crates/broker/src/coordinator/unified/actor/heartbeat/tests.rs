@@ -359,12 +359,11 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
         std::time::Duration::from_mins(1),
         vec![("range".into(), subscription_blob(&["t"]))],
     ));
-    let group = Box::new(CoordinatorGroup {
-        empty_since_ms: None,
-        group_id: "g".into(),
-        kind: GroupKind::Classic(cs),
-        committed_offsets: HashMap::new(),
-    });
+    let group = Box::new(CoordinatorGroup::seeded(
+        "g",
+        GroupKind::Classic(cs),
+        HashMap::new(),
+    ));
     coord.seed_classic("g", group);
     let handle = coord.find("g").expect("seeded classic actor");
 

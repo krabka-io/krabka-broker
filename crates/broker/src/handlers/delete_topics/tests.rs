@@ -1,5 +1,5 @@
 //! Tests for the `DeleteTopics` handler driven over the wire against a live
-//! in-process broker, plus the quota-delay predicate the response path uses.
+//! in-process broker.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -12,7 +12,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_security::Principal;
-use krabka_units::{Time, convert::TimeExt, millis};
 
 use super::{
     test_support::{DOOMED, gated_config, id_state, named_state, request},
@@ -48,12 +47,6 @@ async fn drive(
         .await
         .expect("handle");
     decode_response(&bytes)
-}
-
-#[test]
-fn should_wait_for_quota_delay_only_waits_for_positive_delay() {
-    assert!(!should_wait_for_quota_delay(<Time as TimeExt>::ZERO));
-    assert!(should_wait_for_quota_delay(millis(1)));
 }
 
 #[tokio::test]

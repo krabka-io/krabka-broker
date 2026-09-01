@@ -1,6 +1,7 @@
 //! Unit tests for the dispatch module root: request peeking, the flexible
 //! header metadata the KIP-853 voter RPCs need, and an end-to-end drive of the
-//! serve loop over a real socket.
+//! serve loop over a real socket. [`throttle_mute`] holds the KIP-219 tests,
+//! which drive the same loop against a seeded client quota.
 
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
@@ -8,6 +9,8 @@ use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
+
+mod throttle_mute;
 
 fn request_frame(
     api_key: i16,

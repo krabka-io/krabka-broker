@@ -10,6 +10,11 @@
 //! after the commit marker" semantics. On ABORT the broker drops the buffer,
 //! and `OffsetFetch` still reports `-1`, which means absent.
 //!
+//! The same file covers KIP-447's `require_stable`: while the transaction is
+//! open, a `read_committed` consumer that asks for stable offsets is told to
+//! retry with `UNSTABLE_OFFSET_COMMIT (88)` rather than handed the offset the
+//! transaction is about to replace.
+//!
 //! This test drives the transaction control plane directly with a low-level
 //! client. The cluster has a single broker, so the admin client is itself the
 //! txn coordinator and the group coordinator. The test runs
@@ -30,9 +35,16 @@ use krabka_protocol::{
         find_coordinator_request::FindCoordinatorRequest,
         init_producer_id_request::InitProducerIdRequest,
         metadata_request::{MetadataRequest, MetadataRequestTopic},
+        offset_commit_request::{
+            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+        },
         offset_fetch_request::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopic,
             OffsetFetchRequestTopics,
+        },
+        offset_fetch_response::{
+            OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
+            OffsetFetchResponseTopics,
         },
         txn_offset_commit_request::{
             TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
@@ -329,6 +341,208 @@ async fn txn_offset_commit_dropped_on_abort_marker() {
         fetch_offset(&p.client, group, topic_id).await == -1,
         "txn offset must stay absent after the ABORT marker"
     );
+
+    p.broker.shutdown().await;
+}
+
+/// The `OffsetFetch` version that carries both KIP-447's `require_stable` and
+/// the KIP-516 `groups[]` response shape this test asserts on. Pinning it
+/// makes the expected response struct exact: at v10 the topic name is off the
+/// wire and the `topic_id` identifies the topic.
+const OFFSET_FETCH_V10: i16 = 10;
+
+/// Commit an ordinary, non-transactional offset for `(TOPIC, 0)`, so that the
+/// group has a stable offset for a `require_stable` fetch to be tempted to
+/// hand back while the later transaction is still open.
+async fn commit_stable_offset(client: &krabka_client_core::Client, group_id: &str, offset: i64) {
+    let resp = client
+        .send(OffsetCommitRequest {
+            group_id: group_id.into(),
+            generation_id_or_member_epoch: -1,
+            member_id: String::new(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: TOPIC.into(),
+                topic_id: topic_id_for(client).await,
+                partitions: vec![OffsetCommitRequestPartition {
+                    partition_index: 0,
+                    committed_offset: offset,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("offset commit");
+    assert!(
+        resp.topics[0].partitions[0].error_code == 0,
+        "OffsetCommit: {resp:?}"
+    );
+}
+
+/// `OffsetFetch` at v10 for `(TOPIC, 0)`, with `require_stable` as given.
+/// `send_at_least` refuses to downgrade, so the decoded response is always the
+/// v10 shape.
+async fn fetch_at_v10(
+    client: &krabka_client_core::Client,
+    group_id: &str,
+    topic_id: WireUuid,
+    require_stable: bool,
+) -> OffsetFetchResponse {
+    client
+        .send_at_least(
+            OffsetFetchRequest {
+                groups: vec![OffsetFetchRequestGroup {
+                    group_id: group_id.into(),
+                    topics: Some(vec![OffsetFetchRequestTopics {
+                        name: TOPIC.into(),
+                        topic_id,
+                        partition_indexes: vec![0],
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }],
+                require_stable,
+                ..Default::default()
+            },
+            OFFSET_FETCH_V10,
+        )
+        .await
+        .expect("offset fetch at v10")
+}
+
+/// The whole v10 response carrying one group, one topic, and `partition` as
+/// its only row. v10 drops the topic name from the wire, so it decodes empty.
+fn v10_response(
+    group_id: &str,
+    topic_id: WireUuid,
+    partition: OffsetFetchResponsePartitions,
+) -> OffsetFetchResponse {
+    OffsetFetchResponse {
+        throttle_time_ms: 0,
+        topics: Vec::new(),
+        error_code: 0,
+        groups: vec![OffsetFetchResponseGroup {
+            group_id: group_id.into(),
+            topics: vec![OffsetFetchResponseTopics {
+                name: String::new(),
+                topic_id,
+                partitions: vec![partition],
+                ..Default::default()
+            }],
+            error_code: 0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// A stable `(TOPIC, 0)` row at `offset`. Both the plain `OffsetCommit` and
+/// the `TxnOffsetCommit` in this file leave the leader epoch at `-1` and the
+/// metadata empty.
+fn stable_row(offset: i64) -> OffsetFetchResponsePartitions {
+    OffsetFetchResponsePartitions {
+        partition_index: 0,
+        committed_offset: offset,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code: 0,
+        ..Default::default()
+    }
+}
+
+/// KIP-447: a `read_committed` EOS consumer sets `require_stable = true` and
+/// must be told to retry -- `UNSTABLE_OFFSET_COMMIT (88)` -- while its own
+/// transaction's offset commit is still waiting for a marker.
+///
+/// The group already has a stable offset of 3 when the transaction commits 9.
+/// Handing back 3 while the transaction is open is the rewind this test pins
+/// down: on a consume-process-produce restart the consumer would reprocess
+/// records the transaction had already committed. Kafka answers 88 with the
+/// invalid-offset sentinels instead, and only after `EndTxn` writes the commit
+/// marker does the same request read 9.
+#[tokio::test]
+async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
+    let p = support::start().await;
+    create_topic(&p.client).await;
+    let topic_id = topic_id_for(&p.client).await;
+
+    let tid = "tid-require-stable";
+    let group = "g-require-stable";
+
+    commit_stable_offset(&p.client, group, 3).await;
+    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
+
+    let unstable = OffsetFetchResponsePartitions {
+        partition_index: 0,
+        committed_offset: -1,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code: 88, // UNSTABLE_OFFSET_COMMIT
+        ..Default::default()
+    };
+
+    // require_stable = true, transaction still open: retry, do not rewind.
+    let strict = fetch_at_v10(&p.client, group, topic_id, true).await;
+    assert!(strict == v10_response(group, topic_id, unstable));
+
+    // require_stable = false is unchanged by KIP-447: it still reads the
+    // stable offset the open transaction is about to replace.
+    let relaxed = fetch_at_v10(&p.client, group, topic_id, false).await;
+    assert!(relaxed == v10_response(group, topic_id, stable_row(3)));
+
+    let end = p
+        .client
+        .send(EndTxnRequest {
+            transactional_id: tid.into(),
+            producer_id: pid,
+            producer_epoch: epoch,
+            committed: true,
+            ..Default::default()
+        })
+        .await
+        .expect("end txn commit");
+    assert!(end.error_code == 0, "EndTxn(commit): {end:?}");
+
+    // The marker resolved the transaction: the offset is stable again, at the
+    // value the transaction committed.
+    let settled = fetch_at_v10(&p.client, group, topic_id, true).await;
+    assert!(settled == v10_response(group, topic_id, stable_row(9)));
+
+    p.broker.shutdown().await;
+}
+
+/// An aborted transaction also stops answering `UNSTABLE_OFFSET_COMMIT`: the
+/// abort marker drops the pending marks without publishing anything, so a
+/// `require_stable` fetch goes back to the group's stable offset rather than
+/// telling the consumer to retry for ever.
+#[tokio::test]
+async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker() {
+    let p = support::start().await;
+    create_topic(&p.client).await;
+    let topic_id = topic_id_for(&p.client).await;
+
+    let tid = "tid-require-stable-abort";
+    let group = "g-require-stable-abort";
+
+    commit_stable_offset(&p.client, group, 3).await;
+    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
+
+    let end = p
+        .client
+        .send(EndTxnRequest {
+            transactional_id: tid.into(),
+            producer_id: pid,
+            producer_epoch: epoch,
+            committed: false,
+            ..Default::default()
+        })
+        .await
+        .expect("end txn abort");
+    assert!(end.error_code == 0, "EndTxn(abort): {end:?}");
+
+    let settled = fetch_at_v10(&p.client, group, topic_id, true).await;
+    assert!(settled == v10_response(group, topic_id, stable_row(3)));
 
     p.broker.shutdown().await;
 }
