@@ -12,6 +12,7 @@ use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use krabka_raft::NodeId;
 use krabka_units::convert::TimeExt as _;
+use krabka_verified::unclean_recovery_commit_admission;
 use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
@@ -147,6 +148,8 @@ impl UncleanRecoveryManager {
             return self.refuse_background_now(job);
         }
         let known_epoch = pr.leader_epoch;
+        let selected_partition_epoch = pr.partition_epoch;
+        let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
         let topic_id = image
             .topic(&job.topic)
             .map_or(WireUuid::ZERO, |t| WireUuid(t.topic_id.into_bytes()));
@@ -213,11 +216,18 @@ impl UncleanRecoveryManager {
         let Some(pr) = image.partition(&job.topic, job.partition) else {
             return RecoveryOutcome::NotNeeded;
         };
-        if self.liveness.is_alive(pr.leader.0).await {
-            return RecoveryOutcome::NotNeeded;
-        }
+        let current_leader_alive = self.liveness.is_alive(pr.leader.0).await;
 
-        self.commit_elected_leader(job, &image, pr, election).await
+        self.commit_elected_leader(
+            job,
+            &image,
+            pr,
+            election,
+            selected_partition_epoch,
+            &selected_replicas,
+            current_leader_alive,
+        )
+        .await
     }
 
     /// KFC-9: carry out a refusal the background rule has already decided on,
@@ -273,8 +283,26 @@ impl UncleanRecoveryManager {
         image: &MetadataImage,
         pr: &PartitionRecord,
         election: Election,
+        selected_partition_epoch: i32,
+        selected_replicas: &[u64],
+        current_leader_alive: bool,
     ) -> RecoveryOutcome {
         let winner = election.leader;
+        let current_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
+        if !unclean_recovery_commit_admission(
+            selected_partition_epoch,
+            pr.partition_epoch,
+            selected_replicas,
+            &current_replicas,
+            winner.0,
+            current_leader_alive,
+        ) {
+            return if current_leader_alive {
+                RecoveryOutcome::NotNeeded
+            } else {
+                RecoveryOutcome::Stale
+            };
+        }
         let new_pr = PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,

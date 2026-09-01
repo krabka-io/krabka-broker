@@ -236,6 +236,50 @@ pub fn find_coordinator_admission(
     }
 }
 
+/// Admit an unclean-election commit only against the exact partition snapshot
+/// used to select its winner.
+#[ensures(result == (selected_partition_epoch@ == current_partition_epoch@
+    && !current_leader_alive
+    && selected_replicas@ == current_replicas@
+    && (exists<i: Int> 0 <= i && i < current_replicas@.len()
+        && current_replicas@[i] == winner)))]
+#[must_use]
+pub fn unclean_recovery_commit_admission(
+    selected_partition_epoch: i32,
+    current_partition_epoch: i32,
+    selected_replicas: &[u64],
+    current_replicas: &[u64],
+    winner: u64,
+    current_leader_alive: bool,
+) -> bool {
+    if selected_partition_epoch != current_partition_epoch
+        || current_leader_alive
+        || selected_replicas.len() != current_replicas.len()
+    {
+        return false;
+    }
+
+    let mut winner_assigned = false;
+    let mut i = 0usize;
+    #[cfg_attr(creusot, invariant(i@ <= selected_replicas@.len()))]
+    #[cfg_attr(creusot, invariant(selected_replicas@.len() == current_replicas@.len()))]
+    #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@
+        ==> selected_replicas@[k] == current_replicas@[k]))]
+    #[cfg_attr(creusot, invariant(winner_assigned == (exists<k: Int>
+        0 <= k && k < i@ && current_replicas@[k] == winner)))]
+    #[cfg_attr(creusot, variant(selected_replicas@.len() - i@))]
+    while i < selected_replicas.len() {
+        if selected_replicas[i] != current_replicas[i] {
+            return false;
+        }
+        if current_replicas[i] == winner {
+            winner_assigned = true;
+        }
+        i += 1;
+    }
+    winner_assigned
+}
+
 /// Java `String.hashCode` over the first `limit` UTF-16 code units.
 #[cfg(creusot)]
 #[logic]
@@ -535,6 +579,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unclean_recovery_commit_requires_the_selection_snapshot() {
+        assert!(unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            8,
+            &[1, 2],
+            &[1, 2],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[2, 1],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2, 3],
+            2,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            3,
+            false
+        ));
+        assert!(!unclean_recovery_commit_admission(
+            7,
+            7,
+            &[1, 2],
+            &[1, 2],
+            2,
+            true
+        ));
     }
 
     #[test]

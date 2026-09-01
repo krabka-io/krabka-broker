@@ -433,8 +433,17 @@ async fn audit_only_elects_and_records_the_bypass() {
         .partition("t", 0)
         .expect("the partition is in the image");
 
+    let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
     let outcome = mgr
-        .commit_elected_leader(&job(), &image, pr, fallback_to(2))
+        .commit_elected_leader(
+            &job(),
+            &image,
+            pr,
+            fallback_to(2),
+            pr.partition_epoch,
+            &selected_replicas,
+            false,
+        )
         .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
@@ -485,9 +494,18 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
         leader: NodeId(2),
         basis: ElectionBasis::EligibleLeaderReplica,
     };
+    let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
 
     let outcome = mgr
-        .commit_elected_leader(&job(), &image, pr, election)
+        .commit_elected_leader(
+            &job(),
+            &image,
+            pr,
+            election,
+            pr.partition_epoch,
+            &selected_replicas,
+            false,
+        )
         .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
@@ -504,6 +522,82 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
     );
     check!(bypasses(&mgr.metrics) == 0);
     check!(mgr.metrics.unclean_leader_elections_total.get() == 0);
+}
+
+#[tokio::test]
+async fn commit_fences_every_change_since_replica_selection() {
+    for (label, selected_epoch, selected_replicas, winner, leader_alive, expected) in [
+        (
+            "partition epoch changed",
+            -1,
+            vec![1, 2],
+            2,
+            false,
+            RecoveryOutcome::Stale,
+        ),
+        (
+            "assignment changed",
+            0,
+            vec![2, 1],
+            2,
+            false,
+            RecoveryOutcome::Stale,
+        ),
+        (
+            "winner removed",
+            0,
+            vec![1, 2, 3],
+            3,
+            false,
+            RecoveryOutcome::Stale,
+        ),
+        (
+            "leader recovered",
+            0,
+            vec![1, 2],
+            2,
+            true,
+            RecoveryOutcome::NotNeeded,
+        ),
+        (
+            "selection unchanged",
+            0,
+            vec![1, 2],
+            2,
+            false,
+            RecoveryOutcome::Elected(NodeId(2)),
+        ),
+    ] {
+        let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+        let image = source.current_image();
+        let submitted = Arc::clone(&source.submitted);
+        let mgr = manager(source, liveness_with_alive(&[]).await);
+        let pr = image
+            .partition("t", 0)
+            .expect("the partition is in the image");
+
+        let outcome = mgr
+            .commit_elected_leader(
+                &job(),
+                &image,
+                pr,
+                fallback_to(winner),
+                selected_epoch,
+                &selected_replicas,
+                leader_alive,
+            )
+            .await;
+
+        assert!(outcome == expected, "case {label}");
+        assert!(
+            submitted
+                .lock()
+                .expect("the submitted batches are not poisoned")
+                .len()
+                == usize::from(matches!(expected, RecoveryOutcome::Elected(_))),
+            "case {label}"
+        );
+    }
 }
 
 /// KFC-9 gives the three settings three distinct meanings, and `off` means the
@@ -546,8 +640,17 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
             .partition("t", 0)
             .expect("the partition is in the image");
 
+        let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
         let outcome = mgr
-            .commit_elected_leader(&job, &image, pr, fallback_to(2))
+            .commit_elected_leader(
+                &job,
+                &image,
+                pr,
+                fallback_to(2),
+                pr.partition_epoch,
+                &selected_replicas,
+                false,
+            )
             .await;
 
         check!(
@@ -818,8 +921,19 @@ async fn an_applied_election_names_the_proposal_that_authorized_it() {
             leader: NodeId(2),
             basis: ElectionBasis::EligibleLeaderReplica,
         };
+        let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
 
-        let outcome = mgr.commit_elected_leader(&job, &image, pr, election).await;
+        let outcome = mgr
+            .commit_elected_leader(
+                &job,
+                &image,
+                pr,
+                election,
+                pr.partition_epoch,
+                &selected_replicas,
+                false,
+            )
+            .await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),

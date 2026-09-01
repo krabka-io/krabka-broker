@@ -42,7 +42,7 @@ pub use authz::{AclDecision, acl_decision};
 pub use break_glass::{BreakGlassAdmission, break_glass_admission, select_break_glass_candidate};
 pub use broker::{
     FetchVisibility, FetchWatermarks, delete_records_offset_out_of_range, delete_records_target,
-    effective_share_backlog, fetch_visibility,
+    effective_share_backlog, fetch_visibility, unclean_recovery_commit_admission,
 };
 pub use chain::{ChainStep, chain_step, select_chain_tip};
 pub use compaction::{
