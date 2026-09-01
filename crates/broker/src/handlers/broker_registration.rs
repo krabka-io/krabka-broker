@@ -73,6 +73,7 @@ pub(crate) async fn handle(
             return response(version, codes::DUPLICATE_BROKER_REGISTRATION, -1);
         }
     }
+    let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
 
     let first = &endpoints[0];
     let features = req
@@ -101,13 +102,19 @@ pub(crate) async fn handle(
         log_dirs,
         features,
     };
-    // A registration that replaces one the image already holds is a broker
-    // that has come back as a new process: the handler has already answered
-    // the same-incarnation retry and refused a live duplicate, so an existing
-    // registration here means a new incarnation of a broker the controller
-    // saw die. That is Kafka's unclean shutdown, and
-    // `compute_unclean_restart_changes` is what one costs.
-    let restart = if image.broker(node_id).is_some() {
+    // KIP-966: a broker that cannot prove it stopped gracefully may have lost
+    // an unflushed log tail, so nothing the cluster still believes about that
+    // log holds -- not its ELR membership, and not its ISR seat either.
+    // `ClusterControlManager.registerBroker` calls
+    // `handleBrokerShutdown(id, isCleanShutdown, records)` before it appends
+    // the `RegisterBrokerRecord`, and the branch that boolean picks is the
+    // whole difference: `isElrFeatureEnabled() && !isCleanShutdown` runs two
+    // `generateLeaderAndIsrUpdates` calls, which is what
+    // `compute_unclean_restart_changes` is. A restart that proves itself
+    // clean takes none of that.
+    let restart = if clean_restart {
+        crate::leader_election::FailoverPlan::default()
+    } else {
         crate::leader_election::compute_unclean_restart_changes(
             &image,
             node_id,
@@ -115,8 +122,6 @@ pub(crate) async fn handle(
             &broker.metrics,
         )
         .await
-    } else {
-        crate::leader_election::FailoverPlan::default()
     };
     for (topic, partition) in &restart.unavailable {
         tracing::warn!(
@@ -168,8 +173,8 @@ pub(crate) async fn handle(
 
 /// The records one accepted registration writes, in the order they apply.
 ///
-/// `restart` is what a returning incarnation costs, empty for a broker the
-/// controller has never seen: the ELR withdrawals and ISR removals
+/// `restart` is what a restart that could not prove itself clean costs, empty
+/// for one that did: the ELR withdrawals and ISR removals
 /// [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
 /// decided. They go ahead of the registration, so a replay that stops between
 /// the two has already stopped trusting the returning log rather than not yet
@@ -180,6 +185,24 @@ fn registration_records(
 ) -> Vec<MetadataRecord> {
     restart.push(MetadataRecord::V1BrokerRegistration(record));
     restart
+}
+
+/// Whether this registration proves the broker stopped gracefully last time.
+///
+/// `previous_broker_epoch` reaches the wire only at v3, and Kafka's
+/// `QuorumController` mirrors that by passing
+/// `cleanShutdownDetectionEnabled = requestApiVersion >= 3` into
+/// `ClusterControlManager.registerBroker`, which forces the comparison to
+/// `false` for anything older. A broker that cannot say what epoch it last
+/// held is not trusted to have held one.
+fn clean_shutdown_proven(
+    req: &BrokerRegistrationRequest,
+    version: i16,
+    image: &krabka_metadata::MetadataImage,
+    node_id: NodeId,
+) -> bool {
+    version >= 3
+        && crate::clean_shutdown::restart_was_clean(image, node_id, req.previous_broker_epoch)
 }
 
 fn cluster_id_matches(request: &str, cluster_id: uuid::Uuid) -> bool {
@@ -312,5 +335,237 @@ mod tests {
         assert2::assert!(features_support_finalized(&req, &image));
         req.features[0].max_supported_version = 24;
         assert2::assert!(!features_support_finalized(&req, &image));
+    }
+}
+
+/// KIP-966 on the wire: an external broker's registration carries the
+/// clean-shutdown proof as `previousBrokerEpoch`, and the controller withdraws
+/// its ELR membership when the proof does not hold.
+///
+/// This is the path a JVM broker takes.
+/// [`crate::broker::registration`] holds the same rule for krabka's own
+/// self-registration, which is a different route to the same records.
+#[cfg(test)]
+mod wire_tests {
+    use std::sync::Arc;
+
+    use assert2::assert;
+    use krabka_metadata::{
+        BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, NodeId, PartitionRecord,
+        TopicConfigRecord, TopicRecord,
+    };
+    use krabka_protocol::owned::broker_registration_request::Feature;
+    use krabka_security::{AuthMethod, ListenerProtocol, Principal};
+
+    use super::*;
+    use crate::{
+        config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+        elr::{TopicElr, state::PartitionElr},
+        test_support::{
+            decode_response, encode_request, request_context, start_broker_with_authorizer,
+        },
+    };
+
+    const TOPIC: &str = "orders";
+    const REGISTERED: NodeId = NodeId(2);
+    /// `BrokerRegistration` v3 is where `previousBrokerEpoch` enters the
+    /// schema, and `QuorumController` passes
+    /// `cleanShutdownDetectionEnabled = requestApiVersion >= 3`.
+    const V3: i16 = 3;
+    const V2: i16 = 2;
+
+    /// What the restarting broker offers as its clean-shutdown proof.
+    #[derive(Debug, Clone, Copy)]
+    enum Offer {
+        /// The epoch the cluster still holds for it -- what a graceful stop
+        /// leaves behind.
+        HeldEpoch,
+        /// The `-1` a `BrokerRegistrationRequest` defaults to, which is all a
+        /// crashed broker has.
+        Unproven,
+    }
+
+    fn nodes(ids: &[u64]) -> Vec<NodeId> {
+        ids.iter().copied().map(NodeId).collect()
+    }
+
+    /// Node 2 registered at [`HELD_EPOCH`], and one partition whose ELR names
+    /// it.
+    fn seed_records() -> Vec<MetadataRecord> {
+        vec![
+            MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                node_id: REGISTERED,
+                // The controller stamps the real epoch on submit; this is the
+                // placeholder every self-registration sends.
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::from_u128(0xdead),
+                host: "broker-2".into(),
+                port: 9092,
+                rack: None,
+                endpoints: vec![BrokerEndpoint {
+                    name: "PLAINTEXT".into(),
+                    host: "broker-2".into(),
+                    port: 9092,
+                    protocol: ListenerProtocol::Plaintext,
+                }],
+                log_dirs: vec![uuid::Uuid::from_u128(11)],
+                features: krabka_metadata::supported_feature_ranges(),
+            }),
+            MetadataRecord::V1Topic(TopicRecord {
+                name: TOPIC.into(),
+                topic_id: uuid::Uuid::from_u128(9),
+                partitions: 1,
+                replication_factor: 3,
+            }),
+            MetadataRecord::V1Partition(PartitionRecord {
+                topic: TOPIC.into(),
+                partition: 0,
+                leader: NodeId(1),
+                replicas: nodes(&[1, 2, 3]),
+                isr: nodes(&[1]),
+                leader_epoch: LeaderEpoch(7),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![uuid::Uuid::nil(); 3],
+                partition_epoch: 4,
+            }),
+            MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: TOPIC.into(),
+                overrides: [
+                    (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
+                    (ELIGIBLE_LEADER_REPLICAS.to_string(), "0:2,3:".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            }),
+        ]
+    }
+
+    /// Re-register node 2 from a fresh process -- a new incarnation id, the
+    /// way a JVM broker generates one per boot -- offering
+    /// `previous_broker_epoch` as its proof, and return the published ELR that
+    /// results.
+    async fn reregister(version: i16, offer: Offer) -> PartitionElr {
+        let (broker_handle, _dir) =
+            start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while broker.controller.watch_leader().borrow().as_ref() != Some(&broker.config.node_id) {
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "broker did not become controller leader"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        broker
+            .controller
+            .submit_change(seed_records())
+            .await
+            .expect("seed");
+
+        let image = broker.controller.current_image();
+        let previous_broker_epoch = match offer {
+            Offer::HeldEpoch => image
+                .broker_epoch(REGISTERED)
+                .expect("node 2 is registered"),
+            Offer::Unproven => crate::clean_shutdown::UNPROVEN,
+        };
+        let request = BrokerRegistrationRequest {
+            broker_id: 2,
+            cluster_id: image.cluster_id().to_string(),
+            incarnation_id: krabka_protocol::primitives::uuid::Uuid(
+                uuid::Uuid::from_u128(0xbeef).into_bytes(),
+            ),
+            listeners: vec![Listener {
+                name: "PLAINTEXT".into(),
+                host: "broker-2".into(),
+                port: 9092,
+                security_protocol: 0,
+                ..Default::default()
+            }],
+            features: image
+                .finalized_features()
+                .iter()
+                .map(|(name, level)| Feature {
+                    name: name.clone(),
+                    min_supported_version: 0,
+                    max_supported_version: *level,
+                    ..Default::default()
+                })
+                .collect(),
+            log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
+                uuid::Uuid::from_u128(11).into_bytes(),
+            )],
+            previous_broker_epoch,
+            ..Default::default()
+        };
+        let principal = Principal {
+            name: "broker".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: Vec::new(),
+        };
+        let peer = "127.0.0.1:9092".parse().expect("peer address");
+        let ctx = request_context(&principal, &peer, "broker-client");
+        let bytes = super::handle(
+            &broker,
+            version,
+            1,
+            &encode_request(&request, version),
+            &ctx,
+        )
+        .await
+        .expect("BrokerRegistration");
+        let response: BrokerRegistrationResponse = decode_response(&bytes, version);
+        assert!(
+            response.error_code == 0,
+            "registration was refused: {response:?}"
+        );
+
+        let elr = TopicElr::of_topic(&broker.controller.current_image(), TOPIC).partition(0);
+        drop(broker);
+        broker_handle.shutdown().await;
+        elr
+    }
+
+    /// A broker offering the epoch the cluster still holds for it restarted
+    /// cleanly and keeps its membership.
+    #[tokio::test]
+    async fn a_proven_clean_restart_keeps_its_elr_membership() {
+        assert!(
+            reregister(V3, Offer::HeldEpoch).await
+                == PartitionElr {
+                    eligible_leader_replicas: vec![2, 3],
+                    last_known_elr: vec![],
+                }
+        );
+    }
+
+    /// A broker offering nothing -- the `-1` a `BrokerRegistrationRequest`
+    /// defaults to, which is what a crashed broker has to offer -- loses it.
+    #[tokio::test]
+    async fn an_unproven_restart_loses_its_elr_membership() {
+        assert!(
+            reregister(V3, Offer::Unproven).await
+                == PartitionElr {
+                    eligible_leader_replicas: vec![3],
+                    last_known_elr: vec![2],
+                }
+        );
+    }
+
+    /// A request older than v3 has no `previousBrokerEpoch` field to carry a
+    /// proof, so the controller cannot detect a clean shutdown and assumes
+    /// unclean -- Kafka's `cleanShutdownDetectionEnabled = requestApiVersion
+    /// >= 3`. The epoch on the struct is ignored because it never reaches the
+    /// wire.
+    #[tokio::test]
+    async fn a_pre_v3_registration_cannot_prove_anything() {
+        assert!(
+            reregister(V2, Offer::HeldEpoch).await
+                == PartitionElr {
+                    eligible_leader_replicas: vec![3],
+                    last_known_elr: vec![2],
+                }
+        );
     }
 }

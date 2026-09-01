@@ -72,7 +72,4 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ inputs.crate }}
           repository-cache: true
       - run: >-
-          bash tools/check-mutants.sh
-          '${{ needs.prepare.outputs.target }}'
-          '${{ matrix.shard.index }}'
-          '${{ matrix.shard.total }}'
+          bash tools/check-mutants.sh '${{ needs.prepare.outputs.target }}' '${{ matrix.shard.index }}' '${{ matrix.shard.total }}'

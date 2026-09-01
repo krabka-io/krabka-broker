@@ -200,21 +200,27 @@ pub(crate) async fn compute_offline_dir_failover_changes(
     }
 }
 
-/// The failover changes a broker that has just re-registered under a new
-/// incarnation id needs, in the order they apply.
+/// The failover changes a rejoining broker needs when it cannot prove its
+/// last stop was clean, in the order they apply.
 ///
 /// This is Apache Kafka's `handleBrokerUncleanShutdown`, whose two
 /// `generateLeaderAndIsrUpdates` calls -- read out of
 /// `kafka-metadata-4.3.1.jar` -- are the two halves of one answer to one
 /// event: eligibility, and the ISR the next eligibility is derived from.
-/// [`records_for_restarted_broker`](crate::elr::records_for_restarted_broker)
-/// is the `partitionsWithBrokerInElr` call and comes first, so a replay that
-/// stops mid-batch has already stopped trusting the returning log rather than
-/// not yet started. [`unclean_restart_one`] is the
-/// `partitionsWithBrokerInIsr` call. Then the publisher runs over the whole
-/// batch with the broker named as an unclean-shutdown replica, which is what
-/// stops the ISR removals this batch just made from deriving the broker
-/// straight back into the eligible sets the first half withdrew it from.
+/// [`withdraw_elr_membership`](crate::elr::withdraw_elr_membership) is the
+/// `partitionsWithBrokerInElr` call and comes first, so a replay that stops
+/// mid-batch has already stopped trusting the returning log rather than not
+/// yet started. [`unclean_restart_one`] is the `partitionsWithBrokerInIsr`
+/// call. Then the publisher runs over the whole batch with the broker named
+/// as an unclean-shutdown replica, which is what stops the ISR removals this
+/// batch just made from deriving the broker straight back into the eligible
+/// sets the first half withdrew it from.
+///
+/// The caller decides whether any of it happens. Kafka enters this branch on
+/// `isElrFeatureEnabled() && !isCleanShutdown`, and krabka's
+/// `clean_shutdown_proven` is that boolean, so a broker that offers back the
+/// epoch the cluster still holds for it never reaches here and keeps both its
+/// ISR seat and its ELR membership.
 ///
 /// The plan is otherwise shaped exactly like [`compute_failover_changes`]'s,
 /// and the caller drives `recoveries` and `unavailable` the same way, because
@@ -226,7 +232,7 @@ pub(crate) async fn compute_unclean_restart_changes(
     liveness: &ControllerLivenessState,
     metrics: &crate::metrics::BrokerMetrics,
 ) -> FailoverPlan {
-    let mut changes = crate::elr::records_for_restarted_broker(image, returning);
+    let mut changes = crate::elr::withdraw_elr_membership(image, returning);
     let mut recoveries: Vec<(String, i32, RecoveryStrategy)> = Vec::new();
     let mut unavailable: Vec<(String, i32)> = Vec::new();
     let alive: std::collections::HashSet<NodeId> = liveness

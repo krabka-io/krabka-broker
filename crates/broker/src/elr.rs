@@ -46,22 +46,24 @@
 //!
 //! That is also why the state has to be withdrawn when it stops being true.
 //! The one event that ends a membership without any partition changing is a
-//! broker returning under a new incarnation id, whose current log need not be
-//! the log that made it eligible. [`records_for_restarted_broker`] withdraws
-//! the published half of that, and
+//! broker coming back from a stop it cannot prove was clean, whose current log
+//! need not be the log that made it eligible. [`unclean_restart`] holds that
+//! rule and withdraws the published half of it. The published half is not the
+//! whole of it, though: the next eligibility is derived from the ISRs the
+//! image still holds, so
 //! [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
-//! -- which is what the registration handler actually calls -- drops the
-//! broker from the ISRs the next eligibility would be derived from and runs
-//! [`ElrPublisher`] over the whole batch with the broker excluded, so the
-//! batch cannot re-derive what it just withdrew.
+//! -- what the registration handler calls once the proof fails -- wraps the
+//! withdrawal with the matching ISR removals and runs [`ElrPublisher`] over
+//! the whole batch with the broker excluded, so the batch cannot re-derive
+//! what it just withdrew.
 
 pub(crate) mod maintain;
 pub(crate) mod state;
+pub(crate) mod unclean_restart;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use self::{
-    maintain::{ElrPublisher, records_for_restarted_broker},
-    state::TopicElr,
+    maintain::ElrPublisher, state::TopicElr, unclean_restart::withdraw_elr_membership,
 };

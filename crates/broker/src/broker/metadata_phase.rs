@@ -284,6 +284,10 @@ pub(super) async fn start_metadata_phase(
     wait_for_metadata_leader(&*controller.0, config.startup_leader_wait_timeout.to_std()).await?;
     if config.is_controller() || config.is_broker() {
         config.incarnation_id = crate::incarnation::load_or_generate(&config.log_dir);
+        // Spend the clean-shutdown proof the last stop left, if it left one.
+        // Reading it here -- before this node registers -- is what lets
+        // `register_broker` tell a graceful restart from a crash.
+        config.previous_broker_epoch = crate::clean_shutdown::take(&config.log_dir);
     }
     submit_bootstrap_records(config, &*controller.0, bootstrap_records).await?;
     register_controller(config, &*controller.0).await?;
