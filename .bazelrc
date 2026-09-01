@@ -47,6 +47,30 @@ test --@aspect_rules_lint//lint:fail_on_violation
 # instrumenting the whole dependency closure is most of the run.
 coverage --combined_report=lcov
 coverage --instrumentation_filter=^//crates[:/]
+# Instrument the test crates themselves, which is what makes an integration
+# suite report anything at all.
+#
+# `--instrumentation_filter` decides which *libraries* carry counters. Bazel
+# holds test targets' own code out of it by default, and this flag is what puts
+# it back. The unit-test target is a `rust_test` built from `crate = ":<lib>"`,
+# so it recompiles the library's own sources and inherits their instrumentation
+# -- it reported normally without this. Every `tests/*.rs` suite is a separate
+# crate that only *links* that library, and rustc emits the LLVM profile writer
+# from the flag on the crate it is compiling, not from an instrumented
+# dependency. Those binaries therefore ran with no writer in them, wrote no
+# `.profraw`, and Bazel reported `WARNING: There was no coverage found` beside a
+# zero-byte `coverage.dat` -- for every integration suite in the repository, on
+# a run that stayed green because the tests themselves passed.
+#
+# Codecov consequently saw the unit tests alone. `crates/broker/src/
+# controller_admin.rs` read 36% patch coverage while `crates/broker/tests/
+# kip590_envelope.rs` drove its whole `Envelope` path, because none of that
+# suite's counters existed.
+#
+# The cost is a recompile of the test crate roots, not of the closure: the
+# library rlibs are already instrumented under the filter above. Turning it on
+# over an otherwise-warm coverage run rebuilt five actions.
+coverage --instrument_test_targets
 # Profiling instrumentation slows every test enough to trip the wall-clock
 # assertions in the consensus and replication suites -- they pass in the test
 # run and fail here, which is a statement about the instrumentation rather than

@@ -532,6 +532,89 @@ mod tests {
         );
     }
 
+    /// A supported key that arrives before [`BrokerControllerAdminRouter::bind`]
+    /// has run is an error, not a fall-through.
+    ///
+    /// The controller starts ahead of the broker -- that ordering is why the
+    /// binding is a `OnceLock` at all -- so the listener can accept an Admin
+    /// request with nothing behind the router yet. `Ok(None)` is the wrong
+    /// answer for it: that is what an api this listener does not speak returns,
+    /// and it half-closes the connection the way a Kafka controller does for a
+    /// disabled api, which tells a client the cluster will never serve the key.
+    /// A transient startup gap has to read as a failure of this request
+    /// instead.
+    #[tokio::test]
+    async fn a_supported_key_before_the_broker_binds_is_an_error() {
+        let router = BrokerControllerAdminRouter::new();
+
+        let answer = router
+            .route(request(
+                krabka_protocol::owned::create_topics_request::API_KEY,
+                krabka_protocol::owned::create_topics_request::MAX_VERSION,
+            ))
+            .await;
+
+        check!(
+            answer.err().map(|error| error.to_string())
+                == Some("controller admin dispatch: broker startup is incomplete".to_owned())
+        );
+    }
+
+    /// Every key that can reach [`invoke_registered_handler`] resolves to a
+    /// registered handler of a kind it can call.
+    ///
+    /// Two of that function's arms answer `UnsupportedApi`: one for a key the
+    /// registry does not hold, one for a key whose [`DispatchKind`] carries a
+    /// session this path cannot build. Both are unreachable, and this is the
+    /// invariant that makes them so -- which is worth pinning where the arms
+    /// themselves are not, because breaking it is silent. A key dropped from
+    /// the registry, or a handler re-registered as `Produce`, `Telemetry`,
+    /// `Fetch` or `SaslMetadata`, turns a served api into an `UnsupportedApi`
+    /// that fails the controller connection, and every other test in the tree
+    /// would still pass.
+    ///
+    /// Two ways in, so two sets. Off the listener, the keys [`SUPPORTED_APIS`]
+    /// advertises, `Envelope` aside -- [`serve_envelope`] answers that one
+    /// rather than the registry. Through an `Envelope`, the forwardable keys
+    /// this broker serves, since [`unwrap_envelope`] refuses every other
+    /// embedded key before dispatch.
+    #[test]
+    fn every_key_that_reaches_a_handler_has_one_this_path_can_call() {
+        let registry = crate::handlers::registry::build_registry();
+
+        let reachable: BTreeSet<ApiKeyCode> = SUPPORTED_APIS
+            .iter()
+            .map(|api| api.api_key)
+            .filter(|api_key| *api_key != ENVELOPE_API_KEY)
+            .chain(
+                registry
+                    .registered_api_keys()
+                    .filter(|api_key| envelope::is_forwardable(*api_key)),
+            )
+            .collect();
+
+        let undispatchable: BTreeSet<ApiKeyCode> = reachable
+            .iter()
+            .copied()
+            .filter(|api_key| {
+                !registry.get(*api_key).is_some_and(|entry| {
+                    matches!(
+                        entry.kind(),
+                        DispatchKind::Plain(_) | DispatchKind::Context(_) | DispatchKind::Auth(_)
+                    )
+                })
+            })
+            .collect();
+
+        check!(undispatchable == BTreeSet::new());
+        check!(
+            reachable.len() == 27,
+            "the 23 advertised keys, plus the four forwardable ones this \
+             broker serves without advertising them here: DescribeQuorum, \
+             AllocateProducerIds, AddRaftVoter and RemoveRaftVoter"
+        );
+    }
+
     /// `AssignReplicasToDirs` is the one advertised key whose broker handler
     /// takes no principal and no connection, so it is the only key that
     /// reaches the [`DispatchKind::Plain`] arm straight off the listener
