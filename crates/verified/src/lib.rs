@@ -14,6 +14,7 @@ pub mod chain;
 pub mod compaction;
 pub mod consensus;
 pub mod delegation_token;
+pub mod delivery;
 pub mod diskless;
 pub mod isr;
 pub mod leader_epoch;
@@ -55,6 +56,9 @@ pub use consensus::{
 pub use delegation_token::{
     TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenRenewDecision,
     create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
+};
+pub use delivery::{
+    coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,
 };
 pub use diskless::{DisklessTrimDecision, diskless_trim_decision};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
