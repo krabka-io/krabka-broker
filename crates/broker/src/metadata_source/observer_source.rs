@@ -57,6 +57,9 @@ impl MetadataSource for ObserverSource {
             per_voter_matched_index: std::collections::BTreeMap::new(),
         }
     }
+    fn current_controller_epoch(&self) -> Option<u64> {
+        None
+    }
     async fn submit_change(
         &self,
         records: Vec<MetadataRecord>,

@@ -89,7 +89,7 @@ fn offset_advance_submit_rejects_counts_outside_verified_domain() {
     }
     let log_end = engine.log.log_end_offset();
 
-    for count in [-1, i64::MAX] {
+    for count in [-1, 0, i64::MAX] {
         let (reply, mut rx) = oneshot::channel();
         engine.on_submit_change(&advance(count), reply);
 
@@ -100,6 +100,126 @@ fn offset_advance_submit_rejects_counts_outside_verified_domain() {
         assert!(engine.image.partition_next_offset("topic", 0) == Some(1));
         assert!(engine.log.log_end_offset() == log_end);
     }
+}
+
+#[tokio::test]
+async fn pending_offset_reservations_are_contiguous_before_commit() {
+    use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+
+    let create_ctrl = ctrl.clone();
+    let create =
+        tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let advance = |count| {
+        vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count,
+            },
+        )]
+    };
+    let first_ctrl = ctrl.clone();
+    let first = tokio::spawn(async move { first_ctrl.submit_change(advance(3)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let second_ctrl = ctrl.clone();
+    let second = tokio::spawn(async move { second_ctrl.submit_change(advance(5)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+
+    let first = first.await.unwrap().unwrap();
+    let second = second.await.unwrap().unwrap();
+    assert!(first.offset_reservations[0].base_offset == 0);
+    assert!(first.offset_reservations[0].count == 3);
+    assert!(first.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
+    assert!(second.offset_reservations[0].base_offset == 3);
+    assert!(second.offset_reservations[0].count == 5);
+    assert!(second.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
+    assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(8));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
+    use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let result = ctrl
+        .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count: 1,
+            },
+        )])
+        .await;
+
+    assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+    assert!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let create_ctrl = ctrl.clone();
+    let create =
+        tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let retry_ctrl = ctrl.clone();
+    let retry = tokio::spawn(async move {
+        retry_ctrl
+            .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "topic".to_string(),
+                    partition: 0,
+                    count: 1,
+                },
+            )])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    let retry = retry.await.unwrap().unwrap();
+    assert!(retry.offset_reservations[0].base_offset == 0);
+    assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(1));
+    ctrl.shutdown().await;
 }
 
 #[test]

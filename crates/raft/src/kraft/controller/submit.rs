@@ -14,6 +14,7 @@ use super::{
     },
     records::metadata_record_batch,
 };
+use crate::kraft::role::Role;
 use crate::{OffsetReservation, SubmitChangeResult, error::RaftError};
 
 impl Engine {
@@ -38,6 +39,25 @@ impl Engine {
             let _ = reply.send(Err(RaftError::NotLeader {
                 current_leader: self.core.quorum_state().leader_id,
             }));
+            return;
+        }
+        let leader_epoch = self.core.quorum_state().leader_epoch;
+        let epoch_ready = match self.core.role() {
+            Role::Leader {
+                epoch_start_offset, ..
+            } => {
+                krabka_verified::wal_reservation_epoch_ready(self.log.hwm().0, *epoch_start_offset)
+            }
+            _ => false,
+        };
+        if records
+            .iter()
+            .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+            && !epoch_ready
+        {
+            let _ = reply.send(Err(RaftError::ChangeRejected(
+                "leader epoch must commit before reserving offsets".to_string(),
+            )));
             return;
         }
 
@@ -82,12 +102,33 @@ impl Engine {
                 return;
             }
             if let MetadataRecord::V1PartitionOffsetAdvance(r) = r {
-                let next_offset = scratch
+                let mut next_offset = scratch
                     .partition_next_offset(&r.topic, r.partition)
                     .unwrap_or(0);
-                // `reserve_offsets` is proved only for non-negative counts
-                // whose sum fits in i64, so reject untrusted metadata first.
-                if r.count < 0 || next_offset.checked_add(r.count).is_none() {
+                // A multi-voter leader may have earlier reservations appended
+                // but not committed into `scratch` yet. Fold their exact
+                // contiguous ends so concurrent submissions cannot reuse the
+                // same committed base.
+                for pending in self.commit_waiters.iter().flat_map(|waiter| {
+                    waiter.result.offset_reservations.iter().filter(|pending| {
+                        pending.topic == r.topic && pending.partition == r.partition
+                    })
+                }) {
+                    let Some(frontier) = krabka_verified::wal_reservation_frontier(
+                        next_offset,
+                        pending.base_offset,
+                        pending.count,
+                    ) else {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(
+                            "pending offset reservation chain is invalid".to_string(),
+                        )));
+                        return;
+                    };
+                    next_offset = frontier;
+                }
+                // `reserve_offsets` is proved only for positive counts whose
+                // sum fits in i64, so reject untrusted metadata first.
+                if r.count <= 0 || next_offset.checked_add(r.count).is_none() {
                     let _ = reply.send(Err(RaftError::ChangeRejected(format!(
                         "partition offset advance count {} is out of range at next offset {next_offset}",
                         r.count
@@ -101,6 +142,7 @@ impl Engine {
                     partition: r.partition,
                     base_offset,
                     count: r.count,
+                    leader_epoch: u64::from(leader_epoch),
                 });
             }
             match to_kraft_values(r, &scratch) {
@@ -120,7 +162,6 @@ impl Engine {
             return;
         }
 
-        let leader_epoch = self.core.quorum_state().leader_epoch;
         let mut batch = match metadata_record_batch(leader_epoch, &value_blobs) {
             Ok(batch) => batch,
             Err(e) => {

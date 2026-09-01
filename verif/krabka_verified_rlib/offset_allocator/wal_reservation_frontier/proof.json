@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_wal_reservation_frontier": { "prover": "alt-ergo", "time": 0.01 }
+    }
+  }
+}

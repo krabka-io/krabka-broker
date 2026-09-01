@@ -31,6 +31,12 @@ pub trait MetadataSource: Send + Sync {
     fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>>;
     fn watch_leader(&self) -> watch::Receiver<Option<NodeId>>;
     fn quorum_state(&self) -> QuorumState;
+    /// Current controller epoch when this source owns a quorum view.
+    /// Broker-only observers return `None` because they track the leader id but
+    /// do not own the controller's term state.
+    fn current_controller_epoch(&self) -> Option<u64> {
+        Some(self.quorum_state().current_term)
+    }
     /// Highest metadata-log offset applied to the current image, or `-1`
     /// before the first record.
     fn current_metadata_offset(&self) -> i64 {

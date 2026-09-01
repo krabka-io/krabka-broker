@@ -98,7 +98,10 @@ pub use local_recovery::{
     local_recovery_swap_action,
 };
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
-pub use offset_allocator::reserve_offsets;
+pub use offset_allocator::{
+    reserve_offsets, wal_reservation_epoch_ready, wal_reservation_frontier,
+    wal_reservation_response,
+};
 pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,

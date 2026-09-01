@@ -79,6 +79,8 @@ pub struct OffsetReservation {
     pub partition: i32,
     pub base_offset: i64,
     pub count: i64,
+    /// `KRaft` leader epoch that appended and committed this reservation.
+    pub leader_epoch: u64,
 }
 
 #[cfg(test)]
