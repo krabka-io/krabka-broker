@@ -2,6 +2,166 @@
 
 use creusot_std::prelude::*;
 
+/// Select the earliest valid finished remote segment.
+///
+/// The three slices are parallel arrays supplied from one metadata listing.
+/// Negative or inverted ranges are not candidates, even when their lifecycle
+/// state says the copy finished.
+#[requires(starts@.len() == ends@.len())]
+#[requires(starts@.len() == finished@.len())]
+#[ensures(match result {
+    Some(best) => best@ < starts@.len()
+        && finished@[best@]
+        && 0 <= starts@[best@]@
+        && starts@[best@]@ <= ends@[best@]@
+        && forall<i: Int> 0 <= i && i < starts@.len()
+            && finished@[i]
+            && 0 <= starts@[i]@
+            && starts@[i]@ <= ends@[i]@
+            ==> starts@[best@]@ <= starts@[i]@,
+    None => forall<i: Int> 0 <= i && i < starts@.len()
+        ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
+})]
+#[must_use]
+pub fn tiered_earliest_finished_index(
+    starts: &[i64],
+    ends: &[i64],
+    finished: &[bool],
+) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    let mut index = 0usize;
+    #[invariant(index@ <= starts@.len())]
+    #[invariant(match best {
+        Some(best) => best@ < index@
+            && finished@[best@]
+            && 0 <= starts@[best@]@
+            && starts@[best@]@ <= ends@[best@]@
+            && forall<i: Int> 0 <= i && i < index@
+                && finished@[i]
+                && 0 <= starts@[i]@
+                && starts@[i]@ <= ends@[i]@
+                ==> starts@[best@]@ <= starts@[i]@,
+        None => forall<i: Int> 0 <= i && i < index@
+            ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
+    })]
+    #[variant(starts@.len() - index@)]
+    while index < starts.len() {
+        if finished[index] && starts[index] >= 0 && starts[index] <= ends[index] {
+            match best {
+                Some(current) if starts[current] <= starts[index] => {}
+                _ => best = Some(index),
+            }
+        }
+        index += 1;
+    }
+    best
+}
+
+/// Select the finished remote segment with the greatest valid inclusive end.
+#[requires(starts@.len() == ends@.len())]
+#[requires(starts@.len() == finished@.len())]
+#[ensures(match result {
+    Some(best) => best@ < starts@.len()
+        && finished@[best@]
+        && 0 <= starts@[best@]@
+        && starts@[best@]@ <= ends@[best@]@
+        && forall<i: Int> 0 <= i && i < starts@.len()
+            && finished@[i]
+            && 0 <= starts@[i]@
+            && starts@[i]@ <= ends@[i]@
+            ==> ends@[i]@ <= ends@[best@]@,
+    None => forall<i: Int> 0 <= i && i < starts@.len()
+        ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
+})]
+#[must_use]
+pub fn tiered_latest_finished_index(
+    starts: &[i64],
+    ends: &[i64],
+    finished: &[bool],
+) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    let mut index = 0usize;
+    #[invariant(index@ <= starts@.len())]
+    #[invariant(match best {
+        Some(best) => best@ < index@
+            && finished@[best@]
+            && 0 <= starts@[best@]@
+            && starts@[best@]@ <= ends@[best@]@
+            && forall<i: Int> 0 <= i && i < index@
+                && finished@[i]
+                && 0 <= starts@[i]@
+                && starts@[i]@ <= ends@[i]@
+                ==> ends@[i]@ <= ends@[best@]@,
+        None => forall<i: Int> 0 <= i && i < index@
+            ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
+    })]
+    #[variant(starts@.len() - index@)]
+    while index < starts.len() {
+        if finished[index] && starts[index] >= 0 && starts[index] <= ends[index] {
+            match best {
+                Some(current) if ends[current] >= ends[index] => {}
+                _ => best = Some(index),
+            }
+        }
+        index += 1;
+    }
+    best
+}
+
+/// Select the valid leader epoch whose start is greatest at or below a
+/// segment's inclusive end.
+#[requires(epochs@.len() == starts@.len())]
+#[requires(0 <= segment_start@)]
+#[requires(segment_start@ <= segment_end@)]
+#[ensures(match result {
+    Some(best) => best@ < starts@.len()
+        && 0 <= epochs@[best@]@
+        && segment_start@ <= starts@[best@]@
+        && starts@[best@]@ <= segment_end@
+        && forall<i: Int> 0 <= i && i < starts@.len()
+            && 0 <= epochs@[i]@
+            && segment_start@ <= starts@[i]@
+            && starts@[i]@ <= segment_end@
+            ==> starts@[i]@ <= starts@[best@]@,
+    None => forall<i: Int> 0 <= i && i < starts@.len()
+        ==> epochs@[i]@ < 0 || starts@[i]@ < segment_start@ || segment_end@ < starts@[i]@,
+})]
+#[must_use]
+pub fn tiered_owning_epoch_index(
+    epochs: &[i32],
+    starts: &[i64],
+    segment_start: i64,
+    segment_end: i64,
+) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    let mut index = 0usize;
+    #[invariant(index@ <= starts@.len())]
+    #[invariant(match best {
+        Some(best) => best@ < index@
+            && 0 <= epochs@[best@]@
+            && segment_start@ <= starts@[best@]@
+            && starts@[best@]@ <= segment_end@
+            && forall<i: Int> 0 <= i && i < index@
+                && 0 <= epochs@[i]@
+                && segment_start@ <= starts@[i]@
+                && starts@[i]@ <= segment_end@
+                ==> starts@[i]@ <= starts@[best@]@,
+        None => forall<i: Int> 0 <= i && i < index@
+            ==> epochs@[i]@ < 0 || starts@[i]@ < segment_start@ || segment_end@ < starts@[i]@,
+    })]
+    #[variant(starts@.len() - index@)]
+    while index < starts.len() {
+        if epochs[index] >= 0 && starts[index] >= segment_start && starts[index] <= segment_end {
+            match best {
+                Some(current) if starts[current] >= starts[index] => {}
+                _ => best = Some(index),
+            }
+        }
+        index += 1;
+    }
+    best
+}
+
 /// Decide whether one decoded time-index offset belongs to the usable prefix.
 ///
 /// The first entry is usable. Every later entry must strictly advance the
@@ -185,6 +345,25 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn tiered_frontiers_are_finished_valid_and_exact() {
+        let starts = [20, 0, -1, 40];
+        let ends = [39, 19, 100, 59];
+        let finished = [true, true, true, false];
+        check!(tiered_earliest_finished_index(&starts, &ends, &finished) == Some(1));
+        check!(tiered_latest_finished_index(&starts, &ends, &finished) == Some(0));
+        check!(tiered_earliest_finished_index(&[], &[], &[]) == None);
+        check!(tiered_latest_finished_index(&[], &[], &[]) == None);
+    }
+
+    #[test]
+    fn tiered_epoch_owner_has_the_greatest_valid_start() {
+        let epochs = [0, 2, -1, 4];
+        let starts = [20, 30, 38, 35];
+        check!(tiered_owning_epoch_index(&epochs, &starts, 20, 39) == Some(3));
+        check!(tiered_owning_epoch_index(&[7], &[40], 20, 39) == None);
+    }
 
     #[test]
     fn remote_time_index_selects_strict_predecessor_prefix() {

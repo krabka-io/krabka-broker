@@ -129,7 +129,9 @@ pub use registration::{
 };
 pub use remote_metadata::{remote_metadata_partition, remote_metadata_resume_cursor};
 pub use remote_read::{
-    remote_read_relative_offset, remote_time_index_candidate_count, remote_time_index_offset_usable,
+    remote_read_relative_offset, remote_time_index_candidate_count,
+    remote_time_index_offset_usable, tiered_earliest_finished_index, tiered_latest_finished_index,
+    tiered_owning_epoch_index,
 };
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{
