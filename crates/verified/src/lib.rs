@@ -52,8 +52,9 @@ pub use authz::{
 };
 pub use break_glass::{BreakGlassAdmission, break_glass_admission, select_break_glass_candidate};
 pub use broker::{
-    FetchVisibility, FetchWatermarks, delete_records_offset_out_of_range, delete_records_target,
-    effective_share_backlog, fetch_visibility, unclean_recovery_commit_admission,
+    FetchVisibility, FetchWatermarks, ReplicaFetchMutation, delete_records_offset_out_of_range,
+    delete_records_target, effective_share_backlog, fetch_visibility, replica_fetch_mutation,
+    unclean_recovery_commit_admission,
 };
 pub use chain::{ChainStep, chain_step, select_chain_tip};
 pub use checkpoint::{checkpoint_id_newer, checkpoint_id_retained, latest_checkpoint_index};
