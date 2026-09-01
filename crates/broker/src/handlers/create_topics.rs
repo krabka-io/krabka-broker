@@ -47,6 +47,44 @@ use crate::{
 /// `PartitionRecord` and the handler-side leader-cache install must agree.
 const INITIAL_LEADER_EPOCH: i32 = 0;
 
+pub(crate) fn diskless_wal_placement_error(
+    image: &krabka_metadata::MetadataImage,
+    config: &crate::config::BrokerConfig,
+    first_partition: i32,
+    assignments: &[Vec<krabka_raft::NodeId>],
+) -> Option<String> {
+    let mut brokers = image
+        .brokers()
+        .map(|broker| (broker.node_id, broker.rack.clone()))
+        .collect::<Vec<_>>();
+    if brokers.is_empty() {
+        brokers.push((config.node_id, config.rack.clone()));
+    }
+    brokers.sort_by_key(|(node_id, _)| node_id.0);
+
+    let required = config.diskless_wal_local_replica_count;
+    assignments
+        .iter()
+        .enumerate()
+        .find_map(|(offset, assignment)| {
+            let leader = *assignment.first()?;
+            let available = crate::wal::quorum::placement::select_voters_from_sorted_racks(
+                &brokers, leader, required,
+            )
+            .len();
+            (available != required).then(|| {
+                let partition =
+                    first_partition.saturating_add(i32::try_from(offset).unwrap_or(i32::MAX));
+                format!(
+                    "diskless WAL partition {partition} leader {} has {available} eligible \
+                     rack-distinct voters, but {required} are required; configure `broker.rack` \
+                     on every voter and provide at least {required} distinct racks",
+                    leader.0
+                )
+            })
+        })
+}
+
 #[tracing::instrument(
     name = "handle_create_topics",
     level = "info",
@@ -202,6 +240,18 @@ pub(crate) async fn handle(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,
                 None,
+            ));
+            continue;
+        }
+
+        if diskless
+            && let Some(reason) =
+                diskless_wal_placement_error(&image, &broker.config, 0, &assignments)
+        {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_CONFIG,
+                Some(reason),
             ));
             continue;
         }
