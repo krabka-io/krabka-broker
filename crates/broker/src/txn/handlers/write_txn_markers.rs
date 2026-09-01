@@ -283,10 +283,10 @@ mod tests {
         let (reply, result) = tokio::sync::oneshot::channel();
         handle
             .tx
-            .send(GroupActorMessage::FetchCommitted { reply })
+            .send(GroupActorMessage::FetchOffsets { reply })
             .await
             .unwrap();
-        let committed = result.await.unwrap();
+        let committed = result.await.unwrap().committed;
         let entry = committed
             .get(&("orders".to_string(), 2))
             .expect("committed offset visible");

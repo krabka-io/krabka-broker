@@ -46,7 +46,7 @@ use crate::{
     coordinator::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         unified::{
-            actor::{GroupKindTag, validate_group_commit},
+            actor::{GroupActorMessage, GroupKindTag, validate_group_commit},
             streams::actor::validate_streams_group_commit,
         },
     },
@@ -218,13 +218,68 @@ pub(crate) async fn handle(
     //    Topics denied by the per-topic Read ACL are skipped from the
     //    batch and surfaced as TOPIC_AUTHORIZATION_FAILED in the response.
     let now_ms = now_millis();
-    if let Err(code) =
-        append_txn_batch(&req, &partitions, offsets_partition, now_ms, &denied_topics).await
+    let pending_keys = match append_txn_batch(
+        &req,
+        &partitions,
+        offsets_partition,
+        now_ms,
+        &denied_topics,
+    )
+    .await
+    {
+        Ok(keys) => keys,
+        Err(code) => return encode_resp(version, &build_response(&req, code, &denied_topics)),
+    };
+
+    // 4. KIP-447: mark those offsets pending on the group actor, so that an
+    //    `OffsetFetch` with `require_stable = true` answers
+    //    UNSTABLE_OFFSET_COMMIT for them until the transaction's marker
+    //    resolves. Marking after the durable append is what guarantees the
+    //    marker path can rediscover the same keys in the log and clear them;
+    //    a mark placed before a failed append would never be cleared.
+    if !pending_keys.is_empty()
+        && let Err(code) =
+            mark_offsets_pending(&handle, req.producer_id, pending_keys, &req.group_id).await
     {
         return encode_resp(version, &build_response(&req, code, &denied_topics));
     }
 
-    // 4. Success — per-(topic, partition) error_code = NONE for allowed,
+    // 5. Success — per-(topic, partition) error_code = NONE for allowed,
     //    TOPIC_AUTHORIZATION_FAILED for denied.
     encode_resp(version, &build_response(&req, codes::NONE, &denied_topics))
+}
+
+/// Marks the appended offsets as belonging to an unresolved transaction.
+///
+/// A group actor that cannot take the mark would leave the group answering a
+/// `require_stable` fetch with the pre-transaction offset, which is the
+/// rewind KIP-447 exists to prevent, so the commit reports
+/// `COORDINATOR_NOT_AVAILABLE` rather than claiming a success the fetch path
+/// cannot honour.
+async fn mark_offsets_pending(
+    handle: &crate::coordinator::unified::actor::GroupActorHandle,
+    producer_id: i64,
+    keys: Vec<(String, i32)>,
+    group_id: &str,
+) -> Result<(), i16> {
+    let (reply, ack) = tokio::sync::oneshot::channel();
+    if handle
+        .tx
+        .send(GroupActorMessage::AddPendingTxnOffsets {
+            producer_id,
+            keys,
+            reply,
+        })
+        .await
+        .is_err()
+        || ack.await.is_err()
+    {
+        tracing::warn!(
+            group = %group_id,
+            producer_id,
+            "TxnOffsetCommit: group actor could not record the pending transactional offsets"
+        );
+        return Err(codes::COORDINATOR_NOT_AVAILABLE);
+    }
+    Ok(())
 }

@@ -18,18 +18,25 @@ use crate::{
     coordinator::{bootstrap::OFFSETS_TOPIC, persistence::OffsetCommitValue},
 };
 
-/// Append the transactional offset records to `__consumer_offsets`.
+/// Append the transactional offset records to `__consumer_offsets`, and
+/// report the `(topic, partition)` keys the append covered.
+///
 /// The offsets partition's `WriteTxnMarkers` handler materializes these records
 /// into the owning group actor after the commit marker is durable. This keeps
 /// visibility on the group-coordinator broker even when the transaction
 /// coordinator is a different broker.
+///
+/// The returned keys are the ones the caller marks pending on the group actor
+/// for KIP-447. They come from the same walk that builds the batch, so a key
+/// can never be marked pending without a durable record behind it for the
+/// transaction's marker to find again.
 pub(super) async fn append_txn_batch(
     req: &TxnOffsetCommitRequest,
     partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     offsets_partition: i32,
     now_ms: i64,
     denied_topics: &std::collections::HashSet<String>,
-) -> Result<(), i16> {
+) -> Result<Vec<(String, i32)>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
         max_timestamp: now_ms,
@@ -38,6 +45,7 @@ pub(super) async fn append_txn_batch(
         ..RecordBatch::default()
     };
     let mut delta: i32 = 0;
+    let mut keys: Vec<(String, i32)> = Vec::new();
     for topic in &req.topics {
         if denied_topics.contains(&topic.name) {
             continue;
@@ -60,13 +68,14 @@ pub(super) async fn append_txn_batch(
                 value: Some(value.encode_value()),
                 ..Default::default()
             });
+            keys.push((topic.name.clone(), part.partition_index));
             delta += 1;
         }
     }
 
     // If every topic was denied, there's nothing to append; succeed silently.
     if batch.records.is_empty() {
-        return Ok(());
+        return Ok(keys);
     }
 
     batch.last_offset_delta = (delta - 1).max(0);
@@ -80,7 +89,7 @@ pub(super) async fn append_txn_batch(
     part_handle
         .produce_batch(batch)
         .await
-        .map(|_| ())
+        .map(|_| keys)
         .map_err(|e| {
             tracing::error!(
                 group = %req.group_id,

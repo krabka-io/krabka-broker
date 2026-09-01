@@ -175,3 +175,62 @@ fn replay_applies_only_committed_transactional_offsets() {
     check!(!committed.contains_key(&("t".to_string(), 1)));
     check!(!committed.contains_key(&("t".to_string(), 2)));
 }
+
+/// KIP-447 across a coordinator reload. A transaction whose offset commits the
+/// log ends without a marker for is still open: its marker can arrive after
+/// the reload. Replay must not apply those offsets, and must not forget them
+/// either -- the group has to keep answering `UNSTABLE_OFFSET_COMMIT` to a
+/// `require_stable` `OffsetFetch` for exactly those keys.
+#[tokio::test]
+async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
+    use krabka_log::Offset;
+    use krabka_protocol::records::{Attributes, Record};
+    use tokio::sync::oneshot;
+
+    use super::{replay::finalize, test_support::bare_coordinator};
+    use crate::coordinator::unified::actor::GroupActorMessage;
+
+    let coordinator = bare_coordinator();
+    let dir = tempdir().unwrap();
+    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    log.append(&mut RecordBatch {
+        producer_id: 7,
+        producer_epoch: 0,
+        attributes: Attributes::default().with_transactional(true),
+        records: vec![Record {
+            key: Some(OffsetCommitValue::encode_key("g", "t", 4)),
+            value: Some(
+                OffsetCommitValue {
+                    offset: Offset(444),
+                    leader_epoch: -1,
+                    metadata: String::new(),
+                    commit_timestamp_ms: 0,
+                }
+                .encode_value(),
+            ),
+            ..Default::default()
+        }],
+        ..RecordBatch::default()
+    })
+    .unwrap();
+
+    let replayed = replay_records(&log, &coordinator).unwrap();
+    check!(!replayed.committed.contains_key("g"));
+    check!(
+        replayed.pending_txn["g"][&7] == std::collections::HashSet::from([("t".to_string(), 4)])
+    );
+
+    // The group is offset-only and open-transaction-only, so `finalize` still
+    // has to spawn an actor for it and hand it the marks.
+    finalize(&coordinator, replayed);
+    let handle = coordinator.find("g").expect("seeded classic actor");
+    let (reply, offsets) = oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::FetchOffsets { reply })
+        .await
+        .unwrap();
+    let offsets = offsets.await.unwrap();
+    check!(offsets.committed.is_empty());
+    check!(offsets.pending_txn == std::collections::HashSet::from([("t".to_string(), 4)]));
+}

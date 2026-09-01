@@ -1,12 +1,16 @@
-//! The `__consumer_offsets` half of a committed transaction marker: reading
-//! back the offset commits the transaction wrote, and publishing them to the
-//! local group actors.
+//! The `__consumer_offsets` half of a transaction marker: reading back the
+//! offset commits the transaction wrote, and resolving them against the local
+//! group actors.
 //!
 //! A transactional offset commit is invisible to a consumer until the
-//! transaction commits, so the records sit in the offsets log with no actor
-//! state behind them. When the commit marker lands, this module rescans the
-//! log from the transaction's first record, decodes every `OffsetCommit` key
-//! the producer wrote, and hands the results to the owning group actor.
+//! transaction commits, so the records sit in the offsets log with no offset
+//! behind them in the actor — only KIP-447's pending mark, which makes a
+//! `require_stable` `OffsetFetch` answer `UNSTABLE_OFFSET_COMMIT`. When a
+//! marker lands, this module rescans the log from the transaction's first
+//! record and decodes every `OffsetCommit` key the producer wrote. A commit
+//! publishes those offsets and drops the marks; an abort drops the marks and
+//! publishes nothing. Either way the group stops reporting the partitions as
+//! unstable.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -20,6 +24,7 @@ use crate::{
         },
     },
     error::BrokerError,
+    txn::marker::MarkerType,
 };
 
 pub(super) type CommittedOffsets = HashMap<String, Vec<((String, i32), OffsetEntry)>>;
@@ -81,29 +86,53 @@ pub(super) fn pending_offset_entries(
     Ok(offsets)
 }
 
-pub(super) async fn apply_committed_offsets(
+/// Resolve a transaction's offset commits against the local group actors.
+///
+/// A commit publishes the offsets and clears the producer's KIP-447 pending
+/// marks in one actor turn, so no fetch can observe a partition that is
+/// neither unstable nor updated. An abort clears the marks and publishes
+/// nothing, leaving the group's stable offsets where they were.
+///
+/// A commit uses the get-or-create factory, which detects and replaces a
+/// closed actor: the offsets have to become visible even if the actor failed
+/// since the transaction began, without waiting for a marker retry the durable
+/// commit marker will never trigger. An abort has nothing to publish, so it
+/// only touches an actor that already exists and never resurrects a group that
+/// went away with its marks.
+pub(super) async fn resolve_pending_offsets(
     coordinator: &Arc<GroupCoordinator>,
+    producer_id: krabka_log::ProducerId,
+    marker_type: MarkerType,
     offsets: CommittedOffsets,
 ) -> Result<(), BrokerError> {
+    let commit = marker_type == MarkerType::Commit;
     for (group_id, entries) in offsets {
-        // The factory detects and replaces a closed actor. This makes the
-        // in-memory publication robust after an actor failure without
-        // requiring a marker retry after the durable commit marker exists.
-        let handle = coordinator.get_or_create_group(&group_id, GroupKindTag::Classic);
+        let handle = if commit {
+            Some(coordinator.get_or_create_group(&group_id, GroupKindTag::Classic))
+        } else {
+            coordinator.find(&group_id)
+        };
+        let Some(handle) = handle else {
+            continue;
+        };
         let (reply, response) = tokio::sync::oneshot::channel();
         if handle
             .tx
-            .send(GroupActorMessage::UpdateCommitted { entries, reply })
+            .send(GroupActorMessage::ResolveTxnOffsets {
+                producer_id: producer_id.get(),
+                committed: if commit { entries } else { Vec::new() },
+                reply,
+            })
             .await
             .is_err()
             || response.await.is_err()
         {
             tracing::warn!(
                 group = %group_id,
-                "WriteTxnMarkers: could not publish committed transactional offsets"
+                "WriteTxnMarkers: could not resolve the transaction's offset commits"
             );
             return Err(BrokerError::Txn(format!(
-                "could not publish committed transactional offsets for group {group_id}"
+                "could not resolve transactional offset commits for group {group_id}"
             )));
         }
     }

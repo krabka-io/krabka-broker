@@ -15,7 +15,7 @@
 // The state machines are reused verbatim, relocated under `unified/`. These
 // aliases give the unified surface its types without renaming the moved code
 // (the classic file keeps its internal `Group`/`GroupState` names).
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) use crate::coordinator::unified::{
     classic_state::{ClassicGroup as ClassicState, OffsetEntry},
@@ -45,6 +45,32 @@ pub struct CoordinatorGroup {
     /// change, in slices C to E, can therefore carry the committed offsets
     /// through a conversion untouched.
     pub committed_offsets: HashMap<(String, i32), OffsetEntry>,
+    /// KIP-447: the `(topic, partition)` keys a transaction has written an
+    /// offset commit for and that no commit or abort marker has resolved yet,
+    /// grouped by the producer whose transaction wrote them.
+    ///
+    /// The offsets themselves are not here: they live in the log below the
+    /// partition's LSO until the marker lands, and `WriteTxnMarkers`
+    /// materializes them into `committed_offsets` only for a commit. These
+    /// keys are what makes an `OffsetFetch` with `require_stable = true`
+    /// answer `UNSTABLE_OFFSET_COMMIT` instead of the older stable offset.
+    ///
+    /// Grouping by producer is what lets one producer's marker resolve its own
+    /// keys while another producer's in-flight transaction keeps its own.
+    pending_txn_offsets: HashMap<i64, HashSet<(String, i32)>>,
+}
+
+/// A group's offset state as `OffsetFetch` needs to see it: the stable
+/// committed offsets, plus the keys an unresolved transaction has written.
+///
+/// The two travel together because a `require_stable` fetch has to decide per
+/// partition between them. Reading them in two actor turns would let a
+/// transaction marker land in between and produce a row that is neither the
+/// pre-transaction offset nor the post-transaction one.
+#[derive(Debug, Default, Clone)]
+pub struct GroupOffsets {
+    pub committed: HashMap<(String, i32), OffsetEntry>,
+    pub pending_txn: HashSet<(String, i32)>,
 }
 
 impl CoordinatorGroup {
@@ -55,6 +81,7 @@ impl CoordinatorGroup {
             kind: GroupKind::Classic(ClassicState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            pending_txn_offsets: HashMap::new(),
         }
     }
 
@@ -65,6 +92,24 @@ impl CoordinatorGroup {
             kind: GroupKind::Consumer(ConsumerState::new(group_id.clone())),
             group_id,
             committed_offsets: HashMap::new(),
+            pending_txn_offsets: HashMap::new(),
+        }
+    }
+
+    /// A group rebuilt from state that already exists: a replayed or
+    /// hand-built state machine together with the committed offsets that go
+    /// with it. No transaction is open on a group built this way; a replay
+    /// that recovered one re-registers it with `add_pending_txn_offsets`.
+    pub fn seeded(
+        group_id: impl Into<String>,
+        kind: GroupKind,
+        committed_offsets: HashMap<(String, i32), OffsetEntry>,
+    ) -> Self {
+        Self {
+            group_id: group_id.into(),
+            kind,
+            committed_offsets,
+            pending_txn_offsets: HashMap::new(),
         }
     }
 
@@ -112,6 +157,43 @@ impl CoordinatorGroup {
     pub fn kind_mut(&mut self) -> &mut GroupKind {
         &mut self.kind
     }
+
+    /// Marks `keys` as written by `producer_id`'s open transaction.
+    ///
+    /// The caller must have made the offset-commit records durable first, so
+    /// that the transaction's marker can always find the same keys again and
+    /// clear them.
+    pub fn add_pending_txn_offsets(
+        &mut self,
+        producer_id: i64,
+        keys: impl IntoIterator<Item = (String, i32)>,
+    ) {
+        self.pending_txn_offsets
+            .entry(producer_id)
+            .or_default()
+            .extend(keys);
+    }
+
+    /// Drops every pending mark `producer_id`'s transaction holds, whether its
+    /// marker committed or aborted. Publishing the committed offsets is a
+    /// separate step, because an abort publishes nothing.
+    pub fn clear_pending_txn_offsets(&mut self, producer_id: i64) {
+        self.pending_txn_offsets.remove(&producer_id);
+    }
+
+    /// The group's offset state for `OffsetFetch`, with every open
+    /// transaction's pending keys flattened into one set.
+    pub fn offsets(&self) -> GroupOffsets {
+        GroupOffsets {
+            committed: self.committed_offsets.clone(),
+            pending_txn: self
+                .pending_txn_offsets
+                .values()
+                .flatten()
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -140,5 +222,28 @@ mod tests {
         check!(g.as_classic().is_none());
         check!(g.as_consumer_mut().is_some());
         check!(g.group_id == "g");
+    }
+
+    #[test]
+    fn pending_txn_offsets_flatten_across_producers_and_clear_per_producer() {
+        let mut g = CoordinatorGroup::new_classic("g");
+        check!(g.offsets().pending_txn.is_empty());
+
+        g.add_pending_txn_offsets(7, [("orders".to_string(), 0), ("orders".to_string(), 1)]);
+        g.add_pending_txn_offsets(9, [("payments".to_string(), 3)]);
+        check!(
+            g.offsets().pending_txn
+                == HashSet::from([
+                    ("orders".to_string(), 0),
+                    ("orders".to_string(), 1),
+                    ("payments".to_string(), 3),
+                ])
+        );
+
+        g.clear_pending_txn_offsets(7);
+        check!(g.offsets().pending_txn == HashSet::from([("payments".to_string(), 3)]));
+
+        g.clear_pending_txn_offsets(9);
+        check!(g.offsets().pending_txn.is_empty());
     }
 }

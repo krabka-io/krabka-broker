@@ -2,8 +2,6 @@
 //! the structured results the parking classic RPCs reply with, kept together
 //! because every handler module speaks this one protocol.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -19,7 +17,11 @@ use crate::{
     codes,
     coordinator::{
         DeleteGroupError, GroupSnapshot,
-        unified::{GroupSeed, classic_state::OffsetEntry, group::CoordinatorGroup},
+        unified::{
+            GroupSeed,
+            classic_state::OffsetEntry,
+            group::{CoordinatorGroup, GroupOffsets},
+        },
     },
 };
 
@@ -94,11 +96,33 @@ pub enum GroupActorMessage {
         entries: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
     },
-    FetchCommitted {
-        reply: oneshot::Sender<HashMap<(String, i32), OffsetEntry>>,
+    /// Read the group's stable offsets and its unresolved transactional keys
+    /// in one turn, for `OffsetFetch`.
+    FetchOffsets {
+        reply: oneshot::Sender<GroupOffsets>,
     },
     RemoveCommitted {
         keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<()>,
+    },
+
+    // ── in-flight transactional offsets (KIP-447) ──
+    /// Record that `producer_id`'s open transaction has durably written
+    /// offset commits for `keys`. Until its marker arrives, an `OffsetFetch`
+    /// with `require_stable = true` answers `UNSTABLE_OFFSET_COMMIT` for them.
+    AddPendingTxnOffsets {
+        producer_id: i64,
+        keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<()>,
+    },
+    /// Resolve `producer_id`'s transaction: publish `committed` and drop the
+    /// producer's pending marks in the same turn. An abort marker sends an
+    /// empty `committed`, which leaves the group's stable offsets as they
+    /// were. Doing both in one message is what stops a `require_stable` fetch
+    /// from seeing a partition that is neither pending nor yet updated.
+    ResolveTxnOffsets {
+        producer_id: i64,
+        committed: Vec<((String, i32), OffsetEntry)>,
         reply: oneshot::Sender<()>,
     },
 

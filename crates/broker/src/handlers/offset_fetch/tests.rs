@@ -1,15 +1,23 @@
-//! End-to-end test of the `OffsetFetch` handler against a running broker,
-//! driven over the wire encoding on the legacy single-group path.
+//! End-to-end tests of the `OffsetFetch` handler against a running broker,
+//! driven over the wire encoding.
+//!
+//! Both request shapes are covered, because KIP-447's `require_stable` is one
+//! top-level field that has to reach two different response shapes: the
+//! pre-KIP-516 `topics[]` of v0–v7 and the `groups[]` of v8 and above.
 
 use std::sync::Arc;
 
 use assert2::assert;
 use krabka_log::Offset;
-use krabka_protocol::owned::offset_fetch_response::OffsetFetchResponse;
+use krabka_protocol::owned::offset_fetch_response::{
+    OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
+    OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+};
 use tokio::sync::oneshot;
 
 use super::*;
 use crate::{
+    codes,
     coordinator::unified::{
         actor::{GroupActorMessage, GroupKindTag},
         classic_state::OffsetEntry,
@@ -94,5 +102,251 @@ async fn named_topic_fetch_returns_committed_offset() {
         "committed_offset must echo the seeded value (42), got {}",
         part.committed_offset
     );
+    broker_handle.shutdown().await;
+}
+
+// Mark (topic, partition) keys as written by an unresolved transaction, the
+// way `TxnOffsetCommit` does once its records are durable.
+async fn seed_pending_txn_offsets(
+    broker: &Broker,
+    group: &str,
+    producer_id: i64,
+    keys: Vec<(String, i32)>,
+) {
+    let h = broker
+        .group_coordinator
+        .get_or_create_group(group, GroupKindTag::Classic);
+    let (tx, rx) = oneshot::channel();
+    h.tx.send(GroupActorMessage::AddPendingTxnOffsets {
+        producer_id,
+        keys,
+        reply: tx,
+    })
+    .await
+    .expect("send AddPendingTxnOffsets");
+    rx.await.expect("AddPendingTxnOffsets ack");
+}
+
+// Resolve the transaction the way a commit marker does: publish its offsets
+// and drop its pending marks.
+async fn commit_pending_txn_offsets(
+    broker: &Broker,
+    group: &str,
+    producer_id: i64,
+    committed: Vec<((String, i32), OffsetEntry)>,
+) {
+    let h = broker
+        .group_coordinator
+        .get_or_create_group(group, GroupKindTag::Classic);
+    let (tx, rx) = oneshot::channel();
+    h.tx.send(GroupActorMessage::ResolveTxnOffsets {
+        producer_id,
+        committed,
+        reply: tx,
+    })
+    .await
+    .expect("send ResolveTxnOffsets");
+    rx.await.expect("ResolveTxnOffsets ack");
+}
+
+async fn fetch(
+    broker: &Broker,
+    version: i16,
+    req: &OffsetFetchRequest,
+) -> krabka_protocol::owned::offset_fetch_response::OffsetFetchResponse {
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = crate::test_support::request_context(&p, &peer, "consumer");
+    let req_bytes = crate::test_support::encode_request(req, version);
+    let bytes = handle(broker, version, 123, &req_bytes, &ctx)
+        .await
+        .expect("handle");
+    crate::test_support::decode_response(&bytes, version)
+}
+
+// KIP-447 on the pre-KIP-516 shape. `orders-0` carries a stable offset that an
+// open transaction is about to replace; `orders-1` is stable and untouched.
+//
+// `require_stable = false` keeps the pre-KIP-447 answer, so the consumer sees
+// the offset the transaction is replacing. `require_stable = true` turns
+// `orders-0` into the UNSTABLE_OFFSET_COMMIT row Kafka sends — the invalid
+// offset sentinels with an empty, not null, metadata string — while
+// `orders-1` still answers normally. Once the transaction's marker resolves,
+// the same request reads the new offset.
+#[tokio::test]
+async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
+    const VERSION: i16 = 7; // lowest version carrying require_stable
+    const PRODUCER_ID: i64 = 91;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
+    seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
+    seed_pending_txn_offsets(&broker, "grp", PRODUCER_ID, vec![("orders".to_string(), 0)]).await;
+
+    let request = |require_stable| OffsetFetchRequest {
+        group_id: "grp".into(),
+        topics: Some(vec![
+            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                name: "orders".into(),
+                partition_indexes: vec![0, 1],
+                ..Default::default()
+            },
+        ]),
+        require_stable,
+        ..Default::default()
+    };
+    let stable_row = |partition_index, committed_offset| OffsetFetchResponsePartition {
+        partition_index,
+        committed_offset,
+        committed_leader_epoch: 5,
+        metadata: Some(String::new()),
+        error_code: codes::NONE,
+        ..Default::default()
+    };
+    let expect = |partitions| OffsetFetchResponse {
+        throttle_time_ms: 0,
+        topics: vec![OffsetFetchResponseTopic {
+            name: "orders".into(),
+            partitions,
+            ..Default::default()
+        }],
+        error_code: codes::NONE,
+        groups: Vec::new(),
+        ..Default::default()
+    };
+
+    let relaxed = fetch(&broker, VERSION, &request(false)).await;
+    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
+
+    let strict = fetch(&broker, VERSION, &request(true)).await;
+    assert!(
+        strict
+            == expect(vec![
+                OffsetFetchResponsePartition {
+                    partition_index: 0,
+                    committed_offset: -1,
+                    committed_leader_epoch: -1,
+                    metadata: Some(String::new()),
+                    error_code: codes::UNSTABLE_OFFSET_COMMIT,
+                    ..Default::default()
+                },
+                stable_row(1, 11),
+            ])
+    );
+
+    commit_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        vec![(
+            ("orders".to_string(), 0),
+            OffsetEntry {
+                offset: Offset(77),
+                leader_epoch: 5,
+                metadata: String::new(),
+                commit_timestamp_ms: 0,
+            },
+        )],
+    )
+    .await;
+
+    let resolved = fetch(&broker, VERSION, &request(true)).await;
+    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
+    broker_handle.shutdown().await;
+}
+
+// The same three phases on the KIP-516 `groups[]` shape. `require_stable` is a
+// top-level request field there too, so it governs every group the request
+// names.
+#[tokio::test]
+async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
+    const VERSION: i16 = 9; // groups[] shape, still keyed by topic name
+    const PRODUCER_ID: i64 = 91;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
+    seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
+    seed_pending_txn_offsets(&broker, "grp", PRODUCER_ID, vec![("orders".to_string(), 0)]).await;
+
+    let request = |require_stable| OffsetFetchRequest {
+        groups: vec![
+            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestGroup {
+                group_id: "grp".into(),
+                topics: Some(vec![
+                    krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics {
+                        name: "orders".into(),
+                        partition_indexes: vec![0, 1],
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+        ],
+        require_stable,
+        ..Default::default()
+    };
+    let stable_row = |partition_index, committed_offset| OffsetFetchResponsePartitions {
+        partition_index,
+        committed_offset,
+        committed_leader_epoch: 5,
+        metadata: Some(String::new()),
+        error_code: codes::NONE,
+        ..Default::default()
+    };
+    let expect = |partitions| OffsetFetchResponse {
+        throttle_time_ms: 0,
+        topics: Vec::new(),
+        error_code: codes::NONE,
+        groups: vec![OffsetFetchResponseGroup {
+            group_id: "grp".into(),
+            topics: vec![OffsetFetchResponseTopics {
+                name: "orders".into(),
+                topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+                partitions,
+                ..Default::default()
+            }],
+            error_code: codes::NONE,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let relaxed = fetch(&broker, VERSION, &request(false)).await;
+    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
+
+    let strict = fetch(&broker, VERSION, &request(true)).await;
+    assert!(
+        strict
+            == expect(vec![
+                OffsetFetchResponsePartitions {
+                    partition_index: 0,
+                    committed_offset: -1,
+                    committed_leader_epoch: -1,
+                    metadata: Some(String::new()),
+                    error_code: codes::UNSTABLE_OFFSET_COMMIT,
+                    ..Default::default()
+                },
+                stable_row(1, 11),
+            ])
+    );
+
+    commit_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        vec![(
+            ("orders".to_string(), 0),
+            OffsetEntry {
+                offset: Offset(77),
+                leader_epoch: 5,
+                metadata: String::new(),
+                commit_timestamp_ms: 0,
+            },
+        )],
+    )
+    .await;
+
+    let resolved = fetch(&broker, VERSION, &request(true)).await;
+    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
     broker_handle.shutdown().await;
 }
