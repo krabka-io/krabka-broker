@@ -276,4 +276,76 @@ mod tests {
                 .is_none()
         );
     }
+
+    /// `AssignReplicasToDirs` is the one routed key whose broker handler takes
+    /// no principal and no connection, so it is the only user of the
+    /// [`DispatchKind::Plain`] arm. Route it against a bound broker and decode
+    /// what comes back, which is what proves the arm hands the body to the
+    /// registry rather than falling through to the incompatible-kind error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_plain_kind_api_key_routes_to_the_broker_registry() {
+        use krabka_protocol::{Decode as _, Encode as _};
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind data listener");
+        let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind controller listener");
+        let data_addr = data_listener.local_addr().expect("data addr");
+        let controller_addr = controller_listener.local_addr().expect("controller addr");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.listen_addr = data_addr;
+        config.advertised_listener = data_addr.to_string();
+        config.controller_listen_addr = controller_addr;
+        config.controller_quorum_voters =
+            vec![(krabka_raft::NodeId(1), controller_addr.to_string())];
+        let handle = crate::Broker::start_with_listeners(
+            config,
+            Some(controller_listener),
+            Some(data_listener),
+        )
+        .await
+        .expect("broker start");
+        handle.wait_until_controller_leader().await;
+
+        let router = BrokerControllerAdminRouter::new();
+        router.bind(handle.broker_for_test()).expect("bind once");
+
+        let api_key = krabka_protocol::owned::assign_replicas_to_dirs_request::API_KEY;
+        let api_version = krabka_protocol::owned::assign_replicas_to_dirs_request::MAX_VERSION;
+        let mut body = bytes::BytesMut::new();
+        krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
+            broker_id: 1,
+            broker_epoch: -1,
+            directories: Vec::new(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }
+        .encode(&mut body, api_version)
+        .expect("encode the request body");
+
+        let answer = router
+            .route(ControllerAdminRequest {
+                body: body.freeze(),
+                ..request(api_key, api_version)
+            })
+            .await
+            .expect("the plain arm routes without error")
+            .expect("a routed key answers with a body");
+
+        let mut cursor = answer.body.clone();
+        let decoded = krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::decode(
+            &mut cursor,
+            api_version,
+        )
+        .expect("decode the routed response");
+
+        check!(answer.flexible);
+        check!(
+            decoded
+                == krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::default()
+        );
+        handle.shutdown().await;
+    }
 }

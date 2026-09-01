@@ -18,7 +18,7 @@
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
 use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     UnknownTaggedFields,
@@ -65,6 +65,10 @@ const DELEGATION_TOKEN_AUTH_DISABLED: i16 = 61;
 /// `SCRAM-SHA-256` as KIP-554 numbers the mechanisms on the wire.
 const SCRAM_SHA_256: i8 = 1;
 
+/// Kafka's `INVALID_REPLICATION_FACTOR`, which `CreateTopics` answers when the
+/// registered broker set cannot carry the requested replication factor.
+const INVALID_REPLICATION_FACTOR: i16 = 38;
+
 /// Every api key a Kafka 4.x controller listener accepts, in key order.
 ///
 /// Read off a live `mirror.gcr.io/apache/kafka:4.3.1` controller with a raw
@@ -93,6 +97,11 @@ const KEYS_KRABKA_DOES_NOT_ANSWER: [i16; 5] = [17, 36, 56, 58, 67];
 /// port, and return the handle. Both listeners are bound before the broker
 /// starts so the test knows the ports without racing the bind.
 async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
+    start_node(&[NodeRole::Controller, NodeRole::Broker]).await
+}
+
+/// The same node, with the `process.roles` the case needs.
+async fn start_node(roles: &[NodeRole]) -> (BrokerHandle, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -107,6 +116,7 @@ async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
     config.advertised_listener = data_addr.to_string();
     config.controller_listen_addr = controller_addr;
     config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
+    config.roles = roles.to_vec();
     let broker =
         Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
             .await
@@ -536,6 +546,58 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
                         }],
                         unknown_tagged_fields: UnknownTaggedFields::default(),
                     }],
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }],
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+    broker.shutdown().await;
+}
+
+/// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
+/// listener, so a controller-only node answers both -- and it hosts no
+/// replicas. `process.roles` without `broker` means `register_broker` skips it,
+/// so its image holds no broker at all, and placement has nowhere to put a
+/// replica.
+///
+/// Kafka answers that with `INVALID_REPLICATION_FACTOR` ("the target
+/// replication factor cannot be reached because only 0 broker(s) are
+/// registered"). Substituting the local node instead would create a topic
+/// whose only replica lives on a node that serves no partition, leaving
+/// metadata nothing can ever serve.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_only_node_places_no_replica_on_itself() {
+    let (broker, _dir) = start_node(&[NodeRole::Controller]).await;
+    let connection = dial_controller(&broker).await;
+
+    let created = connection
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "controller-only-placement".into(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics over a controller-only listener");
+    connection.close();
+
+    check!(
+        created
+            == CreateTopicsResponse {
+                throttle_time_ms: 0,
+                topics: vec![CreatableTopicResult {
+                    name: "controller-only-placement".into(),
+                    topic_id: WireUuid([0; 16]),
+                    error_code: INVALID_REPLICATION_FACTOR,
+                    error_message: None,
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: None,
+                    topic_config_error_code: 0,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }],
                 unknown_tagged_fields: UnknownTaggedFields::default(),
