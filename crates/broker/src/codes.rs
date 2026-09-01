@@ -239,6 +239,14 @@ kafka_codes! {
     /// write, or the write timed out.
     FEATURE_UPDATE_FAILED = 96;
 
+    /// `PRINCIPAL_DESERIALIZATION_FAILURE` (97, KIP-590): the controller could
+    /// not read the `request_principal` a forwarding node put in an
+    /// `Envelope`. `kafka.server.EnvelopeUtils` raises it whenever the
+    /// configured `KafkaPrincipalSerde` throws, which covers an absent
+    /// principal, a schema version outside the supported range, and a
+    /// truncated `DefaultPrincipalData` body.
+    PRINCIPAL_DESERIALIZATION_FAILURE = 97;
+
     // KIP-853 voter-reconfiguration codes. Kafka assigns exactly three, at
     // 125 to 127; there is no separate code for a malformed voter update.
     /// `INVALID_VOTER_KEY` (125, KIP-853): a raft RPC carried a voter key

@@ -191,6 +191,7 @@ mod diskless;
 #[cfg(test)]
 mod diskless_crash_model;
 pub(crate) mod elr;
+mod envelope;
 mod error;
 mod features;
 pub mod fetch_session;
