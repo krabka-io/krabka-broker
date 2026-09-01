@@ -160,6 +160,71 @@ pub const fn remote_partition_delete_transition(from: u8, to: u8) -> bool {
     (from == 0 && to == 1) || (from == 1 && to == 2) || (from == 2 && to == 3)
 }
 
+/// Mutation of the primary remote-metadata cache and its derived epoch index.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum RemoteCacheAction {
+    /// Reject a stale, conflicting, or resurrection attempt.
+    Reject,
+    /// Preserve state for an exact retry or an already-absent tombstone.
+    Noop,
+    /// Store the new readable state and rebuild the derived epoch index.
+    StoreFinished,
+    /// Store a non-readable state and rebuild the index without it.
+    StoreHidden,
+    /// Remove primary state and rebuild the index without it.
+    Remove,
+}
+
+/// Classify one remote-segment cache update.
+///
+/// Tags are `0 = missing`, `1 = copy-started`, `2 = copy-finished`,
+/// `3 = delete-started`, and `4 = delete-finished`. A missing
+/// delete-finished event is an idempotent tombstone; every other missing-state
+/// update is rejected so an update can never resurrect a segment.
+#[ensures(result == if current@ == 0 {
+    if target@ == 4 { RemoteCacheAction::Noop } else { RemoteCacheAction::Reject }
+} else if current@ == target@ {
+    if exact_retry { RemoteCacheAction::Noop } else { RemoteCacheAction::Reject }
+} else if current@ == 1 && target@ == 2 {
+    RemoteCacheAction::StoreFinished
+} else if (current@ == 1 || current@ == 2) && target@ == 3 {
+    RemoteCacheAction::StoreHidden
+} else if current@ == 3 && target@ == 4 {
+    RemoteCacheAction::Remove
+} else {
+    RemoteCacheAction::Reject
+})]
+#[ensures(result == RemoteCacheAction::StoreFinished ==> target@ == 2)]
+#[ensures(current@ == 0 ==> result == RemoteCacheAction::Reject
+    || (target@ == 4 && result == RemoteCacheAction::Noop))]
+#[must_use]
+pub const fn remote_cache_action(current: u8, target: u8, exact_retry: bool) -> RemoteCacheAction {
+    if current == 0 {
+        return if target == 4 {
+            RemoteCacheAction::Noop
+        } else {
+            RemoteCacheAction::Reject
+        };
+    }
+    if current == target {
+        return if exact_retry {
+            RemoteCacheAction::Noop
+        } else {
+            RemoteCacheAction::Reject
+        };
+    }
+    if current == 1 && target == 2 {
+        RemoteCacheAction::StoreFinished
+    } else if (current == 1 || current == 2) && target == 3 {
+        RemoteCacheAction::StoreHidden
+    } else if current == 3 && target == 4 {
+        RemoteCacheAction::Remove
+    } else {
+        RemoteCacheAction::Reject
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +304,26 @@ mod tests {
             for (to, want) in [1_u8, 2, 3].into_iter().zip(row) {
                 assert2::check!(remote_partition_delete_transition(from, to) == want);
             }
+        }
+    }
+
+    #[test]
+    fn remote_cache_actions_are_idempotent_and_never_resurrect() {
+        use RemoteCacheAction::{Noop, Reject, Remove, StoreFinished, StoreHidden};
+
+        for (current, target, retry, expected) in [
+            (0, 2, false, Reject),
+            (0, 4, false, Noop),
+            (1, 1, true, Noop),
+            (1, 1, false, Reject),
+            (1, 2, false, StoreFinished),
+            (1, 3, false, StoreHidden),
+            (2, 3, false, StoreHidden),
+            (3, 4, false, Remove),
+            (3, 2, false, Reject),
+            (4, 1, false, Reject),
+        ] {
+            assert2::check!(remote_cache_action(current, target, retry) == expected);
         }
     }
 }

@@ -12,10 +12,10 @@
 //! [`DeleteSegmentFinished`](RemoteLogSegmentState::DeleteSegmentFinished)
 //! drops it entirely.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use krabka_ids::LeaderEpoch;
-use krabka_verified::remote_read_relative_offset;
+use krabka_verified::{RemoteCacheAction, remote_cache_action, remote_read_relative_offset};
 use uuid::Uuid;
 
 use crate::{
@@ -68,51 +68,71 @@ impl RemoteLogMetadataCache {
         update: &RemoteLogSegmentMetadataUpdate,
     ) -> Result<(), RemoteStorageError> {
         let id = update.remote_log_segment_id.clone();
-        let existing = self
-            .id_to_metadata
-            .get(&id.id)
-            .ok_or_else(|| RemoteStorageError::SegmentNotFound(id.clone()))?;
+        let Some(existing) = self.id_to_metadata.get(&id.id).cloned() else {
+            return match remote_cache_action(0, cache_state_tag(update.state), false) {
+                RemoteCacheAction::Noop => Ok(()),
+                _ => Err(RemoteStorageError::SegmentNotFound(id)),
+            };
+        };
+        let exact_retry = update.state == existing.state()
+            && update.event_timestamp_ms == existing.event_timestamp_ms()
+            && update.broker_id == existing.broker_id()
+            && update
+                .custom_metadata
+                .as_ref()
+                .is_none_or(|custom| existing.custom_metadata() == Some(custom));
 
-        let updated = existing.with_update(update)?;
-        let new_state = updated.state();
-
-        match new_state {
-            RemoteLogSegmentState::CopySegmentFinished => self.index_epochs(&updated),
-            RemoteLogSegmentState::DeleteSegmentStarted => self.deindex_epochs(&updated),
-            RemoteLogSegmentState::DeleteSegmentFinished => {
-                self.deindex_epochs(&updated);
-                self.id_to_metadata.remove(&id.id);
-                return Ok(());
+        match remote_cache_action(
+            cache_state_tag(existing.state()),
+            cache_state_tag(update.state),
+            exact_retry,
+        ) {
+            RemoteCacheAction::Reject => Err(RemoteStorageError::InvalidSegmentTransition {
+                id,
+                from: existing.state(),
+                to: update.state,
+            }),
+            RemoteCacheAction::Noop => Ok(()),
+            RemoteCacheAction::StoreFinished | RemoteCacheAction::StoreHidden => {
+                let updated = existing.with_update(update)?;
+                self.id_to_metadata.insert(id.id, updated);
+                self.rebuild_epoch_index();
+                Ok(())
             }
-            RemoteLogSegmentState::CopySegmentStarted => {}
+            RemoteCacheAction::Remove => {
+                existing.with_update(update)?;
+                self.id_to_metadata.remove(&id.id);
+                self.rebuild_epoch_index();
+                Ok(())
+            }
         }
-
-        self.id_to_metadata.insert(id.id, updated);
-        Ok(())
     }
 
-    fn index_epochs(&mut self, metadata: &RemoteLogSegmentMetadata) {
-        let id = metadata.remote_log_segment_id().id;
-        for (&epoch, &start) in metadata.segment_leader_epochs() {
+    /// Rebuild the derived map from canonical primary state. Sorting makes a
+    /// malformed same-epoch/same-start collision deterministic; the lowest
+    /// UUID owns the slot until it leaves readable state, after which the
+    /// next finished candidate becomes visible.
+    fn rebuild_epoch_index(&mut self) {
+        let mut entries = self
+            .id_to_metadata
+            .values()
+            .filter(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
+            .flat_map(|metadata| {
+                let id = metadata.remote_log_segment_id().id;
+                metadata
+                    .segment_leader_epochs()
+                    .iter()
+                    .map(move |(&epoch, &start)| (epoch, start, id))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        self.epoch_to_offset_to_id.clear();
+        for (epoch, start, id) in entries {
             self.epoch_to_offset_to_id
                 .entry(epoch)
                 .or_default()
-                .insert(start, id);
-        }
-    }
-
-    fn deindex_epochs(&mut self, metadata: &RemoteLogSegmentMetadata) {
-        let id = metadata.remote_log_segment_id().id;
-        for (&epoch, &start) in metadata.segment_leader_epochs() {
-            if let Some(map) = self.epoch_to_offset_to_id.get_mut(&epoch) {
-                // Only remove the slot if it still points at this segment.
-                if map.get(&start) == Some(&id) {
-                    map.remove(&start);
-                }
-                if map.is_empty() {
-                    self.epoch_to_offset_to_id.remove(&epoch);
-                }
-            }
+                .entry(start)
+                .or_insert(id);
         }
     }
 
@@ -151,6 +171,10 @@ impl RemoteLogMetadataCache {
         let map = self.epoch_to_offset_to_id.get(&leader_epoch)?;
         map.values()
             .filter_map(|id| self.id_to_metadata.get(id))
+            .filter(|metadata| {
+                metadata.state() == RemoteLogSegmentState::CopySegmentFinished
+                    && metadata.segment_leader_epochs().contains_key(&leader_epoch)
+            })
             .map(RemoteLogSegmentMetadata::end_offset)
             .max()
     }
@@ -166,7 +190,10 @@ impl RemoteLogMetadataCache {
         let mut out: Vec<RemoteLogSegmentMetadata> = self
             .id_to_metadata
             .values()
-            .filter(|m| m.segment_leader_epochs().contains_key(&leader_epoch))
+            .filter(|metadata| {
+                metadata.state() == RemoteLogSegmentState::CopySegmentFinished
+                    && metadata.segment_leader_epochs().contains_key(&leader_epoch)
+            })
             .cloned()
             .collect();
         sort_by_start_offset(&mut out);
@@ -180,31 +207,41 @@ impl RemoteLogMetadataCache {
         self.id_to_metadata.values().cloned().collect()
     }
 
-    /// Seeds this cache from a dump and does no lifecycle-transition
-    /// validation. The cache is assumed to be empty.
+    /// Replace this cache from a dump without replaying lifecycle transitions.
     ///
-    /// The seed rebuilds the per-epoch offset index for every finished
-    /// segment exactly as the live path does, so reads after the seed behave
-    /// the same. The cache keeps `delete_started` and `delete_finished`
-    /// segments in `id_to_metadata` but does not index them. A
-    /// `delete_finished` segment never reaches a dump, but the seed tolerates
-    /// it for robustness. The seed sets the partition-delete state verbatim.
+    /// Duplicate UUIDs fold toward the most advanced lifecycle state, and a
+    /// `delete_finished` UUID remains tombstoned for the whole pass so later
+    /// stale rows cannot resurrect it. The seed then rebuilds the per-epoch
+    /// index from finished primary entries exactly as the live path does.
+    /// Repeating the same seed is idempotent. The partition-delete state is
+    /// replaced verbatim.
     pub(crate) fn seed(
         &mut self,
         segments: Vec<RemoteLogSegmentMetadata>,
         delete_state: Option<RemotePartitionDeleteState>,
     ) {
+        self.id_to_metadata.clear();
+        self.epoch_to_offset_to_id.clear();
+        let mut tombstones = HashSet::new();
         for md in segments {
             let id = md.remote_log_segment_id().id;
-            if md.state() == RemoteLogSegmentState::CopySegmentFinished {
-                self.index_epochs(&md);
-            }
-            // DeleteSegmentFinished segments are dropped entirely in the
-            // live path; if one somehow appears in a dump, skip it.
-            if md.state() != RemoteLogSegmentState::DeleteSegmentFinished {
-                self.id_to_metadata.insert(id, md);
+            if md.state() == RemoteLogSegmentState::DeleteSegmentFinished {
+                self.id_to_metadata.remove(&id);
+                tombstones.insert(id);
+            } else if !tombstones.contains(&id) {
+                match self.id_to_metadata.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(md);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if cache_state_tag(md.state()) > cache_state_tag(entry.get().state()) {
+                            entry.insert(md);
+                        }
+                    }
+                }
             }
         }
+        self.rebuild_epoch_index();
         self.delete_state = delete_state;
     }
 
@@ -214,6 +251,15 @@ impl RemoteLogMetadataCache {
 
     pub(crate) fn set_delete_state(&mut self, state: RemotePartitionDeleteState) {
         self.delete_state = Some(state);
+    }
+}
+
+const fn cache_state_tag(state: RemoteLogSegmentState) -> u8 {
+    match state {
+        RemoteLogSegmentState::CopySegmentStarted => 1,
+        RemoteLogSegmentState::CopySegmentFinished => 2,
+        RemoteLogSegmentState::DeleteSegmentStarted => 3,
+        RemoteLogSegmentState::DeleteSegmentFinished => 4,
     }
 }
 
@@ -334,6 +380,10 @@ mod tests {
     fn list_by_epoch_returns_matching_segments() {
         let mut c = RemoteLogMetadataCache::default();
         c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
+        assert!(
+            c.list_by_epoch(LeaderEpoch(0)).is_empty(),
+            "copy-started is not epoch-readable"
+        );
         c.update(&finish(10)).unwrap();
         let listed_ids: Vec<Uuid> = c
             .list_by_epoch(LeaderEpoch(0))
@@ -344,6 +394,12 @@ mod tests {
         assert!(
             c.list_by_epoch(LeaderEpoch(7)).is_empty(),
             "unknown epoch -> empty"
+        );
+        c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
+            .unwrap();
+        assert!(
+            c.list_by_epoch(LeaderEpoch(0)).is_empty(),
+            "delete-started is not epoch-readable"
         );
     }
 
@@ -439,6 +495,50 @@ mod tests {
     }
 
     #[test]
+    fn exact_update_and_absent_tombstone_retries_are_idempotent() {
+        let mut c = RemoteLogMetadataCache::default();
+        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
+        let finished = finish(10);
+        c.update(&finished).unwrap();
+        c.update(&finished).expect("exact retry is a no-op");
+        check!(c.highest_offset_for_epoch(LeaderEpoch(0)) == Some(99));
+
+        let conflicting = transition(10, RemoteLogSegmentState::CopySegmentFinished);
+        let error = c.update(&conflicting).unwrap_err();
+        check!(matches!(
+            error,
+            RemoteStorageError::InvalidSegmentTransition { .. }
+        ));
+
+        c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
+            .unwrap();
+        c.update(&transition(
+            10,
+            RemoteLogSegmentState::DeleteSegmentFinished,
+        ))
+        .unwrap();
+        c.update(&transition(
+            10,
+            RemoteLogSegmentState::DeleteSegmentFinished,
+        ))
+        .expect("absent delete-finished tombstone is a no-op");
+        check!(c.list().is_empty());
+        check!(c.highest_offset_for_epoch(LeaderEpoch(0)).is_none());
+    }
+
+    #[test]
+    fn stale_update_cannot_reindex_a_deleting_segment() {
+        let mut c = RemoteLogMetadataCache::default();
+        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
+        c.update(&finish(10)).unwrap();
+        c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
+            .unwrap();
+        check!(c.update(&finish(10)).is_err());
+        check!(c.segment_for(LeaderEpoch(0), 50).is_none());
+        check!(c.highest_offset_for_epoch(LeaderEpoch(0)).is_none());
+    }
+
+    #[test]
     fn add_with_wrong_state_errors() {
         let mut c = RemoteLogMetadataCache::default();
         let mut s = seg(10, &[(0, 0)], 0, 99);
@@ -487,6 +587,56 @@ mod tests {
         check!(seeded.segment_for(LeaderEpoch(0), 150).is_none());
         check!(seeded.list().len() == 2);
         check!(seeded.delete_state() == Some(RemotePartitionDeleteState::DeletePartitionMarked));
+    }
+
+    #[test]
+    fn repeated_seed_and_tombstone_duplicates_do_not_resurrect() {
+        let started = seg(10, &[(0, 0)], 0, 99);
+        let finished = started.with_update(&finish(10)).unwrap();
+        let deleting = finished
+            .with_update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
+            .unwrap();
+        let deleted = deleting
+            .with_update(&transition(
+                10,
+                RemoteLogSegmentState::DeleteSegmentFinished,
+            ))
+            .unwrap();
+        let dump = vec![finished, deleted, started];
+
+        let mut c = RemoteLogMetadataCache::default();
+        c.seed(dump.clone(), None);
+        check!(c.list().is_empty());
+        check!(c.segment_for(LeaderEpoch(0), 50).is_none());
+        c.seed(dump, None);
+        check!(c.list().is_empty());
+        check!(c.highest_offset_for_epoch(LeaderEpoch(0)).is_none());
+    }
+
+    #[test]
+    fn index_collision_is_deterministic_and_reveals_the_remaining_finished_segment() {
+        let mut c = RemoteLogMetadataCache::default();
+        c.add(seg(11, &[(0, 0)], 0, 99)).unwrap();
+        c.add(seg(10, &[(0, 0)], 0, 99)).unwrap();
+        c.update(&finish(11)).unwrap();
+        c.update(&finish(10)).unwrap();
+        check!(
+            c.segment_for(LeaderEpoch(0), 50)
+                .unwrap()
+                .remote_log_segment_id()
+                .id
+                == Uuid::from_u128(10)
+        );
+
+        c.update(&transition(10, RemoteLogSegmentState::DeleteSegmentStarted))
+            .unwrap();
+        check!(
+            c.segment_for(LeaderEpoch(0), 50)
+                .unwrap()
+                .remote_log_segment_id()
+                .id
+                == Uuid::from_u128(11)
+        );
     }
 
     #[test]
