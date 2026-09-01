@@ -51,6 +51,11 @@ kafka_codes! {
     /// format.
     CORRUPT_MESSAGE = 2;
     UNKNOWN_TOPIC_OR_PARTITION = 3;
+    /// `LEADER_NOT_AVAILABLE` (5): the partition has no leader this broker can
+    /// name. Kafka's `KRaftMetadataCache` sets it on a `Metadata` partition row
+    /// whose `leader_id` it is answering as `-1`; a JVM client reads it as
+    /// retriable and refreshes its metadata.
+    LEADER_NOT_AVAILABLE = 5;
     NOT_LEADER_OR_FOLLOWER = 6;
     REQUEST_TIMED_OUT = 7;
     /// `REPLICA_NOT_AVAILABLE` (9, KIP-113): this broker does not host the

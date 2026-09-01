@@ -9,6 +9,11 @@
 //! responses names the replica on the dead disk — and that a partition on the
 //! surviving disk still reports none.
 //!
+//! The same row also has to stop calling that replica a leader and an in-sync
+//! member, because those are the two columns the tools actually filter on.
+//! `crates/broker/tests/unavailable_partitions_jvm.rs` drives the real
+//! `kafka-topics` over this behaviour and compares it against Apache Kafka.
+//!
 //! The other half of Kafka's rule is the fencing state
 //! (`KRaftMetadataCache.isReplicaOffline` is `fenced() || !hasOnlineDir(dir)`).
 //! Only the controller leader holds the heartbeat registry that decides it, so
@@ -46,6 +51,12 @@ const TOPIC: &str = "kip112-offline-replicas";
 /// algorithm; `jbod.rs` relies on the same premise.
 const PARTITIONS: i32 = 6;
 const BROKER_ID: i32 = 1;
+/// Kafka's `MetadataResponse.NO_LEADER_ID`, which `kafka-topics` prints as
+/// `Leader: none`.
+const NO_LEADER_ID: i32 = -1;
+/// `LEADER_NOT_AVAILABLE`, the code Kafka's `Metadata` carries beside a `-1`
+/// leader.
+const LEADER_NOT_AVAILABLE: i16 = 5;
 const METADATA_VERSION: i16 = 12;
 const DESCRIBE_TOPIC_PARTITIONS_VERSION: i16 = 0;
 /// The heartbeat that carries the offline dir to the controller runs every
@@ -294,42 +305,46 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
 
     let expected_offline: HashSet<i32> = doomed.iter().copied().collect();
 
+    // The whole row, for both APIs. The sole replica of a doomed partition is
+    // on the dead disk, so it is reported offline, it does not lead, and it is
+    // not in-sync -- which is the shape Apache Kafka 4.3.1 answers for the
+    // same cluster: `Leader: none  Replicas: 1  Isr:`. `Metadata` carries
+    // `LEADER_NOT_AVAILABLE` beside the `-1`; `DescribeTopicPartitions` does
+    // not.
     let metadata = metadata_partitions(addr).await;
     let expected_metadata: Vec<MetadataResponsePartition> = (0..PARTITIONS)
-        .map(|partition| MetadataResponsePartition {
-            error_code: 0,
-            partition_index: partition,
-            leader_id: BROKER_ID,
-            leader_epoch: leader_epoch(&handle, partition),
-            replica_nodes: vec![BROKER_ID],
-            isr_nodes: vec![BROKER_ID],
-            offline_replicas: if expected_offline.contains(&partition) {
-                vec![BROKER_ID]
-            } else {
-                vec![]
-            },
-            ..Default::default()
+        .map(|partition| {
+            let doomed = expected_offline.contains(&partition);
+            MetadataResponsePartition {
+                error_code: if doomed { LEADER_NOT_AVAILABLE } else { 0 },
+                partition_index: partition,
+                leader_id: if doomed { NO_LEADER_ID } else { BROKER_ID },
+                leader_epoch: leader_epoch(&handle, partition),
+                replica_nodes: vec![BROKER_ID],
+                isr_nodes: if doomed { vec![] } else { vec![BROKER_ID] },
+                offline_replicas: if doomed { vec![BROKER_ID] } else { vec![] },
+                ..Default::default()
+            }
         })
         .collect();
     assert!(metadata == expected_metadata);
 
     let described = describe_topic_partitions(addr).await;
     let expected_described: Vec<DescribeTopicPartitionsResponsePartition> = (0..PARTITIONS)
-        .map(|partition| DescribeTopicPartitionsResponsePartition {
-            error_code: 0,
-            partition_index: partition,
-            leader_id: BROKER_ID,
-            leader_epoch: leader_epoch(&handle, partition),
-            replica_nodes: vec![BROKER_ID],
-            isr_nodes: vec![BROKER_ID],
-            eligible_leader_replicas: Some(vec![]),
-            last_known_elr: Some(vec![]),
-            offline_replicas: if expected_offline.contains(&partition) {
-                vec![BROKER_ID]
-            } else {
-                vec![]
-            },
-            ..Default::default()
+        .map(|partition| {
+            let doomed = expected_offline.contains(&partition);
+            DescribeTopicPartitionsResponsePartition {
+                error_code: 0,
+                partition_index: partition,
+                leader_id: if doomed { NO_LEADER_ID } else { BROKER_ID },
+                leader_epoch: leader_epoch(&handle, partition),
+                replica_nodes: vec![BROKER_ID],
+                isr_nodes: if doomed { vec![] } else { vec![BROKER_ID] },
+                eligible_leader_replicas: Some(vec![]),
+                last_known_elr: Some(vec![]),
+                offline_replicas: if doomed { vec![BROKER_ID] } else { vec![] },
+                ..Default::default()
+            }
         })
         .collect();
     assert!(described == expected_described);
@@ -364,6 +379,10 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
             .map(|node| i32::try_from(node.0).expect("node id fits an i32"))
             .collect()
     };
+    // A fenced broker keeps whatever seat the image still gives it: only a
+    // replica on a dead *directory* is projected out of the leader and ISR
+    // columns, because that is the one conclusion the controller cannot write
+    // down. See `krabka_broker::handlers::offline_replicas`.
     MetadataResponsePartition {
         error_code: 0,
         partition_index: 0,

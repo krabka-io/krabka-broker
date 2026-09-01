@@ -9,6 +9,11 @@
 //! field in any version of Kafka's schema, `0-13` included, so a partition row
 //! here stops at `offline_replicas`. `DescribeTopicPartitions` is the only API
 //! that reports ELR; see [`crate::handlers::elr`].
+//!
+//! Leader, ISR and `offline_replicas` are decided together, by
+//! `crate::handlers::offline_replicas::partition_availability`, so this API and
+//! `DescribeTopicPartitions` cannot report a replica offline in one column and
+//! leading in another.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -29,7 +34,7 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::{authorized_operations::authorized_operations_bits, offline_replicas::NO_LEADER_ID},
 };
 
 // ACL preamble + asymmetric loop.
@@ -278,27 +283,37 @@ fn success_topic_row(
 ) -> MetadataResponseTopic {
     let partitions = image
         .partitions_of(name)
-        .map(|partition| MetadataResponsePartition {
-            error_code: codes::NONE,
-            partition_index: partition.partition,
-            leader_id: i32::try_from(partition.leader.0).unwrap_or(i32::MAX),
-            leader_epoch: partition.leader_epoch.0,
-            replica_nodes: partition
-                .replicas
-                .iter()
-                .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-                .collect(),
-            isr_nodes: partition
-                .isr
-                .iter()
-                .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
-                .collect(),
-            offline_replicas: crate::handlers::offline_replicas::offline_replicas(
+        .map(|partition| {
+            let availability = crate::handlers::offline_replicas::partition_availability(
                 image,
                 partition,
                 inputs.unavailable,
-            ),
-            ..Default::default()
+            );
+            MetadataResponsePartition {
+                // Kafka's `KRaftMetadataCache.partitionMetadata` answers a
+                // partition it can find no live leader endpoint for with
+                // `LEADER_NOT_AVAILABLE` beside the `-1`, and with the
+                // replica, ISR and offline lists filled in as usual. Read out
+                // of `kafka-metadata-4.3.1.jar`; `DescribeTopicPartitions`
+                // takes the same `-1` with no error code, which is why only
+                // this API sets one.
+                error_code: if availability.leader_id == NO_LEADER_ID {
+                    codes::LEADER_NOT_AVAILABLE
+                } else {
+                    codes::NONE
+                },
+                partition_index: partition.partition,
+                leader_id: availability.leader_id,
+                leader_epoch: partition.leader_epoch.0,
+                replica_nodes: partition
+                    .replicas
+                    .iter()
+                    .map(|replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
+                    .collect(),
+                isr_nodes: availability.isr_nodes,
+                offline_replicas: availability.offline_replicas,
+                ..Default::default()
+            }
         })
         .collect();
     let topic_authorized_operations = if inputs.request.include_topic_authorized_operations {

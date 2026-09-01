@@ -110,6 +110,10 @@ crate_tests(
         "librdkafka_conformance": [
             "kcat_1_7_1",
         ],
+        # One image, used twice: as the `kafka-topics` client that reads
+        # krabka's answer and as the Kafka broker the same command is run
+        # against for the differential.
+        "unavailable_partitions_jvm": ["apache_kafka_4_3_1"],
         # Same image set as `jvm_acceptance_tiered`: the suite reuses that
         # harness's producer, consumer and topic-create helpers, and adds an
         # Object-Lock bucket that `mc` creates and then fails to empty.
