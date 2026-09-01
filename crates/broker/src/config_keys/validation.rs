@@ -4,107 +4,72 @@
 use std::collections::BTreeMap;
 
 use super::{
-    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
-    RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
-    delivery::{
-        DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
-        DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
-    },
-    diskless::{DISKLESS, validate_diskless_combination},
+    CLEANUP_POLICY, COMPRESSION_TYPE,
+    delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
+    diskless::validate_diskless_combination,
     qos::{QOS_TIER, validate_qos_tier},
-    recovery::{RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
-    schema::{
-        SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL,
-        SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_VALUE,
-    },
+    registry::{self, BOOLEAN_VALUES, ConfigScope, ValueCheck},
 };
 
 /// Validate a single key/value pair. `Err(reason)` carries an
 /// operator-readable explanation that the handler propagates into the
 /// `error_message` field of the response.
+///
+/// The accepted values come from the key's row in [`super::registry`], so the
+/// check an operator meets here is the one the reference page and
+/// `DescribeConfigs` describe. Four keys carry a parser their own module
+/// owns; the rest are a closed value list or a numeric floor.
 pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String> {
-    match key {
-        RETENTION_MS | RETENTION_BYTES => {
-            parse_i64_at_least(RETENTION_UNLIMITED, value).map(|_| ())
+    let Some(row) = registry::lookup(ConfigScope::Topic, key).filter(|row| row.is_stored()) else {
+        return Err(format!("unrecognized config key `{key}`"));
+    };
+    match row.check {
+        ValueCheck::Bool => expect_one_of(key, value, BOOLEAN_VALUES),
+        ValueCheck::OneOf(accepted) => expect_one_of(key, value, accepted),
+        ValueCheck::I64AtLeast(min) => parse_i64_at_least(min, value).map(|_| ()),
+        ValueCheck::I32AtLeast(min) => parse_i32_at_least(min, value).map(|_| ()),
+        ValueCheck::Parsed => match key {
+            COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
+            QOS_TIER => validate_qos_tier(value),
+            crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
+            | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
+                crate::throttle::ThrottledReplicas::parse(value).map(|_| ())
+            }
+            other => Err(format!("unrecognized config key `{other}`")),
+        },
+        // A stored key is never `NotAltered`, and the `let ... else` above
+        // has already refused the unstored ones.
+        ValueCheck::NotAltered => Err(format!("unrecognized config key `{key}`")),
+    }
+}
+
+/// The refusal a closed value list gives, spelled the way Kafka's own
+/// `ConfigDef` refusals read: the offending pair, then the accepted values in
+/// the order the registry lists them.
+fn expect_one_of(key: &str, value: &str, accepted: &[&str]) -> Result<(), String> {
+    if accepted.contains(&value) {
+        return Ok(());
+    }
+    Err(format!(
+        "{key}={value} not supported; expected {}",
+        list_values(accepted)
+    ))
+}
+
+/// `` `a` or `b` `` for two values, `` `a`, `b`, or `c` `` for more.
+fn list_values(accepted: &[&str]) -> String {
+    match accepted {
+        [] => String::new(),
+        [only] => format!("`{only}`"),
+        [first, second] => format!("`{first}` or `{second}`"),
+        [rest @ .., last] => {
+            let head = rest
+                .iter()
+                .map(|value| format!("`{value}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head}, or `{last}`")
         }
-        LOCAL_RETENTION_MS | LOCAL_RETENTION_BYTES => {
-            parse_i64_at_least(LOCAL_RETENTION_INHERIT, value).map(|_| ())
-        }
-        DELETE_RETENTION_MS => parse_i64_at_least(0, value).map(|_| ()),
-        SEGMENT_BYTES => parse_u64_at_least(1, value).map(|_| ()),
-        CLEANUP_POLICY => match value {
-            "delete" | "compact" => Ok(()),
-            _ => Err(format!(
-                "cleanup.policy={value} not supported; expected `delete` or `compact`"
-            )),
-        },
-        COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
-        MIN_INSYNC_REPLICAS => parse_i64_at_least(1, value).map(|_| ()),
-        UNCLEAN_LEADER_ELECTION_ENABLE => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "unclean.leader.election.enable={value} not supported; expected `true` or `false`"
-            )),
-        },
-        UNCLEAN_RECOVERY_STRATEGY => RecoveryStrategy::parse(value).map(|_| ()).ok_or_else(|| {
-            format!(
-                "unclean.recovery.strategy={value} not supported; expected `None`, `Balanced`, or `Aggressive`"
-            )
-        }),
-        REMOTE_STORAGE_ENABLE => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "remote.storage.enable={value} not supported; expected `true` or `false`"
-            )),
-        },
-        DISKLESS => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "krabka.diskless={value} not supported; expected `true` or `false`"
-            )),
-        },
-        QOS_TIER => validate_qos_tier(value),
-        DELIVERY_MODE => match value {
-            DELIVERY_MODE_IMMEDIATE | DELIVERY_MODE_SCHEDULED => Ok(()),
-            _ => Err(format!(
-                "delivery.mode={value} not supported; expected \
-                 `{DELIVERY_MODE_IMMEDIATE}` or `{DELIVERY_MODE_SCHEDULED}`"
-            )),
-        },
-        DELIVERY_MAX_DELAY_MS => {
-            parse_i64_at_least(DELIVERY_MAX_DELAY_UNLIMITED, value).map(|_| ())
-        }
-        DELIVERY_SCHEDULE_MONOTONIC => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "delivery.schedule.monotonic={value} not supported; expected `true` or `false`"
-            )),
-        },
-        SCHEMA_VALIDATION_KEY => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "schema.validation.key={value} not supported; expected `true` or `false`"
-            )),
-        },
-        SCHEMA_VALIDATION_VALUE => match value {
-            "true" | "false" => Ok(()),
-            _ => Err(format!(
-                "schema.validation.value={value} not supported; expected `true` or `false`"
-            )),
-        },
-        SCHEMA_VALIDATION_MODE => match value {
-            SCHEMA_VALIDATION_MODE_ID | SCHEMA_VALIDATION_MODE_FULL => Ok(()),
-            _ => Err(format!(
-                "schema.validation.mode={value} not supported; expected \
-                 `{SCHEMA_VALIDATION_MODE_ID}` or `{SCHEMA_VALIDATION_MODE_FULL}`"
-            )),
-        },
-        crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
-        | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
-            crate::throttle::ThrottledReplicas::parse(value).map(|_| ())
-        }
-        unknown => Err(format!("unrecognized config key `{unknown}`")),
     }
 }
 
@@ -188,10 +153,16 @@ fn parse_i64_at_least(min: i64, value: &str) -> Result<i64, String> {
     Ok(parsed)
 }
 
-fn parse_u64_at_least(min: u64, value: &str) -> Result<u64, String> {
-    let parsed: u64 = value
+/// The check an `INT` row carries. Kafka parses the value of a key it types
+/// `INT` with `Integer.parseInt`, so `2147483648` is not a value the key can
+/// hold however large the broker's own runtime type is: `apache/kafka:4.3.1`
+/// answers `Invalid value 2147483648 for configuration min.insync.replicas:
+/// Not a number of type INT`. Refusing it here keeps the value an operator
+/// may set inside the type `DescribeConfigs` advertises.
+fn parse_i32_at_least(min: i32, value: &str) -> Result<i32, String> {
+    let parsed: i32 = value
         .parse()
-        .map_err(|_| format!("expected non-negative integer, got `{value}`"))?;
+        .map_err(|_| format!("expected a 32-bit integer, got `{value}`"))?;
     if parsed < min {
         return Err(format!("value `{value}` must be >= {min}"));
     }
@@ -200,33 +171,10 @@ fn parse_u64_at_least(min: u64, value: &str) -> Result<u64, String> {
 
 /// Returns `true` if `key` is one of the recognized topic-config keys.
 /// This helps `IncrementalAlterConfigs` DELETE-op validation, which then
-/// needs no sentinel probe value.
+/// needs no sentinel probe value. A synthesised key such as
+/// [`super::WRITE_FREEZE`] is not recognized: no alter path may write it.
 pub(crate) fn is_recognized(key: &str) -> bool {
-    matches!(
-        key,
-        RETENTION_MS
-            | RETENTION_BYTES
-            | SEGMENT_BYTES
-            | CLEANUP_POLICY
-            | COMPRESSION_TYPE
-            | MIN_INSYNC_REPLICAS
-            | UNCLEAN_LEADER_ELECTION_ENABLE
-            | UNCLEAN_RECOVERY_STRATEGY
-            | REMOTE_STORAGE_ENABLE
-            | LOCAL_RETENTION_MS
-            | LOCAL_RETENTION_BYTES
-            | DELETE_RETENTION_MS
-            | QOS_TIER
-            | DISKLESS
-            | DELIVERY_MODE
-            | DELIVERY_MAX_DELAY_MS
-            | DELIVERY_SCHEDULE_MONOTONIC
-            | SCHEMA_VALIDATION_KEY
-            | SCHEMA_VALIDATION_VALUE
-            | SCHEMA_VALIDATION_MODE
-            | crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
-            | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY
-    )
+    registry::lookup(ConfigScope::Topic, key).is_some_and(registry::ConfigKey::is_stored)
 }
 
 #[cfg(test)]

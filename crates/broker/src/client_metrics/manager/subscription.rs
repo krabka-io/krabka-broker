@@ -178,6 +178,22 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_metrics_list_collects_nothing() {
+        // KIP-714: `*` is the value that means every metric. An empty list
+        // names no prefix, so it contributes nothing to the client's set --
+        // `apache/kafka:4.3.1` builds the same set by adding each matching
+        // subscription's metrics, and an empty one adds none. The registry
+        // row documents the key that way.
+        let img = img_with("empty", &[("metrics", ""), ("interval.ms", "60000")]);
+        let m = compute_subscription(&img, &attrs(), 300_000);
+        assert!(m.metrics.is_empty());
+
+        let unset = img_with("unset", &[("interval.ms", "60000")]);
+        let m2 = compute_subscription(&unset, &attrs(), 300_000);
+        assert!(m2.metrics.is_empty());
+    }
+
+    #[test]
     fn star_collapses_union() {
         let mut img = img_with("s1", &[("metrics", "a.")]);
         img.apply(&MetadataRecord::V1ClientMetricsConfig(
