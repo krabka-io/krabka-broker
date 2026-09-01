@@ -142,10 +142,11 @@ mod tests {
     #[test]
     fn fired_separates_a_completed_deadline_from_a_failed_one() {
         let clock = clock_past_its_origin();
-        let refusal = clock
-            .new_timer()
-            .after(Duration::MAX)
-            .expect_err("an overflowing delay is refused");
+        // `expect_err` would need `Debug` on the success type, and a
+        // `TimerFuture` is a boxed trait object that has none.
+        let Err(refusal) = clock.new_timer().after(Duration::MAX) else {
+            panic!("an overflowing delay must be refused");
+        };
 
         check!(fired(Ok(()), TASK));
         check!(!fired(Err(refusal), TASK));
