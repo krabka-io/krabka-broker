@@ -77,6 +77,11 @@ impl Log {
         }
         base_offsets.sort_unstable();
         base_offsets.dedup();
+        if !krabka_verified::local_recovery_segment_chain(&base_offsets) {
+            return Err(LogError::Corrupt(
+                "log segment bases are not a nonnegative ordered chain".into(),
+            ));
+        }
 
         let mut segments: Vec<Segment> = Vec::with_capacity(base_offsets.len());
         let mut active: Option<Segment> = None;
@@ -90,7 +95,9 @@ impl Log {
                 // doesn't skip this recovered segment and serve a later base
                 // offset — which after a restart manufactures an offset gap that
                 // strands a follower fetching from a low offset.
-                seg.seal_at(Offset(base_offsets[i + 1] - 1));
+                let last = krabka_verified::local_recovery_sealed_last(*base, base_offsets[i + 1])
+                    .ok_or_else(|| LogError::Corrupt("invalid sealed segment boundary".into()))?;
+                seg.seal_at(Offset(last));
                 // `Segment::open` also leaves `max_timestamp` unknown, and
                 // `retention::time_based_evict` reads it as "older than any
                 // cutoff". Without this the first tick after a restart deletes
@@ -98,10 +105,11 @@ impl Log {
                 seg.restore_max_timestamp()?;
                 segments.push(seg);
             } else {
-                active = Some(Segment::open_active(
+                active = Some(Segment::open_active_with_index_interval(
                     &dir,
                     Offset(*base),
                     config.validate_on_open,
+                    config.index_interval,
                 )?);
             }
         }

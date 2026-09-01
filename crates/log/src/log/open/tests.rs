@@ -31,6 +31,17 @@ fn open_creates_log_file() {
 }
 
 #[test]
+fn open_rejects_a_negative_segment_base() {
+    let dir = tempdir().unwrap();
+    std::fs::File::create(name::log_path(dir.path(), -1)).unwrap();
+
+    assert2::assert!(matches!(
+        Log::open(dir.path(), LogConfig::default()),
+        Err(LogError::Corrupt(message)) if message.contains("segment bases")
+    ));
+}
+
+#[test]
 fn open_recovers_partial_trailing_batch() {
     let dir = tempdir().unwrap();
     {

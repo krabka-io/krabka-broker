@@ -22,6 +22,7 @@ pub mod epoch;
 pub mod features;
 pub mod isr;
 pub mod leader_epoch;
+pub mod local_recovery;
 pub mod log_index;
 pub mod offset_allocator;
 pub mod produce;
@@ -89,6 +90,11 @@ pub use diskless::{
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
+pub use local_recovery::{
+    LocalRecoveryStep, LocalRecoverySwapAction, local_recovery_batch_step,
+    local_recovery_index_frontier, local_recovery_sealed_last, local_recovery_segment_chain,
+    local_recovery_swap_action,
+};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
 pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};

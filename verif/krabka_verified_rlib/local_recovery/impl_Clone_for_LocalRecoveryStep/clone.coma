@@ -1,0 +1,19 @@
+(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 8 27 8 32 *)
+
+(* <local_recovery::LocalRecoveryStep as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_LocalRecoveryStep = { valid_end: UInt64.t; last_offset: Int64.t; next_offset: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_LocalRecoveryStep [#"/proof-work-243/crates/verified/src/local_recovery.rs" 8 27 8 32]
+  (self: t_LocalRecoveryStep) (return (x: t_LocalRecoveryStep)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalRecoveryStep = Any.any_l () | & self: t_LocalRecoveryStep = self ])
+  [ return (result: t_LocalRecoveryStep) -> (! return {result}) ]
