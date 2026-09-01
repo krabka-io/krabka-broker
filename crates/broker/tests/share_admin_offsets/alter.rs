@@ -47,7 +47,7 @@ async fn alter_resets_empty_group() {
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
     // Make the share coordinator write-ready WITHOUT joining (no members).
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     // Produce 6 records so offset 5 exists.
     produce_n(&client, "t", tid, 0, 6).await;
 
@@ -116,7 +116,7 @@ async fn alter_non_empty_group_fenced() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 3).await;
 
     // Live member present (steady-state heartbeat), never leaves.

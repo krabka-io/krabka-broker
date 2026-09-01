@@ -360,6 +360,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
         vec![("range".into(), subscription_blob(&["t"]))],
     ));
     let group = Box::new(CoordinatorGroup {
+        empty_since_ms: None,
         group_id: "g".into(),
         kind: GroupKind::Classic(cs),
         committed_offsets: HashMap::new(),

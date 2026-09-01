@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_frontier_reaches": { "prover": "alt-ergo", "time": 0.007 }
+    }
+  }
+}

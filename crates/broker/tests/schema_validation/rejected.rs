@@ -52,6 +52,12 @@ async fn records_that_fail_validation_are_rejected_and_not_appended() {
                 .is_some_and(|m| !m.is_empty()),
             "case {name}: empty message"
         );
+        // Nothing was appended, so there is no offset to report: Kafka's
+        // pre-append sentinel, not the 0 that would name the head of the log.
+        check!(
+            out.base_offset == -1,
+            "case {name}: a rejected row named an offset"
+        );
         // The assertion that matters: nothing was appended.
         check!(
             broker.local_log_end_offset("validated", 0) == Some(0),

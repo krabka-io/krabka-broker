@@ -1,10 +1,23 @@
 //! Per-API request accounting: the dispatched, unsupported and errored
-//! request counters, the request-latency histogram, and the resolution of a
-//! wire `api_key` to the bounded label those families share.
+//! request counters, the request-latency histograms — the end-to-end total and
+//! the local, remote and throttle phases beside it — the applied-throttle
+//! histogram keyed by quota, and the resolution of a wire `api_key` to the
+//! bounded label those families share.
+
+use krabka_units::{Time, convert::TimeExt};
 
 use super::{
-    ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, UNKNOWN_LABEL,
+    ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, QuotaType,
+    QuotaTypeLabel, UNKNOWN_LABEL,
 };
+use crate::handlers::ApiKeyCode;
+
+/// The `api_key` label every per-API family in this module shares.
+fn api_key_label(api_key: ApiKeyCode) -> ApiKeyLabel {
+    ApiKeyLabel {
+        api_key: api_key_label_name(api_key).to_string(),
+    }
+}
 
 impl BrokerMetrics {
     /// Account one dispatched request for `api_key`. The label is the
@@ -50,6 +63,85 @@ impl BrokerMetrics {
         self.connection_closes
             .get_or_create(&ConnectionCloseReasonLabel { reason })
             .inc();
+    }
+
+    /// Observe the seconds one request spent on this broker's own log, on
+    /// `request_local_duration_seconds{api_key}`. Labelled exactly like
+    /// `observe_request_duration`, so the phase and the total share one label
+    /// set and an operator can divide one by the other.
+    pub fn observe_request_local_duration(&self, api_key: ApiKeyCode, seconds: f64) {
+        self.request_local_duration_seconds
+            .get_or_create(&api_key_label(api_key))
+            .observe(seconds);
+    }
+
+    /// Observe the seconds one request spent waiting on another broker, on
+    /// `request_remote_duration_seconds{api_key}`. Labelled like
+    /// `observe_request_duration`.
+    pub fn observe_request_remote_duration(&self, api_key: ApiKeyCode, seconds: f64) {
+        self.request_remote_duration_seconds
+            .get_or_create(&api_key_label(api_key))
+            .observe(seconds);
+    }
+
+    /// Observe the seconds one request slept in the KIP-219 quota throttle, on
+    /// `request_throttle_duration_seconds{api_key}`. Callers observe on every
+    /// request they account a quota for, passing zero when no quota delayed
+    /// it, so the family counts accounted requests rather than only throttled
+    /// ones.
+    pub fn observe_request_throttle_duration(&self, api_key: ApiKeyCode, seconds: f64) {
+        self.request_throttle_duration_seconds
+            .get_or_create(&api_key_label(api_key))
+            .observe(seconds);
+    }
+
+    /// Observe one applied throttle on `quota_throttle_duration_seconds`,
+    /// attributed to the [`QuotaType`] whose delay the broker slept for.
+    ///
+    /// A zero delay is *not* observed: this family answers "which quota is
+    /// holding my clients back, and for how long", so its `_count` is the
+    /// number of throttled requests. The caller checks the delay before
+    /// deciding which quota won, so it also decides whether to call at all.
+    pub fn observe_quota_throttle(&self, quota_type: QuotaType, seconds: f64) {
+        self.quota_throttle_duration_seconds
+            .get_or_create(&QuotaTypeLabel { quota_type })
+            .observe(seconds);
+    }
+
+    /// Resolve and record the throttle one request applies, and return the
+    /// delay the caller must sleep for.
+    ///
+    /// `charged` is every quota the request was charged, paired with the delay
+    /// that quota asked for. KIP-219 makes the request sleep for the largest
+    /// of them, so that delay lands on
+    /// `request_throttle_duration_seconds{api_key}` — with an explicit zero
+    /// when no quota asked for anything — and the quota that produced it
+    /// labels `quota_throttle_duration_seconds`. Equal delays resolve to the
+    /// earlier entry, which is why callers list the quota specific to their
+    /// api ahead of the request quota that every api shares.
+    ///
+    /// The `max` lives here rather than at each call site so that the delay
+    /// the broker sleeps for, the delay it reports in `ThrottleTimeMs`, and
+    /// the delay it records cannot drift apart. An api that is charged one
+    /// quota still calls with a one-entry slice, for that reason: the
+    /// KIP-599 admin apis pass only their controller-mutation delay.
+    pub(crate) fn record_applied_throttle(
+        &self,
+        api_key: ApiKeyCode,
+        charged: &[(QuotaType, Time)],
+    ) -> Time {
+        let mut applied: Option<(QuotaType, Time)> = None;
+        for &(quota_type, delay) in charged {
+            if applied.is_none_or(|(_, largest)| delay > largest) {
+                applied = Some((quota_type, delay));
+            }
+        }
+        let (quota_type, delay) = applied.unwrap_or((QuotaType::Request, <Time as TimeExt>::ZERO));
+        self.observe_request_throttle_duration(api_key, delay.secs_f64());
+        if delay > <Time as TimeExt>::ZERO {
+            self.observe_quota_throttle(quota_type, delay.secs_f64());
+        }
+        delay
     }
 
     /// Account one request whose handler returned an error (the
@@ -100,8 +192,108 @@ fn krabka_private_api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_units::millis;
 
     use super::*;
+
+    /// The applied throttle is the largest delay charged, and it is attributed
+    /// to the quota that asked for it — the one an operator has to raise.
+    #[tokio::test]
+    async fn record_applied_throttle_returns_and_attributes_the_largest_delay() {
+        let cases = [
+            (
+                "byte rate dominates",
+                vec![
+                    (QuotaType::Produce, millis(400)),
+                    (QuotaType::Request, millis(100)),
+                ],
+                millis(400),
+                Some(QuotaType::Produce),
+            ),
+            (
+                "request quota dominates",
+                vec![
+                    (QuotaType::Fetch, millis(50)),
+                    (QuotaType::Request, millis(250)),
+                ],
+                millis(250),
+                Some(QuotaType::Request),
+            ),
+            (
+                "a tie goes to the api-specific quota listed first",
+                vec![
+                    (QuotaType::Produce, millis(200)),
+                    (QuotaType::Request, millis(200)),
+                ],
+                millis(200),
+                Some(QuotaType::Produce),
+            ),
+            (
+                "no quota fired: the phase is observed, the quota family is not",
+                vec![
+                    (QuotaType::Produce, <Time as TimeExt>::ZERO),
+                    (QuotaType::Request, <Time as TimeExt>::ZERO),
+                ],
+                <Time as TimeExt>::ZERO,
+                None,
+            ),
+            (
+                "the KIP-599 admin apis charge one quota and pass one entry",
+                vec![(QuotaType::ControllerMutation, millis(750))],
+                millis(750),
+                Some(QuotaType::ControllerMutation),
+            ),
+        ];
+
+        for (label, charged, want_delay, want_quota) in cases {
+            let metrics = BrokerMetrics::new();
+            let applied = metrics.record_applied_throttle(0, &charged);
+            assert!(applied == want_delay, "{label}");
+
+            let rendered = render(&metrics).await;
+            // Every call observes the per-api throttle phase, the zero
+            // included, so its `_count` tracks the request count.
+            let phase = format!(
+                "krabka_broker_request_throttle_duration_seconds_sum{{api_key=\"Produce\"}} {}",
+                want_delay.secs_f64()
+            );
+            assert!(rendered.contains(&phase), "{label}: missing {phase}");
+            assert!(
+                rendered.contains(
+                    "krabka_broker_request_throttle_duration_seconds_count{api_key=\"Produce\"} 1"
+                ),
+                "{label}: throttle phase must be observed once"
+            );
+
+            // The quota family carries a series only for the quota that won,
+            // and only when a quota actually delayed the request.
+            for quota_type in QuotaType::ALL {
+                let series = format!(
+                    "krabka_broker_quota_throttle_duration_seconds_sum{{quota_type=\"{}\"}} {}",
+                    quota_type.as_str(),
+                    want_delay.secs_f64()
+                );
+                let present = rendered.contains(&series);
+                assert!(
+                    present == (want_quota == Some(quota_type)),
+                    "{label}: {} series presence {present} in:\n{rendered}",
+                    quota_type.as_str()
+                );
+            }
+        }
+    }
+
+    /// Renders the registry as the exposition text an operator scrapes.
+    ///
+    /// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
+    /// `test-util` feature, which this workspace does not turn on, so a test
+    /// reads a histogram the way Prometheus does.
+    async fn render(metrics: &BrokerMetrics) -> String {
+        let mut out = String::new();
+        let registry = metrics.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut out, &registry).expect("encode registry");
+        out
+    }
 
     #[test]
     fn api_key_label_name_names_every_krabka_private_api() {

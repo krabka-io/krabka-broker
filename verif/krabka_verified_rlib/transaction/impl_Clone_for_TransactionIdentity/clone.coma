@@ -1,0 +1,19 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 28 27 28 32 *)
+
+(* <transaction::TransactionIdentity as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.prelude.Any
+
+type t_TransactionIdentity = { pid: Int64.t; epoch: Int16.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionIdentity [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 28 27 28 32]
+  (self: t_TransactionIdentity) (return (x: t_TransactionIdentity)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionIdentity = Any.any_l () | & self: t_TransactionIdentity = self ])
+  [ return (result: t_TransactionIdentity) -> (! return {result}) ]

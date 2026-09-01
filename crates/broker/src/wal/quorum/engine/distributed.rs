@@ -167,13 +167,14 @@ impl WalShardEngine {
             })
             .collect::<Vec<_>>();
         let current = self.durable_watermark();
+        let verified_current = current.0.min(leader_end.0);
         // A log normally has start <= end. Keep that kernel precondition local
         // even if this internal boundary receives an inconsistent range.
         let durable = Offset(krabka_verified::recompute_high_watermark(
             leader_end.0,
             &follower_ends,
             strict_majority(quorum.voters.len()),
-            current.0,
+            verified_current,
             log_start.0.min(leader_end.0),
             true,
         ));
@@ -214,5 +215,11 @@ mod tests {
         assert!(engine.durable_watermark() == Offset(1));
         assert!(!engine.record_durable_offset(NodeId(2), Offset(2), Offset(2), Offset(1),));
         assert!(engine.durable_watermark() == Offset(1));
+
+        engine
+            .durable_watermark
+            .store(Offset(2).0, Ordering::Release);
+        assert!(!engine.record_durable_offset(NodeId(3), Offset(1), Offset(0), Offset(1),));
+        assert!(engine.durable_watermark() == Offset(2));
     }
 }

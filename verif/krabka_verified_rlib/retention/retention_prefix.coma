@@ -1,0 +1,189 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 28 0 34 20 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sretention = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 41 18 41 24
+let%span sretention'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 48 14 48 36
+let%span sretention'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 49 16 49 30
+let%span sretention'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 46 16 47 62
+let%span sretention'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 45 16 45 66
+let%span sretention'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 44 16 44 58
+let%span sretention'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 43 16 43 39
+let%span sretention'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 50 12 50 25
+let%span sretention'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 50 31 50 48
+let%span sretention'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 50 75 50 76
+let%span sretention'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 53 33 53 34
+let%span sretention'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 54 69 54 79
+let%span sretention'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 54 34 54 80
+let%span sretention'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 56 15 56 16
+let%span sretention'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 56 8 56 16
+let%span sretention'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 37 17 37 18
+let%span sretention'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 15 11 15 49
+let%span sretention'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 16 11 16 42
+let%span sretention'17 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 17 10 17 40
+let%span sretention'18 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 18 10 18 59
+let%span sretention'19 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 19 10 20 56
+let%span sretention'20 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 21 10 21 67
+let%span sretention'21 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 22 10 23 65
+let%span sretention'22 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 24 10 26 76
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_bool (self_: Slice64.slice bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+constant const_MIN: UInt64.t = (0: UInt64.t)
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+let saturating_sub (self_: UInt64.t) (rhs: UInt64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:saturating_sub ensures] ([@stop_split] [@expl:saturating_sub ensures #0] [%#snum] ge_log_Int (UInt64.t'int self_
+          - UInt64.t'int rhs) (UInt64.t'int const_MIN)
+        /\ UInt64.t'int self_ - UInt64.t'int rhs <= UInt64.t'int const_MAX
+      -> UInt64.t'int result = UInt64.t'int self_ - UInt64.t'int rhs)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #1] [%#snum'0] UInt64.t'int self_ - UInt64.t'int rhs
+        < UInt64.t'int const_MIN -> UInt64.t'int result = UInt64.t'int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #2] [%#snum'1] gt_log_Int (UInt64.t'int self_
+      - UInt64.t'int rhs) (UInt64.t'int const_MAX) -> UInt64.t'int result = UInt64.t'int const_MAX)}
+    (! return {result}) ]
+
+type t_RetentionPrefix = { len: UInt64.t; remaining_size_debt: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let retention_prefix [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 28 0 34 20]
+  (mutable': bool) (finished: Slice64.slice bool) (time_expired: Slice64.slice bool) (sizes: Slice64.slice UInt64.t)
+  (initial_size_debt: UInt64.t) (return (x: t_RetentionPrefix)) =
+{[@stop_split] [@expl:retention_prefix requires] ([@stop_split] [@expl:retention_prefix requires #0] [%#sretention'15] Seq.length (Slice64.view finished)
+    = Seq.length (Slice64.view time_expired))
+  /\ ([@stop_split] [@expl:retention_prefix requires #1] [%#sretention'16] Seq.length (Slice64.view finished)
+  = Seq.length (Slice64.view sizes))}
+  (! bb0
+  [ bb0 = any [ br0 -> {mutable' = false} (! bb1) | br1 -> {mutable'} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &len'0 <- [%#sretention] (0: UInt64.t) ] s1
+    | s1 = [ &remaining_size_debt'0 <- initial_size_debt ] s2
+    | s2 = bb3 ]
+  | bb3 = bb3invariant
+    [ bb3 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb3 ([%#sretention'0] Seq.length (Slice64.view finished)
+      - UInt64.t'int len'0)}
+      bb3invariant
+    | bb3invariant = {[@expl:loop invariant #0] [%#sretention'5] UInt64.t'int len'0
+      <= Seq.length (Slice64.view finished)}
+      {[@expl:loop invariant #1] [%#sretention'4] UInt64.t'int remaining_size_debt'0 <= UInt64.t'int initial_size_debt}
+      {[@expl:loop invariant #2] [%#sretention'3] forall i: int. 0 <= i /\ i < UInt64.t'int len'0
+        -> Seq.get (Slice64.view finished) i}
+      {[@expl:loop invariant #3] [%#sretention'2] UInt64.t'int initial_size_debt = 0
+      -> (forall i: int. 0 <= i /\ i < UInt64.t'int len'0 -> Seq.get (Slice64.view time_expired) i)}
+      (! [ &variant_old_bb3 <- [%#sretention'0] Seq.length (Slice64.view finished) - UInt64.t'int len'0 ] s0)
+      [ s0 = len_bool [%#sretention'1] {finished} (fun (_x: UInt64.t) -> [ &_55 <- _x ] s1)
+      | s1 = [ &_53 <- UInt64.lt len'0 _55 ] s2
+      | s2 = any [ br0 -> {_53 = false} (! bb23) | br1 -> {_53} (! bb6) ] ]
+      [ bb6 = s0
+        [ s0 = [ &_59 <- len'0 ] s1
+        | s1 = [ &_60 <- Slice64.length finished ] s2
+        | s2 = [ &_61 <- UInt64.lt _59 _60 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'6] _61} s4
+        | s4 = Slice64.get [%#sretention'6] <bool> {finished} {_59} (fun (r: bool) -> [ &_58 <- r ] s5)
+        | s5 = any [ br0 -> {_58 = false} (! bb23) | br1 -> {_58} (! bb9) ] ]
+      | bb9 = s0
+        [ s0 = [ &_63 <- len'0 ] s1
+        | s1 = [ &_64 <- Slice64.length time_expired ] s2
+        | s2 = [ &_65 <- UInt64.lt _63 _64 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'7] _65} s4
+        | s4 = Slice64.get [%#sretention'7] <bool> {time_expired} {_63} (fun (r: bool) -> [ &_62 <- r ] s5)
+        | s5 = any [ br0 -> {_62 = false} (! bb11) | br1 -> {_62} (! bb16) ] ]
+      | bb11 = s0
+        [ s0 = [ &_66 <- remaining_size_debt'0 = ([%#sretention'8] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_66 = false} (! bb16) | br1 -> {_66} (! bb23) ] ]
+      | bb16 = s0
+        [ s0 = [ &_70 <- UInt64.gt remaining_size_debt'0 ([%#sretention'9] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_70 = false} (! bb21) | br1 -> {_70} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = [ &_75 <- len'0 ] s1
+        | s1 = [ &_76 <- Slice64.length sizes ] s2
+        | s2 = [ &_77 <- UInt64.lt _75 _76 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'10] _77} s4
+        | s4 = Slice64.get [%#sretention'10] <UInt64.t> {sizes} {_75} (fun (r: UInt64.t) -> [ &_74 <- r ] s5)
+        | s5 = saturating_sub [%#sretention'11] {remaining_size_debt'0} {_74} (fun (_x: UInt64.t) -> [ &_72 <- _x ] s6)
+        | s6 = [ &remaining_size_debt'0 <- _72 ] s7
+        | s7 = bb21 ]
+      | bb21 = s0
+        [ s0 = UInt64.add [%#sretention'13] {len'0} {[%#sretention'12] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &len'0 <- _x ] s1)
+        | s1 = bb3 ] ] ]
+  | bb23 = s0 [ s0 = [ &_ret <- { len = len'0; remaining_size_debt = remaining_size_debt'0 } ] s1 | s1 = return {_ret} ]
+  | bb1 = s0
+    [ s0 = [ &_ret <- { len = ([%#sretention'14] (0: UInt64.t)); remaining_size_debt = initial_size_debt } ] s1
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_RetentionPrefix = Any.any_l ()
+  | & mutable': bool = mutable'
+  | & finished: Slice64.slice bool = finished
+  | & time_expired: Slice64.slice bool = time_expired
+  | & sizes: Slice64.slice UInt64.t = sizes
+  | & initial_size_debt: UInt64.t = initial_size_debt
+  | & len'0: UInt64.t = Any.any_l ()
+  | & remaining_size_debt'0: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _59: UInt64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _63: UInt64.t = Any.any_l ()
+  | & _64: UInt64.t = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _74: UInt64.t = Any.any_l ()
+  | & _75: UInt64.t = Any.any_l ()
+  | & _76: UInt64.t = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & variant_old_bb3: int = Any.any_l () ])
+  [ return (result: t_RetentionPrefix) ->
+  {[@stop_split] [@expl:retention_prefix ensures] ([@stop_split] [@expl:retention_prefix ensures #0] [%#sretention'17] UInt64.t'int result.len
+      <= Seq.length (Slice64.view finished))
+    /\ ([@stop_split] [@expl:retention_prefix ensures #1] [%#sretention'18] UInt64.t'int result.remaining_size_debt
+      <= UInt64.t'int initial_size_debt)
+    /\ ([@stop_split] [@expl:retention_prefix ensures #2] [%#sretention'19] not mutable'
+      -> UInt64.t'int result.len = 0 /\ UInt64.t'int result.remaining_size_debt = UInt64.t'int initial_size_debt)
+    /\ ([@stop_split] [@expl:retention_prefix ensures #3] [%#sretention'20] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result.len -> Seq.get (Slice64.view finished) i)
+    /\ ([@stop_split] [@expl:retention_prefix ensures #4] [%#sretention'21] UInt64.t'int initial_size_debt = 0
+      -> (forall i: int. 0 <= i /\ i < UInt64.t'int result.len -> Seq.get (Slice64.view time_expired) i))
+    /\ ([@stop_split] [@expl:retention_prefix ensures #5] [%#sretention'22] mutable'
+      /\ UInt64.t'int result.len < Seq.length (Slice64.view finished)
+    -> not Seq.get (Slice64.view finished) (UInt64.t'int result.len)
+    \/ not Seq.get (Slice64.view time_expired) (UInt64.t'int result.len)
+    /\ UInt64.t'int result.remaining_size_debt = 0)}
+    (! return {result}) ]

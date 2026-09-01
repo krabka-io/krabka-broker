@@ -22,6 +22,11 @@ use krabka_protocol::owned::{
     renew_delegation_token_response::RenewDelegationTokenResponse,
 };
 use krabka_security::SecretBytes;
+use krabka_verified::{
+    TokenRenewDecision,
+    delegation_token::{TokenApi, TokenApiAdmission},
+    renew_token_expiry,
+};
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
@@ -42,8 +47,11 @@ pub(crate) async fn handle<S: BuildHasher>(
     if secret_key.is_none() {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     }
+    if auth.token_api_admission(TokenApi::Renew) == TokenApiAdmission::Reject {
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    }
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return err_response(crate::codes::INVALID_REQUEST);
+        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     };
     let caller = principal.to_kafka();
 
@@ -73,12 +81,19 @@ pub(crate) async fn handle<S: BuildHasher>(
     }
 
     let now = now_ms();
-    let renew_period_ms = if req.renew_period_ms == -1 {
-        default_renew_period_ms
-    } else {
-        req.renew_period_ms
+    let new_expiry = match renew_token_expiry(
+        now,
+        req.renew_period_ms,
+        default_renew_period_ms,
+        token.expiry_timestamp_ms,
+        token.max_timestamp_ms,
+    ) {
+        TokenRenewDecision::Renew(expiry) => expiry,
+        TokenRenewDecision::Expired => {
+            return err_response(crate::codes::DELEGATION_TOKEN_EXPIRED);
+        }
+        TokenRenewDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
     };
-    let new_expiry = (now + renew_period_ms).min(token.max_timestamp_ms);
 
     let record = DelegationTokenRecord {
         token_id: token.token_id.clone(),
@@ -152,7 +167,7 @@ mod tests {
         handle
     }
 
-    fn authed(name: &str) -> ConnectionAuth {
+    fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
         ConnectionAuth::Authenticated {
             principal: Principal {
                 name: name.into(),
@@ -161,8 +176,12 @@ mod tests {
             },
             mechanism: SaslMechanism::ScramSha256,
             expires_at_ms: None,
-            authenticated_via_token: false,
+            authenticated_via_token: via_token,
         }
+    }
+
+    fn authed(name: &str) -> ConnectionAuth {
+        authed_with_token(name, false)
     }
 
     fn kp(name: &str) -> KafkaPrincipal {
@@ -206,6 +225,52 @@ mod tests {
         let controller = test_controller(dir.path().into()).await;
         let resp = handle(&req, &auth, None, 1_000, &*controller, &empty_super_users()).await;
         assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+        controller.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn token_authenticated_caller_is_rejected_before_lookup_or_mutation() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        let hmac = vec![0xAB; 32];
+        let now = now_ms();
+        let original_expiry = now + 60_000;
+        seed_token(
+            (&controller, "tok-token-auth"),
+            hmac.clone(),
+            kp("alice"),
+            vec![],
+            now - 1_000,
+            original_expiry,
+            now + 120_000,
+        )
+        .await;
+        let req = RenewDelegationTokenRequest {
+            hmac: hmac.into(),
+            renew_period_ms: 90_000,
+            ..Default::default()
+        };
+
+        let resp = handle(
+            &req,
+            &authed_with_token("alice", true),
+            Some(&secret),
+            1_000,
+            &*controller,
+            &empty_super_users(),
+        )
+        .await;
+
+        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+        assert!(
+            controller
+                .current_image()
+                .delegation_token_by_id("tok-token-auth")
+                .unwrap()
+                .expiry_timestamp_ms
+                == original_expiry
+        );
         controller.cancel().await;
     }
 
@@ -298,6 +363,67 @@ mod tests {
             "expiry {} far from {target}",
             resp.expiry_timestamp_ms
         );
+        controller.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn expired_and_overflowing_renewals_fail_closed() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        let now = now_ms();
+
+        for (token_id, hmac, expiry, period, expected_code) in [
+            (
+                "expired",
+                vec![0xE1; 32],
+                now - 1,
+                1_000,
+                crate::codes::DELEGATION_TOKEN_EXPIRED,
+            ),
+            (
+                "overflow",
+                vec![0xE2; 32],
+                now + 60_000,
+                i64::MAX,
+                crate::codes::INVALID_REQUEST,
+            ),
+        ] {
+            seed_token(
+                (&controller, token_id),
+                hmac.clone(),
+                kp("alice"),
+                vec![],
+                now - 1_000,
+                expiry,
+                now + 120_000,
+            )
+            .await;
+            let resp = handle(
+                &RenewDelegationTokenRequest {
+                    hmac: hmac.into(),
+                    renew_period_ms: period,
+                    ..Default::default()
+                },
+                &authed("alice"),
+                Some(&secret),
+                1_000,
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            assert!(resp.error_code == expected_code, "{token_id}");
+            assert!(
+                controller
+                    .current_image()
+                    .delegation_token_by_id(token_id)
+                    .expect("token remains")
+                    .expiry_timestamp_ms
+                    == expiry,
+                "{token_id}"
+            );
+        }
+
         controller.cancel().await;
     }
 

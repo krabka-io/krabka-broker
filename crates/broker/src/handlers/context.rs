@@ -36,6 +36,22 @@ pub(crate) struct RequestContext<'a> {
     /// on, exactly as Apache Kafka does. Handlers that do not project broker
     /// addresses ignore this field.
     pub connection_listener_name: &'a str,
+    /// `true` when the listener that accepted this connection already decided
+    /// that the peer may perform `ClusterAction`, so a handler must not deny
+    /// the request for want of a principal.
+    ///
+    /// Only the controller listener sets it. That listener authenticates and
+    /// authorizes at handshake time rather than per request: on a SASL
+    /// protocol `BrokerRaftHandshake` runs the `ClusterAction` gate and drops
+    /// the connection on a deny, and on a protocol that carries no identity
+    /// (`Plaintext`, or `Ssl` without SASL, since krabka derives no principal
+    /// from a client certificate) it admits the peer deliberately -- the same
+    /// peer could already submit arbitrary metadata changes over the private
+    /// `SubmitChange` API on that port. A second ACL check against the
+    /// `ANONYMOUS` principal the router substitutes in that case would deny
+    /// every inter-broker control-plane RPC and fence the whole cluster,
+    /// while buying no protection the listener has not already given away.
+    pub listener_authorized_cluster_action: bool,
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
@@ -65,7 +81,17 @@ impl<'a> RequestContext<'a> {
             connection_id,
             sendfile_capable,
             connection_listener_name,
+            listener_authorized_cluster_action: false,
         }
+    }
+
+    /// Mark this request as arriving over a listener that has already
+    /// authorized the peer for `ClusterAction`. See
+    /// [`RequestContext::listener_authorized_cluster_action`].
+    #[must_use]
+    pub(crate) const fn listener_authorized_for_cluster_action(mut self) -> Self {
+        self.listener_authorized_cluster_action = true;
+        self
     }
 
     /// Kafka's group coordinator stores `InetAddress::toString()`, which is

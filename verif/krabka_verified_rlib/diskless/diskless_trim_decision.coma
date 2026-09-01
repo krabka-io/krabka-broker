@@ -1,0 +1,139 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 53 0 58 25 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'2 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'3 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span scmp'4 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'5 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'6 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'7 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'8 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sdiskless = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 18 59 19
+let%span sdiskless'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 40 59 41
+let%span sdiskless'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 61 59 62
+let%span sdiskless'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 61 25 61 30
+let%span sdiskless'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 66 36 66 37
+let%span sdiskless'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 66 21 66 38
+let%span sdiskless'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 69 25 69 30
+let%span sdiskless'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 74 30 74 57
+let%span sdiskless'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 74 17 74 58
+let%span sdiskless'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 77 25 77 30
+let%span sdiskless'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 82 25 82 29
+let%span sdiskless'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 36 10 42 1
+let%span sdiskless'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 43 10 47 1
+let%span sdiskless'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 48 10 48 42
+let%span sdiskless'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 49 10 49 60
+let%span sdiskless'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 50 10 51 70
+let%span sdiskless'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 19 16 19 61
+let%span sdiskless'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 26 8 26 84
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_DisklessTrimDecision = { should_trim: bool; target: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let max_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:max_i64 ensures] ([@stop_split] [@expl:max ensures #0] [%#scmp] ge_log_Int (deep_model_i64 result) (deep_model_i64 self_))
+    /\ ([@stop_split] [@expl:max ensures #1] [%#scmp'0] ge_log_Int (deep_model_i64 result) (deep_model_i64 o))
+    /\ ([@stop_split] [@expl:max ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:max ensures #3] [%#scmp'2] deep_model_i64 self_ <= deep_model_i64 o -> result = o)
+    /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'3] deep_model_i64 o < deep_model_i64 self_ -> result = self_)}
+    (! return {result}) ]
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp'4] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'5] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'6] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'7] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'8] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+function effective_trim_lag [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 18 0 18 45] (safety_lag: Int64.t) : int
+ = [%#sdiskless'15] if Int64.to_int safety_lag < 0 then 0 else Int64.to_int safety_lag
+
+function trim_target [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 24 0 24 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
+ = [%#sdiskless'16] let high_watermark_floor = Int64.to_int high_watermark
+  - effective_trim_lag safety_lag in if Int64.to_int frontier < high_watermark_floor then
+    Int64.to_int frontier
+  else
+    high_watermark_floor
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_trim_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 53 0 58 25]
+  (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) (current_start: Int64.t)
+  (return (x: t_DisklessTrimDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_23 <- Int64.lt frontier ([%#sdiskless] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_25 <- Int64.lt high_watermark ([%#sdiskless'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb4) | br1 -> {_25} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_27 <- Int64.lt current_start ([%#sdiskless'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb7) | br1 -> {_27} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#sdiskless'2] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = max_i64 [%#sdiskless'4] {safety_lag} {[%#sdiskless'3] (0: Int64.t)}
+        (fun (_x: Int64.t) -> [ &safety_lag'0 <- _x ] s1)
+    | s1 = [ &_34 <- Int64.gt safety_lag'0 high_watermark ] s2
+    | s2 = any [ br0 -> {_34 = false} (! bb10) | br1 -> {_34} (! bb9) ] ]
+  | bb9 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#sdiskless'5] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = Int64.sub [%#sdiskless'6] {high_watermark} {safety_lag'0} (fun (_x: Int64.t) -> [ &_41 <- _x ] s1)
+    | s1 = min_i64 [%#sdiskless'7] {frontier} {_41} (fun (_x: Int64.t) -> [ &target'0 <- _x ] s2)
+    | s2 = [ &_44 <- Int64.le target'0 current_start ] s3
+    | s3 = any [ br0 -> {_44 = false} (! bb13) | br1 -> {_44} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#sdiskless'8] false); target = current_start } ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = [ &_ret <- { should_trim = ([%#sdiskless'9] true); target = target'0 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DisklessTrimDecision = Any.any_l ()
+  | & frontier: Int64.t = frontier
+  | & high_watermark: Int64.t = high_watermark
+  | & safety_lag: Int64.t = safety_lag
+  | & current_start: Int64.t = current_start
+  | & _23: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & safety_lag'0: Int64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & target'0: Int64.t = Any.any_l ()
+  | & _41: Int64.t = Any.any_l ()
+  | & _44: bool = Any.any_l () ])
+  [ return (result: t_DisklessTrimDecision) ->
+  {[@stop_split] [@expl:diskless_trim_decision ensures] ([@stop_split] [@expl:diskless_trim_decision ensures #0] [%#sdiskless'10] result.should_trim
+      = (ge_log_Int (Int64.to_int frontier) 0
+      /\ ge_log_Int (Int64.to_int high_watermark) 0
+      /\ ge_log_Int (Int64.to_int current_start) 0
+      /\ effective_trim_lag safety_lag <= Int64.to_int high_watermark
+      /\ Int64.to_int current_start < trim_target frontier high_watermark safety_lag))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #1] [%#sdiskless'11] Int64.to_int result.target
+      = (if result.should_trim then trim_target frontier high_watermark safety_lag else Int64.to_int current_start))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #2] [%#sdiskless'12] ge_log_Int (Int64.to_int result.target) (Int64.to_int current_start))
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #3] [%#sdiskless'13] result.should_trim
+      -> Int64.to_int result.target <= Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:diskless_trim_decision ensures #4] [%#sdiskless'14] result.should_trim
+    -> Int64.to_int result.target + effective_trim_lag safety_lag <= Int64.to_int high_watermark)}
+    (! return {result}) ]

@@ -291,3 +291,66 @@ impl EncodeLabelValue for ConnectionCloseReason {
 pub struct ConnectionCloseReasonLabel {
     pub reason: ConnectionCloseReason,
 }
+
+/// The client quota that caused a throttle the broker applied.
+///
+/// Kafka splits its quotas the same way, and names them the same way in
+/// `kafka.server:type=*QuotaManager`. The four variants are the quotas whose
+/// delay this broker *sleeps* on: `producer_byte_rate` (KIP-13),
+/// `consumer_byte_rate` (KIP-13), `request_percentage` (KIP-124), and
+/// `controller_mutation_rate` (KIP-599), which `CreateTopics`,
+/// `CreatePartitions` and `DeleteTopics` apply inline once they have assembled
+/// their response. Kafka's `LeaderReplication` and `FollowerReplication`
+/// quotas are absent because KIP-73 throttles a follower fetch by dropping
+/// partitions out of the response rather than by delaying it, so there is no
+/// sleep to attribute.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum QuotaType {
+    /// KIP-13 `producer_byte_rate`, charged on the Produce path.
+    Produce,
+    /// KIP-13 `consumer_byte_rate`, charged on the Fetch path.
+    Fetch,
+    /// KIP-124 `request_percentage`, charged on every api by handler time.
+    Request,
+    /// KIP-599 `controller_mutation_rate`, charged on the topic-mutating
+    /// admin apis by the number of partitions the request moves.
+    ControllerMutation,
+}
+
+impl QuotaType {
+    /// Every quota the broker applies a throttle for.
+    pub const ALL: [Self; 4] = [
+        Self::Produce,
+        Self::Fetch,
+        Self::Request,
+        Self::ControllerMutation,
+    ];
+
+    /// The `quota_type` label value this variant renders as. The spelling is
+    /// Kafka's own `QuotaType` name, so one dashboard query reads the same
+    /// against either broker.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Produce => "Produce",
+            Self::Fetch => "Fetch",
+            Self::Request => "Request",
+            Self::ControllerMutation => "ControllerMutation",
+        }
+    }
+}
+
+impl EncodeLabelValue for QuotaType {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Applied-quota label set, paired with the `quota_throttle_duration_seconds`
+/// histogram family. Cardinality is bounded at four, because the field is the
+/// closed [`QuotaType`] enum: no principal, client id or topic reaches this
+/// label set, so no client can invent a series.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct QuotaTypeLabel {
+    pub quota_type: QuotaType,
+}

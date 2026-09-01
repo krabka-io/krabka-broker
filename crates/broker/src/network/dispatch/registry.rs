@@ -12,7 +12,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::Instrument as _;
 
 use super::{
-    response::{encode_response, maybe_apply_request_quota},
+    response::{ResponseShape, encode_response, maybe_apply_request_quota},
     session::principal_or_anonymous,
 };
 use crate::{broker::Broker, error::BrokerError};
@@ -53,6 +53,7 @@ where
             context.broker,
             response,
             context.parsed,
+            ResponseShape::mirroring_request(context.parsed),
             context.auth,
             started,
         )
