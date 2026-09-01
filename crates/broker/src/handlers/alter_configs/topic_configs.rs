@@ -5,11 +5,20 @@
 //! validation and the cross-key combination rules both apply to the map this
 //! module builds, and neither reads the topic's current overrides.
 //!
-//! One rule does read them. `krabka.diskless` is fixed when the topic is
+//! Two rules do read them. `krabka.diskless` is fixed when the topic is
 //! created, and a replacement that simply omits it would otherwise turn a
 //! diskless topic back into a local-log one, so the resulting map is compared
 //! against the stored one. See
 //! [`crate::config_keys::validate_diskless_unchanged`].
+//!
+//! A stored controller-managed key is carried over. No client may name one, so
+//! a replacement can never restate it, and a replacement that dropped it would
+//! erase state the controller published: KIP-966's
+//! [`ELIGIBLE_LEADER_REPLICAS`](crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
+//! would vanish the first time an operator set `retention.ms`, and every
+//! `DescribeTopicPartitions` after that would report the partition as having
+//! no eligible leader. The keys the client sends are the whole *client* map;
+//! the record this builds is that map plus what only the controller writes.
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -29,12 +38,13 @@ pub(super) fn topic_config_record(
             format!("unknown topic `{}`", resource.resource_name),
         ));
     }
+    let current = image.topic_config(&resource.resource_name);
     let mut overrides = std::collections::BTreeMap::new();
     for cfg in &resource.configs {
-        // A controller-managed key is never stored, so it cannot take part
-        // in the replacement. The check comes before the whitelist, so the
-        // operator reads the refusal that names `krabka-guard` and not
-        // `unrecognized config key`.
+        // A controller-managed key has no client writer, so it cannot take
+        // part in the replacement. The check comes before the whitelist, so
+        // the operator reads the refusal that names what does write the key
+        // and not `unrecognized config key`.
         if config_keys::is_controller_managed_topic_config(&cfg.name) {
             return Err((
                 codes::INVALID_CONFIG,
@@ -48,11 +58,18 @@ pub(super) fn topic_config_record(
     }
     config_keys::validate_config_combination(&overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-    config_keys::validate_diskless_unchanged(
-        image.topic_config(&resource.resource_name),
-        &overrides,
-    )
-    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_diskless_unchanged(current, &overrides)
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    // Both validations read the client's map alone, so the carry-over comes
+    // after them: a controller-managed key is not the client's to be judged
+    // on, and it takes part in no cross-key rule.
+    overrides.extend(
+        current
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| config_keys::is_controller_managed_topic_config(key))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
@@ -214,6 +231,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A replacement drops every stored key it does not restate, and no client
+    /// may restate a controller-managed one. The stored KIP-966 ELR state must
+    /// therefore survive a replacement that names only ordinary keys;
+    /// otherwise `kafka-configs --alter` on `retention.ms` would silently
+    /// erase it and every later `DescribeTopicPartitions` would report the
+    /// partition as having no eligible leader.
+    #[test]
+    fn topic_replacement_keeps_the_controller_managed_state_it_cannot_restate() {
+        let image = image_with_topic_config(
+            "orders",
+            &[
+                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2:3"),
+                (config_keys::RETENTION_MS, "60000"),
+            ],
+        );
+
+        let record = topic_config_record(
+            &topic_resource("orders", &[(config_keys::CLEANUP_POLICY, "delete")]),
+            &image,
+        )
+        .expect("an ordinary replacement is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+                config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
+                config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2:3".to_string(),
+            },
+        });
+        assert!(record == expected);
     }
 
     #[test]
