@@ -44,7 +44,7 @@ pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 const TOOL: &str = "/opt/kafka/bin/kafka-broker-api-versions.sh";
 
 /// Wall-clock budget the oracle gets to answer before the suite gives up.
-const ORACLE_BOOT_BUDGET: Duration = Duration::from_secs(60);
+const ORACLE_BOOT_BUDGET: Duration = Duration::from_mins(1);
 
 /// The pause between a readiness probe that failed and the next one.
 const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
