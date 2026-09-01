@@ -35,13 +35,10 @@ mod support;
 /// least twice.
 const REQUESTS: usize = 6;
 
-/// `heartbeat_timeout` (2s under the test config) for a session to expire,
-/// plus a `liveness_tick_interval` (1s) for the tick that publishes the
-/// decision, plus slack.
-const FENCING_WINDOW: Duration = Duration::from_secs(4);
-
-/// A bound on [`FENCING_WINDOW`] plus metadata propagation, with room for a
-/// loaded runner. Only a stuck cluster reaches it.
+/// A bound on a `heartbeat_timeout` (2s under the test config) for the
+/// session to expire, a `liveness_tick_interval` (1s) for the tick that
+/// publishes the decision, and the metadata propagation behind it, with room
+/// for a loaded runner. Only a stuck cluster reaches it.
 const FENCING_DEADLINE: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -79,14 +76,15 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
         .await
         .unwrap();
 
-    // A broker registers fenced and is unfenced on its first heartbeat, so a
-    // freshly booted cluster publishes an unfencing edge shortly after start.
-    // Sleeping past the window in which that happens before waiting on the
-    // empty set is what stops the wait from returning on a publication that
-    // has not landed yet: an observer image that has simply not seen the seed
-    // reads exactly like one past it.
-    tokio::time::sleep(FENCING_WINDOW).await;
-    wait_until_fenced_set(&cluster[observer_index].0, &BTreeSet::new()).await;
+    let leader_index = (0..cluster.len())
+        .find(|&i| cluster[i].0.node_id() == leader.0)
+        .expect("the elected leader is one of the nodes under test");
+    settle_unfenced(
+        &cluster[leader_index].0,
+        &cluster[observer_index].0,
+        &everyone,
+    )
+    .await;
 
     // Every broker is advertised while every broker is alive, so what the
     // assertions after the death measure is the death, and not a rotation that
@@ -152,6 +150,45 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
 
 fn node_id_of(handle: &BrokerHandle) -> i32 {
     i32::try_from(handle.node_id()).expect("node id fits an i32")
+}
+
+/// Block until the observer's image is known to be past the cluster's start-up
+/// unfencing, with an empty fenced set.
+///
+/// A broker registers fenced and is unfenced on its first heartbeat, so a
+/// freshly booted cluster publishes an unfencing edge shortly after start. An
+/// observer image that has simply not seen that edge reads exactly like one
+/// past it: both report nobody fenced. Waiting on the empty set alone can
+/// therefore return before the seed lands, and the death this test measures
+/// would then race the unfencing that precedes it.
+///
+/// Watching for the fenced set to go non-empty and then empty would not settle
+/// it either. Publication is level-triggered: the controller leader compares
+/// its registry against the image and writes only the difference, so a broker
+/// whose first heartbeat arrives before the leader's first tick is never
+/// published as fenced at all.
+///
+/// What is observable is the decision and the offset it was written at. The
+/// leader's liveness registry reporting every broker alive means its next
+/// publication has no fencing left to write, and its own image agreeing means
+/// the tombstone for anything it did write has committed. An offset read after
+/// that is therefore past any `broker.fenced` record the start-up ever
+/// produced, which is what makes the last wait mean something: an observer
+/// that has applied up to that offset has applied the fencing too, so an empty
+/// fenced set there can no longer be one that has not seen it yet.
+async fn settle_unfenced(leader: &BrokerHandle, observer: &BrokerHandle, everyone: &BTreeSet<i32>) {
+    for &id in everyone {
+        leader
+            .wait_until_broker_alive(u64::try_from(id).expect("node id is positive"))
+            .await;
+    }
+    wait_until_fenced_set(leader, &BTreeSet::new()).await;
+    let unfenced_at = leader.metadata_offset_for_test();
+
+    observer
+        .wait_until_metadata_offset_at_least(unfenced_at)
+        .await;
+    wait_until_fenced_set(observer, &BTreeSet::new()).await;
 }
 
 /// The ids one run of requests advertises as `controller_id`.
