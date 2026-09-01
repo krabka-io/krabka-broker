@@ -168,11 +168,23 @@ fn node_id_of(handle: &BrokerHandle) -> i32 {
 /// whose first heartbeat arrives before the leader's first tick is never
 /// published as fenced at all.
 ///
-/// What is observable is the decision and the offset it was written at. The
-/// leader's liveness registry reporting every broker alive means its next
-/// publication has no fencing left to write, and its own image agreeing means
-/// the tombstone for anything it did write has committed. An offset read after
-/// that is therefore past any `broker.fenced` record the start-up ever
+/// What is observable is the decision, the pass that published it, and the
+/// offset it was written at.
+///
+/// The leader's liveness registry reporting every broker alive means no later
+/// pass computes a fence. It does not mean no earlier one is still committing:
+/// a pass that read the registry before the first heartbeats decides
+/// `broker.fenced=true` and then awaits its own `submit_change`, and while
+/// that await is outstanding the registry already reads all-alive and the
+/// leader's image does not carry the record yet. Reading the image there would
+/// find nobody fenced and be wrong about it. So wait for one publication pass
+/// to *complete* after the all-alive point: the pass awaits its commit, so its
+/// counter moving means any fence decided before that point is applied and
+/// visible, not in flight.
+///
+/// From there the image is honest, and the leader agreeing that nobody is
+/// fenced means the tombstone for anything it did write has committed. An
+/// offset read after that is past every `broker.fenced` record the start-up
 /// produced, which is what makes the last wait mean something: an observer
 /// that has applied up to that offset has applied the fencing too, so an empty
 /// fenced set there can no longer be one that has not seen it yet.
@@ -182,6 +194,13 @@ async fn settle_unfenced(leader: &BrokerHandle, observer: &BrokerHandle, everyon
             .wait_until_broker_alive(u64::try_from(id).expect("node id is positive"))
             .await;
     }
+    let published = leader.metrics().controller_fencing_publications_total.get();
+    leader
+        .wait_for_metrics(
+            "a fencing publication completing after every broker is alive",
+            |m| m.controller_fencing_publications_total.get() > published,
+        )
+        .await;
     wait_until_fenced_set(leader, &BTreeSet::new()).await;
     let unfenced_at = leader.metadata_offset_for_test();
 

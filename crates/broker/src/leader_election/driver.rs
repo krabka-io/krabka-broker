@@ -135,6 +135,11 @@ pub(crate) async fn run_liveness_tick(
     }
     if is_controller_leader(controller, node_id) {
         crate::heartbeat::fencing::publish_fencing_changes(controller, liveness).await;
+        // After the await, so the count answers "the fencing this pass
+        // decided on is applied", not "a pass started". The publication
+        // awaits its own commit, and that is the whole difference between a
+        // published decision and one still in flight.
+        metrics.controller_fencing_publications_total.inc();
     }
 }
 
