@@ -5,11 +5,19 @@
 //! validation and the cross-key combination rules both apply to the map this
 //! module builds, and neither reads the topic's current overrides.
 //!
-//! One rule does read them. `krabka.diskless` is fixed when the topic is
+//! Two rules do read them. `krabka.diskless` is fixed when the topic is
 //! created, and a replacement that simply omits it would otherwise turn a
 //! diskless topic back into a local-log one, so the resulting map is compared
 //! against the stored one. See
 //! [`crate::config_keys::validate_diskless_unchanged`].
+//!
+//! The controller-managed keys are the other. A client cannot name one -- the
+//! handler refuses the request that does -- but a replacement that omits one
+//! would delete it, and `krabka.elr` is real state the controller keeps rather
+//! than an operator preference the request is entitled to replace. Kafka has
+//! no such exposure: it carries the ELR on `PartitionRegistration`, where no
+//! config path can reach it. So the stored value is carried across the
+//! replacement.
 
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
@@ -53,10 +61,34 @@ pub(super) fn topic_config_record(
         &overrides,
     )
     .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    carry_controller_managed_keys(image, &resource.resource_name, &mut overrides);
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
     }))
+}
+
+/// Copy the controller-managed keys the topic already stores into the
+/// replacement map.
+///
+/// It runs after the validations so that the carried values take no part in
+/// them: they are controller state, not an operator's request, and a
+/// cross-key rule that refused one would refuse a request that never named
+/// it. `krabka.elr` is the only key this moves today; `write.freeze` is
+/// synthesised for `DescribeConfigs` and never stored.
+fn carry_controller_managed_keys(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    overrides: &mut std::collections::BTreeMap<String, String>,
+) {
+    let Some(stored) = image.topic_config(topic) else {
+        return;
+    };
+    for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
+        if let Some(value) = stored.get(key) {
+            overrides.insert(key.to_string(), value.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,6 +148,36 @@ mod tests {
             overrides: maplit::btreemap! {
             crate::config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
             crate::config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string()},
+        });
+        assert!(record == expected);
+    }
+
+    /// KIP-966 state survives a replacement that does not mention it. A
+    /// client cannot name the key, so an `AlterConfigs` that replaces a
+    /// topic's overrides would otherwise delete the ELR the controller keeps
+    /// and leave `DescribeTopicPartitions` reporting an empty set until the
+    /// next ISR change rebuilt one.
+    #[test]
+    fn topic_replacement_carries_the_controller_managed_state_forward() {
+        let image = image_with_topic_config(
+            "orders",
+            &[
+                (config_keys::ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
+                (config_keys::RETENTION_MS, "60000"),
+            ],
+        );
+
+        let record = topic_config_record(
+            &topic_resource("orders", &[(config_keys::RETENTION_MS, "120000")]),
+            &image,
+        )
+        .expect("an ordinary replacement is valid");
+
+        let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "orders".into(),
+            overrides: maplit::btreemap! {
+            config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2,3:".to_string(),
+            config_keys::RETENTION_MS.to_string() => "120000".to_string()},
         });
         assert!(record == expected);
     }

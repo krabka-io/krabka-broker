@@ -71,14 +71,13 @@ mod topic_scope;
 mod validation;
 
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
-// Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
-// the alter_configs tests -- so an ungated re-export is dead in a normal build.
+// Reached only from #[cfg(test)] code -- the produce delivery/throttle tests --
+// so an ungated re-export is dead in a normal build.
 #[cfg(test)]
 pub(crate) use self::{
     broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
     qos::{DEFAULT_QOS_TIER, QOS_TIER},
-    topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
 };
 pub(crate) use self::{
     broker_scope::{
@@ -102,8 +101,8 @@ pub(crate) use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE, controller_managed_topic_config_message,
-        is_controller_managed_topic_config,
+        CONTROLLER_MANAGED_TOPIC_CONFIGS, ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE,
+        controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
     validation::{
         is_recognized, parse_compression_type, validate_config_combination, validate_topic_config,
