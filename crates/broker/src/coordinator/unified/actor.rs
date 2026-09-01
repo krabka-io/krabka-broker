@@ -204,6 +204,16 @@ async fn actor_loop(
         group.observe_membership(chrono_now_ms());
         return;
     };
+    // A zero-duration deadline is already due, so `Timer` hands back a future
+    // that is ready on its first poll. `tokio::select!` polls its branches in a
+    // random order, so without this yield the t=0 tick wins roughly half the
+    // races against a mailbox that spawn already filled -- and a replayed group
+    // whose `last_seen` values predate this actor is then swept before it
+    // answers a single request. Yielding once lets those queued messages land
+    // first, which is the ordering this loop has always had: the sleeper it
+    // used before returned a `tokio::time::sleep`, and even a zero-duration one
+    // goes through the runtime and polls `Pending` once.
+    tokio::task::yield_now().await;
     loop {
         let deadline = classic_deadline(&group);
         let keep_running = tokio::select! {
