@@ -197,6 +197,140 @@ async fn request_percentage_throttles_produce() {
     handle.shutdown().await;
 }
 
+/// Renders the broker's registry as the exposition text an operator scrapes,
+/// and reads one series' value out of it.
+///
+/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
+/// `test-util` feature, which this workspace does not enable, so a test reads
+/// a histogram the way Prometheus does. Missing series read as `0.0`: a
+/// `Family` emits nothing until it has an entry, and "never observed" and
+/// "observed only zeroes" mean the same thing to the assertions below.
+async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
+    let mut rendered = String::new();
+    {
+        let registry = handle.metrics().registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut rendered, &registry)
+            .expect("encode registry");
+    }
+    rendered
+        .lines()
+        .find(|line| line.starts_with(series))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0)
+}
+
+/// A throttled produce must move the throttle series, attributed to the quota
+/// that caused it.
+///
+/// The setup is Test 2's: `(user=alice) producer_byte_rate=128`, and alice
+/// produces 8 KB. That test asserts the client is *told* about the throttle;
+/// this one asserts the broker records what it applied, so an operator seeing
+/// produce latency rise can tell "the client is over its quota" from "the
+/// broker is broken". `quota_type="Produce"` is the byte-rate quota, and it
+/// must be the one credited: no `request_percentage` is set, so the KIP-124
+/// quota asks for nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
+        "admin",
+        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    )
+    .await;
+
+    seed_compat_shim_disable_acl(&handle).await;
+    create_topic_as_admin(addr, "throttle-metrics", 1, 1).await;
+    wait_partition_exists(&handle, "throttle-metrics", 0).await;
+    seed_alice_write_acl(&handle, "throttle-metrics").await;
+
+    let alter_resp = drive_alter_client_quotas_sasl(
+        addr,
+        "admin",
+        "admin-secret",
+        vec![(
+            vec![("user".into(), Some("alice".into()))],
+            vec![("producer_byte_rate".into(), 128.0, false)],
+        )],
+        false,
+    )
+    .await;
+    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
+
+    handle
+        .wait_for_image(|img| {
+            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
+            img.client_quotas()
+                .get(&key)
+                .and_then(|cfgs| cfgs.get("producer_byte_rate"))
+                == Some(&128.0)
+        })
+        .await;
+
+    // Alice produces 8 KB against a 128 B/s quota. Retry past
+    // TOPIC_AUTHORIZATION_FAILED (29) while the Write ACL propagates.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let resp = loop {
+        let r =
+            drive_produce_sasl(addr, "alice", b"alice-secret", "throttle-metrics", 1024, 8).await;
+        let ec = r
+            .responses
+            .first()
+            .and_then(|t| t.partition_responses.first())
+            .map_or(-1, |p| p.error_code);
+        if ec != 29 {
+            break r;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "ACL still not applied after 15s; error_code=29"
+        );
+        // real-time wait (not a progress poll): retry cadence between network produce attempts (ACL propagation), deadline-guarded
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        resp.throttle_time_ms > 0,
+        "expected throttle_time_ms > 0, got {}",
+        resp.throttle_time_ms
+    );
+
+    let applied_seconds = f64::from(resp.throttle_time_ms) / 1000.0;
+    let phase = metric_value(
+        &handle,
+        "krabka_broker_request_throttle_duration_seconds_sum{api_key=\"Produce\"}",
+    )
+    .await;
+    assert!(
+        phase >= applied_seconds,
+        "the throttle phase must cover the delay the response reported \
+         ({applied_seconds}s); got {phase}"
+    );
+
+    // The byte-rate quota is what fired, so it is what the applied-throttle
+    // family credits. The request quota is unset and must stay at zero.
+    let by_quota = metric_value(
+        &handle,
+        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Produce\"}",
+    )
+    .await;
+    assert!(
+        by_quota >= applied_seconds,
+        "producer_byte_rate must be credited with the applied throttle \
+         ({applied_seconds}s); got {by_quota}"
+    );
+    let request_quota = metric_value(
+        &handle,
+        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"Request\"}",
+    )
+    .await;
+    assert!(
+        request_quota < 1e-9,
+        "no request_percentage quota is set, so it must be credited with \
+         nothing; got {request_quota}"
+    );
+
+    handle.shutdown().await;
+}
+
 /// Test 3: a low `(user=alice) consumer_byte_rate` throttles a fetch.
 ///
 /// Set `(user=alice) consumer_byte_rate=128`. Produce 8 KB as admin. alice

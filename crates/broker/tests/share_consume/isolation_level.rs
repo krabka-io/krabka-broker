@@ -37,7 +37,7 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     let client = connect(&bootstrap).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
 
     // Open a transaction and send 3 records WITHOUT committing: HWM=3, LSO=0.
     let producer = Producer::builder()

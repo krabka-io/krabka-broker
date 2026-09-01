@@ -1,0 +1,739 @@
+//! The one typed table every config surface reads.
+//!
+//! `AlterConfigs` validation, the generated topic-config reference page, and
+//! `DescribeConfigs` all used to carry their own idea of what a config key is.
+//! The validator knew the accepted values, the reference page knew the type
+//! and the default, and `DescribeConfigs` knew neither, so every key it
+//! reported came back at `ConfigDef.Type::UNKNOWN` with no default chain and
+//! `is_sensitive` hard-wired to `false`. This module holds that knowledge once
+//! and the three surfaces read it.
+//!
+//! A row carries the name, the [`ConfigType`] the JVM `AdminClient` parses the
+//! value with, the default an unset key reports, the documentation
+//! `include_documentation` returns, whether the value is sensitive, and
+//! whether `DescribeConfigs` must mark the key read-only. It also carries the
+//! value check `validate_topic_config` applies, so the accepted values are
+//! stated beside the type rather than in a second `match`.
+//!
+//! Rows are keyed by [`ConfigScope`] and name together: a key such as
+//! `unclean.leader.election.enable` is both a topic config and a
+//! cluster-default broker config, and the two rows differ.
+
+use super::{
+    CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
+    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
+    RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    broker_scope::{
+        BROKER_FENCED, BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        STRETCH_PREFERRED_LEADER_SITE,
+    },
+    delivery::{
+        DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
+        DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
+    },
+    diskless::DISKLESS,
+    qos::{DEFAULT_QOS_TIER, QOS_TIER},
+    recovery::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
+    schema::{
+        SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL,
+        SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_VALUE,
+    },
+    topic_scope::WRITE_FREEZE,
+};
+
+/// The `node.id` a broker resource reports beside its dynamic overrides. The
+/// broker reads it from its own static configuration, never from the metadata
+/// image, so it is the one broker key with no stored form.
+pub(crate) const NODE_ID: &str = "node.id";
+
+/// `DescribeConfigsResponse.ConfigType`, the byte the JVM `AdminClient` reads
+/// out of `ConfigEntry.type()`.
+///
+/// The values are
+/// `org.apache.kafka.common.requests.DescribeConfigsResponse.ConfigType`,
+/// which mirrors `ConfigDef.Type` one-for-one: `UNKNOWN = 0`, `BOOLEAN = 1`,
+/// `STRING = 2`, `INT = 3`, `SHORT = 4`, `LONG = 5`, `DOUBLE = 6`, `LIST = 7`,
+/// `CLASS = 8`, `PASSWORD = 9`. The variants here are the ones krabka's keys
+/// carry; add the rest when a key needs one.
+///
+/// `UNKNOWN` is deliberately absent. A key krabka reports is a key krabka has
+/// a row for, and the `DescribeConfigs` handler treats a missing row as a
+/// config it may not disclose rather than as an untyped one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigType {
+    Boolean,
+    String,
+    Int,
+    Long,
+    List,
+}
+
+impl ConfigType {
+    /// The wire byte `DescribeConfigsResourceResult.config_type` carries.
+    pub(crate) const fn wire(self) -> i8 {
+        match self {
+            Self::Boolean => 1,
+            Self::String => 2,
+            Self::Int => 3,
+            Self::Long => 5,
+            Self::List => 7,
+        }
+    }
+
+    /// The name the generated reference page prints in its type column.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean",
+            Self::String => "string",
+            Self::Int => "int",
+            Self::Long => "long",
+            Self::List => "list",
+        }
+    }
+}
+
+/// The resource type a row belongs to. A name alone does not identify a row:
+/// `unclean.leader.election.enable` is both a topic key and a cluster-default
+/// broker key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ConfigScope {
+    Topic,
+    Broker,
+    ClientMetrics,
+    Group,
+}
+
+/// The value check `validate_topic_config` applies to a topic key.
+///
+/// The four mechanical checks cover every key whose accepted values are a
+/// closed set or a numeric floor. [`ValueCheck::Parsed`] names the keys whose
+/// check is a parser their own module owns, and
+/// [`ValueCheck::NotAltered`] names the keys no alter path accepts at all.
+///
+/// The width of a numeric check follows the row's [`ConfigType`], because the
+/// width is what the JVM `AdminClient` parses the value with: a key krabka
+/// reports as [`ConfigType::Int`] must refuse what Kafka's `INT` cannot hold.
+/// `apache/kafka:4.3.1` refuses `segment.bytes=2147483648` with
+/// `Invalid value 2147483648 for configuration segment.bytes: Not a number of
+/// type INT`, so krabka refuses it too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueCheck {
+    /// `true` or `false`, exactly.
+    Bool,
+    /// One of a closed list, in the order the refusal names them.
+    OneOf(&'static [&'static str]),
+    /// An `i64` no smaller than the bound. Only a [`ConfigType::Long`] row
+    /// may carry it.
+    I64AtLeast(i64),
+    /// An `i32` no smaller than the bound, which is the width Kafka's `INT`
+    /// carries on the wire.
+    I32AtLeast(i32),
+    /// Checked by a parser the key's own module owns.
+    Parsed,
+    /// Never accepted by an alter path: the broker synthesises the key, or
+    /// only the controller writes it.
+    NotAltered,
+}
+
+/// One config key, as every surface that reports it needs to know it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConfigKey {
+    pub(crate) name: &'static str,
+    pub(crate) scope: ConfigScope,
+    /// The type the JVM `AdminClient` parses the value with.
+    pub(crate) config_type: ConfigType,
+    /// A unit or range the reference page appends to the type name, such as
+    /// `ms` or `>=1`. It is documentation, not a second type.
+    pub(crate) type_note: Option<&'static str>,
+    /// The value an unset key reports, at `DEFAULT_CONFIG`. `None` means the
+    /// broker computes the default at request time, or that the key has none.
+    pub(crate) default: Option<&'static str>,
+    /// What `include_documentation` returns for the key.
+    pub(crate) doc: &'static str,
+    /// `true` when no alter path may change the key, which
+    /// `DescribeConfigs` reports as `read_only`.
+    pub(crate) read_only: bool,
+    /// `true` when the broker must not disclose the value. Kafka reads this
+    /// off `ConfigDef.Type::PASSWORD`; krabka states it, because a key can be
+    /// secret without being a password. `DescribeConfigs` reports a sensitive
+    /// key with a null value, in the entry and in every synonym.
+    pub(crate) sensitive: bool,
+    /// The KIP or KFC the key comes from, for the reference page.
+    pub(crate) kip: Option<&'static str>,
+    /// The cluster-default broker config the broker falls back to when the
+    /// resource sets no value of its own. `None` means the broker consults
+    /// none, so the key reports no `DYNAMIC_DEFAULT_BROKER_CONFIG` synonym.
+    pub(crate) cluster_default: Option<&'static str>,
+    pub(crate) check: ValueCheck,
+}
+
+impl ConfigKey {
+    /// `true` when the resource's stored override map can hold the key.
+    ///
+    /// The broker synthesises the rest: `write.freeze` comes from the freeze
+    /// registry and `node.id` from the broker's static configuration.
+    pub(crate) fn is_stored(&self) -> bool {
+        !matches!(self.name, WRITE_FREEZE | NODE_ID)
+    }
+
+    /// `true` when the value must not be disclosed. `DescribeConfigs` reports
+    /// a sensitive key with a null value, as Kafka does.
+    pub(crate) const fn is_sensitive(&self) -> bool {
+        self.sensitive
+    }
+
+    /// The type column of the generated reference page.
+    pub(crate) fn value_type(&self) -> String {
+        match self.type_note {
+            Some(note) => format!("{} ({note})", self.config_type.label()),
+            None => self.config_type.label().to_owned(),
+        }
+    }
+}
+
+/// Shorthand for a row that needs none of the uncommon fields.
+const fn key(
+    name: &'static str,
+    scope: ConfigScope,
+    config_type: ConfigType,
+    default: Option<&'static str>,
+    doc: &'static str,
+    check: ValueCheck,
+) -> ConfigKey {
+    ConfigKey {
+        name,
+        scope,
+        config_type,
+        type_note: None,
+        default,
+        doc,
+        read_only: false,
+        sensitive: false,
+        kip: None,
+        cluster_default: None,
+        check,
+    }
+}
+
+/// The two values every boolean key accepts, in the order a refusal names
+/// them.
+pub(super) const BOOLEAN_VALUES: &[&str] = &["true", "false"];
+const CLEANUP_POLICY_VALUES: &[&str] = &["delete", "compact"];
+const RECOVERY_STRATEGY_VALUES: &[&str] = &["None", "Balanced", "Aggressive"];
+const DELIVERY_MODE_VALUES: &[&str] = &[DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED];
+const SCHEMA_VALIDATION_MODE_VALUES: &[&str] =
+    &[SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_MODE_FULL];
+
+/// Every config key the broker validates, documents, or reports.
+pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
+    // ── Topic scope ─────────────────────────────────────────────
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            RETENTION_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("604800000"),
+            "Retention time before log segments become eligible for deletion.",
+            ValueCheck::I64AtLeast(RETENTION_UNLIMITED),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            RETENTION_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("-1"),
+            "Maximum partition size before old segments are deleted.",
+            ValueCheck::I64AtLeast(RETENTION_UNLIMITED),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            SEGMENT_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("1073741824"),
+            "Target size of a single log segment file.",
+            ValueCheck::I32AtLeast(1),
+        )
+    },
+    key(
+        CLEANUP_POLICY,
+        ConfigScope::Topic,
+        ConfigType::List,
+        Some("delete"),
+        "`delete` or `compact`.",
+        ValueCheck::OneOf(CLEANUP_POLICY_VALUES),
+    ),
+    key(
+        COMPRESSION_TYPE,
+        ConfigScope::Topic,
+        ConfigType::String,
+        Some("producer"),
+        "Broker-side compression codec for the topic.",
+        ValueCheck::Parsed,
+    ),
+    ConfigKey {
+        type_note: Some(">=1"),
+        ..key(
+            MIN_INSYNC_REPLICAS,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("1"),
+            "With acks=all, the minimum in-sync replicas required to accept a write; otherwise NOT_ENOUGH_REPLICAS (19).",
+            ValueCheck::I32AtLeast(1),
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-841"),
+        cluster_default: Some(UNCLEAN_LEADER_ELECTION_ENABLE),
+        ..key(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Allow electing an out-of-ISR replica as leader on ISR-empty failover (possible data loss).",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-966"),
+        cluster_default: Some(UNCLEAN_RECOVERY_STRATEGY),
+        ..key(
+            UNCLEAN_RECOVERY_STRATEGY,
+            ConfigScope::Topic,
+            ConfigType::String,
+            Some("None"),
+            "Offset-aware unclean recovery: `None`, `Balanced`, or `Aggressive`. Supersedes unclean.leader.election.enable.",
+            ValueCheck::OneOf(RECOVERY_STRATEGY_VALUES),
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-405"),
+        ..key(
+            REMOTE_STORAGE_ENABLE,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Opt this topic into tiered (remote) storage.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-405"),
+        ..key(
+            LOCAL_RETENTION_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("-2"),
+            "Local-tier retention time for tiered partitions.",
+            ValueCheck::I64AtLeast(LOCAL_RETENTION_INHERIT),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        kip: Some("KIP-405"),
+        ..key(
+            LOCAL_RETENTION_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("-2"),
+            "Local-tier retention size budget for tiered partitions.",
+            ValueCheck::I64AtLeast(LOCAL_RETENTION_INHERIT),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-534"),
+        ..key(
+            DELETE_RETENTION_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("86400000"),
+            "How long tombstones and transaction markers are retained after becoming compaction-eligible.",
+            ValueCheck::I64AtLeast(0),
+        )
+    },
+    key(
+        QOS_TIER,
+        ConfigScope::Topic,
+        ConfigType::String,
+        Some(DEFAULT_QOS_TIER),
+        "Krabka QoS tier used to partition producer quota buckets.",
+        ValueCheck::Parsed,
+    ),
+    ConfigKey {
+        read_only: true,
+        ..key(
+            DISKLESS,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Route this topic through the diskless WAL data path instead of the local log. Fixed when the topic is created, and exclusive with both remote.storage.enable and delivery.mode=scheduled.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KFC-1"),
+        ..key(
+            DELIVERY_MODE,
+            ConfigScope::Topic,
+            ConfigType::String,
+            Some(DELIVERY_MODE_IMMEDIATE),
+            "`immediate` or `scheduled`. Under `scheduled` a batch stays invisible to consumers until its own timestamp comes due.",
+            ValueCheck::OneOf(DELIVERY_MODE_VALUES),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KFC-1"),
+        ..key(
+            DELIVERY_MAX_DELAY_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("604800000"),
+            "Largest delivery delay accepted at produce time, measured forward from produce time; -1 removes the bound.",
+            ValueCheck::I64AtLeast(DELIVERY_MAX_DELAY_UNLIMITED),
+        )
+    },
+    ConfigKey {
+        kip: Some("KFC-1"),
+        ..key(
+            DELIVERY_SCHEDULE_MONOTONIC,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Reject a batch whose delivery time precedes the largest delivery time already in the partition.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KFC-7"),
+        ..key(
+            SCHEMA_VALIDATION_KEY,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Validate the schema of every record key produced to this topic.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KFC-7"),
+        ..key(
+            SCHEMA_VALIDATION_VALUE,
+            ConfigScope::Topic,
+            ConfigType::Boolean,
+            Some("false"),
+            "Validate the schema of every record value produced to this topic.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KFC-7"),
+        ..key(
+            SCHEMA_VALIDATION_MODE,
+            ConfigScope::Topic,
+            ConfigType::String,
+            Some(SCHEMA_VALIDATION_MODE_ID),
+            "`id` checks the Confluent header alone; `full` also decodes the record body against the schema the header names.",
+            ValueCheck::OneOf(SCHEMA_VALIDATION_MODE_VALUES),
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-73"),
+        ..key(
+            crate::throttle::LEADER_THROTTLED_REPLICAS_KEY,
+            ConfigScope::Topic,
+            ConfigType::List,
+            Some(""),
+            "Replica list throttled on the leader side during reassignment.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-73"),
+        ..key(
+            crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
+            ConfigScope::Topic,
+            ConfigType::List,
+            Some(""),
+            "Replica list throttled on the follower side during reassignment.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        kip: Some("KFC-9"),
+        ..key(
+            WRITE_FREEZE,
+            ConfigScope::Topic,
+            ConfigType::String,
+            Some("false"),
+            "Write-freeze state of the topic: `false`, or `frozen:` and the registry scope that matched. Set and cleared with `krabka-guard freeze`.",
+            ValueCheck::NotAltered,
+        )
+    },
+    // ── Broker scope ────────────────────────────────────────────
+    ConfigKey {
+        type_note: Some("bytes/s"),
+        kip: Some("KIP-73"),
+        ..key(
+            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            None,
+            "Byte rate ceiling this broker applies to leader-side replication of throttled replicas.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes/s"),
+        kip: Some("KIP-73"),
+        ..key(
+            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            None,
+            "Byte rate ceiling this broker applies to follower-side replication of throttled replicas.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes/s"),
+        kip: Some("KIP-73"),
+        ..key(
+            crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            None,
+            "Byte rate ceiling this broker applies to inter-log-dir replica movement.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-841"),
+        ..key(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("false"),
+            "Cluster-wide default for the topic key of the same name. Valid only on the cluster-default broker resource.",
+            ValueCheck::Bool,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-966"),
+        ..key(
+            UNCLEAN_RECOVERY_STRATEGY,
+            ConfigScope::Broker,
+            ConfigType::String,
+            Some("None"),
+            "Cluster-wide default for the topic key of the same name. Valid only on the cluster-default broker resource.",
+            ValueCheck::OneOf(RECOVERY_STRATEGY_VALUES),
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-1075"),
+        ..key(
+            REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+            ConfigScope::Broker,
+            ConfigType::Long,
+            Some("30000"),
+            "Server-side deadline for remote ListOffsets work when the request carries no timeout of its own.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            BROKER_WITNESS,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("false"),
+            "Marks this node as a data-bearing witness: it replicates and votes but serves no client and leads no partition. Only the controller writes it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            BROKER_FENCED,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("false"),
+            "Marks this node as fenced: it is past its heartbeat deadline, or has not yet proved metadata catch-up, so every node reports its replicas offline. Only the controller writes it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            STRETCH_PREFERRED_LEADER_SITE,
+            ConfigScope::Broker,
+            ConfigType::String,
+            None,
+            "The `broker.rack` value that should hold partition leadership in a stretch cluster. Only the controller writes it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            NODE_ID,
+            ConfigScope::Broker,
+            ConfigType::Int,
+            None,
+            "The node id this process runs under, from its static configuration.",
+            ValueCheck::NotAltered,
+        )
+    },
+    // ── Client-metrics scope (KIP-714) ──────────────────────────
+    ConfigKey {
+        kip: Some("KIP-714"),
+        ..key(
+            crate::client_metrics::config::KEY_METRICS,
+            ConfigScope::ClientMetrics,
+            ConfigType::List,
+            Some(""),
+            "Metric name prefixes this subscription collects. `*` collects every metric; an empty list collects none, as it does on Kafka, where an empty subscription contributes no metric name to the client's set.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-714"),
+        ..key(
+            crate::client_metrics::config::KEY_INTERVAL_MS,
+            ConfigScope::ClientMetrics,
+            ConfigType::Int,
+            None,
+            "How often a matching client pushes metrics. Unset falls back to the broker's default push interval.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-714"),
+        ..key(
+            crate::client_metrics::config::KEY_MATCH,
+            ConfigScope::ClientMetrics,
+            ConfigType::List,
+            Some(""),
+            "Client selectors this subscription matches on. Empty matches every client.",
+            ValueCheck::Parsed,
+        )
+    },
+    // ── Group scope (KIP-1071) ──────────────────────────────────
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_SESSION_TIMEOUT_MS,
+            ConfigScope::Group,
+            ConfigType::Int,
+            None,
+            "How long the coordinator waits for a heartbeat before it removes a member of this streams group.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_HEARTBEAT_INTERVAL_MS,
+            ConfigScope::Group,
+            ConfigType::Int,
+            None,
+            "How often a member of this streams group heartbeats.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("records"),
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_ACCEPTABLE_RECOVERY_LAG,
+            ConfigScope::Group,
+            ConfigType::Long,
+            None,
+            "Changelog lag in records at which a standby task counts as caught up enough to take an active task.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_NUM_WARMUP_REPLICAS,
+            ConfigScope::Group,
+            ConfigType::Int,
+            None,
+            "Cap on the warmup tasks that may migrate state at once.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+            ConfigScope::Group,
+            ConfigType::Int,
+            None,
+            "Standby copies the assignor places for each stateful task.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        type_note: Some("ms"),
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS,
+            ConfigScope::Group,
+            ConfigType::Long,
+            None,
+            "How often a member reports its task offsets to the coordinator.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_ASSIGNOR_NAME,
+            ConfigScope::Group,
+            ConfigType::String,
+            None,
+            "Server-side task assignor: `auto`, `sticky`, or `highly_available`.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
+        kip: Some("KIP-932"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_SHARE_AUTO_OFFSET_RESET,
+            ConfigScope::Group,
+            ConfigType::String,
+            None,
+            "Where a share group starts when it has no committed offset. krabka accepts `earliest` alone; Kafka's `latest` and `by_duration:<duration>` are refused with INVALID_CONFIG until the share coordinator implements them.",
+            ValueCheck::Parsed,
+        )
+    },
+];
+
+/// The row for one key, or `None` when the scope reports no such key.
+pub(crate) fn lookup(scope: ConfigScope, name: &str) -> Option<&'static ConfigKey> {
+    CONFIG_KEYS
+        .iter()
+        .find(|entry| entry.scope == scope && entry.name == name)
+}
+
+/// Every row in one scope, in the table's own order.
+pub(crate) fn keys_in(scope: ConfigScope) -> impl Iterator<Item = &'static ConfigKey> {
+    CONFIG_KEYS.iter().filter(move |entry| entry.scope == scope)
+}
+
+#[cfg(test)]
+mod tests;

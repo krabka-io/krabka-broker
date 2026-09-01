@@ -33,6 +33,7 @@ use std::{
 };
 
 use assert2::assert;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_log::LogConfig;
@@ -95,6 +96,13 @@ const SHARE_GROUPS: &str = "/opt/kafka/bin/kafka-share-groups.sh";
 
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 50;
+
+fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String {
+    format!(
+        "{group}:{}:{partition}",
+        URL_SAFE_NO_PAD.encode(tid.as_bytes())
+    )
+}
 
 /// Boots one broker bound to `0.0.0.0:9092` that advertises
 /// `host.docker.internal:9092`. The Docker container's connect after Metadata
@@ -298,7 +306,7 @@ async fn jvm_share_consumer_reads_krabka() {
 
     let client = connect().await;
     let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &format!("{group}:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
     produce(&client, topic, tid, &values).await;
 
     // Drive the real JVM KafkaShareConsumer. A fresh share group with
@@ -347,7 +355,7 @@ async fn jvm_share_groups_describe_state() {
 
     let client = connect().await;
     let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &format!("{group}:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
     produce(&client, topic, tid, &values).await;
 
     // Join + read so the group is registered with the coordinator.
@@ -404,7 +412,7 @@ async fn jvm_share_groups_list() {
 
     let client = connect().await;
     let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &format!("{group}:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
     produce(&client, topic, tid, &values).await;
 
     // Join + read so the share group is registered with the coordinator. The

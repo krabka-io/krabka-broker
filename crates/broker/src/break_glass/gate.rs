@@ -6,11 +6,7 @@
 
 use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataImage, MetadataRecord};
 
-use self::{
-    denial::nearer_reason,
-    selection::{better_candidate, covers},
-    usability::unusable_because,
-};
+use self::{denial::nearer_reason, selection::covers, usability::unusable_because};
 pub(crate) use self::{
     denial::{BreakGlassDenial, DenialReason},
     usability::distinct_approvers,
@@ -105,7 +101,7 @@ pub(crate) fn authorize(
     now_ms: i64,
 ) -> Result<MetadataRecord, BreakGlassDenial> {
     let policy = BreakGlassPolicy::new(config);
-    let mut usable: Option<&BreakGlassProposalRecord> = None;
+    let mut usable: Vec<&BreakGlassProposalRecord> = Vec::new();
     let mut denial: Option<DenialReason> = None;
 
     for proposal in image.break_glass_proposals() {
@@ -113,12 +109,21 @@ pub(crate) fn authorize(
             continue;
         }
         match unusable_because(policy, proposal, now_ms) {
-            None => usable = Some(better_candidate(usable, proposal)),
+            None => usable.push(proposal),
             Some(reason) => denial = Some(nearer_reason(denial, reason)),
         }
     }
 
-    match usable {
+    let candidates: Vec<(i64, u64, u64)> = usable
+        .iter()
+        .map(|proposal| {
+            let (high, low) = proposal.proposal_id.as_u64_pair();
+            (proposal.expires_at_ms, high, low)
+        })
+        .collect();
+    let selected = krabka_verified::break_glass::select_break_glass_candidate(&candidates)
+        .map(|index| usable[index]);
+    match selected {
         Some(proposal) => Ok(MetadataRecord::V1BreakGlassProposal(
             BreakGlassProposalRecord {
                 // `0` is the unconsumed sentinel, so a clock that reads zero

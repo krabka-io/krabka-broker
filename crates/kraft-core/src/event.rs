@@ -1,5 +1,7 @@
 //! Inputs to the consensus state machine.
 
+use uuid::Uuid;
+
 use crate::types::{Epoch, NodeId};
 
 /// A peer's view of its log tip, carried in Vote/Fetch requests.
@@ -20,14 +22,20 @@ pub enum Event {
     /// A peer asks us for our vote.
     ReceiveVoteRequest {
         from: NodeId,
+        /// Optional cluster identity from the Vote request.
+        cluster_id: Option<Uuid>,
         /// The recipient of this Vote, that is, the wire top-level `voterId`.
         ///
         /// KIP-595 and Kafka's `KafkaRaftClient` check that an incoming Vote
         /// targets this node before they consider the grant. They reject a
         /// request that is addressed to a different voter.
         voter_id: NodeId,
+        /// KIP-853 directory identity of the receiving voter.
+        voter_directory_id: Uuid,
         candidate_epoch: Epoch,
         candidate: NodeId,
+        /// KIP-853 directory identity of the candidate.
+        candidate_directory_id: Uuid,
         candidate_log_end: LogEnd,
         pre_vote: bool,
     },

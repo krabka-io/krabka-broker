@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 9 27 9 32 *)
+
+(* <audit::SpoolAppendDecision as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_SpoolAppendDecision = { accepted: bool; new_bytes: UInt64.t; sync: bool; next_unsynced: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_SpoolAppendDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 9 27 9 32]
+  (self: t_SpoolAppendDecision) (return (x: t_SpoolAppendDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SpoolAppendDecision = Any.any_l () | & self: t_SpoolAppendDecision = self ])
+  [ return (result: t_SpoolAppendDecision) -> (! return {result}) ]

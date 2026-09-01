@@ -80,7 +80,7 @@ impl QuorumStateMachine {
             },
         ];
         // A lone voter wins its own pre-vote immediately.
-        if self.tally_prevote_reached_majority() {
+        if self.tally_reached_majority() {
             actions.extend(self.promote_to_candidate(log, now));
         }
         actions
@@ -108,6 +108,11 @@ impl QuorumStateMachine {
         if !vote_granted {
             return Vec::new();
         }
+        // A response is tied locally to the peer we contacted, but membership
+        // may have changed while that RPC was in flight. Removed voters cannot
+        // contribute to the new configuration's quorum, but their response must
+        // still re-tally grants retained by the new voter set.
+        let current_voter = self.state.voters.contains(from);
         // Match the grant to our round by our OWN role + epoch — exactly as
         // Kafka does (its `VoteResponse` carries no pre-vote flag). `Prospective`
         // ⇒ this is a pre-vote grant; `Candidate` ⇒ a real-vote grant. The epoch
@@ -115,16 +120,20 @@ impl QuorumStateMachine {
         // grant at epoch E arriving after we bumped to E+1 and became Candidate).
         match &mut self.role {
             Role::Prospective { granted, .. } if epoch == self.state.leader_epoch => {
-                granted.insert(from);
-                if self.tally_prevote_reached_majority() {
+                if current_voter {
+                    granted.insert(from);
+                }
+                if self.tally_reached_majority() {
                     self.promote_to_candidate(log, now)
                 } else {
                     Vec::new()
                 }
             }
             Role::Candidate { granted, .. } if epoch == self.state.leader_epoch => {
-                granted.insert(from);
-                if self.tally_candidate_reached_majority() {
+                if current_voter {
+                    granted.insert(from);
+                }
+                if self.tally_reached_majority() {
                     self.promote_to_leader(log)
                 } else {
                     Vec::new()
@@ -134,18 +143,19 @@ impl QuorumStateMachine {
         }
     }
 
-    /// Whether the current `Prospective` grant set has reached a quorum.
-    fn tally_prevote_reached_majority(&self) -> bool {
+    /// Whether the active election grant set contains a quorum of current voters.
+    fn tally_reached_majority(&self) -> bool {
         match &self.role {
-            Role::Prospective { granted, .. } => granted.len() >= self.state.majority(),
-            _ => false,
-        }
-    }
-
-    /// Whether the current `Candidate` grant set has reached a quorum.
-    fn tally_candidate_reached_majority(&self) -> bool {
-        match &self.role {
-            Role::Candidate { granted, .. } => granted.len() >= self.state.majority(),
+            Role::Prospective { granted, .. } | Role::Candidate { granted, .. } => {
+                let current_grants = granted
+                    .iter()
+                    .filter(|id| self.state.voters.contains(**id))
+                    .count();
+                krabka_verified::consensus::election_has_quorum(
+                    self.state.voters.len(),
+                    current_grants,
+                )
+            }
             _ => false,
         }
     }
@@ -183,7 +193,7 @@ impl QuorumStateMachine {
             },
         ];
         // A lone voter wins its own election immediately.
-        if self.tally_candidate_reached_majority() {
+        if self.tally_reached_majority() {
             actions.extend(self.promote_to_leader_inner(log));
         }
         actions
