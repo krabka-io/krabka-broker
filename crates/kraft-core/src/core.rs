@@ -67,9 +67,12 @@ pub struct QuorumStateMachine {
 #[derive(Clone, Copy)]
 struct VoteRequest {
     from: NodeId,
+    cluster_id: Option<uuid::Uuid>,
     voter_id: NodeId,
+    voter_directory_id: uuid::Uuid,
     candidate_epoch: Epoch,
     candidate: NodeId,
+    candidate_directory_id: uuid::Uuid,
     candidate_log_end: LogEnd,
     pre_vote: bool,
 }
@@ -152,17 +155,23 @@ impl QuorumStateMachine {
         match event {
             Event::ReceiveVoteRequest {
                 from,
+                cluster_id,
                 voter_id,
+                voter_directory_id,
                 candidate_epoch,
                 candidate,
+                candidate_directory_id,
                 candidate_log_end,
                 pre_vote,
             } => self.handle_vote_request(
                 VoteRequest {
                     from,
+                    cluster_id,
                     voter_id,
+                    voter_directory_id,
                     candidate_epoch,
                     candidate,
+                    candidate_directory_id,
                     candidate_log_end,
                     pre_vote,
                 },

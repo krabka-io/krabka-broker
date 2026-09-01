@@ -1,0 +1,140 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 77 0 83 23 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 88 16 88 24
+let%span stransaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 27 90 28
+let%span stransaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 16 90 24
+let%span stransaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 16 90 28
+let%span stransaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 93 27 93 28
+let%span stransaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 93 19 93 28
+let%span stransaction'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 8 95 45
+let%span stransaction'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 39 28 39 70
+let%span stransaction'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 43 8 48 13
+let%span stransaction'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 54 8 59 13
+let%span stransaction'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 65 8 73 13
+let%span stransaction'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 42 95 43
+let%span stransaction'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 18 95 29
+let%span soption = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+
+use creusot.int.Int16
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+type tup2_i64_i16 = { f0: Int64.t; f1: Int16.t }
+
+type t_Option_tup2_i64_i16 = None | Some tup2_i64_i16
+
+let closure0 [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 18 95 29] [@coma:extspec]
+  (self: ()) (fresh_pid: Int64.t) (return (x: tup2_i64_i16)) = bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- { f0 = fresh_pid; f1 = ([%#stransaction'10] (0: Int16.t)) } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup2_i64_i16 = Any.any_l () | & fresh_pid: Int64.t = fresh_pid ]
+  [ return (result: tup2_i64_i16) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate precondition_closure0 (self: ()) (args: Int64.t) =
+  [%#stransaction'11] let fresh_pid = args in closure0'pre self fresh_pid
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: ()) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: ()) (args: Int64.t) (result: tup2_i64_i16) =
+  [%#stransaction'11] let fresh_pid = args in closure0'post'return self fresh_pid result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_i64 (self_: t_Option_i64) (f: ()) (return (x: t_Option_tup2_i64_i16)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self_ with
+    | None'0 -> true
+    | Some'0 t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_tup2_i64_i16) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self_ with
+      | None'0 -> resolve_closure0 f /\ result = None
+      | Some'0 t -> exists r: tup2_i64_i16. result = Some r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+type tup2_Option_tup2_i64_i16_Option_i64 = { f0'0: t_Option_tup2_i64_i16; f1'0: t_Option_i64 }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let next_producer_identity [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 77 0 83 23]
+  (verified: bool) (recovery: bool) (pid: Int64.t) (epoch: Int16.t) (fresh: t_Option_i64)
+  (return (x: t_Option_tup2_i64_i16)) = (! bb0
+  [ bb0 = any [ br0 -> {verified = false} (! bb1) | br1 -> {verified} (! bb2) ]
+  | bb2 = any [ br0 -> {recovery = false} (! bb4) | br1 -> {recovery} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &can_increment <- Int16.lt epoch ([%#stransaction] const_MAX) ] s1 | s1 = bb5 ]
+  | bb4 = s0
+    [ s0 = Int16.sub [%#stransaction'2] {[%#stransaction'1] const_MAX} {[%#stransaction'0] (1: Int16.t)}
+        (fun (_x: Int16.t) -> [ &_35 <- _x ] s1)
+    | s1 = [ &can_increment <- Int16.lt epoch _35 ] s2
+    | s2 = bb5 ]
+  | bb5 = any [ br0 -> {can_increment = false} (! bb7) | br1 -> {can_increment} (! bb6) ]
+  | bb6 = s0
+    [ s0 = Int16.add [%#stransaction'4] {epoch} {[%#stransaction'3] (1: Int16.t)}
+        (fun (_x: Int16.t) -> [ &_39 <- _x ] s1)
+    | s1 = [ &_37 <- { f0 = pid; f1 = _39 } ] s2
+    | s2 = [ &_ret <- Some _37 ] s3
+    | s3 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_42 <- () ] s1
+    | s1 = map_i64 [%#stransaction'5] {fresh} {_42} (fun (_x: t_Option_tup2_i64_i16) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_28 <- { f0 = pid; f1 = epoch } ] s1 | s1 = [ &_ret <- Some _28 ] s2 | s2 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_i16 = Any.any_l ()
+  | & verified: bool = verified
+  | & recovery: bool = recovery
+  | & pid: Int64.t = pid
+  | & epoch: Int16.t = epoch
+  | & fresh: t_Option_i64 = fresh
+  | & _28: tup2_i64_i16 = Any.any_l ()
+  | & can_increment: bool = Any.any_l ()
+  | & _35: Int16.t = Any.any_l ()
+  | & _37: tup2_i64_i16 = Any.any_l ()
+  | & _39: Int16.t = Any.any_l ()
+  | & _42: () = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_i16) ->
+  {[@stop_split] [@expl:next_producer_identity ensures] ([@stop_split] [@expl:next_producer_identity ensures #0] [%#stransaction'6] not verified
+      -> result = Some { f0 = pid; f1 = epoch })
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #1] [%#stransaction'7] verified
+        /\ not recovery /\ Int16.to_int epoch < Int16.to_int const_MAX - 1
+      -> match result with
+        | Some {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #2] [%#stransaction'8] verified
+        /\ recovery /\ Int16.to_int epoch < Int16.to_int const_MAX
+      -> match result with
+        | Some {f0 = result_pid; f1 = result_epoch} -> result_pid = pid
+        /\ Int16.to_int result_epoch = Int16.to_int epoch + 1
+        | None -> false
+        end)
+    /\ ([@stop_split] [@expl:next_producer_identity ensures #3] [%#stransaction'9] verified
+      /\ (not recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX - 1)
+      \/ recovery /\ ge_log_Int (Int16.to_int epoch) (Int16.to_int const_MAX))
+    -> match { f0'0 = result; f1'0 = fresh } with
+      | {f0'0 = Some {f0 = result_pid; f1 = result_epoch}; f1'0 = Some'0 fresh_pid} -> result_pid = fresh_pid
+      /\ Int16.to_int result_epoch = 0
+      | {f0'0 = None; f1'0 = None'0} -> true
+      | _ -> false
+      end)}
+    (! return {result}) ]

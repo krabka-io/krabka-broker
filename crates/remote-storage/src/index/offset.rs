@@ -39,16 +39,12 @@ pub fn end_position_for(
     segment_size: u32,
     max_bytes: usize,
 ) -> Option<BytePosition> {
-    if max_bytes == 0 {
-        return None;
-    }
     let max_bytes_u32 = u32::try_from(max_bytes).unwrap_or(u32::MAX);
-    let exclusive_end = start_position.saturating_add(max_bytes_u32);
-    if exclusive_end >= segment_size {
-        None
-    } else {
-        Some(exclusive_end.saturating_sub(1))
-    }
+    krabka_verified::remote_read::remote_fetch_end_position(
+        start_position,
+        segment_size,
+        max_bytes_u32,
+    )
 }
 
 /// Borrows Kafka's `OffsetIndex` on-disk format as a zero-copy
@@ -151,6 +147,8 @@ mod tests {
             (0, 1024, 0, None),
             // start past the segment-end cap still safe via saturating add.
             (u32::MAX, 1024, 100, None),
+            // Wider host caps saturate before entering the verified kernel.
+            (0, u32::MAX, usize::MAX, None),
         ];
         for (start, segment, max_bytes, want) in cases {
             assert!(

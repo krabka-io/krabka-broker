@@ -81,6 +81,12 @@ pub(crate) struct LivenessTickState {
 ///    up.
 /// 4. Edge. `liveness.tick()` emits `AliveToDead` once per death, and this
 ///    step runs [`on_broker_dead`] at once. That is the fast path.
+/// 5. Publication.
+///    [`publish_fencing_changes`](crate::heartbeat::fencing::publish_fencing_changes)
+///    writes the registry's fencing decisions into the metadata log, so a
+///    `Metadata` or `DescribeTopicPartitions` request served by a follower
+///    reports the same `offline_replicas` as one served here. It runs last,
+///    so a death this tick detected is published in the same tick.
 pub(crate) async fn run_liveness_tick(
     controller: &Arc<dyn crate::metadata_source::MetadataSource>,
     node_id: NodeId,
@@ -126,6 +132,9 @@ pub(crate) async fn run_liveness_tick(
                 on_broker_alive(controller, node_id, NodeId(broker_id), liveness);
             }
         }
+    }
+    if is_controller_leader(controller, node_id) {
+        crate::heartbeat::fencing::publish_fencing_changes(controller, liveness).await;
     }
 }
 

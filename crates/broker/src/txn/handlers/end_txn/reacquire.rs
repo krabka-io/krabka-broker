@@ -4,26 +4,11 @@
 //! still the one it prepared.
 
 use krabka_log::ProducerId;
-
-use crate::{
-    codes,
-    txn::state::{TxnEntry, TxnState},
-};
-
 /// Decision for the Phase-3 (Complete) re-acquire re-validation. See
 /// [`validate_complete_reacquire`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReacquireDecision {
-    /// State is exactly as this handler left it after Prepare. Write Complete.
-    Proceed,
-    /// The entry already advanced to the Complete state this handler intended,
-    /// after an idempotent retry or a lost race. Report success and do not
-    /// write again.
-    AlreadyComplete,
-    /// The entry changed in a way that means this handler must NOT write
-    /// Complete. Return this Kafka error code to the producer.
-    Reject(i16),
-}
+pub(crate) use krabka_verified::transaction::TransactionCompletionDecision as ReacquireDecision;
+
+use crate::txn::state::{TxnEntry, TxnState};
 
 /// Re-validate, after re-acquiring the coordinator's *current* entry for a
 /// transactional-id, that it is safe to finalise the transaction.
@@ -33,17 +18,14 @@ pub(crate) enum ReacquireDecision {
 /// in Phase 1. `complete` is the state it is about to write.
 ///
 /// Returns:
-/// - [`ReacquireDecision::Reject`] with `INVALID_PRODUCER_EPOCH` if the pid or
-///   epoch no longer matches, which means a concurrent `InitProducerId` fenced
-///   this handler. Apache Kafka maps a stale producer epoch on `EndTxn` to
-///   `INVALID_PRODUCER_EPOCH`, also known as `PRODUCER_FENCED` for the newer
-///   producer client.
-/// - [`ReacquireDecision::AlreadyComplete`] if the entry is already in the
-///   exact `complete` state this handler intended. Another caller, or an
-///   `EndTxn` retry, finished the transition, so a second finalise would be a
-///   redundant overwrite.
-/// - [`ReacquireDecision::Reject`] with `INVALID_TXN_STATE` if the state is
-///   anything other than the `prepare` this handler left in place. For
+/// - [`ReacquireDecision::RejectStaleIdentity`] if the pid or epoch no longer
+///   matches, which means a concurrent `InitProducerId` fenced this handler.
+/// - [`ReacquireDecision::AlreadyComplete`] if the entry has the exact
+///   completion identity and state this handler intended. Another caller, or
+///   an `EndTxn` retry, finished the transition, so a second finalise would be
+///   a redundant overwrite.
+/// - [`ReacquireDecision::RejectState`] if the state is anything other than the
+///   `prepare` this handler left in place. For
 ///   example, a concurrent `AddPartitionsToTxn` advanced it to `Ongoing`, or
 ///   it moved into the *opposite* prepare/complete kind. The marker fan-out
 ///   then no longer reflects the live transaction, and this handler must not
@@ -54,19 +36,30 @@ pub(crate) fn validate_complete_reacquire(
     entry: &TxnEntry,
     expected_pid: ProducerId,
     expected_epoch: i16,
+    expected_completion_pid: ProducerId,
+    expected_completion_epoch: i16,
     prepare: TxnState,
     complete: TxnState,
 ) -> ReacquireDecision {
-    if entry.producer_id != expected_pid || entry.producer_epoch != expected_epoch {
-        return ReacquireDecision::Reject(codes::INVALID_PRODUCER_EPOCH);
-    }
-    if entry.state == prepare {
-        return ReacquireDecision::Proceed;
-    }
-    if entry.state == complete {
-        return ReacquireDecision::AlreadyComplete;
-    }
-    ReacquireDecision::Reject(codes::INVALID_TXN_STATE)
+    use krabka_verified::transaction::{TransactionIdentity, TransactionSnapshot};
+
+    krabka_verified::transaction::transaction_completion_decision(
+        TransactionSnapshot {
+            pid: entry.producer_id.get(),
+            epoch: entry.producer_epoch,
+            state: entry.state.to_kafka_status(),
+        },
+        TransactionIdentity {
+            pid: expected_pid.get(),
+            epoch: expected_epoch,
+        },
+        TransactionIdentity {
+            pid: expected_completion_pid.get(),
+            epoch: expected_completion_epoch,
+        },
+        prepare.to_kafka_status(),
+        complete.to_kafka_status(),
+    )
 }
 
 #[cfg(test)]
@@ -92,14 +85,14 @@ mod tests {
                 7,
                 4,
                 TxnState::PrepareCommit,
-                ReacquireDecision::Reject(codes::INVALID_PRODUCER_EPOCH),
+                ReacquireDecision::RejectStaleIdentity,
             ),
             // Producer id changed underneath us — fenced.
             (
                 8,
                 3,
                 TxnState::PrepareCommit,
-                ReacquireDecision::Reject(codes::INVALID_PRODUCER_EPOCH),
+                ReacquireDecision::RejectStaleIdentity,
             ),
             // Another caller (or an EndTxn retry that lost the race) already
             // drove this exact transition. Report success, do not re-write.
@@ -113,26 +106,18 @@ mod tests {
             // (Complete→Ongoing reuse, or some other interleave). Our marker
             // fan-out no longer reflects the live transaction; refuse to
             // finalise.
-            (
-                7,
-                3,
-                TxnState::Ongoing,
-                ReacquireDecision::Reject(codes::INVALID_TXN_STATE),
-            ),
+            (7, 3, TxnState::Ongoing, ReacquireDecision::RejectState),
             // We prepared a Commit, but the entry is now in PrepareAbort — a
             // different finalisation kind raced us. Refuse to write
             // CompleteCommit.
-            (
-                7,
-                3,
-                TxnState::PrepareAbort,
-                ReacquireDecision::Reject(codes::INVALID_TXN_STATE),
-            ),
+            (7, 3, TxnState::PrepareAbort, ReacquireDecision::RejectState),
         ];
         for (pid, epoch, state, expected) in cases {
             let e = entry(pid, epoch, state);
             let decision = validate_complete_reacquire(
                 &e,
+                ProducerId(7),
+                3,
                 ProducerId(7),
                 3,
                 TxnState::PrepareCommit,
@@ -154,6 +139,8 @@ mod tests {
                 &prep,
                 ProducerId(7),
                 3,
+                ProducerId(7),
+                3,
                 TxnState::PrepareAbort,
                 TxnState::CompleteAbort
             ) == ReacquireDecision::Proceed
@@ -164,9 +151,40 @@ mod tests {
                 &done,
                 ProducerId(7),
                 3,
+                ProducerId(7),
+                3,
                 TxnState::PrepareAbort,
                 TxnState::CompleteAbort
             ) == ReacquireDecision::AlreadyComplete
+        );
+    }
+
+    #[test]
+    fn rolled_completion_is_idempotent_only_under_the_new_identity() {
+        let completed = entry(11, 0, TxnState::CompleteCommit);
+        assert!(
+            validate_complete_reacquire(
+                &completed,
+                ProducerId(7),
+                i16::MAX,
+                ProducerId(11),
+                0,
+                TxnState::PrepareCommit,
+                TxnState::CompleteCommit,
+            ) == ReacquireDecision::AlreadyComplete
+        );
+
+        let stale = entry(7, i16::MAX, TxnState::CompleteCommit);
+        assert!(
+            validate_complete_reacquire(
+                &stale,
+                ProducerId(7),
+                i16::MAX,
+                ProducerId(11),
+                0,
+                TxnState::PrepareCommit,
+                TxnState::CompleteCommit,
+            ) == ReacquireDecision::RejectState
         );
     }
 }

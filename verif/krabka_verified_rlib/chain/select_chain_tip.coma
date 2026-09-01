@@ -1,0 +1,235 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 41 0 41 73 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span schain = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 43 16 43 22
+let%span schain'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 58 14 58 36
+let%span schain'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 59 14 59 30
+let%span schain'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 45 16 57 5
+let%span schain'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 44 16 44 39
+let%span schain'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 60 11 60 24
+let%span schain'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 60 11 60 26
+let%span schain'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 64 45
+let%span schain'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 64 47
+let%span schain'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 50 64 69
+let%span schain'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 50 64 71
+let%span schain'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 66 71
+let%span schain'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 28 65 41
+let%span schain'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 28 65 43
+let%span schain'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 47 65 66
+let%span schain'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 47 65 68
+let%span schain'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 31 66 44
+let%span schain'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 31 66 46
+let%span schain'17 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 49 66 68
+let%span schain'18 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 49 66 70
+let%span schain'19 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 27 66 71
+let%span schain'20 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 73 13 73 14
+let%span schain'21 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 73 8 73 14
+let%span schain'22 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 25 10 26 72
+let%span schain'23 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 27 10 39 1
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup3_i64_u64_bool = { f0: Int64.t; f1: UInt64.t; f2: bool }
+
+let len_tup3_i64_u64_bool (self_: Slice64.slice tup3_i64_u64_bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0'0: UInt64.t)) = any
+  [ _k (f0'0: UInt64.t) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_chain_tip [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 41 0 41 73]
+  (candidates: Slice64.slice tup3_i64_u64_bool) (return (x: t_Option_usize)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#schain] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#schain'0] Seq.length (Slice64.view candidates)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#schain'3] UInt64.t'int i <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#schain'2] match best with
+        | None -> forall j: int. 0 <= j /\ j < UInt64.t'int i -> not (Seq.get (Slice64.view candidates) j).f2
+        | Some index -> UInt64.t'int index < UInt64.t'int i
+        /\ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
+        /\ (forall j: int. 0 <= j /\ j < UInt64.t'int i /\ (Seq.get (Slice64.view candidates) j).f2
+            -> Int64.to_int (Seq.get (Slice64.view candidates) j).f0
+              < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+            \/ Int64.to_int (Seq.get (Slice64.view candidates) j).f0
+              = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+            /\ UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
+            <= UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+        /\ (forall j: int. 0 <= j /\ j < UInt64.t'int index /\ (Seq.get (Slice64.view candidates) j).f2
+          -> Int64.to_int (Seq.get (Slice64.view candidates) j).f0
+            < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          \/ Int64.to_int (Seq.get (Slice64.view candidates) j).f0
+            = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          /\ UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
+          < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+        end}
+      (! [ &variant_old_bb1 <- [%#schain'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = len_tup3_i64_u64_bool [%#schain'1] {candidates} (fun (_x: UInt64.t) -> [ &_23 <- _x ] s1)
+      | s1 = [ &_21 <- UInt64.lt i _23 ] s2
+      | s2 = any [ br0 -> {_21 = false} (! bb28) | br1 -> {_21} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_27 <- i ] s1
+        | s1 = [ &_28 <- Slice64.length candidates ] s2
+        | s2 = [ &_29 <- UInt64.lt _27 _28 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'4] _29} s4
+        | s4 = Slice64.get [%#schain'5] <tup3_i64_u64_bool> {candidates} {_27}
+            (fun (r: tup3_i64_u64_bool) -> [ &_26 <- r.f2 ] s5)
+        | s5 = any [ br0 -> {_26 = false} (! bb27) | br1 -> {_26} (! bb6) ] ]
+      | bb6 = any [ br0 -> {best = None} (! bb10) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb9) ]
+      | bb9 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current' <- r0 ] s1)
+        | s1 = [ &_37 <- i ] s2
+        | s2 = [ &_38 <- Slice64.length candidates ] s3
+        | s3 = [ &_39 <- UInt64.lt _37 _38 ] s4
+        | s4 = {[@expl:index in bounds] [%#schain'6] _39} s5
+        | s5 = Slice64.get [%#schain'7] <tup3_i64_u64_bool> {candidates} {_37}
+            (fun (r: tup3_i64_u64_bool) -> [ &_36 <- r.f0 ] s6)
+        | s6 = [ &_41 <- current' ] s7
+        | s7 = [ &_42 <- Slice64.length candidates ] s8
+        | s8 = [ &_43 <- UInt64.lt _41 _42 ] s9
+        | s9 = {[@expl:index in bounds] [%#schain'8] _43} s10
+        | s10 = Slice64.get [%#schain'9] <tup3_i64_u64_bool> {candidates} {_41}
+            (fun (r: tup3_i64_u64_bool) -> [ &_40 <- r.f0 ] s11)
+        | s11 = [ &_35 <- Int64.gt _36 _40 ] s12
+        | s12 = any [ br0 -> {_35 = false} (! bb14) | br1 -> {_35} (! bb13) ] ]
+      | bb13 = s0 [ s0 = [ &newer <- [%#schain'10] true ] s1 | s1 = bb22 ]
+      | bb14 = s0
+        [ s0 = [ &_46 <- i ] s1
+        | s1 = [ &_47 <- Slice64.length candidates ] s2
+        | s2 = [ &_48 <- UInt64.lt _46 _47 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'11] _48} s4
+        | s4 = Slice64.get [%#schain'12] <tup3_i64_u64_bool> {candidates} {_46}
+            (fun (r: tup3_i64_u64_bool) -> [ &_45 <- r.f0 ] s5)
+        | s5 = [ &_50 <- current' ] s6
+        | s6 = [ &_51 <- Slice64.length candidates ] s7
+        | s7 = [ &_52 <- UInt64.lt _50 _51 ] s8
+        | s8 = {[@expl:index in bounds] [%#schain'13] _52} s9
+        | s9 = Slice64.get [%#schain'14] <tup3_i64_u64_bool> {candidates} {_50}
+            (fun (r: tup3_i64_u64_bool) -> [ &_49 <- r.f0 ] s10)
+        | s10 = [ &_44 <- _45 = _49 ] s11
+        | s11 = any [ br0 -> {_44 = false} (! bb18) | br1 -> {_44} (! bb17) ] ]
+      | bb17 = s0
+        [ s0 = [ &_54 <- i ] s1
+        | s1 = [ &_55 <- Slice64.length candidates ] s2
+        | s2 = [ &_56 <- UInt64.lt _54 _55 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'15] _56} s4
+        | s4 = Slice64.get [%#schain'16] <tup3_i64_u64_bool> {candidates} {_54}
+            (fun (r: tup3_i64_u64_bool) -> [ &_53 <- r.f1 ] s5)
+        | s5 = [ &_58 <- current' ] s6
+        | s6 = [ &_59 <- Slice64.length candidates ] s7
+        | s7 = [ &_60 <- UInt64.lt _58 _59 ] s8
+        | s8 = {[@expl:index in bounds] [%#schain'17] _60} s9
+        | s9 = Slice64.get [%#schain'18] <tup3_i64_u64_bool> {candidates} {_58}
+            (fun (r: tup3_i64_u64_bool) -> [ &_57 <- r.f1 ] s10)
+        | s10 = [ &newer <- UInt64.gt _53 _57 ] s11
+        | s11 = bb22 ]
+      | bb18 = s0 [ s0 = [ &newer <- [%#schain'19] false ] s1 | s1 = bb22 ]
+      | bb22 = any [ br0 -> {newer = false} (! bb27) | br1 -> {newer} (! bb23) ]
+      | bb23 = s0 [ s0 = [ &_62 <- Some i ] s1 | s1 = [ &best <- _62 ] s2 | s2 = bb27 ]
+      | bb10 = s0 [ s0 = [ &_31 <- Some i ] s1 | s1 = [ &best <- _31 ] s2 | s2 = bb27 ]
+      | bb27 = s0
+        [ s0 = UInt64.add [%#schain'21] {i} {[%#schain'20] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb28 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & candidates: Slice64.slice tup3_i64_u64_bool = candidates
+  | & best: t_Option_usize = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _23: UInt64.t = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _27: UInt64.t = Any.any_l ()
+  | & _28: UInt64.t = Any.any_l ()
+  | & _29: bool = Any.any_l ()
+  | & _31: t_Option_usize = Any.any_l ()
+  | & current': UInt64.t = Any.any_l ()
+  | & newer: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _36: Int64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _40: Int64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _45: Int64.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _49: Int64.t = Any.any_l ()
+  | & _50: UInt64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _53: UInt64.t = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _57: UInt64.t = Any.any_l ()
+  | & _58: UInt64.t = Any.any_l ()
+  | & _59: UInt64.t = Any.any_l ()
+  | & _60: bool = Any.any_l ()
+  | & _62: t_Option_usize = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_chain_tip ensures] ([@stop_split] [@expl:select_chain_tip ensures #0] [%#schain'22] result
+        = None
+      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> not (Seq.get (Slice64.view candidates) i).f2))
+    /\ ([@stop_split] [@expl:select_chain_tip ensures #1] [%#schain'23] match result with
+      | None -> true
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
+      /\ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates) /\ (Seq.get (Slice64.view candidates) i).f2
+          -> Int64.to_int (Seq.get (Slice64.view candidates) i).f0
+            < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          \/ Int64.to_int (Seq.get (Slice64.view candidates) i).f0
+            = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+          /\ UInt64.t'int (Seq.get (Slice64.view candidates) i).f1
+          <= UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index /\ (Seq.get (Slice64.view candidates) i).f2
+        -> Int64.to_int (Seq.get (Slice64.view candidates) i).f0
+          < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+        \/ Int64.to_int (Seq.get (Slice64.view candidates) i).f0
+          = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
+        /\ UInt64.t'int (Seq.get (Slice64.view candidates) i).f1
+        < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+      end)}
+    (! return {result}) ]

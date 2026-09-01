@@ -45,7 +45,7 @@ pub(super) fn controller_registration_response(
     )
 }
 
-pub(super) fn encode(response: &impl Encode, version: i16) -> Result<Bytes, RaftError> {
+fn encode(response: &impl Encode, version: i16) -> Result<Bytes, RaftError> {
     let mut bytes = BytesMut::new();
     response.encode(&mut bytes, version)?;
     Ok(bytes.freeze())

@@ -1,0 +1,178 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 66 0 73 22 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 418 18 418 53
+let%span sslice'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 419 18 419 63
+let%span sslice'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 67 20 67 29
+let%span scmp = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span swal = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 74 7 74 47
+let%span swal'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 75 11 75 25
+let%span swal'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 75 11 75 46
+let%span swal'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 76 12 76 48
+let%span swal'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 80 23 80 24
+let%span swal'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 54 10 55 83
+let%span swal'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 56 10 58 65
+let%span swal'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 59 10 61 65
+let%span swal'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 62 10 64 67
+let%span swal'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 34 10 35 54
+let%span swal'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 27 8 30 85
+let%span smodel = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use seq.Seq
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+function deep_model_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int = [%#soption] match self with
+    | Some t -> Some'0 (deep_model_u64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_u64
+
+function deep_model_ref_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_u64
+
+let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_u64 self_ <> deep_model_ref_Option_u64 rhs)}
+    (! return {result}) ]
+
+type t_Option_ref_u64 = None'1 | Some'1 UInt64.t
+
+function index_slice_u64 [@inline:trivial] (self: Slice64.slice UInt64.t) (ix: int) : UInt64.t =
+  [%#sslice'1] Seq.get (Slice64.view self) ix
+
+meta "rewrite_def" function index_slice_u64
+
+let first_u64 (self_: Slice64.slice UInt64.t) (return (x: t_Option_ref_u64)) = any
+  [ return (result: t_Option_ref_u64) ->
+  {[@stop_split] [@expl:first_u64 ensures] ([@stop_split] [@expl:first ensures #0] [%#sslice] result = None'1
+      -> Seq.length (Slice64.view self_) = 0)
+    /\ ([@stop_split] [@expl:first ensures #1] [%#sslice'0] forall x: UInt64.t. result = Some'1 x
+      -> index_slice_u64 self_ 0 = x)}
+    (! return {result}) ]
+
+function deep_model_ref_u64 [@inline:trivial] (self: UInt64.t) : int = [%#smodel] deep_model_u64 self
+
+meta "rewrite_def" function deep_model_ref_u64
+
+function deep_model_Option_ref_u64 [@inline:trivial] (self: t_Option_ref_u64) : t_Option_Int =
+  [%#soption] match self with
+    | Some'1 t -> Some'0 (deep_model_ref_u64 t)
+    | None'1 -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_ref_u64
+
+function deep_model_ref_Option_ref_u64 [@inline:trivial] (self: t_Option_ref_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_ref_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_ref_u64
+
+let ne_Option_ref_u64 (self_: t_Option_ref_u64) (rhs: t_Option_ref_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_ref_u64 self_ <> deep_model_ref_Option_ref_u64 rhs)}
+    (! return {result}) ]
+
+let contains_voter (voters: Slice64.slice UInt64.t) (node: UInt64.t) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:contains_voter ensures] [%#swal'8] result
+    = (exists i: int. 0 <= i /\ i < Seq.length (Slice64.view voters) /\ Seq.get (Slice64.view voters) i = node)}
+    (! return {result}) ]
+
+type t_WalFetchAdmission = Denied | FencedLeaderEpoch | UnknownLeaderEpoch | Serve
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate wal_fetch_authorized [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 20 0 25 9] (authenticated_node: t_Option_u64) (claimed_node: UInt64.t) (local_node: UInt64.t) (voters: Seq.seq UInt64.t) =
+  [%#swal'9] authenticated_node = Some claimed_node
+  /\ gt_log_Int (Seq.length voters) 0
+  /\ Seq.get voters 0 = local_node
+  /\ (exists i: int. 0 <= i /\ i < Seq.length voters /\ Seq.get voters i = claimed_node)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let wal_fetch_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/wal.rs" 66 0 73 22]
+  (authenticated_node: t_Option_u64) (claimed_node: UInt64.t) (local_node: UInt64.t) (voters: Slice64.slice UInt64.t)
+  (request_epoch: Int32.t) (leader_epoch: Int32.t) (return (x: t_WalFetchAdmission)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_37 <- Some claimed_node ] s1
+    | s1 = ne_Option_u64 [%#swal] {authenticated_node} {_37} (fun (_x: bool) -> [ &_34 <- _x ] s2)
+    | s2 = any [ br0 -> {_34 = false} (! bb3) | br1 -> {_34} (! bb11) ] ]
+  | bb3 = s0
+    [ s0 = first_u64 [%#swal'0] {voters} (fun (_x: t_Option_ref_u64) -> [ &_41 <- _x ] s1)
+    | s1 = [ &_46 <- local_node ] s2
+    | s2 = [ &_44 <- Some'1 _46 ] s3
+    | s3 = ne_Option_ref_u64 [%#swal'1] {_41} {_44} (fun (_x: bool) -> [ &_39 <- _x ] s4)
+    | s4 = any [ br0 -> {_39 = false} (! bb7) | br1 -> {_39} (! bb11) ] ]
+  | bb7 = s0
+    [ s0 = contains_voter [%#swal'2] {voters} {claimed_node} (fun (_x: bool) -> [ &_47 <- _x ] s1)
+    | s1 = any [ br0 -> {_47 = false} (! bb11) | br1 -> {_47} (! bb9) ] ]
+  | bb9 = s0
+    [ s0 = [ &_52 <- Int32.lt request_epoch ([%#swal'3] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_52 = false} (! bb13) | br1 -> {_52} (! bb16) ] ]
+  | bb13 = s0
+    [ s0 = [ &_54 <- request_epoch = leader_epoch ] s1
+    | s1 = any [ br0 -> {_54 = false} (! bb15) | br1 -> {_54} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- Serve ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_58 <- Int32.lt request_epoch leader_epoch ] s1
+    | s1 = any [ br0 -> {_58 = false} (! bb18) | br1 -> {_58} (! bb17) ] ]
+  | bb17 = s0 [ s0 = [ &_ret <- FencedLeaderEpoch ] s1 | s1 = return {_ret} ]
+  | bb18 = s0 [ s0 = [ &_ret <- UnknownLeaderEpoch ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Denied ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_WalFetchAdmission = Any.any_l ()
+  | & authenticated_node: t_Option_u64 = authenticated_node
+  | & claimed_node: UInt64.t = claimed_node
+  | & local_node: UInt64.t = local_node
+  | & voters: Slice64.slice UInt64.t = voters
+  | & request_epoch: Int32.t = request_epoch
+  | & leader_epoch: Int32.t = leader_epoch
+  | & _34: bool = Any.any_l ()
+  | & _37: t_Option_u64 = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _41: t_Option_ref_u64 = Any.any_l ()
+  | & _44: t_Option_ref_u64 = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _58: bool = Any.any_l () ])
+  [ return (result: t_WalFetchAdmission) ->
+  {[@stop_split] [@expl:wal_fetch_admission ensures] ([@stop_split] [@expl:wal_fetch_admission ensures #0] [%#swal'4] (result
+        = Denied)
+      = (not wal_fetch_authorized authenticated_node claimed_node local_node (Slice64.view voters)))
+    /\ ([@stop_split] [@expl:wal_fetch_admission ensures #1] [%#swal'5] (result = FencedLeaderEpoch)
+      = (wal_fetch_authorized authenticated_node claimed_node local_node (Slice64.view voters)
+      /\ ge_log_Int (Int32.to_int request_epoch) 0 /\ Int32.to_int request_epoch < Int32.to_int leader_epoch))
+    /\ ([@stop_split] [@expl:wal_fetch_admission ensures #2] [%#swal'6] (result = UnknownLeaderEpoch)
+      = (wal_fetch_authorized authenticated_node claimed_node local_node (Slice64.view voters)
+      /\ ge_log_Int (Int32.to_int request_epoch) 0
+      /\ gt_log_Int (Int32.to_int request_epoch) (Int32.to_int leader_epoch)))
+    /\ ([@stop_split] [@expl:wal_fetch_admission ensures #3] [%#swal'7] (result = Serve)
+    = (wal_fetch_authorized authenticated_node claimed_node local_node (Slice64.view voters)
+    /\ (Int32.to_int request_epoch < 0 \/ Int32.to_int request_epoch = Int32.to_int leader_epoch)))}
+    (! return {result}) ]

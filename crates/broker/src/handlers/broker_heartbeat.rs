@@ -66,7 +66,13 @@ pub(crate) async fn handle(
         // Inter-broker control-plane RPC: `ClusterAction` on
         // `Cluster("kafka-cluster")`. On Deny → whole-response
         // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
-        {
+        //
+        // Skipped when the listener already made that decision for the whole
+        // connection, which is how the controller listener works. Re-running
+        // it there would judge the substituted `ANONYMOUS` principal rather
+        // than the peer the listener authenticated, and deny every heartbeat.
+        // See `RequestContext::listener_authorized_cluster_action`.
+        if !ctx.listener_authorized_cluster_action {
             let image = controller.current_image();
             if cluster_action_denied(
                 broker.config.authorizer.as_ref(),

@@ -24,7 +24,7 @@ macro_rules! api_version {
     };
 }
 
-/// The Kafka 4.x controller-listener Admin surface, in `api_key` order.
+/// The Kafka 4.x controller-listener surface, in `api_key` order.
 ///
 /// Apache Kafka marks each request schema with the listeners that accept it,
 /// and a controller's `ApiVersionManager` advertises exactly the ones tagged
@@ -37,6 +37,14 @@ macro_rules! api_version {
 /// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, broker and controller
 /// registration, and the KIP-853 voter RPCs. What remains is the subset that
 /// reuses a broker handler, which is what this router bridges to.
+///
+/// `BrokerHeartbeat` is the one entry here that is not an Admin API, and it
+/// belongs for the same reason the Admin subset does: KIP-919 puts it on the
+/// controller listener, and only the broker crate holds what answering it
+/// takes -- the heartbeat registry that decides fencing, the KIP-112
+/// offline-dir failover, and the controlled-shutdown drain. Routing it here is
+/// what keeps a heartbeat sent to a controller-only node from being answered
+/// by a handler that does none of that.
 ///
 /// Five of Kafka's keys are in neither list, so krabka's controller listener
 /// advertises 36 of the 41. `SaslHandshake` and `SaslAuthenticate` are
@@ -72,6 +80,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(describe_user_scram_credentials_request),
     api_version!(alter_user_scram_credentials_request),
     api_version!(update_features_request),
+    api_version!(broker_heartbeat_request),
     api_version!(unregister_broker_request),
     api_version!(assign_replicas_to_dirs_request),
 ];
@@ -162,7 +171,8 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                         "controller-admin",
                         false,
                         "CONTROLLER",
-                    );
+                    )
+                    .listener_authorized_for_cluster_action();
                     handler(
                         &broker,
                         request.api_version,
@@ -227,8 +237,8 @@ mod tests {
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
             keys == maplit::btreeset! {
-                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 64,
-                73,
+                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 63,
+                64, 73,
             }
         );
     }

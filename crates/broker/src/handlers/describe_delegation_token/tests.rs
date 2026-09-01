@@ -54,6 +54,19 @@ fn authed(name: &str) -> ConnectionAuth {
     authed_with_token(name, false)
 }
 
+fn anonymous() -> ConnectionAuth {
+    ConnectionAuth::Authenticated {
+        principal: Principal {
+            name: "ANONYMOUS".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: vec![],
+        },
+        mechanism: SaslMechanism::Plain,
+        expires_at_ms: None,
+        authenticated_via_token: false,
+    }
+}
+
 fn kp(name: &str) -> KafkaPrincipal {
     KafkaPrincipal {
         principal_type: "User".into(),
@@ -118,6 +131,27 @@ async fn returns_auth_disabled_when_no_secret_key() {
         &simple_authz(),
     );
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    controller.cancel().await;
+}
+
+#[tokio::test]
+async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    seed_token(&controller, "t-a", kp("alice"), vec![]).await;
+
+    let resp = handle(
+        &DescribeDelegationTokenRequest::default(),
+        &anonymous(),
+        Some(&secret),
+        &*controller,
+        &peer(),
+        &crate::authorizer::AllowAllAuthorizer,
+    );
+
+    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    assert!(resp.tokens.is_empty());
     controller.cancel().await;
 }
 

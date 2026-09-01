@@ -395,6 +395,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
             },
         )
         .await
