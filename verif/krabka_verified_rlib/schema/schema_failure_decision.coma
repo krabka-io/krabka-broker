@@ -1,0 +1,31 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 37 0 40 26 *)
+
+let%span sschema = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 34 10 35 61
+
+use creusot.prelude.Any
+
+type t_SchemaFailureKind = Unknown | Transient | Permanent | Malformed
+
+type t_SchemaFailureDecision = Reject | AllowUnvalidated
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let schema_failure_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 37 0 40 26]
+  (fail_open: bool) (failure: t_SchemaFailureKind) (return (x: t_SchemaFailureDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {failure = Unknown} (! bb1)
+    | br1 -> {failure = Transient} (! bb3)
+    | br2 -> {failure = Permanent} (! bb1)
+    | br3 -> {failure = Malformed} (! bb1) ]
+  | bb3 = any [ br0 -> {fail_open = false} (! bb1) | br1 -> {fail_open} (! bb4) ]
+  | bb4 = s0 [ s0 = [ &_ret <- AllowUnvalidated ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SchemaFailureDecision = Any.any_l ()
+  | & fail_open: bool = fail_open
+  | & failure: t_SchemaFailureKind = failure ])
+  [ return (result: t_SchemaFailureDecision) ->
+  {[@stop_split] [@expl:schema_failure_decision ensures] [%#sschema] (result = AllowUnvalidated)
+    = (fail_open /\ failure = Transient)}
+    (! return {result}) ]

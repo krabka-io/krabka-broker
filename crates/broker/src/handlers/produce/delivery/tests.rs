@@ -337,6 +337,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "before the delivery time the partition already holds",
@@ -346,6 +347,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "further ahead than delivery.max.delay.ms",
@@ -396,6 +398,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
             },
         )
         .await

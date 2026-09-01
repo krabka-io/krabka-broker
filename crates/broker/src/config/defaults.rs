@@ -21,22 +21,24 @@ use crate::{
         DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL,
         DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD,
         DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
-        DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
-        DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_HEARTBEAT_INTERVAL,
-        DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, DEFAULT_JWKS_REFRESH_INTERVAL,
-        DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL, DEFAULT_LEADER_IMBALANCE_PER_BROKER,
-        DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
+        DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
+        DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
+        DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
+        DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
+        DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
         DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
         DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
-        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
+        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
+        DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
         ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
 };
 
 impl Default for BrokerConfig {
+    #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let addr: SocketAddr = "127.0.0.1:9092".parse().expect("hard-coded valid addr");
         let controller_addr: SocketAddr = "127.0.0.1:9093".parse().expect("hard-coded valid addr");
@@ -93,6 +95,7 @@ impl Default for BrokerConfig {
             diskless_wal_local_replica_count: DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
             diskless_wal_flush_interval: DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL,
             diskless_wal_flush_max_size: DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
+            diskless_wal_hot_tail_max_size: DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE,
             diskless_wal_trim_safety_lag: DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
             diskless_wal_index_projection_timeout: DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
             unclean_recovery_queue_capacity: 256,
@@ -118,6 +121,8 @@ impl Default for BrokerConfig {
             default_min_insync_replicas: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
+            offsets_retention_override: None,
+            offsets_retention_check_interval_override: None,
             offsets_topic_replication_factor: 3,
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),
@@ -195,6 +200,12 @@ impl Default for BrokerConfig {
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's
             // `transaction.abort.timed.out.transaction.cleanup.interval.ms`).
             txn_abort_cleanup_interval: DEFAULT_TXN_ABORT_CLEANUP_INTERVAL,
+            // KIP-98 transactional-id expiry (Kafka's
+            // `transactional.id.expiration.ms` and
+            // `transaction.remove.expired.transaction.cleanup.interval.ms`).
+            txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
+            txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),

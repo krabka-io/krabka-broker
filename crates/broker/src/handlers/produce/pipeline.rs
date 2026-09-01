@@ -73,6 +73,10 @@ pub(super) struct PartitionServices<'a> {
     pub(super) broker_policy: BrokerProducePolicy,
     pub(super) record_decompression_policy: RecordDecompressionPolicy,
     pub(super) metrics: &'a crate::metrics::BrokerMetrics,
+    /// The request's phase accumulator. The append charges the writer
+    /// round-trip and the `acks=-1` high-watermark gate to it, and the handler
+    /// observes the totals once the whole request is done.
+    pub(super) phases: &'a crate::metrics::RequestPhases,
     /// The broker's KFC-7 validator. `None` is "no `[schema_registry]`
     /// section", and a topic that asks for validation on such a broker is
     /// rejected rather than admitted unchecked.
@@ -106,11 +110,21 @@ pub(super) async fn process_partition(
         broker_policy,
         record_decompression_policy,
         metrics,
+        phases,
         schema_validator,
     } = services;
     let idx = part_data.index;
+    // Every gate below returns this row, and every one of them refuses before
+    // any append happened. Kafka fills such a row from
+    // `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO`, whose `firstOffset` is -1, so
+    // the sentinel is stamped once here rather than at each `return`. The
+    // `Default` for the other two offset-ish fields is already -1; only
+    // `base_offset` defaults to 0, which would claim the batch landed at the
+    // start of the log. The success and dedup paths build their own row and
+    // never see this one.
     let mut out = PartitionProduceResponse {
         index: idx,
+        base_offset: INVALID_OFFSET,
         ..Default::default()
     };
 
@@ -379,6 +393,7 @@ pub(super) async fn process_partition(
             acks,
             timeout,
             leader_epoch,
+            phases,
         },
     )
     .await

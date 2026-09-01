@@ -186,6 +186,35 @@ pub(super) fn whole_millis_i32_time(name: &str, value: Time) -> Result<Time, Fil
     }
 }
 
+/// A whole number of milliseconds Kafka's `ConfigDef.Type::INT` can hold,
+/// where zero is a meaningful value rather than a floor violation.
+///
+/// [`whole_millis_i32_time`] floors at 1ms, which is what Kafka's `atLeast(1)`
+/// states for a knob that must always run. A krabka cadence that zero disables
+/// needs the same 32-bit ceiling with 0 accepted, so that the value the broker
+/// runs on is one `DescribeConfigs` can report as an `INT`.
+pub(super) fn disableable_millis_i32_time(
+    name: &str,
+    value: Time,
+) -> Result<Time, FileConfigError> {
+    let value = nonnegative_time(name, value)?;
+    let millis = value.millis_i64();
+    if Time::from_millis(millis) != value {
+        return Err(invalid_runtime_value(
+            name,
+            "must be a whole number of milliseconds",
+        ));
+    }
+    if (0..=i64::from(i32::MAX)).contains(&millis) {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            "must be within 0ms..=2147483647ms",
+        ))
+    }
+}
+
 pub(super) fn whole_millis_i64_time(name: &str, value: Time) -> Result<Time, FileConfigError> {
     let value = positive_time(name, value)?;
     let millis = value.millis_i64();
@@ -206,7 +235,7 @@ pub(super) fn positive_i16(name: &str, value: i16) -> Result<i16, FileConfigErro
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
     use crate::file_config::FileConfig;
 
@@ -261,6 +290,100 @@ mod tests {
             assert!(error.to_string().contains(field));
         }
     }
+    /// Both KIP-98 expiry knobs are Kafka `ConfigDef.Type::INT`, so a value
+    /// wider than an `i32` of milliseconds, or a fractional one, is refused
+    /// with the field named. The expiry itself must run, matching Kafka's
+    /// `atLeast(1)`; zero on the sweep cadence disables the sweep and is
+    /// accepted.
+    #[test]
+    fn runtime_file_config_bounds_the_transactional_id_expiry_knobs_to_an_i32() {
+        for (label, source, field) in [
+            (
+                "an expiry above the i32 millisecond ceiling",
+                "[runtime]\ntxn_id_expiration = \"2147483648ms\"\n",
+                Some("txn_id_expiration"),
+            ),
+            (
+                "a zero expiry, which Kafka's atLeast(1) refuses",
+                "[runtime]\ntxn_id_expiration = \"0ms\"\n",
+                Some("txn_id_expiration"),
+            ),
+            (
+                "a fractional expiry",
+                "[runtime]\ntxn_id_expiration = \"1.5ms\"\n",
+                Some("txn_id_expiration"),
+            ),
+            (
+                "a sweep cadence above the i32 millisecond ceiling",
+                "[runtime]\ntxn_id_expiration_cleanup_interval = \"2147483648ms\"\n",
+                Some("txn_id_expiration_cleanup_interval"),
+            ),
+            (
+                "a zero sweep cadence, which disables the sweep",
+                "[runtime]\ntxn_id_expiration_cleanup_interval = \"0ms\"\n",
+                None,
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file.apply_to(&mut cfg);
+
+            if let Some(field) = field {
+                let error = result.expect_err(label);
+                check!(error.to_string().contains(field), "{label}");
+            } else {
+                check!(result.is_ok(), "{label}");
+                check!(
+                    cfg.txn_id_expiration_cleanup_interval
+                        == <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO,
+                    "{label}"
+                );
+            }
+        }
+    }
+
+    /// The loader records *that* the operator supplied each expiry knob, not
+    /// only the value, because `DescribeConfigs` reports a config source and a
+    /// source is provenance. Supplying Kafka's own default is the case that
+    /// separates the two: `apache/kafka:4.3.1` still reports
+    /// `STATIC_BROKER_CONFIG` for it, so krabka has to know the key was named.
+    #[test]
+    fn runtime_file_config_records_which_expiry_knobs_the_operator_supplied() {
+        for (label, source, expected) in [
+            (
+                "nothing supplied",
+                "[runtime]\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                },
+            ),
+            (
+                "the expiry supplied, at Kafka's own default value",
+                "[runtime]\ntxn_id_expiration = \"604800000ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: true,
+                    txn_id_expiration_cleanup_interval: false,
+                },
+            ),
+            (
+                "both supplied",
+                "[runtime]\ntxn_id_expiration = \"120000ms\"\n\
+                 txn_id_expiration_cleanup_interval = \"60000ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: true,
+                    txn_id_expiration_cleanup_interval: true,
+                },
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).expect("apply runtime config");
+
+            check!(cfg.static_config_origins == expected, "{label}");
+        }
+    }
+
     #[test]
     fn runtime_file_config_rejects_invalid_dimensioned_sizes_and_ratios() {
         for field in [

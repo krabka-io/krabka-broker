@@ -1,26 +1,14 @@
-//! Kafka's `max.message.bytes` topic key: the value check, and the per-topic
-//! lookup the produce path reads with the broker-wide `message.max.bytes`
-//! behind it.
+//! Kafka's `max.message.bytes` topic key: the per-topic lookup the produce
+//! path reads, with the broker-wide `message.max.bytes` behind it.
+//!
+//! The value check lives in [`super::registry`] with every other key's, as an
+//! `INT` row with `atLeast(0)`: `0` is legal, `-1` is not, and a value past
+//! `i32::MAX` is refused as "not a 32-bit integer" rather than as an
+//! out-of-range one, which is what Kafka's own `ConfigDef` does.
 
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::MAX_MESSAGE_BYTES;
-
-/// Validate a `max.message.bytes` value.
-///
-/// Kafka declares the key as `INT` with `atLeast(0)`, so `0` is legal, `-1` is
-/// not, and a value past `i32::MAX` is "Not a number of type INT" rather than
-/// an out-of-range one. Both rejections are reproduced here, because
-/// `kafka-configs --alter` is where an operator meets them.
-pub(super) fn validate_max_message_bytes(value: &str) -> Result<(), String> {
-    let parsed: i32 = value
-        .parse()
-        .map_err(|_| format!("{MAX_MESSAGE_BYTES}={value} is not a 32-bit integer"))?;
-    if parsed < 0 {
-        return Err(format!("{MAX_MESSAGE_BYTES}={value} must be >= 0"));
-    }
-    Ok(())
-}
 
 /// Resolve the largest record batch a topic accepts.
 ///
@@ -56,7 +44,7 @@ mod tests {
     use super::{super::validation::validate_topic_config, *};
 
     #[test]
-    fn validate_max_message_bytes_matches_kafkas_int_at_least_zero() {
+    fn max_message_bytes_matches_kafkas_int_at_least_zero() {
         let cases = [
             ("0", true),
             ("1048588", true),

@@ -71,6 +71,10 @@ fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
             true,
         ),
         (
+            vec!["krabka-broker", "--diskless-wal-hot-tail-max-size=16MiB"],
+            true,
+        ),
+        (
             vec!["krabka-broker", "--diskless-wal-trim-safety-lag=-1"],
             false,
         ),
@@ -152,6 +156,7 @@ fn runtime_policy_cli_reads_krabka_environment() {
             ("KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", Some("5")),
             ("KRABKA_DISKLESS_WAL_FLUSH_INTERVAL", Some("125ms")),
             ("KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", Some("4MiB")),
+            ("KRABKA_DISKLESS_WAL_HOT_TAIL_MAX_SIZE", Some("16MiB")),
             ("KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", Some("0")),
             ("KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", Some("3s")),
             ("KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
@@ -188,6 +193,7 @@ fn runtime_policy_cli_reads_krabka_environment() {
             assert!(config.diskless_wal_local_replica_count == 5);
             assert!(config.diskless_wal_flush_interval == krabka_units::millis(125));
             assert!(config.diskless_wal_flush_max_size == krabka_units::mebibytes(4));
+            assert!(config.diskless_wal_hot_tail_max_size == krabka_units::mebibytes(16));
             assert!(config.diskless_wal_trim_safety_lag == 0);
             assert!(config.diskless_wal_index_projection_timeout == krabka_units::secs(3));
             assert!(config.client_dispatch_queue_capacity.get() == 7);

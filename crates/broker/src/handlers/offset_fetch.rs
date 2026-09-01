@@ -9,6 +9,12 @@
 //! topic ids to names at the wire boundary and echoes the ids back on the
 //! response.
 //!
+//! From v7 the request also carries KIP-447's `require_stable`. It is a
+//! top-level field, so it applies to every group the request names, and it
+//! turns any partition an unresolved transaction has written into an
+//! `UNSTABLE_OFFSET_COMMIT` row instead of the older stable offset. `unstable`
+//! builds that row for both response shapes.
+//!
 //! The two request shapes are byte-exact contracts with different clients, so
 //! each keeps its own module: `legacy` for v0 to v7 and `groups` for v8 and
 //! above. They share the group-level gate in `authz` and the coordinator read
@@ -24,6 +30,7 @@ mod groups;
 mod legacy;
 #[cfg(test)]
 mod tests;
+mod unstable;
 
 use self::{groups::handle_groups, legacy::handle_legacy};
 use crate::{broker::Broker, error::BrokerError};

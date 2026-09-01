@@ -224,6 +224,20 @@ pub struct Args {
     #[arg(long, env = "KRABKA_TXN_ABORT_CLEANUP_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     pub txn_abort_cleanup_interval: Option<Time>,
 
+    /// Transactional-id expiry (`transactional.id.expiration.ms`).
+    #[arg(
+        long,
+        env = "KRABKA_TXN_ID_EXPIRATION",
+        value_parser = krabka_units::parse::positive_time
+    )]
+    pub txn_id_expiration: Option<Time>,
+
+    /// Transactional-id expiry sweep cadence
+    /// (`transaction.remove.expired.transaction.cleanup.interval.ms`). `0s`
+    /// disables the sweep.
+    #[arg(long, env = "KRABKA_TXN_ID_EXPIRATION_CLEANUP_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
+    pub txn_id_expiration_cleanup_interval: Option<Time>,
+
     /// Auto preferred-replica election scan cadence.
     #[arg(
         long,

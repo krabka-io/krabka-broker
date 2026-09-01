@@ -7,19 +7,19 @@ so there is no second dependency set to keep in sync.
 
 module(
     name = "krabka_broker",
-    version = "0.5.1",
+    version = "0.5.2",
 )
 
-bazel_dep(name = "rules_rs", version = "0.0.106")
-bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
+bazel_dep(name = "rules_rs", version = "0.0.107")
+bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
-# rules_rs 0.0.106 treats unknown cfg keys as false, so a dependency guarded by
+# rules_rs 0.0.107 treats unknown cfg keys as false, so a dependency guarded by
 # `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
-    version = "0.0.106",
+    version = "0.0.107",
 )
 
 # Expose the metadata rules already used by rules_rs so workspace crates appear
@@ -30,11 +30,9 @@ bazel_dep(name = "package_metadata", version = "0.0.7")
 # `bazel_dep` above has nothing to resolve against without this override.
 git_override(
     module_name = "rules_rs_mutants",
-    # Resolved to a commit so the checkout is reproducible. Past v0.0.1 for
-    # `//mutants:config`, without which the sweep enumerates from a synthetic
-    # workspace where this repo's `.cargo/mutants.toml` is not in scope -- so the
-    # exclusions written there did not exclude.
-    commit = "fd8902e425382aaa58490c22721f563127ab9467",
+    # Resolved to the integration-test-capable revision so the checkout is
+    # reproducible and mutation sweeps exercise both unit and integration tests.
+    commit = "e08d0fea86472d4897e3c61c0bb07266d3d9eadf",
     remote = "https://github.com/robot-head/rules_rs_mutants",
 )
 
@@ -94,7 +92,6 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
         ("cp_kafka_7_4_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63"),
         ("cp_kafka_7_5_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:fbbb6fa11b258a88b83f54d4f0bddfcffbf2279f99d66a843486e3da7bdfbf41"),
         ("cp_kafka_7_8_8", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:6ed4c074b8169cd0e280350c41cddf1495a2ce4bf144d90f68b3a8856369ccd7"),
-        ("kafkacat_1_5_0", "mirror.gcr.io/edenhill/kafkacat", "sha256:05daf8af237495df2bc726427e421d101072cf2d2306fb2379243acbffe40823"),
         ("kcat_1_7_1", "mirror.gcr.io/edenhill/kcat", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # The base //packaging ships the broker on: glibc and ca-certificates,
         # a nonroot user, and nothing else. The monorepo builds the equivalent
@@ -111,18 +108,29 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 use_repo(
     oci,
     "apache_kafka_4_0_0",
+    "apache_kafka_4_0_0_linux_amd64",
     "apache_kafka_4_1_0",
+    "apache_kafka_4_1_0_linux_amd64",
     "apache_kafka_4_3_1",
+    "apache_kafka_4_3_1_linux_amd64",
     "cp_kafka_3_1_2",
+    "cp_kafka_3_1_2_linux_amd64",
     "cp_kafka_6_1_1",
+    "cp_kafka_6_1_1_linux_amd64",
     "cp_kafka_7_4_0",
+    "cp_kafka_7_4_0_linux_amd64",
     "cp_kafka_7_5_0",
+    "cp_kafka_7_5_0_linux_amd64",
     "cp_kafka_7_8_8",
+    "cp_kafka_7_8_8_linux_amd64",
     "distroless_cc",
-    "kafkacat_1_5_0",
+    "distroless_cc_linux_amd64",
     "kcat_1_7_1",
+    "kcat_1_7_1_linux_amd64",
     "minio",
+    "minio_linux_amd64",
     "minio_mc",
+    "minio_mc_linux_amd64",
 )
 
 # ---------------------------------------------------------------------------
@@ -137,7 +145,7 @@ bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
 bazel_dep(name = "aspect_rules_lint_rust", version = "0.0.2")
 
 # See the patch header: that module registers `@default_rust_toolchains//:all`,
-# a package rules_rs 0.0.106 does not create.
+# a package rules_rs 0.0.107 does not create.
 single_version_override(
     module_name = "aspect_rules_lint_rust",
     patch_strip = 1,
@@ -173,11 +181,11 @@ toolchains.toolchain(
     # exactly this.
     rustfmt_version = "nightly/2026-08-14",
     # Matches rust-toolchain.toml. These had drifted apart -- Bazel built with
-    # 1.97.0 while Cargo used 1.97.1 -- which is precisely the split the "one
+    # 1.97.0 while Cargo used 1.98.0 -- which is precisely the split the "one
     # dependency source of truth" arrangement exists to avoid.
-    version = "1.97.1",
+    version = "1.98.0",
 )
-use_repo(toolchains, "krabka_rust_toolchains")
+use_repo(toolchains, "default_rust_toolchains", "krabka_rust_toolchains")
 
 register_toolchains("@krabka_rust_toolchains//...")
 

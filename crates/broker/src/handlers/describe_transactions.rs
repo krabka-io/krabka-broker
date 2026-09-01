@@ -32,7 +32,9 @@ use crate::{
     txn::state::{TxnEntry, TxnState},
 };
 
-const TRANSACTIONAL_ID_NOT_FOUND: i16 = 75;
+/// Kafka's `TRANSACTIONAL_ID_NOT_FOUND`, the row a tid the coordinator does
+/// not hold earns.
+pub(crate) const TRANSACTIONAL_ID_NOT_FOUND: i16 = 75;
 
 fn txn_state_str(s: TxnState) -> &'static str {
     match s {
@@ -69,6 +71,35 @@ fn topics_for(entry: &TxnEntry) -> Vec<TopicData> {
             }
         })
         .collect()
+}
+
+/// The row `DescribeTransactions` answers for one authorized transactional id.
+///
+/// `entry` is the coordinator's live entry for `tid`, or `None` when the
+/// coordinator holds none. An absent entry is Kafka's
+/// `TRANSACTIONAL_ID_NOT_FOUND`: the tid was never initialized here, or the
+/// KIP-98 expiry sweep tombstoned it out of `__transaction_state` and dropped
+/// it. The two are indistinguishable to a client, in Kafka and here.
+pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> TransactionState {
+    let Some(entry) = entry else {
+        return TransactionState {
+            error_code: TRANSACTIONAL_ID_NOT_FOUND,
+            transactional_id: tid.to_owned(),
+            ..Default::default()
+        };
+    };
+    TransactionState {
+        error_code: codes::NONE,
+        transactional_id: entry.transactional_id.clone(),
+        transaction_state: txn_state_str(entry.state).to_string(),
+        transaction_timeout_ms: entry.txn_timeout_ms,
+        transaction_start_time_ms: entry.start_ms,
+        // Unwrap into the raw-`i64` wire field.
+        producer_id: entry.producer_id.get(),
+        producer_epoch: entry.producer_epoch,
+        topics: topics_for(entry),
+        ..Default::default()
+    }
 }
 
 #[tracing::instrument(
@@ -113,29 +144,13 @@ pub(crate) async fn handle(
         }
 
         // Look up the coordinator's local entry. Unknown → 75.
-        let Some(handle) = broker.txn_coordinator.get(tid.as_str()) else {
-            rows.push(TransactionState {
-                error_code: TRANSACTIONAL_ID_NOT_FOUND,
-                transactional_id: tid.clone(),
-                ..Default::default()
-            });
-            continue;
+        let row = match broker.txn_coordinator.get(tid.as_str()) {
+            None => transaction_state_row(tid, None),
+            Some(handle) => {
+                let entry = handle.lock().await;
+                transaction_state_row(tid, Some(&entry))
+            }
         };
-        let entry = handle.lock().await;
-
-        let row = TransactionState {
-            error_code: codes::NONE,
-            transactional_id: entry.transactional_id.clone(),
-            transaction_state: txn_state_str(entry.state).to_string(),
-            transaction_timeout_ms: entry.txn_timeout_ms,
-            transaction_start_time_ms: entry.start_ms,
-            // Unwrap into the raw-`i64` wire field.
-            producer_id: entry.producer_id.get(),
-            producer_epoch: entry.producer_epoch,
-            topics: topics_for(&entry),
-            ..Default::default()
-        };
-        drop(entry);
         rows.push(row);
     }
 

@@ -60,7 +60,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-log/0.5.1")]
+#![doc(html_root_url = "https://docs.rs/krabka-log/0.5.2")]
 
 /// Emit the wrapped items only on platforms with a usable file-to-socket
 /// `sendfile(2)` for the zero-copy fetch path.

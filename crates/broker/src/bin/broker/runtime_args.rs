@@ -177,6 +177,8 @@ pub struct RuntimeArgs {
     pub diskless_wal_flush_interval: Option<Time>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_FLUSH_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
     pub diskless_wal_flush_max_size: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_DISKLESS_WAL_HOT_TAIL_MAX_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
+    pub diskless_wal_hot_tail_max_size: Option<ByteSize>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_TRIM_SAFETY_LAG", value_parser = clap::value_parser!(i64).range(0..))]
     pub diskless_wal_trim_safety_lag: Option<i64>,
     #[arg(long, env = "KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
@@ -241,6 +243,10 @@ pub struct RuntimeArgs {
     pub offsets_topic_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     pub offsets_topic_replication_factor: Option<PositiveI16>,
+    #[arg(long, env = "KRABKA_OFFSETS_RETENTION", value_parser = krabka_units::parse::positive_time)]
+    pub offsets_retention: Option<Time>,
+    #[arg(long, env = "KRABKA_OFFSETS_RETENTION_CHECK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub offsets_retention_check_interval: Option<Time>,
     #[arg(long, env = "KRABKA_TRANSACTION_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     pub transaction_state_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_TRANSACTION_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]

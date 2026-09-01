@@ -8,6 +8,7 @@ use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::records::{
     Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
 };
+use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
 use super::{framing::PartitionPayload, owned_decode::decode_owned_batch};
 use crate::codes;
@@ -268,19 +269,19 @@ fn validate_client_batch_fields(
     producer_id: i64,
     base_sequence: i32,
 ) -> Result<(), i16> {
-    let offset_count = last_offset_delta.checked_add(1);
-    if base_offset != 0
-        || offset_count.is_none_or(|count| count <= 0 || count != records_count)
-        || records_count <= 0
-        || attributes.is_control_batch()
-        || (producer_id >= 0 && base_sequence < 0)
-    {
-        return Err(codes::INVALID_RECORD);
+    match produce_batch_admission(
+        base_offset,
+        last_offset_delta,
+        records_count,
+        attributes.is_control_batch(),
+        producer_id,
+        base_sequence,
+        attributes.timestamp_type() == TimestampType::CreateTime,
+    ) {
+        ProduceBatchAdmission::Admit => Ok(()),
+        ProduceBatchAdmission::InvalidRecord => Err(codes::INVALID_RECORD),
+        ProduceBatchAdmission::InvalidTimestamp => Err(codes::INVALID_TIMESTAMP),
     }
-    if attributes.timestamp_type() != TimestampType::CreateTime {
-        return Err(codes::INVALID_TIMESTAMP);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

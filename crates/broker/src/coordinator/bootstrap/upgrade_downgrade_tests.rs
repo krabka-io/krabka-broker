@@ -89,10 +89,10 @@ async fn downgraded_group_replays_as_classic() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
-    finalize(&coord, acc);
+    finalize(&coord, acc).await;
 
     // The group must NOT be next-gen, and the classic describe path must
     // surface it with member "m1".
@@ -157,10 +157,10 @@ async fn compacted_downgrade_residue_replays_as_classic() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
-    finalize(&coord, acc);
+    finalize(&coord, acc).await;
 
     // The group must replay CLASSIC, not resurrect as next-gen.
     assert!(coord.group_type("g") != Some(GroupType::NextGen));
@@ -211,7 +211,7 @@ async fn surviving_k6_write_resurrects_as_next_gen_without_fix() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
 
@@ -222,7 +222,7 @@ async fn surviving_k6_write_resurrects_as_next_gen_without_fix() {
     // makes it suppress the classic k2 reconstruction.
     assert!(coord.seeds.contains_key("g"));
 
-    finalize(&coord, acc);
+    finalize(&coord, acc).await;
 
     // Resurrection: `finalize` spawned a CONSUMER (next-gen) actor for "g"
     // off that stray seed instead of the classic actor the k2 should have
@@ -279,7 +279,7 @@ async fn upgraded_group_without_tombstone_replays_as_consumer() {
         let key = persistence::parse_key(&k).unwrap();
         apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
     }
-    finalize(&coord, acc);
+    finalize(&coord, acc).await;
 
     assert!(coord.group_type("g") != Some(GroupType::Classic));
     let handle = coord.find("g").expect("consumer actor present");
@@ -338,7 +338,7 @@ async fn member_with_classic_block_replays_facade() {
         let key = persistence::parse_key(&k).unwrap();
         apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
     }
-    finalize(&coord, acc);
+    finalize(&coord, acc).await;
 
     let handle = coord.find("g").expect("consumer actor present");
     assert!(handle.kind == GroupKindTag::Consumer);
