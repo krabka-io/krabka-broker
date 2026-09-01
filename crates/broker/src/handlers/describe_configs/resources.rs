@@ -25,7 +25,8 @@ use super::{
         CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DYNAMIC_BROKER,
         CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
         CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER,
-        RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+        RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
+        RESOURCE_TYPE_TOPIC,
     },
 };
 use crate::{
@@ -36,11 +37,13 @@ use crate::{
     },
 };
 
+mod broker_logger;
 mod write_freeze;
 
 #[cfg(test)]
 mod tests;
 
+pub(super) use self::broker_logger::BrokerLoggers;
 use self::write_freeze::write_freeze_override;
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
@@ -49,6 +52,7 @@ pub(super) fn describe_one(
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    loggers: BrokerLoggers<'_>,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
@@ -86,6 +90,22 @@ pub(super) fn describe_one(
             Some(krabka_metadata::NodeId(node_id))
         };
         return ok(broker_configs(image, node_id, &wanted, options));
+    }
+
+    if r.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+        if let Err(message) =
+            broker_logger::validate_resource_name(&r.resource_name, loggers.node_id)
+        {
+            return DescribeConfigsResult {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(message),
+                resource_type: r.resource_type,
+                resource_name: r.resource_name,
+                configs: Vec::new(),
+                ..Default::default()
+            };
+        }
+        return ok(broker_logger::logger_configs(loggers.levels, &wanted));
     }
 
     if r.resource_type == RESOURCE_TYPE_CLIENT_METRICS {

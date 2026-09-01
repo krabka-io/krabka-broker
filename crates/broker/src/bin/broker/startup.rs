@@ -39,6 +39,10 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         "info,krabka_broker::request=debug,krabka_log=info",
         "krabka-broker",
     )?;
+    // The handle behind the `BROKER_LOGGER` config resource. It drives the
+    // stdout layer this call just installed, so `kafka-configs --entity-type
+    // broker-loggers --alter` retargets the filter of the running process.
+    let log_levels = telemetry.log_levels();
     let file_config: Option<krabka_broker::file_config::FileConfig> =
         match args.config_file.as_ref() {
             Some(p) => {
@@ -90,6 +94,7 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         client_metrics_otlp_endpoint,
         client_metrics_otlp_protocol,
     );
+    config.log_levels = log_levels;
     if let Some(roles) = roles {
         config.roles = roles;
     }
