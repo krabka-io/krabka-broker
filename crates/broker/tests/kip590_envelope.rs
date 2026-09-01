@@ -16,7 +16,10 @@
 
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer};
+use krabka_broker::{
+    Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer,
+    config::InterBrokerCredentials,
+};
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
@@ -26,13 +29,20 @@ use krabka_protocol::{
         allocate_producer_ids_request::{self, AllocateProducerIdsRequest},
         allocate_producer_ids_response::AllocateProducerIdsResponse,
         api_versions_response::ApiVersionsResponse,
+        create_delegation_token_request::{self, CreateDelegationTokenRequest},
+        create_delegation_token_response::CreateDelegationTokenResponse,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
         envelope_request::{self, EnvelopeRequest},
         envelope_response::EnvelopeResponse,
         produce_request::ProduceRequest,
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_response::SaslHandshakeResponse,
     },
 };
+use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 mod support;
@@ -51,6 +61,14 @@ const JVM_USER_ALICE: &[u8] = &[
 /// the `token_authenticated` byte is `0x00` in both.
 const JVM_USER_BOB: &[u8] = &[
     0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x04, b'b', b'o', b'b', 0x00, 0x00,
+];
+
+/// `JVM_USER_ALICE` with its `token_authenticated` byte set, which is what
+/// `DefaultKafkaPrincipalBuilder.serialize` writes for a client that
+/// authenticated with a delegation token. The two constants differ in that one
+/// byte and nothing else, so a test that sends both isolates the flag.
+const JVM_USER_ALICE_VIA_TOKEN: &[u8] = &[
+    0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x06, b'a', b'l', b'i', b'c', b'e', 0x01, 0x00,
 ];
 
 /// The address a forwarding broker copies out of its own client's connection
@@ -146,6 +164,12 @@ async fn round_trip(addr: std::net::SocketAddr, frame: Bytes) -> Bytes {
     let mut stream = tokio::net::TcpStream::connect(addr)
         .await
         .expect("connect listener");
+    exchange(&mut stream, frame).await
+}
+
+/// The same exchange on a connection the caller already holds, for the tests
+/// that send more than one request down one authenticated connection.
+async fn exchange(stream: &mut tokio::net::TcpStream, frame: Bytes) -> Bytes {
     stream.write_all(&frame).await.expect("write request");
     stream.flush().await.expect("flush request");
 
@@ -163,14 +187,26 @@ async fn round_trip(addr: std::net::SocketAddr, frame: Bytes) -> Bytes {
     Bytes::from(body)
 }
 
-/// Send an `Envelope` at v0 to the controller listener and decode the
-/// `EnvelopeResponse` out of the reply.
+/// Send an `Envelope` at v0 to the controller listener on a fresh connection
+/// and decode the `EnvelopeResponse` out of the reply.
+async fn send_envelope(addr: std::net::SocketAddr, envelope: &EnvelopeRequest) -> EnvelopeResponse {
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("connect listener");
+    send_envelope_on(&mut stream, envelope).await
+}
+
+/// The same exchange on a connection the caller already opened and, where the
+/// listener demands it, already authenticated.
 ///
 /// The response header is v1 because the `EnvelopeResponse` body is flexible,
 /// so four bytes of correlation id are followed by one tagged-fields byte
 /// before the body starts. Both are checked here rather than skipped, since a
 /// missing or extra byte would shift the whole body.
-async fn send_envelope(addr: std::net::SocketAddr, envelope: &EnvelopeRequest) -> EnvelopeResponse {
+async fn send_envelope_on(
+    stream: &mut tokio::net::TcpStream,
+    envelope: &EnvelopeRequest,
+) -> EnvelopeResponse {
     const ENVELOPE_CORRELATION_ID: i32 = 99;
 
     let frame = request_frame(
@@ -181,7 +217,7 @@ async fn send_envelope(addr: std::net::SocketAddr, envelope: &EnvelopeRequest) -
         true,
         &encode(envelope, 0),
     );
-    let response = round_trip(addr, frame).await;
+    let response = exchange(stream, frame).await;
 
     let mut cur = response.as_ref();
     assert!(let Some((header, rest)) = cur.split_at_checked(5));
@@ -685,4 +721,230 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
         broker.controller_image_for_test().topic(TOPIC).is_none(),
         "the embedded request must not have run"
     );
+}
+
+/// Canonical Kafka error code that mirrors `krabka_broker::codes::
+/// DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`. The broker's `codes` module is
+/// private to the crate, so this file keeps a local copy, as
+/// `tests/delegation_tokens.rs` does. Keep it in sync with
+/// `crates/broker/src/codes.rs` and the Apache Kafka error table.
+const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
+
+/// The `request_data` for an embedded `CreateDelegationToken` that names no
+/// owner, so KIP-48 owner resolution falls back to whoever the envelope says
+/// is calling.
+fn embedded_create_delegation_token() -> Bytes {
+    let version = create_delegation_token_request::MAX_VERSION;
+    let body = encode(
+        &CreateDelegationTokenRequest {
+            owner_principal_type: None,
+            owner_principal_name: None,
+            renewers: Vec::new(),
+            // The `defer to the broker ceiling` sentinel.
+            max_lifetime_ms: -1,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        },
+        version,
+    );
+    request_frame(
+        create_delegation_token_request::API_KEY,
+        version,
+        EMBEDDED_CORRELATION_ID,
+        Some("adminclient-1"),
+        true,
+        &body,
+    )
+    .slice(4..)
+}
+
+/// Decode the embedded `CreateDelegationTokenResponse` out of a served
+/// `Envelope`. Flexible at its maximum version, so the embedded response
+/// header is v1, exactly as `embedded_create_topics_response` reads it.
+fn embedded_create_delegation_token_response(
+    response: &EnvelopeResponse,
+) -> CreateDelegationTokenResponse {
+    check!(response.error_code == 0, "the Envelope itself was served");
+    let data = response
+        .response_data
+        .as_ref()
+        .expect("a served Envelope carries response_data");
+    let mut body = data.get(5..).expect("embedded response header v1");
+    let decoded = CreateDelegationTokenResponse::decode(
+        &mut body,
+        krabka_protocol::owned::create_delegation_token_response::MAX_VERSION,
+    )
+    .expect("decode the embedded CreateDelegationTokenResponse");
+    check!(
+        body.is_empty(),
+        "the embedded response consumed its own bytes"
+    );
+    decoded
+}
+
+/// Authenticate a controller-listener connection with SASL/PLAIN, the way a
+/// forwarding broker's inter-broker client does: `SaslHandshake` v1 to pick
+/// the mechanism, then one `SaslAuthenticate` v2 carrying the RFC 4616
+/// `authzid\0authcid\0passwd` triple.
+///
+/// `BrokerRaftHandshake` consumes both before the controller server sees the
+/// stream, which is why neither appears in the listener's `ApiVersions`
+/// table. v1 is not flexible and v2 is, so their reply headers differ by the
+/// one tagged-fields byte checked below.
+async fn sasl_plain(stream: &mut tokio::net::TcpStream, user: &str, password: &str) {
+    let handshake = exchange(
+        stream,
+        request_frame(
+            krabka_protocol::owned::sasl_handshake_request::API_KEY,
+            1,
+            1,
+            Some("forwarding-broker"),
+            false,
+            &encode(
+                &SaslHandshakeRequest {
+                    mechanism: "PLAIN".to_owned(),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                1,
+            ),
+        ),
+    )
+    .await;
+    let mut cur = handshake.as_ref();
+    assert!(let Some((header, rest)) = cur.split_at_checked(4));
+    check!(header == [0, 0, 0, 1], "SaslHandshake v1 reply header v0");
+    cur = rest;
+    let decoded = SaslHandshakeResponse::decode(&mut cur, 1).expect("decode SaslHandshakeResponse");
+    check!(cur.is_empty(), "SaslHandshakeResponse consumed its body");
+    check!(
+        decoded
+            == SaslHandshakeResponse {
+                error_code: 0,
+                mechanisms: vec!["PLAIN".to_owned()],
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+
+    let mut auth_bytes = Vec::new();
+    auth_bytes.push(0);
+    auth_bytes.extend_from_slice(user.as_bytes());
+    auth_bytes.push(0);
+    auth_bytes.extend_from_slice(password.as_bytes());
+    let authenticate = exchange(
+        stream,
+        request_frame(
+            krabka_protocol::owned::sasl_authenticate_request::API_KEY,
+            2,
+            2,
+            Some("forwarding-broker"),
+            true,
+            &encode(
+                &SaslAuthenticateRequest {
+                    auth_bytes: Bytes::from(auth_bytes),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                2,
+            ),
+        ),
+    )
+    .await;
+    let mut cur = authenticate.as_ref();
+    assert!(let Some((header, rest)) = cur.split_at_checked(5));
+    check!(
+        header == [0, 0, 0, 2, 0],
+        "SaslAuthenticate v2 reply header v1: correlation id then tagged fields"
+    );
+    cur = rest;
+    let decoded =
+        SaslAuthenticateResponse::decode(&mut cur, 2).expect("decode SaslAuthenticateResponse");
+    check!(cur.is_empty(), "SaslAuthenticateResponse consumed its body");
+    check!((decoded.error_code, decoded.error_message) == (0, None));
+}
+
+/// A forwarded request runs under the *client's* delegation-token flag, not
+/// the forwarding hop's.
+///
+/// KIP-48 forbids a caller who authenticated with a delegation token from
+/// minting another one, and `CreateDelegationToken` is in
+/// `ApiKeys.forwardable`, so the rule has to survive the hop. Both envelopes
+/// below go down one SASL/PLAIN controller connection authenticated as
+/// `User:forwarder`, whose own `authenticated_via_token` is false, and they
+/// differ in a single byte: the `token_authenticated` flag inside
+/// `request_principal`. Reading the connection's flag rather than the
+/// envelope's mints a token for a token-authenticated client, which is the
+/// escalation KIP-48 closes; reading it the other way round refuses every
+/// forwarded mint a cluster makes.
+///
+/// The listener has to speak SASL for this to be observable at all: KIP-48
+/// admits no anonymous caller to any of the four token APIs, so on a plaintext
+/// controller listener both halves are refused and the flag never decides
+/// anything.
+///
+/// This is also the one test that drives a forwarded request into the
+/// `DispatchKind::Auth` arm of the shared dispatch. The delegation-token APIs
+/// are the forwardable keys registered that way, and that arm rebuilds a
+/// `ConnectionAuth` out of the envelope rather than a `RequestContext`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
+    const FORWARDER: (&str, &str) = ("forwarder", "forwarder-secret");
+
+    let (broker, _dir) = start_broker_with(|config| {
+        config.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
+        config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+        config
+            .plain_credentials
+            .insert(FORWARDER.0.to_owned(), FORWARDER.1.to_owned());
+        config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+            username: FORWARDER.0.to_owned(),
+            password: FORWARDER.1.to_owned(),
+        });
+        // Without a master key the handler answers
+        // `DELEGATION_TOKEN_AUTH_DISABLED` before it ever reads the flag, and
+        // both halves of this test would agree for the wrong reason.
+        config.delegation_token_secret_key =
+            Some(SecretBytes::new(b"envelope-master-key".to_vec()));
+    })
+    .await;
+
+    let mut stream = tokio::net::TcpStream::connect(broker.controller_addr())
+        .await
+        .expect("connect controller listener");
+    sasl_plain(&mut stream, FORWARDER.0, FORWARDER.1).await;
+
+    let refused = send_envelope_on(
+        &mut stream,
+        &envelope_for(
+            embedded_create_delegation_token(),
+            Some(JVM_USER_ALICE_VIA_TOKEN),
+        ),
+    )
+    .await;
+    let minted = send_envelope_on(
+        &mut stream,
+        &envelope_for(embedded_create_delegation_token(), Some(JVM_USER_ALICE)),
+    )
+    .await;
+
+    // The whole refusal, not just its code: Kafka's `err_response` leaves
+    // every other field at its default, and a handler that got as far as
+    // minting would have populated them.
+    check!(
+        embedded_create_delegation_token_response(&refused)
+            == CreateDelegationTokenResponse {
+                error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                ..CreateDelegationTokenResponse::default()
+            }
+    );
+
+    // The same request over the same connection, differing only in that byte,
+    // is minted -- and minted for the *embedded* principal, which is what says
+    // the client's identity and its flag crossed the hop together.
+    let minted = embedded_create_delegation_token_response(&minted);
+    check!(
+        (
+            minted.error_code,
+            minted.principal_type.as_str(),
+            minted.principal_name.as_str(),
+        ) == (0, "User", "alice")
+    );
+    check!(!minted.hmac.is_empty(), "a minted token carries its HMAC");
 }

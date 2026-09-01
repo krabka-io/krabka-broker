@@ -532,6 +532,23 @@ mod tests {
         );
     }
 
+    /// The controller listener serves before the broker binds itself to this
+    /// router -- the weak pointer exists because the controller starts first --
+    /// so a supported key can arrive inside that window. It has to come back as
+    /// an error the listener can report, not as an unwrap on an absent broker.
+    #[tokio::test]
+    async fn a_supported_key_before_the_broker_binds_is_reported_as_an_error() {
+        let router = BrokerControllerAdminRouter::new();
+        let update_features = SUPPORTED_APIS.iter().find(|api| api.api_key == 57).unwrap();
+
+        let error = router
+            .route(request(57, update_features.max_version))
+            .await
+            .expect_err("an unbound router cannot serve a supported key");
+
+        check!(error.to_string() == "controller admin dispatch: broker startup is incomplete");
+    }
+
     /// `AssignReplicasToDirs` is the one advertised key whose broker handler
     /// takes no principal and no connection, so it is the only key that
     /// reaches the [`DispatchKind::Plain`] arm straight off the listener
