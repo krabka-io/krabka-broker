@@ -55,15 +55,31 @@ pub(super) fn apply_request_quota(
         Some(ApiKey::Produce | ApiKey::Fetch)
     );
     let mut throttle = <Time as TimeExt>::ZERO;
-    if !self_accounts && let Some(principal) = auth.principal() {
-        let image = broker.controller.current_image();
-        let delay = crate::quota::consume_request_quota(
-            &image,
-            &broker.quota_buckets,
-            &principal.name,
-            parsed.client_id.unwrap_or(""),
-            elapsed_micros,
-            broker.config.quota_throttle_max,
+    if !self_accounts {
+        // KIP-124 keys the request quota on the principal, so a connection
+        // that never authenticated is charged nothing. The zero still reaches
+        // the throttle histogram below, which is what keeps that family's
+        // `_count` equal to the number of requests this path accounted for.
+        let charged = match auth.principal() {
+            None => <Time as TimeExt>::ZERO,
+            Some(principal) => {
+                let image = broker.controller.current_image();
+                crate::quota::consume_request_quota(
+                    &image,
+                    &broker.quota_buckets,
+                    &principal.name,
+                    parsed.client_id.unwrap_or(""),
+                    elapsed_micros,
+                    broker.config.quota_throttle_max,
+                )
+            }
+        };
+        // The request quota is the only one an api that does not account for
+        // itself is charged, so it is the only entry, and the delay it asks
+        // for is the window this request is muted for.
+        let delay = broker.metrics.record_applied_throttle(
+            parsed.api_key,
+            &[(crate::metrics::QuotaType::Request, charged)],
         );
         if delay > <Time as TimeExt>::ZERO {
             if throttle_is_leading_field(parsed.api_key, parsed.api_version) {

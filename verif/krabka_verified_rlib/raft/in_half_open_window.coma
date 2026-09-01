@@ -1,0 +1,27 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 30 0 30 74 *)
+
+let%span sraft = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 31 4 31 33
+let%span sraft'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 29 28 29 73
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let in_half_open_window [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 30 0 30 74]
+  (value: Int64.t) (start: Int64.t) (end': Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_8 <- Int64.le start value ] s1 | s1 = any [ br0 -> {_8 = false} (! bb2) | br1 -> {_8} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Int64.lt value end' ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sraft] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & value: Int64.t = value
+  | & start: Int64.t = start
+  | & end': Int64.t = end'
+  | & _8: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:in_half_open_window ensures] [%#sraft'0] result
+    = (Int64.to_int start <= Int64.to_int value /\ Int64.to_int value < Int64.to_int end')}
+    (! return {result}) ]

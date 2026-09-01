@@ -16,6 +16,7 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -74,6 +75,13 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
 
 fn wire(tid: uuid::Uuid) -> WireUuid {
     WireUuid(*tid.as_bytes())
+}
+
+fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String {
+    format!(
+        "{group}:{}:{partition}",
+        URL_SAFE_NO_PAD.encode(tid.as_bytes())
+    )
 }
 
 /// Create `__share_group_state` lazily through `FindCoordinator` SHARE, and
@@ -229,7 +237,7 @@ async fn find_coordinator_share_returns_broker() {
     let client = connect(&bootstrap).await;
 
     let tid = uuid::Uuid::from_bytes([3u8; 16]);
-    let (error_code, node_id) = find_share(&client, &format!("g1:{tid}:0")).await;
+    let (error_code, node_id) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
 
     assert!(
         error_code == 0,
@@ -249,7 +257,7 @@ async fn persister_round_trip() {
     let tid = uuid::Uuid::from_bytes([9u8; 16]);
 
     // Bootstrap __share_group_state, then initialize (retrying until led).
-    let (fc, _) = find_share(&client, &format!("g1:{tid}:0")).await;
+    let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
     assert!(fc == 0, "FindCoordinator(SHARE) error: {fc}");
     let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
     assert!(init == 0, "initialize error: {init}");
@@ -356,7 +364,7 @@ async fn write_fences_stale_state_epoch() {
     let client = connect(&bootstrap).await;
     let tid = uuid::Uuid::from_bytes([11u8; 16]);
 
-    let (fc, _) = find_share(&client, &format!("g1:{tid}:0")).await;
+    let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
     assert!(fc == 0);
     let init = initialize_ready(&client, "g1", tid, 0, 5, 0).await; // state_epoch 5
     assert!(init == 0, "initialize error: {init}");
@@ -396,7 +404,7 @@ async fn state_survives_restart() {
             .unwrap();
         let client = connect(&broker.listen_addr().to_string()).await;
 
-        let (fc, _) = find_share(&client, &format!("g1:{tid}:0")).await;
+        let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
         assert!(fc == 0);
         let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
         assert!(init == 0, "initialize error: {init}");

@@ -70,7 +70,17 @@ pub(super) fn finish_produce_response(
         elapsed_micros,
         broker.config.quota_throttle_max,
     );
-    let delay = data_delay.max(request_delay);
+    // KIP-219: the request sleeps for the larger of the two delays. Resolving
+    // it through the metric records the throttle phase and the quota that
+    // caused it, and hands back the delay that the response reports and the
+    // sleep below honors.
+    let delay = broker.metrics.record_applied_throttle(
+        super::PRODUCE_API_KEY,
+        &[
+            (crate::metrics::QuotaType::Produce, data_delay),
+            (crate::metrics::QuotaType::Request, request_delay),
+        ],
+    );
     let response = ProduceResponse {
         responses: topic_results,
         throttle_time_ms: crate::quota::throttle_time_ms(delay),

@@ -9,13 +9,13 @@
 //! dry run takes exactly the path a real run takes.
 
 use bytes::Bytes;
-use krabka_ids::{LeaderEpoch, Offset, ProducerId};
+use krabka_ids::{LeaderEpoch, ProducerId};
 use krabka_log::{FilteredBatch, VerbatimBatch, filter_batch};
 use krabka_protocol::records::{Attributes, RecordBatch, RecordBatchBorrowed, RecordBatchHeader};
 
 use crate::{
     args::PartitionRef,
-    bound::{BatchDecision, Predicates, RecordDecision},
+    bound::{BatchDecision, Predicates, RecordDecision, record_coordinates},
     error::RestoreError,
 };
 
@@ -58,7 +58,7 @@ pub(super) fn prepare_batch(
     records_in_batch: u64,
 ) -> Result<(PreparedBatch, BatchTally), RestoreError> {
     let header = batch.header();
-    match predicates.decide_batch(partition_ref, batch) {
+    match predicates.decide_batch(partition_ref, batch)? {
         BatchDecision::Keep => {
             let verbatim = verbatim_from_header(header, batch_bytes, batch.attributes());
             Ok((PreparedBatch::Verbatim(verbatim), BatchTally::Kept))
@@ -89,8 +89,7 @@ fn prepare_filtered_batch(
     let mut keep_flags = Vec::with_capacity(usize::try_from(records_in_batch).unwrap_or(0));
     for record in batch {
         let record = record?;
-        let record_offset = Offset(header.base_offset.get() + i64::from(record.offset_delta));
-        let timestamp_ms = header.base_timestamp.get() + record.timestamp_delta;
+        let (record_offset, timestamp_ms) = record_coordinates(header, &record)?;
         let producer_id = ProducerId(header.producer_id.get());
         let decision = predicates.decide_record(
             partition_ref,

@@ -1,0 +1,91 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 31 0 38 25 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srecovery = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 39 22 39 23
+let%span srecovery'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 42 16 42 39
+let%span srecovery'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 43 20 43 28
+let%span srecovery'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 43 20 43 36
+let%span srecovery'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 46 17 46 35
+let%span srecovery'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 15 10 29 1
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ReplayRecordDecision = Apply Int64.t | Skip
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let replay_record_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 31 0 38 25]
+  (batch_base: Int64.t) (record_delta: Int32.t) (from: Int64.t) (end': Int64.t) (control_batch: bool)
+  (replay_control: bool) (return (x: t_ReplayRecordDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_15 <- Int32.lt record_delta ([%#srecovery] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb2) | br1 -> {_15} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_17 <- Int64.ge batch_base end' ] s1 | s1 = any [ br0 -> {_17 = false} (! bb4) | br1 -> {_17} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_20 <- control_batch <> replay_control ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Skip ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = from_i64 [%#srecovery'0] {record_delta} (fun (_x: Int64.t) -> [ &delta <- _x ] s1)
+    | s1 = Int64.sub [%#srecovery'2] {[%#srecovery'1] const_MAX} {delta} (fun (_x: Int64.t) -> [ &_29 <- _x ] s2)
+    | s2 = [ &_27 <- Int64.gt batch_base _29 ] s3
+    | s3 = any [ br0 -> {_27 = false} (! bb10) | br1 -> {_27} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- Skip ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = Int64.add [%#srecovery'3] {batch_base} {delta} (fun (_x: Int64.t) -> [ &offset <- _x ] s1)
+    | s1 = [ &_35 <- Int64.lt offset from ] s2
+    | s2 = any [ br0 -> {_35 = false} (! bb12) | br1 -> {_35} (! bb15) ] ]
+  | bb12 = s0
+    [ s0 = [ &_38 <- Int64.ge offset end' ] s1 | s1 = any [ br0 -> {_38 = false} (! bb14) | br1 -> {_38} (! bb15) ] ]
+  | bb15 = s0 [ s0 = [ &_ret <- Skip ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- Apply offset ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplayRecordDecision = Any.any_l ()
+  | & batch_base: Int64.t = batch_base
+  | & record_delta: Int32.t = record_delta
+  | & from: Int64.t = from
+  | & end': Int64.t = end'
+  | & control_batch: bool = control_batch
+  | & replay_control: bool = replay_control
+  | & _15: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & delta: Int64.t = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: Int64.t = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _38: bool = Any.any_l () ])
+  [ return (result: t_ReplayRecordDecision) ->
+  {[@stop_split] [@expl:replay_record_decision ensures] [%#srecovery'4] match result with
+      | Apply offset -> ge_log_Int (Int32.to_int record_delta) 0
+      /\ Int64.to_int batch_base < Int64.to_int end'
+      /\ control_batch = replay_control
+      /\ Int64.to_int batch_base <= Int64.to_int const_MAX - Int32.to_int record_delta
+      /\ Int64.to_int offset = Int64.to_int batch_base + Int32.to_int record_delta
+      /\ Int64.to_int from <= Int64.to_int offset /\ Int64.to_int offset < Int64.to_int end'
+      | Skip -> not (ge_log_Int (Int32.to_int record_delta) 0
+      /\ Int64.to_int batch_base < Int64.to_int end'
+      /\ control_batch = replay_control
+      /\ Int64.to_int batch_base <= Int64.to_int const_MAX - Int32.to_int record_delta
+      /\ Int64.to_int from <= Int64.to_int batch_base + Int32.to_int record_delta
+      /\ Int64.to_int batch_base + Int32.to_int record_delta < Int64.to_int end')
+      end}
+    (! return {result}) ]

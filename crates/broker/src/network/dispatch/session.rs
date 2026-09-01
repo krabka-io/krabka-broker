@@ -55,7 +55,7 @@ fn instant_at_epoch_ms(epoch_ms: i64) -> tokio::time::Instant {
         .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     // `.max(0)` ensures delta is non-negative before the unsigned cast;
     // tokens with past `exp` fire the timer on the very next poll.
-    let delta_ms = (epoch_ms - now_ms).max(0);
+    let delta_ms = epoch_ms.saturating_sub(now_ms).max(0);
     tokio::time::Instant::now() + std::time::Duration::from_millis(delta_ms.cast_unsigned())
 }
 
@@ -147,11 +147,11 @@ where
     }
     let frame_result = tokio::select! {
         biased;
-        next = framed.next() => next,
         () = sleep_until_some(auth_deadline(auth)) => {
             log_session_expiry(auth);
             return None;
-        }
+        },
+        next = framed.next() => next,
     };
     match frame_result {
         Some(Ok(bytes)) => Some(bytes.freeze()),

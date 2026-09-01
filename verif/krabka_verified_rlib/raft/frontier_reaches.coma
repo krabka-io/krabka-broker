@@ -1,0 +1,24 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 37 0 37 65 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sraft = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 36 28 36 60
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let frontier_reaches [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 37 0 37 65]
+  (frontier: Int64.t) (target: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- Int64.ge frontier target ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & frontier: Int64.t = frontier | & target: Int64.t = target ])
+  [ return (result: bool) -> {[@stop_split] [@expl:frontier_reaches ensures] [%#sraft] result
+    = ge_log_Int (Int64.to_int frontier) (Int64.to_int target)}
+    (! return {result}) ]

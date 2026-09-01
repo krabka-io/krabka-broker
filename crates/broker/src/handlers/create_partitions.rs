@@ -244,5 +244,5 @@ pub(crate) async fn handle(
     // KIP-599: report the controller_mutation_rate throttle after response
     // assembly. It sets throttle_time_ms and records the window for the
     // connection loop's post-send mute (KIP-219).
-    finish_response(ctx, quota.delay(), results, version)
+    finish_response(broker, ctx, quota.delay(), results, version)
 }

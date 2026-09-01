@@ -9,6 +9,7 @@
 //! same way.
 
 use krabka_protocol::records::Record;
+use krabka_verified::{ChainStep, chain_step};
 
 use super::{TrustedKeys, VerifyBreak, VerifyLoss, VerifyReport};
 use crate::{
@@ -135,24 +136,30 @@ pub(super) fn check_chained(
     let (Some(seq), Some(prev)) = (seq, prev) else {
         return Err(broke(state, offset, seq, "missing/invalid chain headers"));
     };
-    if seq != state.expected_seq {
-        return Err(broke(
-            state,
-            offset,
-            Some(seq),
-            &format!("seq gap: expected {}, found {seq}", state.expected_seq),
-        ));
-    }
-    if prev != state.head {
-        return Err(broke(
-            state,
-            offset,
-            Some(seq),
-            "prev_hash does not match recomputed chain head",
-        ));
-    }
+    let next_seq = match chain_step(state.expected_seq.0, seq.0, prev == state.head) {
+        ChainStep::SequenceMismatch => {
+            return Err(broke(
+                state,
+                offset,
+                Some(seq),
+                &format!("seq gap: expected {}, found {seq}", state.expected_seq),
+            ));
+        }
+        ChainStep::HeadMismatch => {
+            return Err(broke(
+                state,
+                offset,
+                Some(seq),
+                "prev_hash does not match recomputed chain head",
+            ));
+        }
+        ChainStep::Exhausted => {
+            return Err(broke(state, offset, Some(seq), "chain sequence exhausted"));
+        }
+        ChainStep::Continue(next_seq) => next_seq,
+    };
     state.head = chain_hash(&state.head, seq.0, value);
-    state.expected_seq.0 += 1;
+    state.expected_seq = Seq(next_seq);
     state.records.0 += 1;
     Ok(())
 }

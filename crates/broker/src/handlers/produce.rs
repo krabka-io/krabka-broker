@@ -52,6 +52,12 @@ mod test_support;
 /// until every in-sync replica has it.
 const ACKS_ALL: i16 = -1;
 
+/// This handler's own wire api key, for the `api_key` label the request-phase
+/// and throttle histograms carry. The dispatcher labels the total latency from
+/// the frame it parsed; the handler labels its phases from the same number.
+pub(super) const PRODUCE_API_KEY: crate::handlers::ApiKeyCode =
+    krabka_protocol::api_key::ApiKey::Produce as i16;
+
 /// Wire sentinel "no offset assigned", which is
 /// `ProduceResponse.INVALID_OFFSET`. The handler stamps it on partition rows
 /// that failed before any append happened.
@@ -80,6 +86,12 @@ pub(crate) async fn handle(
     // start so the request throttle can be combined with the byte-rate throttle
     // below (KIP-219).
     let handler_start = std::time::Instant::now();
+    // Phase accounting for `request_{local,remote}_duration_seconds`. One
+    // Produce appends to many partitions, so the two phases are sums over the
+    // partition loop below rather than single intervals: `dispatch_prepared`
+    // charges the writer round-trip to local and the `acks=all` high-watermark
+    // gate to remote.
+    let phases = crate::metrics::RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
     let partitions = broker.partitions.clone();
     let controller = broker.controller.clone();
@@ -255,6 +267,7 @@ pub(crate) async fn handle(
                         broker_policy,
                         record_decompression_policy,
                         metrics: &broker.metrics,
+                        phases: &phases,
                         schema_validator: broker.config.schema_validator.as_ref(),
                     },
                 ))
@@ -284,6 +297,13 @@ pub(crate) async fn handle(
             ..Default::default()
         });
     }
+
+    // The local and remote phases are complete once the partition loop is.
+    // The throttle below is the third phase, and `finish_produce_response`
+    // observes that one itself.
+    broker
+        .metrics
+        .observe_request_phases(PRODUCE_API_KEY, &phases);
 
     // ── KIP-13 producer_byte_rate + KIP-124 request_percentage ──────
     // Combine the data (byte-rate) and request (handler-time) throttles as

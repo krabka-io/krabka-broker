@@ -71,7 +71,16 @@ pub(super) fn apply_consumer_fetch_quota(
         elapsed_micros,
         broker.config.quota_throttle_max,
     );
-    let delay = data_delay.max(request_delay);
+    // KIP-219: the request sleeps for the larger of the two delays. Resolving
+    // it through the metric records the throttle phase and the quota that
+    // caused it, and hands back the delay the response reports.
+    let delay = broker.metrics.record_applied_throttle(
+        super::FETCH_API_KEY,
+        &[
+            (crate::metrics::QuotaType::Fetch, data_delay),
+            (crate::metrics::QuotaType::Request, request_delay),
+        ],
+    );
     if delay <= <Time as TimeExt>::ZERO {
         return 0;
     }
