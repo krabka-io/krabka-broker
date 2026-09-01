@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 27 27 27 32 *)
+
+(* <consensus::FailoverRecovery as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FailoverRecovery = None | Balanced | Aggressive
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FailoverRecovery [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 27 27 27 32]
+  (self: t_FailoverRecovery) (return (x: t_FailoverRecovery)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FailoverRecovery = Any.any_l () | & self: t_FailoverRecovery = self ])
+  [ return (result: t_FailoverRecovery) -> (! return {result}) ]

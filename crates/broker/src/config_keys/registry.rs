@@ -567,7 +567,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Broker,
             ConfigType::Boolean,
             Some("false"),
-            "Whether the controller has fenced this node: it is past its heartbeat deadline or has not proved metadata catch-up, so its replicas read as offline. Only the controller writes it.",
+            "Marks this node as fenced: it is past its heartbeat deadline, or has not yet proved metadata catch-up, so every node reports its replicas offline. Only the controller writes it.",
             ValueCheck::NotAltered,
         )
     },

@@ -1,0 +1,44 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 244 0 244 72 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 243 10 243 15
+let%span sbroker'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 242 11 242 45
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+
+use creusot.int.UInt16
+use seq.Seq
+use creusot.int.Int32
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant units : Seq.seq UInt16.t
+
+constant limit : int
+
+function java_string_hash_prefix_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 244 0 244 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+
+goal vc_java_string_hash_prefix_model: ([%#sbroker'0] 0 <= limit /\ limit <= Seq.length units)
+  -> (if limit <= 0 then
+    true
+  else
+    ([@stop_split] [@expl:java_string_hash_prefix_model requires] [%#sbroker'0] 0 <= limit - 1
+      /\ limit - 1 <= Seq.length units)
+    /\ ([@expl:variant decreases] well_founded_relation_Int ([%#sbroker] limit) ([%#sbroker] limit - 1))
+  )

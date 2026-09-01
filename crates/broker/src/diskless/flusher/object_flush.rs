@@ -137,8 +137,6 @@ pub(crate) async fn flush_once(
                 partition.high_watermark.0.saturating_sub(frontier),
             );
             if let Some(lag) = config.trim_safety_lag {
-                let hw_trim_floor = partition.high_watermark.0.saturating_sub(lag.max(0));
-                let trim_to = frontier.min(hw_trim_floor);
                 let current_start = partition
                     .handle
                     .log
@@ -146,8 +144,18 @@ pub(crate) async fn flush_once(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .log_start_offset()
                     .0;
-                let trim_frontier = if trim_to > current_start {
-                    match partition.handle.trim_to_offset(Offset(trim_to)).await {
+                let decision = krabka_verified::diskless_trim_decision(
+                    frontier,
+                    partition.high_watermark.0,
+                    lag,
+                    current_start,
+                );
+                let trim_frontier = if decision.should_trim {
+                    match partition
+                        .handle
+                        .trim_to_offset(Offset(decision.target))
+                        .await
+                    {
                         Ok(offset) => offset.0,
                         Err(error) => {
                             metrics.diskless_wal_flush_failures_total.inc();
