@@ -24,7 +24,7 @@
 
 /// The static broker keys this node's configuration named explicitly.
 ///
-/// One flag per key that [`crate::handlers`]' `DescribeConfigs` reports as a
+/// One flag per key that `crate::handlers`' `DescribeConfigs` reports as a
 /// static broker config. A key is flagged when the CLI, the environment or the
 /// `[runtime]` file config supplied it -- all three arrive through
 /// [`crate::file_config::RuntimeFileConfig`] -- and left clear when the broker

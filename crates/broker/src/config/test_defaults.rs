@@ -158,6 +158,7 @@ impl BrokerConfig {
             bootstrap_servers: vec![],
             directory_id: uuid::Uuid::from_u128(1),
             incarnation_id: uuid::Uuid::new_v4(),
+            previous_broker_epoch: crate::clean_shutdown::UNPROVEN,
             auto_join: false,
             observer_lag_bound: DEFAULT_OBSERVER_LAG_BOUND,
             heartbeat_interval: millis(200),

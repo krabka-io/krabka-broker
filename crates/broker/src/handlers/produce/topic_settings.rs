@@ -1,9 +1,23 @@
 //! The per-topic produce settings that the handler resolves once per topic
 //! out of the metadata image, before it walks that topic's partitions.
 
-use crate::config_keys::{COMPRESSION_TYPE, MIN_INSYNC_REPLICAS, parse_compression_type};
+use crate::config_keys::{
+    COMPRESSION_TYPE, configured_min_insync_replicas, parse_compression_type,
+};
 
 /// Resolve `min.insync.replicas` for a topic from the metadata image.
+///
+/// The lookup is [`configured_min_insync_replicas`], the one the controller
+/// resolves KIP-966's ELR threshold through: the topic override, then the
+/// cluster-wide dynamic broker default. Reading only the topic override here
+/// would let a cluster-wide default that the controller honours govern the
+/// ELR while this gate ignored it, and the ELR would then name replicas that
+/// accepted writes had moved past.
+///
+/// `default_min_insync_replicas` is this broker's command-line value, the one
+/// layer the controller cannot see. It applies only when the image names
+/// nothing, where the controller resolves Kafka's default of 1, so this gate
+/// is never the more permissive of the two.
 ///
 /// On a malformed value the function falls back to the broker default without
 /// a message. The `AlterConfigs` validator already rejected the invalid
@@ -14,11 +28,7 @@ pub(super) fn topic_min_insync_replicas(
     topic: &str,
     default_min_insync_replicas: i32,
 ) -> i32 {
-    image
-        .topic_config(topic)
-        .and_then(|m| m.get(MIN_INSYNC_REPLICAS))
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(default_min_insync_replicas)
+    configured_min_insync_replicas(image, topic).unwrap_or(default_min_insync_replicas)
 }
 
 /// Resolve a topic's broker-side `compression.type` from the metadata image.
@@ -48,7 +58,72 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::handlers::produce::test_support::{image_with_topic, set_min_isr};
+    use crate::{
+        config_keys::MIN_INSYNC_REPLICAS,
+        handlers::produce::test_support::{image_with_topic, set_min_isr},
+    };
+
+    /// Seed a cluster-wide dynamic `min.insync.replicas` default, the layer
+    /// Kafka resolves between the topic override and each node's static
+    /// config, and the one the controller's ELR resolver reads.
+    fn set_cluster_default_min_isr(img: &mut MetadataImage, n: i32) {
+        img.apply(&MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: MIN_INSYNC_REPLICAS.to_string(),
+                config_value: Some(n.to_string()),
+            },
+        ));
+    }
+
+    /// KIP-966 keys the whole ELR decision on `min.insync.replicas`: the
+    /// controller records the replicas still known to hold every committed
+    /// record, and what is committed is what this gate accepted. So the
+    /// threshold the two resolve has to be the same one, and the gate must
+    /// never be the more permissive of the two.
+    ///
+    /// A cluster-wide default alone is the case that used to break it. The
+    /// controller honoured it and this gate did not, so an `acks=all` write
+    /// was accepted at an ISR the controller still called below-min -- and
+    /// the replicas the controller was holding in the ELR fell behind that
+    /// write while it went on calling them eligible to lead.
+    #[test]
+    fn the_gate_resolves_the_threshold_the_controller_maintains_the_elr_against() {
+        for (label, topic_override, cluster_default, broker_default, expected) in [
+            (
+                "nothing published, so the broker's own default stands alone",
+                None,
+                None,
+                2,
+                2,
+            ),
+            (
+                "a cluster-wide default outranks the broker's own",
+                None,
+                Some(3),
+                1,
+                3,
+            ),
+            ("a topic override outranks both", Some(3), Some(2), 1, 3),
+        ] {
+            let mut img = image_with_topic("t", &[1, 2, 3]);
+            if let Some(value) = topic_override {
+                set_min_isr(&mut img, "t", value);
+            }
+            if let Some(value) = cluster_default {
+                set_cluster_default_min_isr(&mut img, value);
+            }
+
+            let gate = topic_min_insync_replicas(&img, "t", broker_default);
+            let controller = crate::config_keys::effective_min_insync_replicas(&img, "t", 3);
+
+            assert!(gate == expected, "{label}: got {gate}");
+            assert!(
+                i32::try_from(controller).expect("a min ISR fits in i32") <= gate,
+                "{label}: the controller resolved {controller} against the gate's {gate}"
+            );
+        }
+    }
 
     #[test]
     fn topic_min_isr_defaults_to_one_when_unset() {

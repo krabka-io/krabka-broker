@@ -119,6 +119,26 @@ fn seed_replayed_group(
         .seed_classic(GROUP, Box::new(group));
 }
 
+/// The moment `GROUP`'s actor stamped the group memberless.
+///
+/// The actor refreshes `empty_since_ms` at the end of every turn, so this
+/// read — a turn of its own — is ordered after the stamp of the turn before
+/// it. A sweep driven from the returned instant therefore exercises exactly
+/// the grace it passes, however late the runner scheduled the actor.
+async fn empty_since_ms(broker: &Broker) -> i64 {
+    let handle = broker.group_coordinator.find(GROUP).expect("group actor");
+    let (reply, stamped) = oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::TestEmptySinceMs { reply })
+        .await
+        .expect("send TestEmptySinceMs");
+    stamped
+        .await
+        .expect("TestEmptySinceMs reply")
+        .expect("actor stamped its empty-since moment")
+}
+
 /// Commit one offset through the `OffsetCommit` handler.
 async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
     let request = OffsetCommitRequest {
@@ -481,12 +501,14 @@ async fn an_empty_group_that_holds_no_offsets_is_reaped() {
         "a group that has only just been created is left alone"
     );
 
-    // Read the clock again: the actor stamps its own empty-since moment on its
-    // first turn, which is after `now_ms` above.
+    // Sweep one whole interval after the actor's own stamp, not after a clock
+    // this test reads. The stamp lands on the actor's turn, which a loaded
+    // machine can schedule after any instant read here; measuring from the
+    // stamp is what makes the grace exactly one interval either way.
     let swept = sweep(
         &broker.group_coordinator,
         |_| true,
-        crate::time_util::now_ms() + CHECK_INTERVAL_MS,
+        empty_since_ms(&broker).await + CHECK_INTERVAL_MS,
         RETENTION_MS,
         CHECK_INTERVAL_MS,
     )

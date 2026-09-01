@@ -112,7 +112,8 @@ async fn gssapi_handshake_advertised_when_enabled() {
 /// provider contract test:
 ///
 /// ```text
-/// cd crates/broker/tests/fixtures/security/kdc && docker compose up --build -d
+/// bazel run //crates/broker/tests/fixtures/security/kdc:image_load
+/// docker compose -f crates/broker/tests/fixtures/security/kdc/docker-compose.yml up -d
 /// KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf SSPI_KDC_URL=tcp://localhost:88 \
 ///   cargo test -p krabka-broker gssapi_inter_broker -- --ignored
 /// ```
