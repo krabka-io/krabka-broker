@@ -21,10 +21,10 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
-    config_keys::RecoveryStrategy,
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, RecoveryStrategy},
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
-    unclean_recovery::BackgroundRecovery,
+    unclean_recovery::{BackgroundRecovery, selection::ElectionBasis},
 };
 
 /// Minimal `MetadataSource` that drives the control flow of
@@ -127,6 +127,32 @@ fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
         partition_epoch: 0,
     }));
     img
+}
+
+/// Publish `krabka.elr` for partition 0 of topic `t`, in the grammar
+/// `TopicElr::parse` reads: these node ids are eligible, none are last-known.
+fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
+    let ids = eligible
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    img.apply(&MetadataRecord::V1TopicConfig(
+        krabka_metadata::TopicConfigRecord {
+            topic: "t".into(),
+            overrides: [(ELIGIBLE_LEADER_REPLICAS.to_string(), format!("0:{ids}:"))]
+                .into_iter()
+                .collect(),
+        },
+    ));
+}
+
+/// The election the URM reaches when nothing but the log lengths decided it.
+fn fallback_to(leader: u64) -> Election {
+    Election {
+        leader: NodeId(leader),
+        basis: ElectionBasis::MostCompleteLog,
+    }
 }
 
 fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16) {
@@ -381,7 +407,7 @@ async fn audit_only_elects_and_records_the_bypass() {
         .expect("the partition is in the image");
 
     let outcome = mgr
-        .commit_elected_leader(&job(), &image, pr, NodeId(2))
+        .commit_elected_leader(&job(), &image, pr, fallback_to(2))
         .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
@@ -399,15 +425,68 @@ async fn audit_only_elects_and_records_the_bypass() {
     assert!(batches == vec![vec![MetadataRecord::V1Partition(elected)]]);
     check!(bypasses(&mgr.metrics) == 1);
     let event = events.try_recv().expect("a bypass reaches the audit log");
-    assert!(let AuditEvent::PrivilegedAction { phase, target, .. } = &event);
+    assert!(let AuditEvent::PrivilegedAction { phase, target, reason, .. } = &event);
     check!(*phase == PrivilegedPhase::Bypassed);
     check!(target == "t-0");
+    check!(
+        reason
+            == "unclean recovery elected broker 2 as the most complete surviving log, so \
+                committed records may be lost (strategy None), with no break-glass approval"
+    );
+    check!(mgr.metrics.unclean_leader_elections_total.get() == 1);
+}
+
+/// KIP-966: an eligible leader replica holds every committed record, so the
+/// election that picks one is not the data-losing act the two-person rule
+/// watches for and is not the election the unclean meter counts. The audit
+/// record still says what happened, and names the rule that chose the leader.
+#[tokio::test]
+async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
+    let (audit_log, mut events) = AuditLog::new(8);
+    let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+    let image = source.current_image();
+    let mgr = manager_with(
+        source,
+        liveness_with_alive(&[2]).await,
+        &gated(BackgroundUncleanRecovery::AuditOnly),
+        audit_log,
+    );
+    let pr = image
+        .partition("t", 0)
+        .expect("the partition is in the image");
+    let election = Election {
+        leader: NodeId(2),
+        basis: ElectionBasis::EligibleLeaderReplica,
+    };
+
+    let outcome = mgr
+        .commit_elected_leader(&job(), &image, pr, election)
+        .await;
+
+    assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
+    let event = events
+        .try_recv()
+        .expect("an election reaches the audit log");
+    assert!(let AuditEvent::PrivilegedAction { phase, target, reason, .. } = &event);
+    check!(*phase == PrivilegedPhase::Applied);
+    check!(target == "t-0");
+    check!(
+        reason
+            == "unclean recovery elected broker 2 from the eligible leader replicas, so no \
+                committed record is lost (strategy None)"
+    );
+    check!(bypasses(&mgr.metrics) == 0);
+    check!(mgr.metrics.unclean_leader_elections_total.get() == 0);
 }
 
 #[tokio::test]
-async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
+async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
     let cases = [
-        ("off writes nothing", BackgroundUncleanRecovery::Off, job()),
+        (
+            "a broker that runs no rule bypasses none",
+            BackgroundUncleanRecovery::Off,
+            job(),
+        ),
         (
             "an approved job is not a bypass",
             BackgroundUncleanRecovery::AuditOnly,
@@ -428,14 +507,53 @@ async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
             .partition("t", 0)
             .expect("the partition is in the image");
 
-        let outcome = mgr.commit_elected_leader(&job, &image, pr, NodeId(2)).await;
+        let outcome = mgr
+            .commit_elected_leader(&job, &image, pr, fallback_to(2))
+            .await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),
             "case {label}"
         );
         check!(bypasses(&mgr.metrics) == 0, "case {label}");
+        let event = events.try_recv().expect("an election is always recorded");
+        assert!(let AuditEvent::PrivilegedAction { phase, .. } = &event, "case {label}");
+        check!(*phase == PrivilegedPhase::Applied, "case {label}");
         check!(events.try_recv().is_err(), "case {label}");
+    }
+}
+
+/// KFC-9 meets KIP-966: the fail-closed rule refuses a recovery that can only
+/// lose data, and a partition with a surviving eligible leader replica is not
+/// one of those. The ELR case reaches the replica poll -- which the refused
+/// case never does -- and answers `NoEligibleReplica` when nothing replies.
+#[tokio::test]
+async fn require_refuses_only_a_recovery_that_no_elr_could_save() {
+    let cases = [
+        (
+            "no ELR is refused before the poll",
+            &[][..],
+            RecoveryOutcome::BreakGlassRequired,
+        ),
+        (
+            "a surviving ELR member is polled",
+            &[2][..],
+            RecoveryOutcome::NoEligibleReplica,
+        ),
+    ];
+    for (label, eligible, expected) in cases {
+        let mut image = dead_leader_with_a_survivor();
+        if !eligible.is_empty() {
+            publish_elr(&mut image, eligible);
+        }
+        let mgr = manager_with(
+            MockSource::new(Some(NODE), image),
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::Require),
+            AuditLog::disabled(),
+        );
+
+        check!(mgr.run_recovery(&job()).await == expected, "case {label}");
     }
 }
 

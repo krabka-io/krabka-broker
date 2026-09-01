@@ -5,13 +5,17 @@
 // still enforces the full lint gate.
 
 //! KIP-966 end-to-end: offset-aware **unclean recovery** elects the survivor
-//! with the most complete log, not merely the first alive replica.
+//! that is known to be complete, and only falls back to the most complete
+//! surviving log when there is no such replica. Neither answer is "the first
+//! alive replica".
 //!
-//! The test uses a 3-broker PLAINTEXT cluster, for the same reason as
+//! The tests use a 3-broker PLAINTEXT cluster, for the same reason as
 //! `tests/elect_leaders.rs`. A 3-node raft quorum survives one dead node, and
 //! the authorizer compat shim lets the wire path through without SASL.
 //!
-//! Scenario (`unclean_recovery_elects_longest_log_replica`):
+//! Both cases run the same scenario, in `run_unclean_recovery`, and differ
+//! only in the eligible-leader-replica set the partition carries and the
+//! leader that must win:
 //!
 //! 1. A 3-broker cluster with topic "t", 1 partition, and RF=3, so the
 //!    replicas are `[1, 2, 3]`.
@@ -24,18 +28,28 @@
 //!    real replication fetchers, which keeps the next step deterministic.
 //! 4. Force the replicas' local logs to **diverge** deterministically with the
 //!    `produce_records_for_test` accessor. It appends directly to each
-//!    broker's hosted partition log, so the per-broker LEOs differ, and broker
-//!    2 gets the strictly highest LEO. All three keep
-//!    `current_leader_epoch == 0`, so only `log_end_offset` decides the
-//!    selection tiebreak. Broker 2 must win even though broker 1 is the first
-//!    alive replica. That distinction is the point of the test.
-//! 5. Trigger recovery with `ElectLeaders(UNCLEAN)` sent to the raft leader.
+//!    broker's hosted partition log, so the per-broker LEOs differ: broker 2
+//!    gets the strictly highest LEO, broker 3 the middle one, and broker 1 the
+//!    lowest. All three keep `current_leader_epoch == 0`, so only
+//!    `log_end_offset` decides the most-complete-log ranking.
+//! 5. Publish the partition's eligible-leader-replica set, when the case has
+//!    one. It is written last so that no controller path re-derives it between
+//!    the write and the election.
+//! 6. Trigger recovery with `ElectLeaders(UNCLEAN)` sent to the raft leader.
 //!    The URM polls brokers 1, 2, and 3 over the real `GetReplicaLogInfo` wire
-//!    path, and elects the survivor with the highest LEO.
-//! 6. Assert that the new partition leader is broker 2, the highest LEO, and
-//!    NOT broker 1, the first alive replica. The ISR becomes `[2]`.
+//!    path and elects one of them.
+//! 7. Assert the new partition leader, and that the ISR collapses to it.
 //!
-//! This test is gated to non-Windows, to match the multi-broker test
+//! With no ELR (`unclean_recovery_elects_longest_log_replica`) the winner is
+//! broker 2, the highest LEO, and not broker 1, the first alive replica. With
+//! an ELR of `{3}` (`unclean_recovery_prefers_an_eligible_leader_replica`) the
+//! winner is broker 3, whose log is *shorter* than broker 2's: an ELR member
+//! held every committed record when it left the ISR, so electing it loses
+//! nothing, and a longer non-ELR log is only a guess. Broker 3 is neither the
+//! first alive replica nor the most complete log, so the assertion separates
+//! the ELR rule from both of the others.
+//!
+//! These tests are gated to non-Windows, to match the multi-broker test
 //! convention. The openraft `debug_assert!` races on the hosted Windows
 //! scheduler are unrelated.
 
@@ -60,6 +74,11 @@ use tokio::{
 mod support;
 
 const ELECT_LEADERS_VERSION: i16 = 2;
+
+/// The controller-managed topic config that carries KIP-966 ELR state. It is
+/// `crate::config_keys::ELIGIBLE_LEADER_REPLICAS`, which a test crate cannot
+/// name.
+const ELR_CONFIG_KEY: &str = "krabka.elr";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal wire helpers — bare TCP on PLAINTEXT, no SASL.
@@ -249,31 +268,63 @@ async fn wait_partition_isr_only(
         .await;
 }
 
+/// The topic's whole controller-managed override map: the recovery strategy
+/// that routes an UNCLEAN election through the URM, plus the published
+/// eligible-leader-replica value when the case has one.
+fn topic_config(topic: &str, elr: Option<&str>) -> MetadataRecord {
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "unclean.recovery.strategy".to_string(),
+        "Aggressive".to_string(),
+    );
+    if let Some(elr) = elr {
+        overrides.insert(ELR_CONFIG_KEY.to_string(), elr.to_string());
+    }
+    MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: topic.to_string(),
+        overrides,
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Test
+// Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A 3-broker PLAINTEXT cluster with an RF=3 topic, whose replicas are
-/// `[1, 2, 3]`.
-///
-/// This test proves that the offset-aware unclean-recovery path elects the
-/// survivor with the **highest LEO**. That result is different from a simple
-/// "first alive replica" pick.
+/// The offset-aware unclean-recovery path elects the survivor with the
+/// **highest LEO** when nothing better is known about any of them. That result
+/// is different from a simple "first alive replica" pick.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_recovery_elects_longest_log_replica() {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _g = lock.lock().await;
+    run_unclean_recovery(None, 2).await;
+}
 
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+/// KIP-966: a surviving eligible leader replica outranks a longer log that is
+/// not one. Broker 3 is in the published ELR and holds fewer records than
+/// broker 2, and broker 3 must still win: it is known to hold every committed
+/// record, and broker 2's longer log is only the longest one that answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_recovery_prefers_an_eligible_leader_replica() {
+    // `krabka.elr` grammar: partition 0 has ELR {3} and no last-known ELR.
+    run_unclean_recovery(Some("0:3:"), 3).await;
+}
 
-    let topic = "t";
-    let addr = cluster[0].1.listen_addr;
-    let h1 = &cluster[0].0; // broker_id 1
-    let h2 = &cluster[1].0; // broker_id 2
-    let h3 = &cluster[2].0; // broker_id 3
-
+/// A 3-broker PLAINTEXT cluster with an RF=3 topic, whose replicas are
+/// `[1, 2, 3]`. It runs the scenario the module docs describe with `elr`
+/// published as partition 0's eligible-leader-replica set, and asserts that
+/// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
+/// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
+/// surviving replicas holding logs of three different lengths.
+///
+/// `handles` are brokers 1, 2 and 3 in that order, and `addr` is any broker's
+/// listener. On return the partition's leader is a node that never existed, so
+/// nothing will elect a leader on its own, and broker 2 holds the strictly
+/// highest LEO with broker 3 in the middle and broker 1 lowest.
+async fn offline_partition_with_diverged_logs(
+    addr: SocketAddr,
+    topic: &str,
+    handles: [&BrokerHandle; 3],
+) {
+    let [h1, h2, h3] = handles;
     // ── Create the RF=3 topic. With 3 registered brokers, partition 0's
     //    replica assignment is [1, 2, 3]; broker 1 is the preferred/first. ──
     create_topic_plaintext(addr, topic, 1, 3).await;
@@ -301,17 +352,9 @@ async fn unclean_recovery_elects_longest_log_replica() {
 
     // ── Set unclean.recovery.strategy=Aggressive so UNCLEAN routes through
     //    the offset-aware Unclean Recovery Manager. ──
-    let mut overrides = std::collections::BTreeMap::new();
-    overrides.insert(
-        "unclean.recovery.strategy".to_string(),
-        "Aggressive".to_string(),
-    );
-    h1.submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.to_string(),
-        overrides,
-    }))
-    .await
-    .expect("set unclean.recovery.strategy=Aggressive");
+    h1.submit_metadata_record_for_test(topic_config(topic, None))
+        .await
+        .expect("set unclean.recovery.strategy=Aggressive");
 
     // ── Take the partition offline FIRST: inject a PartitionRecord whose
     //    leader and ISR are a dead phantom node (99, never heartbeated →
@@ -372,6 +415,42 @@ async fn unclean_recovery_elects_longest_log_replica() {
         end2 > end1 && end2 > end3,
         "broker 2 must hold the strictly-highest LEO (b1={end1} b2={end2} b3={end3})"
     );
+}
+
+async fn run_unclean_recovery(elr: Option<&str>, expected_leader: u64) {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _g = lock.lock().await;
+
+    let cluster = support::start_n_node_with_retry(3).await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+
+    let topic = "t";
+    let addr = cluster[0].1.listen_addr;
+    let h1 = &cluster[0].0; // broker_id 1
+    let h2 = &cluster[1].0; // broker_id 2
+    let h3 = &cluster[2].0; // broker_id 3
+
+    offline_partition_with_diverged_logs(addr, topic, [h1, h2, h3]).await;
+
+    // ── Publish the eligible-leader-replica set, if this case has one. It
+    //    goes in last: a `V1TopicConfig` replaces the topic's whole override
+    //    map, and writing it after the partition is already offline keeps any
+    //    controller path that recomputes ELR from clearing it first. The
+    //    record carries the recovery strategy along with it for the same
+    //    reason. ──
+    if let Some(elr) = elr {
+        h1.submit_metadata_record_for_test(topic_config(topic, Some(elr)))
+            .await
+            .expect("publish the eligible leader replicas");
+        // Event-driven: await the published value in the image the URM reads.
+        h1.wait_for_image(|img| {
+            img.topic_config(topic)
+                .and_then(|configs| configs.get(ELR_CONFIG_KEY))
+                .is_some_and(|value| value == elr)
+        })
+        .await;
+    }
 
     // ── ElectLeaders(UNCLEAN) must reach the raft leader, the only node that
     //    runs the URM and has authoritative liveness state. Discover it. ──
@@ -394,19 +473,19 @@ async fn unclean_recovery_elects_longest_log_replica() {
         "expected error_code=0 for UNCLEAN election; got {result:?}"
     );
 
-    // ── The load-bearing assertion: the elected leader is broker 2 (the
-    //    highest-LEO survivor), NOT broker 1 (the first-alive replica). ──
-    wait_partition_leader(h1, topic, 0, 2).await;
+    // ── The load-bearing assertion: the URM elected the replica the rules
+    //    name, and not merely the first alive one. ──
+    wait_partition_leader(h1, topic, 0, expected_leader).await;
     let final_leader = h1
         .partition_leader_for_test(topic, 0)
         .expect("leader present");
     assert!(
-        final_leader == 2,
-        "URM must elect the highest-LEO survivor (broker 2), not the \
-         first-alive replica (broker 1); got leader={final_leader}"
+        final_leader == expected_leader,
+        "URM must elect broker {expected_leader} with elr={elr:?}; got \
+         leader={final_leader}"
     );
     // ISR collapses to the singleton elected leader.
-    wait_partition_isr_only(h1, topic, 0, &[2]).await;
+    wait_partition_isr_only(h1, topic, 0, &[expected_leader]).await;
 
     // Clean up.
     for (h, _, _) in cluster {

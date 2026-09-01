@@ -16,10 +16,10 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
 use super::{
-    RecoveryJob, RecoveryOutcome, RecoveryPolicy, ReplicaLogInfo, UncleanRecoveryHandle,
+    Election, RecoveryJob, RecoveryOutcome, RecoveryPolicy, ReplicaLogInfo, UncleanRecoveryHandle,
     has_newer_leader,
     query::{ReplicaQuery, gather_responses, query_replica},
-    select_best_replica,
+    select_leader,
 };
 use crate::{
     heartbeat::controller_state::ControllerLivenessState, network::client::InterBrokerClient,
@@ -31,8 +31,9 @@ mod tests;
 /// The controller-side Unclean Recovery Manager.
 ///
 /// It receives [`RecoveryJob`] values, dedups the in-flight work for each
-/// partition, queries surviving replicas for their log state, and elects the
-/// replica with the most complete log through `submit_change`.
+/// partition, queries surviving replicas for their log state, and elects one
+/// of them through `submit_change`: an eligible leader replica if one
+/// answered, and otherwise the most complete log that did.
 pub(crate) struct UncleanRecoveryManager {
     controller: Arc<dyn crate::metadata_source::MetadataSource>,
     liveness: Arc<ControllerLivenessState>,
@@ -128,19 +129,24 @@ impl UncleanRecoveryManager {
         if self.liveness.is_alive(pr.leader.0).await {
             return RecoveryOutcome::NotNeeded;
         }
+        // KIP-966: the replicas that are known to hold every committed record.
+        // Read here, with the rest of the partition state, so the selection and
+        // the break-glass rule below both see one image.
+        let eligible = crate::elr::TopicElr::of_topic(&image, &job.topic)
+            .partition(job.partition)
+            .eligible_leader_replicas;
         // KFC-9: the recovery is needed from here on, so this is where the
-        // fail-closed rule bites. It runs before the replica poll, because a
-        // recovery the broker will not commit has no reason to spend a round
-        // trip to every surviving replica.
-        if self.policy.background.refuses(job) {
-            self.policy.background.audit_refusal(job, self.node_id);
-            warn!(
-                topic = %job.topic,
-                partition = job.partition,
-                "unclean recovery refused: break_glass.background_unclean_recovery is require \
-                 and no proposal approved it; the partition stays offline"
-            );
-            return RecoveryOutcome::BreakGlassRequired;
+        // fail-closed rule bites. What it guards is a data-losing election, and
+        // a partition with an eligible leader replica may yet have a lossless
+        // one, so only a partition with no ELR at all is refused here. The
+        // check runs again below, once the poll has said which of the two
+        // elections this recovery reached. Refusing the no-ELR case up front is
+        // what keeps a recovery the broker will not commit from spending a
+        // round trip to every surviving replica, which is the common case.
+        if eligible.is_empty()
+            && let Some(refused) = self.refuse_background(job)
+        {
+            return refused;
         }
         let known_epoch = pr.leader_epoch;
         let topic_id = image
@@ -194,9 +200,15 @@ impl UncleanRecoveryManager {
         if has_newer_leader(&collected, known_epoch.0) {
             return RecoveryOutcome::Stale;
         }
-        let Some(winner) = select_best_replica(&collected) else {
+        let Some(election) = select_leader(&collected, &eligible) else {
             return RecoveryOutcome::NoEligibleReplica;
         };
+        // KFC-9 again: the ELR did not save this one, so the rule applies.
+        if election.basis.loses_data()
+            && let Some(refused) = self.refuse_background(job)
+        {
+            return refused;
+        }
 
         // Re-read the image and re-check before committing: the leader may
         // have come back, or the partition may have been deleted, while we
@@ -209,19 +221,46 @@ impl UncleanRecoveryManager {
             return RecoveryOutcome::NotNeeded;
         }
 
-        self.commit_elected_leader(job, &image, pr, winner).await
+        self.commit_elected_leader(job, &image, pr, election).await
     }
 
-    /// Builds and submits the `PartitionRecord` that elects `winner` as the
-    /// new leader. The record bumps the epoch and shrinks the ISR to the
-    /// winner alone.
+    /// KFC-9: what the background rule says about a data-losing recovery that
+    /// no operator approved.
+    ///
+    /// `Some(BreakGlassRequired)` when the rule refuses it. The refusal is
+    /// audited here, because the partition then keeps no leader and the audit
+    /// log is the only place that says why.
+    fn refuse_background(&self, job: &RecoveryJob) -> Option<RecoveryOutcome> {
+        if !self.policy.background.refuses(job) {
+            return None;
+        }
+        self.policy.background.audit_refusal(job, self.node_id);
+        warn!(
+            topic = %job.topic,
+            partition = job.partition,
+            "unclean recovery refused: break_glass.background_unclean_recovery is require \
+             and no proposal approved it; the partition stays offline"
+        );
+        Some(RecoveryOutcome::BreakGlassRequired)
+    }
+
+    /// Builds and submits the `PartitionRecord` that elects `election.leader`
+    /// as the new leader. The record bumps the epoch and shrinks the ISR to
+    /// the elected replica alone.
+    ///
+    /// `election.basis` decides everything the commit says about the election
+    /// rather than anything it writes: only a fallback to the most complete
+    /// surviving log counts on the unclean-leader-election meter or reads as a
+    /// break-glass bypass, because only that one can drop a committed record.
+    /// The `PartitionRecord` is the same either way.
     async fn commit_elected_leader(
         &self,
         job: &RecoveryJob,
         image: &MetadataImage,
         pr: &PartitionRecord,
-        winner: NodeId,
+        election: Election,
     ) -> RecoveryOutcome {
+        let winner = election.leader;
         let new_pr = PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
@@ -237,7 +276,7 @@ impl UncleanRecoveryManager {
         if let Err(error) = self
             .policy
             .background
-            .require_audit(job, self.node_id, winner)
+            .require_audit(job, self.node_id, election)
             .await
         {
             warn!(%error, "unclean recovery refused by fail-closed audit policy");
@@ -247,25 +286,29 @@ impl UncleanRecoveryManager {
             topic = %job.topic,
             partition = job.partition,
             leader = winner.0,
-            "unclean recovery: elected most-complete-log replica (possible data loss)"
+            basis = election.basis.describe(),
+            "unclean recovery elected a leader"
         );
-        // KIP-966: the elected replica need not hold every committed record,
-        // so nothing that was eligible before it still is. `ElrPublisher`
-        // reads that off the record and clears the published state.
+        // KIP-966: `ElrPublisher` recomputes the published state from the
+        // record. An ELR member stays in the set the rules carry forward; a
+        // most-complete-log winner need not hold every committed record, so
+        // nothing that was eligible before it still is and the publisher
+        // clears the state outright.
         let mut changes = vec![MetadataRecord::V1Partition(new_pr)];
         crate::elr::ElrPublisher::new(image).extend(&mut changes);
         if let Err(e) = self.controller.submit_change(changes).await {
             warn!(error = %e, "unclean recovery submit_change failed");
             return RecoveryOutcome::NoEligibleReplica;
         }
-        self.metrics.record_unclean_leader_election();
-        // KFC-9: the data-losing election is durable now, so a bypass is a
-        // fact rather than an intention. A job that carries a proposal took
-        // the operator path, and its handler already audited the approval it
-        // spent.
+        if election.basis.loses_data() {
+            self.metrics.record_unclean_leader_election();
+        }
+        // KFC-9: the election is durable now, so a bypass is a fact rather
+        // than an intention. A job that carries a proposal took the operator
+        // path, and its handler already audited the approval it spent.
         self.policy
             .background
-            .audit_bypass(job, self.node_id, winner, &self.metrics);
+            .audit_election(job, self.node_id, election, &self.metrics);
         RecoveryOutcome::Elected(winner)
     }
 }

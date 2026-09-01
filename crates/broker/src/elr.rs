@@ -36,6 +36,13 @@
 //! partition's ISR or leader hands its emitted records to an
 //! [`ElrPublisher`], which recomputes the affected partitions and appends the
 //! `V1TopicConfig` records that carry the new state.
+//!
+//! The columns are not the only reader. KIP-966's point is that the set is
+//! *elected from*: `unclean_recovery`'s
+//! [`select_leader`](crate::unclean_recovery::select_leader) reads the same
+//! projection and elects a surviving ELR member ahead of any longer log that
+//! is not one, because only the ELR member is known to hold every committed
+//! record.
 
 pub(crate) mod maintain;
 pub(crate) mod state;
