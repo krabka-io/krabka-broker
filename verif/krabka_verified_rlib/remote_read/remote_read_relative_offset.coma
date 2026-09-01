@@ -1,0 +1,154 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 55 0 62 16 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sconvert'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sremote_read = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 81 16 81 44
+let%span sremote_read'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 81 47 81 71
+let%span sremote_read'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 81 16 81 71
+let%span sremote_read'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 82 26 82 34
+let%span sremote_read'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 82 15 82 35
+let%span sremote_read'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 14 10 43 1
+
+use creusot.int.Int64
+use creusot.int.UInt32
+use creusot.int.Int128
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_u32 = None'0 | Some'0 UInt32.t
+
+let from_i128 (small: Int64.t) (return (x: Int128.t)) = any
+  [ return (result: Int128.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int128.of_int (Int64.to_int small)}
+    (! return {result}) ]
+
+constant const_MAX: UInt32.t = (4294967295: UInt32.t)
+
+let from_i128'0 (small: UInt32.t) (return (x: Int128.t)) = any
+  [ return (result: Int128.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert'0] result
+    = Int128.of_int (UInt32.t'int small)}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_read_relative_offset [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_read.rs" 55 0 62 16]
+  (start_offset: Int64.t) (end_offset: Int64.t) (requested_offset: Int64.t) (copy_finished: bool)
+  (epoch_start: t_Option_i64) (next_epoch_start: t_Option_i64) (return (x: t_Option_u32)) = (! bb0
+  [ bb0 = any [ br0 -> {epoch_start = None} (! bb3) | br1 (x0: Int64.t) -> {epoch_start = Some x0} (! bb4) ]
+  | bb4 = s0
+    [ s0 = elim_Some {epoch_start} (fun (r0: Int64.t) -> [ &epoch_start'1 <- r0 ] s1)
+    | s1 = [ &epoch_start'0 <- epoch_start'1 ] s2
+    | s2 = any [ br0 -> {copy_finished = false} (! bb12) | br1 -> {copy_finished} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_20 <- Int64.lt epoch_start'0 start_offset ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb12) ] ]
+  | bb7 = s0
+    [ s0 = [ &_23 <- Int64.lt requested_offset epoch_start'0 ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb9) | br1 -> {_23} (! bb12) ] ]
+  | bb9 = s0
+    [ s0 = [ &_26 <- Int64.gt requested_offset end_offset ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb11) | br1 -> {_26} (! bb12) ] ]
+  | bb11 = any
+    [ br0 -> {next_epoch_start = None} (! bb13) | br1 (x0: Int64.t) -> {next_epoch_start = Some x0} (! bb15) ]
+  | bb15 = s0
+    [ s0 = elim_Some {next_epoch_start} (fun (r0: Int64.t) -> [ &next'0 <- r0 ] s1)
+    | s1 = [ &_35 <- Int64.le next'0 epoch_start'0 ] s2
+    | s2 = any [ br0 -> {_35 = false} (! bb17) | br1 -> {_35} (! bb21) ] ]
+  | bb17 = s0
+    [ s0 = [ &_38 <- Int64.gt next'0 end_offset ] s1
+    | s1 = any [ br0 -> {_38 = false} (! bb19) | br1 -> {_38} (! bb21) ] ]
+  | bb19 = s0
+    [ s0 = [ &_41 <- Int64.ge requested_offset next'0 ] s1
+    | s1 = any [ br0 -> {_41 = false} (! bb13) | br1 -> {_41} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = elim_Some {next_epoch_start} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
+    | s1 = [ &_ret <- None'0 ] s2
+    | s2 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = from_i128 [%#sremote_read] {requested_offset} (fun (_x: Int128.t) -> [ &_46 <- _x ] s1)
+    | s1 = from_i128 [%#sremote_read'0] {start_offset} (fun (_x: Int128.t) -> [ &_48 <- _x ] s2)
+    | s2 = Int128.sub [%#sremote_read'1] {_46} {_48} (fun (_x: Int128.t) -> [ &delta <- _x ] s3)
+    | s3 = from_i128'0 [%#sremote_read'3] {[%#sremote_read'2] const_MAX} (fun (_x: Int128.t) -> [ &_52 <- _x ] s4)
+    | s4 = [ &_50 <- Int128.gt delta _52 ] s5
+    | s5 = any [ br0 -> {_50 = false} (! bb27) | br1 -> {_50} (! bb26) ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = [ &_53 <- UInt32.of_int (Int128.to_int delta) ] s1 | s1 = [ &_ret <- Some'0 _53 ] s2 | s2 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_u32 = Any.any_l ()
+  | & start_offset: Int64.t = start_offset
+  | & end_offset: Int64.t = end_offset
+  | & requested_offset: Int64.t = requested_offset
+  | & copy_finished: bool = copy_finished
+  | & epoch_start: t_Option_i64 = epoch_start
+  | & next_epoch_start: t_Option_i64 = next_epoch_start
+  | & epoch_start'0: Int64.t = Any.any_l ()
+  | & epoch_start'1: Int64.t = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & next'0: Int64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & delta: Int128.t = Any.any_l ()
+  | & _46: Int128.t = Any.any_l ()
+  | & _48: Int128.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _52: Int128.t = Any.any_l ()
+  | & _53: UInt32.t = Any.any_l () ])
+  [ return (result: t_Option_u32) ->
+  {[@stop_split] [@expl:remote_read_relative_offset ensures] [%#sremote_read'4] match result with
+      | Some'0 delta -> match epoch_start with
+        | Some epoch_start'0 -> copy_finished
+        /\ Int64.to_int start_offset <= Int64.to_int epoch_start'0
+        /\ Int64.to_int epoch_start'0 <= Int64.to_int requested_offset
+        /\ Int64.to_int requested_offset <= Int64.to_int end_offset
+        /\ match next_epoch_start with
+            | Some next -> Int64.to_int epoch_start'0 < Int64.to_int next
+            /\ Int64.to_int next <= Int64.to_int end_offset /\ Int64.to_int requested_offset < Int64.to_int next
+            | None -> true
+            end
+        /\ UInt32.t'int delta = Int64.to_int requested_offset - Int64.to_int start_offset
+        | None -> false
+        end
+      | None'0 -> match epoch_start with
+        | Some epoch_start'0 -> not copy_finished
+        \/ Int64.to_int epoch_start'0 < Int64.to_int start_offset
+        \/ Int64.to_int requested_offset < Int64.to_int epoch_start'0
+        \/ gt_log_Int (Int64.to_int requested_offset) (Int64.to_int end_offset)
+        \/ match next_epoch_start with
+            | Some next -> Int64.to_int next <= Int64.to_int epoch_start'0
+            \/ gt_log_Int (Int64.to_int next) (Int64.to_int end_offset)
+            \/ ge_log_Int (Int64.to_int requested_offset) (Int64.to_int next)
+            | None -> false
+            end
+        \/ gt_log_Int (Int64.to_int requested_offset - Int64.to_int start_offset) (UInt32.t'int const_MAX)
+        | None -> true
+        end
+      end}
+    (! return {result}) ]

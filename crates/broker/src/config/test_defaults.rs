@@ -29,8 +29,8 @@ use crate::{
         DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
-        DEFAULT_OBSERVER_LAG_BOUND, FreezeConfig, NodeRole, ReplicationRuntimeConfig, RlmmKind,
-        feature_flags::test_feature_flags, shared_epoch_ms,
+        DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_TXN_ID_EXPIRATION, FreezeConfig, NodeRole,
+        ReplicationRuntimeConfig, RlmmKind, feature_flags::test_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
 };
@@ -127,6 +127,8 @@ impl BrokerConfig {
             default_min_insync_replicas: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
+            offsets_retention_override: None,
+            offsets_retention_check_interval_override: None,
             offsets_topic_replication_factor: 3,
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),
@@ -210,6 +212,12 @@ impl BrokerConfig {
             features: test_feature_flags(),
             // Reaper disabled in tests; suites that exercise it set it low.
             txn_abort_cleanup_interval: <Time as TimeExt>::ZERO,
+            // The expiry itself keeps its production value, so a test that
+            // ticks the sweep by hand sees the real window. The sweep task is
+            // disabled, like the abort reaper above.
+            txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
+            txn_id_expiration_cleanup_interval: <Time as TimeExt>::ZERO,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),

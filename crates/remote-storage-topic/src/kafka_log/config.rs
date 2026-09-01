@@ -193,7 +193,6 @@ fn validate_positive_duration(name: &str, value: Time) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 
     use super::*;
 

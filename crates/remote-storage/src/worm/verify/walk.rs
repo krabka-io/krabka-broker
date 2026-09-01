@@ -8,6 +8,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use krabka_verified::{ChainStep, chain_step};
 use object_store::ObjectStore;
 
 use super::{
@@ -138,17 +139,20 @@ pub(super) async fn walk_partition(
         let mut expected_seq = 0u64;
         for (key, manifest) in run {
             let body = &manifest.body;
-            if let Some(reason) = chain_break(manifest, expected_seq, head) {
-                walk.first_break = Some(VerifyBreak {
-                    manifest_key: key.clone(),
-                    seq: Some(body.chain.seq),
-                    reason,
-                });
-                walk.epochs.extend(span);
-                return Ok(walk);
-            }
+            let next_seq = match chain_continuation(manifest, expected_seq, head) {
+                Ok(next_seq) => next_seq,
+                Err(reason) => {
+                    walk.first_break = Some(VerifyBreak {
+                        manifest_key: key.clone(),
+                        seq: Some(body.chain.seq),
+                        reason,
+                    });
+                    walk.epochs.extend(span);
+                    return Ok(walk);
+                }
+            };
             head = manifest_head(body);
-            expected_seq = body.chain.seq.0.saturating_add(1);
+            expected_seq = next_seq;
 
             match signature_state(manifest, trusted) {
                 SignatureState::Unsigned => walk.unsigned = walk.unsigned.saturating_add(1),
@@ -217,21 +221,24 @@ fn chain_runs(decoded: &[KeyedManifest]) -> Vec<Vec<&KeyedManifest>> {
 }
 
 /// Why the manifest does not continue the running chain, if it does not.
-fn chain_break(manifest: &SegmentManifest, expected_seq: u64, head: ChainHead) -> Option<String> {
+fn chain_continuation(
+    manifest: &SegmentManifest,
+    expected_seq: u64,
+    head: ChainHead,
+) -> Result<u64, String> {
     let chain = manifest.body.chain;
-    if chain.seq.0 != expected_seq {
-        return Some(format!(
+    match chain_step(expected_seq, chain.seq.0, chain.prev_head == head) {
+        ChainStep::SequenceMismatch => Err(format!(
             "chain sequence gap: expected seq {expected_seq}, the manifest records seq {}",
             chain.seq
-        ));
-    }
-    if chain.prev_head != head {
-        return Some(format!(
+        )),
+        ChainStep::HeadMismatch => Err(format!(
             "chain head mismatch: the manifest records prev_head {}, the running head is {head}",
             chain.prev_head
-        ));
+        )),
+        ChainStep::Exhausted => Err("chain sequence exhausted".to_string()),
+        ChainStep::Continue(next_seq) => Ok(next_seq),
     }
-    None
 }
 
 #[cfg(test)]

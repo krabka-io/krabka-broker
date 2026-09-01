@@ -62,6 +62,17 @@ pub(super) fn test_coordinator(
 /// replay tests. A test can drive the `apply_record`, `apply_tombstone`,
 /// and `finalize` replay path directly with it.
 pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
+    bare_coordinator_with_mailbox(
+        crate::coordinator::unified::config::NextGenConfig::default().actor_mailbox_capacity,
+    )
+}
+
+/// A [`bare_coordinator`] whose group actors have a mailbox of exactly
+/// `actor_mailbox_capacity` messages, so a test can drive replay past what one
+/// actor can take at once.
+pub(super) fn bare_coordinator_with_mailbox(
+    actor_mailbox_capacity: usize,
+) -> Arc<GroupCoordinator> {
     use crate::coordinator::unified::{
         offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
     };
@@ -75,7 +86,10 @@ pub(super) fn bare_coordinator() -> Arc<GroupCoordinator> {
     }
 
     Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
+        crate::coordinator::unified::config::NextGenConfig {
+            actor_mailbox_capacity,
+            ..crate::coordinator::unified::config::NextGenConfig::default()
+        },
         crate::coordinator::unified::share::config::ShareGroupConfig::default(),
         Arc::new(EmptyMeta),
         Arc::new(InMemoryOffsetsLog::default()),

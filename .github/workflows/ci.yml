@@ -72,6 +72,49 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+
+      # A GitHub-hosted `ubuntu-latest` runner boots with roughly 25 GB free,
+      # and this job does not fit in it. The restored Bazel disk cache is ~11
+      # GiB compressed before it is unpacked, the repository cache another ~5
+      # GiB, and a coverage-instrumented build of the workspace then has to
+      # link 300-file test binaries carrying full LLVM profile instrumentation
+      # on top of that. The root filesystem fills partway through.
+      #
+      # It surfaces twice over, and neither message says "disk": clang++ dies
+      # with `Bus error (core dumped)` when a write to an mmap'd object file
+      # lands past the end of the device, and the cache save reports `zstd:
+      # error 70 : Write error : cannot write block`. Because the shortfall
+      # depends on how large a cache the run restored and how far it got, a
+      # re-run sometimes clears it -- which is what made this look flaky.
+      # Every occurrence skipped `codecov-action`, so no report was ever
+      # uploaded and `codecov/patch` never posted.
+      #
+      # Nothing removed here is an input to `bazel coverage`. The C++
+      # toolchain is the hermetic `@llvm` one, the JDK is `remotejdk_21` (see
+      # .bazelrc), and the coverage run filters out every container suite
+      # (`--test_tag_filters=-docker`), so the preinstalled Docker images have
+      # no consumer in this job either.
+      #
+      # The `df` lines bracket the reclaim and the build so the headroom this
+      # job actually has stays visible in the log -- if it trends back toward
+      # zero as the workspace grows, that is the signal to act on.
+      - name: reclaim runner disk
+        run: |
+          echo "::group::free space before"
+          df -h /
+          echo "::endgroup::"
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          echo "::group::free space after"
+          df -h /
+          echo "::endgroup::"
+
       - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
@@ -79,6 +122,14 @@ jobs:
           disk-cache: ${{ github.workflow }}-coverage
           repository-cache: true
       - run: bazel coverage //crates/...
+
+      # Headroom left at the point the build finished, which is the number that
+      # says whether this fix still has room in it. `always()` so a failure
+      # still reports it.
+      - name: free space after the build
+        if: always()
+        run: df -h /
+
       - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
@@ -125,7 +176,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-docs
           repository-cache: true
       - run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
@@ -169,7 +220,7 @@ jobs:
       # The opam switch builds why3 from source, which is the slow part of a
       # cold run. Key the cache on the Creusot pin and the prover profile, so a
       # bump of either rebuilds and nothing else does.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.opam
@@ -222,11 +273,10 @@ jobs:
   # suite rather than the sum of all of them.
   #
   # `aspect test` does not narrow to impacted targets -- that is an Aspect
-  # Workflows feature, not part of the open-source CLI -- so the set is computed
-  # here: reverse dependencies of the files a change touched, intersected with
-  # the targets tagged `docker`. A scheduled or manual run takes every suite
-  # instead, because a green impacted run says "nothing impacted broke", not
-  # "the container suites pass".
+  # Workflows feature, not part of the open-source CLI. The custom `aspect
+  # container-suites` task owns the selection: scheduled/manual runs take every
+  # suite, while PRs use Bazel rdeps outside the broker and an explicit broker
+  # feature map so one Rust target does not become the entire JVM matrix.
   docker-select:
     name: select container suites
     runs-on: ubuntu-latest
@@ -247,61 +297,16 @@ jobs:
           repository-cache: true
 
       - id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          all() { bazel query 'attr(tags, "docker", //crates/...)'; }
-
-          event="${{ github.event_name }}"
-          if [ "${event}" = "schedule" ] || [ "${event}" = "workflow_dispatch" ]; then
-            targets="$(all)"
+          if [ "${FULL_MATRIX}" = "true" ]; then
+            aspect container-suites
           else
-            base="${{ github.event.pull_request.base.sha || github.event.before }}"
-            if [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-              # No usable base (first push on a branch, force-push): run them all
-              # rather than silently skipping.
-              targets="$(all)"
-            else
-              changed="$(git diff --name-only "${base}...HEAD")"
-
-              # Build-wide inputs reach every target, and most are not Bazel
-              # targets at all -- `rdeps` takes a target set, and `//:MODULE.bazel`
-              # is a source file no rule exports. Treat them as "everything"
-              # rather than trying to name them.
-              if grep -qE '^(MODULE\.bazel|\.bazelrc|Cargo\.lock|Cargo\.toml|bazel/|tools/)' <<<"${changed}"; then
-                targets="$(all)"
-              else
-                # `rdeps` takes a target set, so every path here must be a
-                # target Bazel knows. A crate README is not one: no rule globs
-                # it and no crate pulls one in with `include_str!`. Feeding it
-                # to `set(...)` fails the whole query, so a documentation-only
-                # change would kill the suite selection rather than select
-                # nothing.
-                mapfile -t files < <(grep -E '^crates/' <<<"${changed}" |
-                  grep -vE '\.md$' | while read -r f; do
-                  [ -e "${f}" ] && printf '%s\n' "${f}"
-                done)
-                if [ "${#files[@]}" -eq 0 ]; then
-                  targets=""
-                else
-                  targets="$(bazel query "attr(tags, 'docker', rdeps(//crates/..., set(${files[*]})))")"
-                fi
-              fi
-            fi
+            aspect container-suites --base "${BASE_SHA}"
           fi
-
-          # One matrix entry per target, `name` being the bare suite for the job
-          # label -- the full label is too long to read in the checks list.
-          # `grep` finding nothing is the empty selection, not an error, and a
-          # bare `[ ] && x` would exit under `set -e` whenever the test is false.
-          suites="$(
-            printf '%s\n' "${targets}" | { grep -E '^//' || true; } |
-              jq -R -s -c 'split("\n") | map(select(length > 0)) |
-                map({target: ., name: (. | split(":")[1] | sub("_docker_test$"; ""))})'
-          )"
-          if [ -z "${suites}" ]; then suites='[]'; fi
-          echo "suites=${suites}" >>"${GITHUB_OUTPUT}"
-          echo "any=$([ "${suites}" = '[]' ] && echo false || echo true)" >>"${GITHUB_OUTPUT}"
-          echo "Selected: ${suites}"
 
   docker:
     name: container · ${{ matrix.suite.name }}
@@ -386,7 +391,7 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}
           repository-cache: true
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

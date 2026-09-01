@@ -5,25 +5,21 @@
 
 use bytes::{Bytes, BytesMut};
 
-use super::{
-    describe_cluster::API_KEY_DESCRIBE_CLUSTER,
-    kip853::{
-        API_KEY_ADD_RAFT_VOTER, API_KEY_DESCRIBE_QUORUM, API_KEY_REMOVE_RAFT_VOTER,
-        API_KEY_UPDATE_RAFT_VOTER,
-    },
-    registration,
-};
-use crate::{error::RaftError, kraft::transport::api_key};
+use self::table::CONTROLLER_LISTENER_APIS;
+use crate::error::RaftError;
+
+pub(super) mod table;
 
 /// Kafka's `ApiVersions` API key. The controller TCP listener answers this
 /// because `krabka_client_core::Connection::connect` performs an `ApiVersions`
 /// handshake before any other request.
 pub(super) const API_KEY_API_VERSIONS: i16 = 18;
 
-/// Highest `ApiVersions` request version this listener speaks: the advertised
-/// max in the `api_keys` table and the clamp applied to the response body codec
-/// (current JVM controllers dial at v5; Krabka's own client at v0).
-const API_VERSIONS_MAX_VERSION: i16 = 5;
+/// Highest `ApiVersions` request version this listener speaks: the clamp
+/// applied to the response body codec, and the same generated maximum the
+/// `api_keys` table advertises for API 18 (current JVM controllers dial at v5;
+/// Krabka's own client at v0).
+const API_VERSIONS_MAX_VERSION: i16 = krabka_protocol::owned::api_versions_request::MAX_VERSION;
 /// First `ApiVersions` version that carries KIP-1242 routing identity.
 const API_VERSIONS_ROUTING_MIN_VERSION: i16 = 5;
 const API_VERSIONS_INVALID_REQUEST: i16 = 42;
@@ -71,7 +67,10 @@ pub(super) fn api_versions_routing_error(
 /// which version of `Vote`/`Fetch`/etc. to send. An EMPTY `api_keys` list made
 /// the JVM treat every raft RPC as `UNSUPPORTED_VERSION` and refuse to send
 /// `Vote` on the wire. Advertising the KIP-595 APIs at the versions Krabka's
-/// engine speaks lets compatible peers proceed to real `Vote`/`Fetch`.
+/// engine speaks lets compatible peers proceed to real `Vote`/`Fetch`. Those
+/// versions come from [`table::CONTROLLER_LISTENER_APIS`], which derives them
+/// from the generated message constants; the KIP-919 Admin surface the broker
+/// attaches contributes the rest.
 ///
 /// Body is the flexible (v3+) `ApiVersionsResponse` shape: `error_code(i16)`,
 /// `api_keys` compact-array of `{api_key(i16), min(i16), max(i16), tagged(0)}`,
@@ -91,26 +90,6 @@ pub(super) fn api_versions_response_body(
             SupportedFeatureKey,
         },
     };
-    // (api_key, max_version) — min_version/error_code/throttle_time_ms are all
-    // protocol defaults of 0, so leave them implicit. Each max_version is the
-    // highest version the engine's codec speaks for that API.
-    const KEYS: &[(i16, i16)] = &[
-        (api_key::FETCH, 17),
-        (API_KEY_API_VERSIONS, API_VERSIONS_MAX_VERSION),
-        (api_key::VOTE, 2),
-        (api_key::BEGIN_QUORUM_EPOCH, 1),
-        (api_key::END_QUORUM_EPOCH, 1),
-        (api_key::FETCH_SNAPSHOT, 1),
-        (API_KEY_DESCRIBE_CLUSTER, 2),
-        (API_KEY_DESCRIBE_QUORUM, 2),
-        (API_KEY_ADD_RAFT_VOTER, 1),
-        (API_KEY_REMOVE_RAFT_VOTER, 0),
-        (API_KEY_UPDATE_RAFT_VOTER, 0),
-        registration::SUPPORTED_APIS[0],
-        registration::SUPPORTED_APIS[1],
-        registration::SUPPORTED_APIS[2],
-    ];
-
     if error_code != 0 {
         let response = ApiVersionsResponse {
             error_code,
@@ -120,21 +99,15 @@ pub(super) fn api_versions_response_body(
         let _ = response.encode(&mut body, req_version.clamp(0, API_VERSIONS_MAX_VERSION));
         return body.freeze();
     }
-    let mut api_keys: Vec<ApiVersionEntry> = KEYS
-        .iter()
-        .map(|&(api_key, max_version)| ApiVersionEntry {
-            api_key,
-            max_version,
-            ..Default::default()
-        })
-        .collect();
+    let entry = |version: &crate::ControllerApiVersion| ApiVersionEntry {
+        api_key: version.api_key,
+        min_version: version.min_version,
+        max_version: version.max_version,
+        ..Default::default()
+    };
+    let mut api_keys: Vec<ApiVersionEntry> = CONTROLLER_LISTENER_APIS.iter().map(entry).collect();
     if let Some(router) = admin_router {
-        api_keys.extend(router.api_versions().iter().map(|version| ApiVersionEntry {
-            api_key: version.api_key,
-            min_version: version.min_version,
-            max_version: version.max_version,
-            ..Default::default()
-        }));
+        api_keys.extend(router.api_versions().iter().map(entry));
     }
     api_keys.sort_unstable_by_key(|version| version.api_key);
 
@@ -222,11 +195,18 @@ mod tests {
             assert2::assert!(resp.error_code == 0);
             let keys: std::collections::BTreeSet<i16> =
                 resp.api_keys.iter().map(|k| k.api_key).collect();
-            for want in [1i16, 18, 52, 53, 54, 59, 62, 63, 70] {
+            for want in [1i16, 18, 52, 53, 54, 59, 62, 70] {
                 assert2::assert!(keys.contains(&want));
             }
+            // `BrokerHeartbeat` reaches the controller listener through the
+            // Admin router, so the native table must not advertise it on its
+            // own. `an_admin_router_contributes_its_own_api_versions` covers
+            // the other half: with a router bound, the key is advertised.
+            assert2::assert!(!keys.contains(&63i16));
+            // Vote is pinned to the one version the engine's codec speaks, so
+            // the advertised range is that version on both ends.
             let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
-            assert2::assert!(vote.min_version == 0 && vote.max_version == 2);
+            assert2::assert!(vote.min_version == 2 && vote.max_version == 2);
             if req_v >= 3 {
                 let kraft = resp
                     .supported_features
@@ -254,6 +234,51 @@ mod tests {
                 assert2::assert!(resp.finalized_features_epoch == image.finalized_features_epoch());
             }
         }
+    }
+
+    /// The controller listener advertises what a bound Admin router serves, on
+    /// top of the APIs it answers itself. `BrokerHeartbeat` is the case that
+    /// matters: a broker reads this table to learn where to send it.
+    #[test]
+    fn an_admin_router_contributes_its_own_api_versions() {
+        use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
+
+        struct HeartbeatRouter;
+        impl crate::ControllerAdminRouter for HeartbeatRouter {
+            fn api_versions(&self) -> &[crate::ControllerApiVersion] {
+                use krabka_protocol::owned::broker_heartbeat_request;
+                &[crate::ControllerApiVersion {
+                    api_key: broker_heartbeat_request::API_KEY,
+                    min_version: broker_heartbeat_request::MIN_VERSION,
+                    max_version: broker_heartbeat_request::MAX_VERSION,
+                    flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
+                }]
+            }
+
+            fn route(
+                &self,
+                _request: crate::ControllerAdminRequest,
+            ) -> crate::ControllerAdminRouteFuture<'_> {
+                Box::pin(async { Ok(None) })
+            }
+        }
+
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        let body = super::api_versions_response_body(4, &image, Some(&HeartbeatRouter), 0);
+        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
+
+        let heartbeat = resp
+            .api_keys
+            .iter()
+            .find(|key| key.api_key == 63)
+            .expect("BrokerHeartbeat advertised through the Admin router");
+        assert2::assert!(
+            (heartbeat.min_version, heartbeat.max_version)
+                == (
+                    krabka_protocol::owned::broker_heartbeat_request::MIN_VERSION,
+                    krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
+                )
+        );
     }
 
     #[test]

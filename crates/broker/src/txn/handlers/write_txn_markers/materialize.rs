@@ -1,5 +1,5 @@
-//! Appending one transaction marker to a partition, and the offset
-//! materialization that a committed `__consumer_offsets` marker triggers.
+//! Appending one transaction marker to a partition, and the offset resolution
+//! that a `__consumer_offsets` marker triggers.
 //!
 //! Both the inter-broker `WriteTxnMarkers` handler and `EndTxn`'s direct local
 //! path go through this module rather than calling the partition themselves,
@@ -8,20 +8,31 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use super::offsets::{apply_committed_offsets, pending_offset_entries};
+use super::offsets::{pending_offset_entries, resolve_pending_offsets};
 use crate::{
     coordinator::{bootstrap::OFFSETS_TOPIC, unified::GroupCoordinator},
     error::BrokerError,
     txn::marker::{MarkerType, build_marker_batch},
 };
 
-/// Append a transaction marker and, for a committed `__consumer_offsets`
-/// transaction, publish the now-visible offsets to the local group actors.
+/// Append a transaction marker and, on a `__consumer_offsets` partition,
+/// resolve the offset commits the transaction wrote against the local group
+/// actors: a commit publishes them, an abort discards them, and both drop the
+/// KIP-447 pending marks that made them answer `UNSTABLE_OFFSET_COMMIT`.
 ///
 /// Both the inter-broker `WriteTxnMarkers` handler and `EndTxn`'s direct local
-/// path must use this function. Keeping marker append and actor publication in
+/// path must use this function. Keeping marker append and actor resolution in
 /// one path prevents local transactions from becoming durable in the log but
-/// remaining invisible until the next coordinator replay.
+/// remaining invisible — or, after an abort, permanently unstable — until the
+/// next coordinator replay.
+///
+/// The log scan runs before the append, because it starts from the producer's
+/// first unresolved record and the marker itself ends that transaction.
+///
+/// A commit needs the group coordinator, because losing it would lose offsets
+/// the transaction made durable. An abort publishes nothing, so a caller with
+/// no coordinator — and therefore no group actors holding pending marks — has
+/// nothing to resolve.
 pub(crate) async fn append_marker_and_materialize(
     partition: &crate::partition::Partition,
     group_coordinator: Option<&Arc<GroupCoordinator>>,
@@ -35,16 +46,19 @@ pub(crate) async fn append_marker_and_materialize(
         coordinator_epoch,
         commit_stamp,
     } = marker;
-    let committed_offsets = if marker_type == MarkerType::Commit && topic == OFFSETS_TOPIC {
-        let coordinator = group_coordinator.ok_or_else(|| {
-            BrokerError::Txn(
-                "cannot commit transactional offsets without a group coordinator".into(),
-            )
-        })?;
-        (
-            Some(coordinator),
-            pending_offset_entries(partition, producer_id)?,
-        )
+    let committed_offsets = if topic == OFFSETS_TOPIC {
+        match (marker_type, group_coordinator) {
+            (_, Some(coordinator)) => (
+                Some(coordinator),
+                pending_offset_entries(partition, producer_id)?,
+            ),
+            (MarkerType::Commit, None) => {
+                return Err(BrokerError::Txn(
+                    "cannot commit transactional offsets without a group coordinator".into(),
+                ));
+            }
+            (MarkerType::Abort, None) => (None, HashMap::new()),
+        }
     } else {
         (None, HashMap::new())
     };
@@ -62,22 +76,32 @@ pub(crate) async fn append_marker_and_materialize(
     marker.partition_leader_epoch = partition
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
-    if let Some(stamp) = commit_stamp {
+    let marker_offset = if let Some(stamp) = commit_stamp {
         if marker_type != MarkerType::Commit {
             return Err(BrokerError::Txn(
                 "a transaction commit stamp cannot be attached to an abort marker".into(),
             ));
         }
-        partition.produce_commit_marker(marker, stamp).await?;
+        partition.produce_commit_marker(marker, stamp).await?
     } else {
         // A control batch takes the control append path, which applies no
         // compression rewrite. Kafka never compresses a control batch that
         // arrived uncompressed.
-        partition.produce_control_batch(marker).await?;
-    }
+        partition.produce_control_batch(marker).await?
+    };
 
     if let (Some(coordinator), offsets) = committed_offsets {
-        apply_committed_offsets(coordinator, offsets).await?;
+        // The marker's own log position resolves the KIP-447 marks: it is what
+        // tells a group actor that a mark still on its way, for records below
+        // it, belongs to the transaction this marker ends.
+        resolve_pending_offsets(
+            coordinator,
+            producer_id,
+            marker_type,
+            marker_offset.get(),
+            offsets,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -132,6 +156,7 @@ mod tests {
                         leader_epoch: 4,
                         metadata: "aborted".into(),
                         commit_timestamp_ms: 456,
+                        expire_timestamp_ms: None,
                     }
                     .encode_value(),
                 ),

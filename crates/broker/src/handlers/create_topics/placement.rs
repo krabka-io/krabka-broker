@@ -92,11 +92,22 @@ fn manual_replicas(
 ///
 /// The list keeps the race tolerance of the plain broker list. On a cluster
 /// that just started, the image may not hold the self-registration record
-/// yet. The list then holds this broker alone. That entry declares no site,
-/// so the placement stays the plain Kafka round-robin.
+/// yet. `local_broker` covers that window: it is this node when this node is
+/// itself a broker, and the list then holds it alone. That entry declares no
+/// site, so the placement stays the plain Kafka round-robin.
+///
+/// `local_broker` is `None` on a node whose `process.roles` exclude `broker`.
+/// KIP-919 puts `CreateTopics` and `CreatePartitions` on the controller
+/// listener, so a controller-only node answers both, and it never
+/// self-registers as a broker -- `register_broker` skips it deliberately.
+/// Substituting it here would place partitions on a node that hosts no
+/// replicas and materialize them locally, leaving topic metadata that nothing
+/// can ever serve. With no fallback the list stays empty, the placement
+/// cannot be satisfied, and the caller reports `INVALID_REPLICATION_FACTOR`,
+/// which is what a Kafka controller with no registered brokers returns.
 pub(crate) fn site_broker_views(
     image: &krabka_metadata::MetadataImage,
-    node_id: krabka_raft::NodeId,
+    local_broker: Option<krabka_raft::NodeId>,
 ) -> Vec<SiteBrokerView> {
     let mut views = image
         .brokers()
@@ -106,7 +117,7 @@ pub(crate) fn site_broker_views(
             is_witness: resolve_broker_witness(image, broker.node_id),
         })
         .collect::<Vec<_>>();
-    if views.is_empty() {
+    if let (true, Some(node_id)) = (views.is_empty(), local_broker) {
         views.push(SiteBrokerView {
             node_id,
             site: None,

@@ -23,15 +23,12 @@ pub(crate) struct ReplicaLogInfo {
 /// `last_written_leader_epoch`, then the highest `log_end_offset`, then the
 /// lowest `broker_id` for determinism. Returns `None` for an empty input.
 pub(crate) fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId> {
-    responses
+    let candidates: Vec<(i32, i64, u64)> = responses
         .iter()
-        .max_by(|a, b| {
-            a.last_written_leader_epoch
-                .cmp(&b.last_written_leader_epoch)
-                .then(a.log_end_offset.cmp(&b.log_end_offset))
-                .then(b.broker_id.cmp(&a.broker_id)) // lower broker_id wins ties
-        })
-        .map(|r| r.broker_id)
+        .map(|r| (r.last_written_leader_epoch, r.log_end_offset, r.broker_id.0))
+        .collect();
+    krabka_verified::consensus::select_best_recovery_replica(&candidates)
+        .map(|index| responses[index].broker_id)
 }
 
 /// Returns true if any responder reports a `current_leader_epoch` strictly

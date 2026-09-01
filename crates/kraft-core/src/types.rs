@@ -85,7 +85,7 @@ impl QuorumState {
     /// Majority size for the current voter set: `floor(n/2) + 1`.
     #[must_use]
     pub fn majority(&self) -> usize {
-        self.voters.len() / 2 + 1
+        krabka_verified::consensus::majority_size(self.voters.len())
     }
 }
 

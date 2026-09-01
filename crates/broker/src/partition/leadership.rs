@@ -168,7 +168,7 @@ impl Partition {
                 new_epoch,
                 "partition leadership changed (observed in committed metadata)"
             );
-            st.per_follower.clear();
+            st.reset_for_leader(krabka_raft::NodeId(new_leader));
         }
         st.current_leader_epoch = krabka_ids::LeaderEpoch(new_epoch);
         drop(st);

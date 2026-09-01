@@ -67,9 +67,10 @@ impl SchemaValidator {
             // `entry` was fetched for `Full`, so the text is there unless the
             // registry answered without one. Treat that as unavailable rather
             // than as a passing record.
-            return self.on_unavailable(RejectReason::RegistryUnavailable(format!(
-                "registry returned no schema text for id {id}"
-            )));
+            return self.on_unavailable(RejectReason::RegistryRejected {
+                kind: krabka_verified::SchemaFailureKind::Malformed,
+                detail: format!("registry returned no schema text for id {id}"),
+            });
         };
 
         // Protobuf carries a message-index between the id and the body, so the
@@ -96,10 +97,15 @@ impl SchemaValidator {
     /// answer. "Not registered" is an answer, and it rejects under either
     /// setting.
     fn on_unavailable(&self, reason: RejectReason) -> Result<(), RejectReason> {
-        if self.fail_open && matches!(reason, RejectReason::RegistryUnavailable(_)) {
-            Ok(())
-        } else {
-            Err(reason)
+        let failure = match &reason {
+            RejectReason::UnknownId(_) => krabka_verified::SchemaFailureKind::Unknown,
+            RejectReason::RegistryUnavailable(_) => krabka_verified::SchemaFailureKind::Transient,
+            RejectReason::RegistryRejected { kind, .. } => *kind,
+            _ => return Err(reason),
+        };
+        match krabka_verified::schema_failure_decision(self.fail_open, failure) {
+            krabka_verified::SchemaFailureDecision::AllowUnvalidated => Ok(()),
+            krabka_verified::SchemaFailureDecision::Reject => Err(reason),
         }
     }
 }
@@ -343,5 +349,79 @@ mod tests {
             .await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "unknown_id", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn fail_open_rejects_permanent_registry_errors() {
+        for status in [400, 401, 403, 600] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+            let got = v
+                .check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &framed(KNOWN_ID, b"x"),
+                    &no_metrics(),
+                )
+                .await;
+            assert!(let Err(reason) = got, "status {status}");
+            check!(
+                reason.label() == "registry_unavailable",
+                "status {status}: {reason}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fail_open_rejects_a_malformed_success_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+        let got = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &framed(KNOWN_ID, b"x"),
+                &no_metrics(),
+            )
+            .await;
+        assert!(let Err(reason) = got);
+        check!(reason.label() == "registry_unavailable", "{reason}");
+    }
+
+    #[tokio::test]
+    async fn fail_open_admits_retryable_registry_statuses() {
+        for status in [408, 429] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let v = SchemaValidator::new(server.uri(), true, 100, minutes(1), secs(5)).unwrap();
+            check!(
+                v.check(
+                    "orders",
+                    Role::Value,
+                    ValidationMode::Id,
+                    &framed(KNOWN_ID, b"x"),
+                    &no_metrics(),
+                )
+                .await
+                .is_ok(),
+                "status {status}"
+            );
+        }
     }
 }

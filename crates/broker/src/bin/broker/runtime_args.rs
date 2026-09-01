@@ -241,6 +241,10 @@ pub struct RuntimeArgs {
     pub offsets_topic_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
     pub offsets_topic_replication_factor: Option<PositiveI16>,
+    #[arg(long, env = "KRABKA_OFFSETS_RETENTION", value_parser = krabka_units::parse::positive_time)]
+    pub offsets_retention: Option<Time>,
+    #[arg(long, env = "KRABKA_OFFSETS_RETENTION_CHECK_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub offsets_retention_check_interval: Option<Time>,
     #[arg(long, env = "KRABKA_TRANSACTION_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     pub transaction_state_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_TRANSACTION_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]

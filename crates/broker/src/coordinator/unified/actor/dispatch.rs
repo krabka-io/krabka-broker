@@ -15,6 +15,7 @@ use super::{
     commit_validation::validate_commit_message,
     heartbeat::handle_actor_heartbeat,
     messages::classic_leave_result,
+    retention::handle_reap_message,
     seed::apply_seed,
     views::{build_classic_view, build_describe, inspect_any},
 };
@@ -138,13 +139,31 @@ pub(super) async fn handle_actor_message(
             }
             true
         }
+        GroupActorMessage::CommitOffsets {
+            batch,
+            entries,
+            reply,
+        } => {
+            let result = match services.offsets_log.append(&group.group_id, batch).await {
+                Ok(()) => {
+                    group.committed_offsets.extend(entries);
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!(group_id = %group.group_id, %error, "OffsetCommit append failed");
+                    Err(codes::from_broker_error(&error))
+                }
+            };
+            let _ = reply.send(result);
+            true
+        }
         GroupActorMessage::UpdateCommitted { entries, reply } => {
             group.committed_offsets.extend(entries);
             let _ = reply.send(());
             true
         }
-        GroupActorMessage::FetchCommitted { reply } => {
-            let _ = reply.send(group.committed_offsets.clone());
+        GroupActorMessage::FetchOffsets { reply } => {
+            let _ = reply.send(group.offsets());
             true
         }
         GroupActorMessage::RemoveCommitted { keys, reply } => {
@@ -153,6 +172,44 @@ pub(super) async fn handle_actor_message(
             }
             let _ = reply.send(());
             true
+        }
+        GroupActorMessage::AddPendingTxnOffsets {
+            producer_id,
+            written_at,
+            keys,
+            reply,
+        } => {
+            group.add_pending_txn_offsets(producer_id, written_at, keys);
+            let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::ResolveTxnOffsets {
+            producer_id,
+            resolved_through,
+            committed,
+            reply,
+        } => {
+            group.committed_offsets.extend(committed);
+            group.resolve_pending_txn_offsets(producer_id, resolved_through);
+            let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::ReapExpiredOffsets {
+            now_ms,
+            retention_ms,
+            empty_grace_ms,
+            reply,
+        } => {
+            handle_reap_message(
+                group,
+                services.offsets_log,
+                services.coordinator,
+                now_ms,
+                retention_ms,
+                empty_grace_ms,
+                reply,
+            )
+            .await
         }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {
@@ -203,20 +260,21 @@ mod tests {
             Duration::from_mins(1),
             vec![("range".into(), bytes::Bytes::new())],
         ));
-        let group = Box::new(CoordinatorGroup {
-            group_id: "g".into(),
-            kind: GroupKind::Classic(cs),
-            committed_offsets: [(
+        let group = Box::new(CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Classic(cs),
+            [(
                 ("t".to_string(), 0),
                 OffsetEntry {
                     offset: Offset(7),
                     leader_epoch: 0,
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
                 },
             )]
             .into(),
-        });
+        ));
         coord.seed_classic("g", group);
 
         // Seeded committed offsets and member are visible.
@@ -224,10 +282,18 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
-            .send(GroupActorMessage::FetchCommitted { reply: tx })
+            .send(GroupActorMessage::FetchOffsets { reply: tx })
             .await
             .unwrap();
-        assert!(rx.await.unwrap().get(&("t".to_string(), 0)).unwrap().offset == 7);
+        assert!(
+            rx.await
+                .unwrap()
+                .committed
+                .get(&("t".to_string(), 0))
+                .unwrap()
+                .offset
+                == 7
+        );
         // Non-empty group cannot be deleted.
         assert!(
             coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty)

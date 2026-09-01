@@ -36,7 +36,7 @@ mod streams_conversion;
 mod type_lock;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use self::{
     group_coordinator::{GroupCoordinator, GroupType},

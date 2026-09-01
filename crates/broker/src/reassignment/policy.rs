@@ -7,6 +7,7 @@
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
+use krabka_verified::reassignment::{ReassignmentAction, reassignment_action};
 
 use crate::heartbeat::controller_state::ControllerLivenessState;
 
@@ -51,14 +52,18 @@ pub(crate) fn reassign_one(
         .filter(|r| !pr.removing_replicas.contains(r))
         .copied()
         .collect();
-    if !pr.adding_replicas.iter().all(|n| pr.isr.contains(n)) {
-        return None; // wait for replication
-    }
-    if pr.removing_replicas.contains(&pr.leader) {
-        // Leader-handoff phase: pick a new leader from target ∩ isr ∩ alive.
-        let new_leader = *target
-            .iter()
-            .find(|n| pr.isr.contains(n) && alive.contains(n))?;
+    let eligible_handoffs: Vec<bool> = target
+        .iter()
+        .map(|n| pr.isr.contains(n) && alive.contains(n))
+        .collect();
+    let action = reassignment_action(
+        pr.adding_replicas.iter().all(|n| pr.isr.contains(n)),
+        pr.removing_replicas.contains(&pr.leader),
+        &eligible_handoffs,
+    );
+    if let ReassignmentAction::Handoff(index) = action {
+        // The verified index maps to target ∩ ISR ∩ alive.
+        let new_leader = target[index];
         return Some(PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
@@ -71,6 +76,9 @@ pub(crate) fn reassign_one(
             directories: pr.directories.clone(),
             partition_epoch: pr.partition_epoch + 1,
         });
+    }
+    if action != ReassignmentAction::Complete {
+        return None;
     }
     // Completion phase: switch to the target replica set.
     let new_isr: Vec<NodeId> = pr

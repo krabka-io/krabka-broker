@@ -14,7 +14,9 @@ macro_rules! audit_fields {
             /// Whether privileged operations continue when their audit record
             /// cannot be durably written.
             pub audit_failure_mode: krabka_audit::AuditMode,
-            /// Internal topic name for audit records.
+            /// Internal topic name for audit records. `BrokerConfig::validate`
+            /// requires the `__` prefix, so the flag on `Metadata` and the
+            /// freeze refusal cover the same name.
             pub audit_topic: String,
             /// Path to the PKCS#8 Ed25519 audit checkpoint signing key. `None` means
             /// no checkpoints.
