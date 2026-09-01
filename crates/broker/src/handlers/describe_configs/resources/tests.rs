@@ -41,12 +41,37 @@ const VALUES_ONLY: EntryOptions = EntryOptions {
     include_documentation: false,
 };
 
+/// A process that names neither KIP-211 retention knob, which is what every
+/// case but the two retention cases runs as.
+const UNTUNED: StaticBrokerConfigs = StaticBrokerConfigs {
+    offsets_retention: None,
+    offsets_retention_check_interval: None,
+};
+
 fn describe(
     image: &MetadataImage,
     resource_type: i8,
     resource_name: &str,
     configuration_keys: Option<Vec<String>>,
     options: EntryOptions,
+) -> DescribeConfigsResult {
+    describe_with_static(
+        image,
+        resource_type,
+        resource_name,
+        configuration_keys,
+        options,
+        UNTUNED,
+    )
+}
+
+fn describe_with_static(
+    image: &MetadataImage,
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    options: EntryOptions,
+    static_broker: StaticBrokerConfigs,
 ) -> DescribeConfigsResult {
     describe_one(
         image,
@@ -59,6 +84,7 @@ fn describe(
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         options,
+        static_broker,
     )
 }
 
@@ -466,7 +492,7 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "7",
-        None,
+        Some(vec![NODE_ID.to_owned()]),
         VALUES_ONLY,
     );
 
@@ -500,12 +526,14 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
 
     for (label, filter, expected) in [
         (
-            "no filter reports every stored key beside the static node id",
+            "no filter reports every stored key beside the static ones",
             None,
             vec![
                 crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
+                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                config_keys::OFFSETS_RETENTION_MINUTES,
             ],
         ),
         (
@@ -531,6 +559,60 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
         let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
 
         check!(names == expected, "{label}");
+    }
+}
+
+#[test]
+fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
+    // Kafka filters with `keys == null || keys.isEmpty() || keys.contains(name)`
+    // in `ConfigHelperUtils.toDescribeConfigsResult`, so an empty list asks for
+    // every key rather than for none. One closure carries the filter into every
+    // resource type, so every type it reaches is checked here.
+    let mut image = image_with_broker_config(
+        krabka_metadata::NodeId(2),
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: maplit::btreemap! {
+        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
+    }));
+    image.apply(&MetadataRecord::V1ClientMetricsConfig(
+        krabka_metadata::ClientMetricsConfigRecord {
+            name: "sub-1".to_owned(),
+            configs: maplit::btreemap! {
+            crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
+        },
+    ));
+    image.apply(&MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "streams-1".to_owned(),
+            configs: maplit::btreemap! {
+            crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS.to_string()
+                => "2".to_string()},
+        },
+    ));
+
+    for (resource_type, resource_name) in [
+        (RESOURCE_TYPE_TOPIC, "orders"),
+        (RESOURCE_TYPE_BROKER, "2"),
+        (RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
+        (RESOURCE_TYPE_GROUP, "streams-1"),
+    ] {
+        let unfiltered = describe(&image, resource_type, resource_name, None, EVERYTHING);
+        let empty_filter = describe(
+            &image,
+            resource_type,
+            resource_name,
+            Some(Vec::new()),
+            EVERYTHING,
+        );
+
+        check!(
+            !unfiltered.configs.is_empty(),
+            "resource type {resource_type}"
+        );
+        check!(empty_filter == unfiltered, "resource type {resource_type}");
     }
 }
 
@@ -731,5 +813,197 @@ fn an_unhandled_resource_type_reports_nothing_and_no_error() {
                 configs: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }
+    );
+}
+
+/// KIP-211: a broker that runs the built-in retention reports both keys at
+/// `DEFAULT_CONFIG`, read-only, with the default on the synonym chain.
+///
+/// Verified against `apache/kafka:4.3.1`, where `kafka-configs --entity-type
+/// brokers --entity-name 1 --describe --all` reports
+/// `offsets.retention.minutes=10080 sensitive=false
+/// synonyms={DEFAULT_CONFIG:offsets.retention.minutes=10080}` on a broker
+/// whose properties name neither key.
+#[test]
+fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
+    let result = describe(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "1",
+        Some(vec![
+            config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+            config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
+        ]),
+        EVERYTHING,
+    );
+
+    assert!(
+        result.configs
+            == vec![
+                DescribeConfigsResourceResult {
+                    name: config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
+                    value: Some("600000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: vec![synonym(
+                        config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                        "600000",
+                        CONFIG_SOURCE_DEFAULT
+                    )],
+                    config_type: ConfigType::Long.wire(),
+                    documentation: Some(
+                        registry::lookup(
+                            ConfigScope::Broker,
+                            config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS
+                        )
+                        .expect("offsets.retention.check.interval.ms")
+                        .doc
+                        .to_owned()
+                    ),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+                    value: Some("10080".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: vec![synonym(
+                        config_keys::OFFSETS_RETENTION_MINUTES,
+                        "10080",
+                        CONFIG_SOURCE_DEFAULT
+                    )],
+                    config_type: ConfigType::Int.wire(),
+                    documentation: Some(
+                        registry::lookup(
+                            ConfigScope::Broker,
+                            config_keys::OFFSETS_RETENTION_MINUTES
+                        )
+                        .expect("offsets.retention.minutes")
+                        .doc
+                        .to_owned()
+                    ),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            ]
+    );
+}
+
+/// A retuned knob reports the process's own value at `STATIC_BROKER_CONFIG`,
+/// above the default it displaced. It stays read-only either way:
+/// `apache/kafka:4.3.1` answers `kafka-configs --alter --add-config
+/// offsets.retention.minutes=100` with `InvalidRequestException: Cannot update
+/// these configs dynamically`.
+#[test]
+fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
+    let result = describe_with_static(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "1",
+        Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
+        EVERYTHING,
+        StaticBrokerConfigs {
+            offsets_retention: Some(krabka_units::minutes(60)),
+            offsets_retention_check_interval: None,
+        },
+    );
+
+    assert!(
+        result.configs
+            == vec![DescribeConfigsResourceResult {
+                name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+                value: Some("60".to_owned()),
+                read_only: true,
+                config_source: CONFIG_SOURCE_STATIC_BROKER,
+                is_sensitive: false,
+                synonyms: vec![
+                    synonym(
+                        config_keys::OFFSETS_RETENTION_MINUTES,
+                        "60",
+                        CONFIG_SOURCE_STATIC_BROKER
+                    ),
+                    synonym(
+                        config_keys::OFFSETS_RETENTION_MINUTES,
+                        "10080",
+                        CONFIG_SOURCE_DEFAULT
+                    ),
+                ],
+                config_type: ConfigType::Int.wire(),
+                documentation: Some(
+                    registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+                        .expect("offsets.retention.minutes")
+                        .doc
+                        .to_owned()
+                ),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }]
+    );
+}
+
+/// Source is provenance, not a comparison. A key the operator wrote down at
+/// Kafka's own default value still reports `STATIC_BROKER_CONFIG`, above the
+/// `DEFAULT_CONFIG` synonym that carries the same number.
+///
+/// Verified against `apache/kafka:4.3.1` with `offsets.retention.minutes=10080`
+/// in the broker's properties: `kafka-configs --entity-type brokers
+/// --entity-name 1 --describe --all` answers
+/// `synonyms={STATIC_BROKER_CONFIG:offsets.retention.minutes=10080,
+/// DEFAULT_CONFIG:offsets.retention.minutes=10080}`.
+#[test]
+fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
+    let described = |static_broker| {
+        describe_with_static(
+            &MetadataImage::new(Uuid::nil()),
+            RESOURCE_TYPE_BROKER,
+            "1",
+            Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
+            EVERYTHING,
+            static_broker,
+        )
+        .configs
+    };
+    let default_synonym = synonym(
+        config_keys::OFFSETS_RETENTION_MINUTES,
+        "10080",
+        CONFIG_SOURCE_DEFAULT,
+    );
+    let entry = |config_source, synonyms| DescribeConfigsResourceResult {
+        name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+        value: Some("10080".to_owned()),
+        read_only: true,
+        config_source,
+        is_sensitive: false,
+        synonyms,
+        config_type: ConfigType::Int.wire(),
+        documentation: Some(
+            registry::lookup(ConfigScope::Broker, config_keys::OFFSETS_RETENTION_MINUTES)
+                .expect("offsets.retention.minutes")
+                .doc
+                .to_owned(),
+        ),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+
+    check!(
+        described(UNTUNED) == vec![entry(CONFIG_SOURCE_DEFAULT, vec![default_synonym.clone()])],
+        "a broker that names neither key"
+    );
+    check!(
+        described(StaticBrokerConfigs {
+            offsets_retention: Some(krabka_units::minutes(10_080)),
+            offsets_retention_check_interval: None,
+        }) == vec![entry(
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym(
+                    config_keys::OFFSETS_RETENTION_MINUTES,
+                    "10080",
+                    CONFIG_SOURCE_STATIC_BROKER
+                ),
+                default_synonym,
+            ]
+        )],
+        "a broker whose properties name the key at that same value"
     );
 }

@@ -1,20 +1,24 @@
-//! Role separation: a controller-only node plus broker-only observers.
+//! Component B integration test, with a controller-only node and broker-only
+//! observers.
 //!
-//! The observers replicate metadata through fetch, not through openraft, and
-//! never join the voter set. Two behaviours share that topology.
+//! An observer replicates metadata through fetch, not through openraft. A
+//! `CreateTopics` forwarded through the observer reaches the controller and
+//! comes back to the observer's image. The observer never joins the voter
+//! set.
 //!
-//! [`broker_only_node_observes_and_forwards`] is the write side. A
-//! `CreateTopics` forwarded through an observer reaches the controller and
-//! comes back to the observer's image.
-//!
-//! [`advertised_controller_id_resolves_to_a_broker_row`] is the read side. A
-//! client reads `controller_id` out of a `Metadata` or `DescribeCluster`
-//! response and resolves it against the broker list in that same response. The
-//! controller-only node registers no broker endpoint and so never appears in
-//! that list, which is why both APIs advertise a broker instead of the raft
-//! leader, the way a `KRaft` broker does.
+//! The second test covers the other half of role separation: the brokers stay
+//! *unfenced*. A broker's `BrokerHeartbeat` goes to the controller leader's
+//! CONTROLLER listener, which is the only endpoint a controller-only node
+//! publishes for itself, and the controller's liveness registry fences every
+//! registered broker it does not hear from within `heartbeat_timeout`. It also
+//! covers what the metadata surface then advertises: `controller_id` has to
+//! name a broker the caller can resolve out of the same response, which the
+//! controller-only node's own id never is.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker, BrokerHandle, config::NodeRole};
@@ -22,53 +26,51 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_cluster_request::DescribeClusterRequest,
-    describe_cluster_response::{DescribeClusterBroker, DescribeClusterResponse},
     metadata_request::MetadataRequest,
-    metadata_response::{MetadataResponse, MetadataResponseBroker},
 };
 use tempfile::TempDir;
 
 mod support;
 
-/// A booted role-separated cluster: one controller-only node and
-/// `broker_count` broker-only observers.
+/// A booted role-separated cluster: one controller-only node that is the sole
+/// voter, and `n` broker-only observers.
 struct RoleSeparated {
-    /// Node 1. The sole voter, and never a registered broker.
     controller: BrokerHandle,
-    /// Nodes 2..=n. Observers, never voters.
     brokers: Vec<BrokerHandle>,
-    /// Held so the log directories outlive the brokers that write them.
+    // Dropping these removes the log dirs the nodes still hold open.
     _dirs: Vec<TempDir>,
 }
 
-/// Boots one controller-only node (node 1, the only voter, bootstrapped as a
-/// singleton so it elects itself) and `broker_count` broker-only nodes that
-/// keep their metadata image current by fetching `__cluster_metadata` and
-/// forward writes to the controller quorum.
-///
-/// Returns once every broker's registration is committed on the controller.
-async fn start_role_separated(broker_count: usize) -> RoleSeparated {
-    support::init_tracing();
+impl RoleSeparated {
+    /// Every node's handle, controller first. The fencing state is replicated,
+    /// so an assertion about it has to hold on all of them.
+    fn nodes(&self) -> impl Iterator<Item = &BrokerHandle> {
+        std::iter::once(&self.controller).chain(&self.brokers)
+    }
 
-    let nodes = broker_count + 1;
+    async fn shutdown(self) {
+        for broker in self.brokers {
+            broker.shutdown().await;
+        }
+        self.controller.shutdown().await;
+    }
+}
+
+/// Boot node 1 as controller-only and nodes `2..=brokers + 1` as broker-only.
+///
+/// Node 1 is the whole voter set, so it elects itself and the observers reach
+/// it by fetching `__cluster_metadata`. The controller is up and leading
+/// before the first observer starts, so an observer's first fetch already has
+/// a committed log to replicate.
+async fn start_role_separated(brokers: usize) -> RoleSeparated {
+    let nodes = brokers + 1;
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(nodes).await;
-    // Only the controller (node 1) is a voter. The broker-only nodes observe
-    // via fetch and must never appear in the quorum.
     let voters = vec![(1u64, controller_addrs[0])];
-
-    // Unpack the held listeners for every node up front, before any broker
-    // starts, so no node races another for a port.
     let mut data_ls = client_listeners.into_iter();
     let mut ctrl_ls = controller_listeners.into_iter();
-    let mut held: Vec<(tokio::net::TcpListener, tokio::net::TcpListener)> =
-        Vec::with_capacity(nodes);
-    for _ in 0..nodes {
-        held.push((data_ls.next().unwrap(), ctrl_ls.next().unwrap()));
-    }
-    let mut held = held.into_iter();
-
     let mut dirs = Vec::with_capacity(nodes);
+
     let ctrl_dir = TempDir::new().unwrap();
     let mut ctrl_cfg = support::broker_config(
         0,
@@ -79,21 +81,21 @@ async fn start_role_separated(broker_count: usize) -> RoleSeparated {
         BootstrapMode::Bootstrap,
     );
     ctrl_cfg.roles = vec![NodeRole::Controller];
-    let (data, ctrl) = held.next().unwrap();
-    let controller = Broker::start_with_listeners(ctrl_cfg, Some(ctrl), Some(data))
-        .await
-        .expect("controller-only start");
+    let controller = Broker::start_with_listeners(
+        ctrl_cfg,
+        Some(ctrl_ls.next().unwrap()),
+        Some(data_ls.next().unwrap()),
+    )
+    .await
+    .expect("controller-only start");
     dirs.push(ctrl_dir);
-
-    // Wait until the controller is leader before starting the observers, so
-    // the first observer fetch already has a committed log to replicate.
     controller.wait_until_controller_leader().await;
 
-    let mut brokers = Vec::with_capacity(broker_count);
-    for i in 1..nodes {
+    let mut observers = Vec::with_capacity(brokers);
+    for index in 1..nodes {
         let dir = TempDir::new().unwrap();
         let mut cfg = support::broker_config(
-            i,
+            index,
             &client_addrs,
             &controller_addrs,
             &voters,
@@ -101,119 +103,74 @@ async fn start_role_separated(broker_count: usize) -> RoleSeparated {
             BootstrapMode::Join,
         );
         cfg.roles = vec![NodeRole::Broker];
-        let (data, ctrl) = held.next().unwrap();
-        brokers.push(
-            Broker::start_with_listeners(cfg, Some(ctrl), Some(data))
-                .await
-                .expect("broker-only start"),
+        observers.push(
+            Broker::start_with_listeners(
+                cfg,
+                Some(ctrl_ls.next().unwrap()),
+                Some(data_ls.next().unwrap()),
+            )
+            .await
+            .expect("broker-only start"),
         );
         dirs.push(dir);
     }
 
-    // A broker-only node self-registers by forwarding the registration to the
-    // controller. Wait until the controller's committed image reflects every
-    // one of them, and then until each observer has replicated that image
-    // back: an observer answers `Metadata` out of its own copy, which lags the
-    // controller by one fetch.
-    controller.wait_until_brokers_registered(broker_count).await;
-    for broker in &brokers {
-        broker.wait_until_brokers_registered(broker_count).await;
-    }
-
-    // A broker registers fenced and stays that way until it has heartbeated
-    // and proved metadata catch-up, so a freshly booted cluster advertises no
-    // controller at all for the first liveness tick or two. Settle the
-    // controller first — until it has unfenced every broker it may still
-    // publish `broker.fenced=true`, and an observer image that merely has not
-    // seen that publication yet reads the same as one past it. Then wait for
-    // the resulting tombstone to reach each observer's own copy.
-    wait_until_the_controller_has_unfenced_every_broker(&controller).await;
-    for broker in &brokers {
-        wait_until_no_broker_is_fenced(broker).await;
-    }
-
+    // A broker-only node self-registers (it IS a broker) by forwarding the
+    // registration to the controller. Wait until the controller's committed
+    // image reflects every one of them, so `CreateTopics` has brokers to place
+    // replicas on.
+    controller.wait_until_brokers_registered(brokers).await;
     RoleSeparated {
         controller,
-        brokers,
+        brokers: observers,
         _dirs: dirs,
     }
 }
 
-/// The controller-managed broker config that carries a fencing decision into
-/// the metadata log, and the value it takes on a fenced node.
-const BROKER_FENCED: &str = "broker.fenced";
-const FENCED_TRUE: &str = "true";
+/// Long enough for a controller to notice that a broker has gone silent:
+/// `heartbeat_timeout` (2s under the test config) for the session to expire,
+/// plus a `liveness_tick_interval` (1s) for the tick that publishes the
+/// decision, plus slack.
+const FENCING_WINDOW: Duration = Duration::from_secs(4);
 
-/// `heartbeat_timeout` plus a liveness-tick publication and one metadata
-/// propagation, with slack for a loaded runner.
-const UNFENCING_DEADLINE: Duration = Duration::from_secs(30);
-
-/// Block until the controller reports no unavailable broker at all: neither
-/// its own liveness registry nor its image holds one, so no further
-/// `broker.fenced=true` publication is coming.
-async fn wait_until_the_controller_has_unfenced_every_broker(handle: &BrokerHandle) {
-    let deadline = tokio::time::Instant::now() + UNFENCING_DEADLINE;
-    loop {
-        let unavailable = handle.unavailable_brokers_for_test().await;
-        if unavailable.is_empty() {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the controller still treats brokers {unavailable:?} as unavailable"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-/// Block until `handle`'s own replicated image marks no registered broker
-/// fenced.
+/// Every broker any node currently reports as fenced.
 ///
-/// This reads the image rather than a response, on purpose: the wait must not
-/// run through the handlers under test, or a handler that ignored the
-/// replicated state would hang here instead of failing on the id it
-/// advertises.
-async fn wait_until_no_broker_is_fenced(handle: &BrokerHandle) {
-    let deadline = tokio::time::Instant::now() + UNFENCING_DEADLINE;
-    loop {
-        let image = handle.controller_image_for_test();
-        let fenced: BTreeSet<u64> = image
-            .brokers()
-            .filter(|broker| {
-                image
-                    .broker_config(broker.node_id)
-                    .and_then(|configs| configs.get(BROKER_FENCED))
-                    .map(String::as_str)
-                    == Some(FENCED_TRUE)
-            })
-            .map(|broker| broker.node_id.0)
-            .collect();
-        if fenced.is_empty() {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "node {} still marks brokers {fenced:?} fenced",
-            handle.node_id()
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+/// The fencing decision is replicated as the `broker.fenced` broker config, so
+/// an observer's image carries it as surely as the controller's.
+fn fenced_anywhere(cluster: &RoleSeparated) -> BTreeSet<u64> {
+    cluster
+        .nodes()
+        .flat_map(BrokerHandle::fenced_broker_ids_for_test)
+        .collect()
 }
 
-impl RoleSeparated {
-    async fn shutdown(self) {
-        for broker in self.brokers {
-            broker.shutdown().await;
-        }
-        self.controller.shutdown().await;
-    }
+/// Sleep past [`FENCING_WINDOW`], then require that no broker is fenced.
+///
+/// Sampling right after boot proves nothing: a leadership change seeds every
+/// registered broker alive, so a cluster whose heartbeats never arrive still
+/// looks healthy until the first session expires. Waiting out that window
+/// first is what makes the assertion mean "the heartbeats are landing".
+async fn assert_settled_unfenced(cluster: &RoleSeparated) {
+    tokio::time::sleep(FENCING_WINDOW).await;
+    let fenced = fenced_anywhere(cluster);
+    assert!(
+        fenced.is_empty(),
+        "brokers fenced in a role-separated cluster: {fenced:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn broker_only_node_observes_and_forwards() {
+    support::init_tracing();
+
     let cluster = start_role_separated(1).await;
     let broker_only = &cluster.brokers[0];
     let broker_only_id = broker_only.node_id();
+
+    // Settle before asserting anything else. Without this the suite finishes
+    // inside the seed window, so it would pass while every broker was on its
+    // way to being fenced forever.
+    assert_settled_unfenced(&cluster).await;
 
     // CreateTopics against the broker-only node — forwarded to the controller
     // quorum via the observer's write path.
@@ -267,148 +224,143 @@ async fn broker_only_node_observes_and_forwards() {
     cluster.shutdown().await;
 }
 
-/// The `controller_id` in `Metadata` and `DescribeCluster` must name a node
-/// the same response also gives an endpoint for. The controller-only node
-/// (node 1) has no broker endpoint anywhere in this cluster, so naming it
-/// would hand an `AdminClient` an id it cannot connect to.
+/// A controller-only node never registers itself as a broker, so the only
+/// address it publishes is the CONTROLLER endpoint of its
+/// `ControllerRegistrationRecord`. When the heartbeat client looked the leader
+/// up as a broker instead, every tick bailed out, no heartbeat ever reached
+/// the controller, and roughly one `liveness_tick_interval` after boot the
+/// controller published `broker.fenced=true` for every broker in the cluster —
+/// permanently, since nothing could ever unfence them.
 ///
-/// Both responses are compared whole. The broker array is sorted by node id
-/// first: the metadata image stores registrations in a hash map, so the wire
-/// order of that array is unspecified.
+/// So this holds the assertion across several liveness ticks and past
+/// `heartbeat_timeout`, rather than sampling it once: the broken behaviour
+/// takes a session expiry to show up, and a single early sample would see the
+/// seeded-alive state and pass.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn advertised_controller_id_resolves_to_a_broker_row() {
-    const REQUESTS: usize = 6;
+async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
+    support::init_tracing();
 
     let cluster = start_role_separated(2).await;
-    let cluster_id = cluster
-        .controller
-        .controller_image_for_test()
-        .cluster_id()
-        .to_string();
+    assert_settled_unfenced(&cluster).await;
 
-    // The two broker-only nodes, as the rows every response must carry.
-    let mut metadata_rows: Vec<MetadataResponseBroker> = cluster
-        .brokers
-        .iter()
-        .map(|b| MetadataResponseBroker {
-            node_id: i32::try_from(b.node_id()).unwrap(),
-            host: b.listen_addr().ip().to_string(),
-            port: i32::from(b.listen_addr().port()),
-            rack: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        })
-        .collect();
-    metadata_rows.sort_by_key(|row| row.node_id);
-    let broker_ids: BTreeSet<i32> = metadata_rows.iter().map(|row| row.node_id).collect();
-
-    // The only responses this cluster may produce: one per advertised broker.
-    // Looking a `controller_id` up here is what proves it resolves — an id
-    // that is not a broker row has no expected response at all.
-    let expected_metadata = |controller_id: i32| -> MetadataResponse {
+    // Then hold it across several more liveness ticks, so a cluster that
+    // fences on any later tick — rather than on the first expiry — is caught
+    // too.
+    let hold_until = Instant::now() + FENCING_WINDOW;
+    while Instant::now() < hold_until {
+        let fenced = fenced_anywhere(&cluster);
         assert!(
-            broker_ids.contains(&controller_id),
-            "advertised controller_id {controller_id} is not one of the brokers {broker_ids:?} \
-             this response lists"
+            fenced.is_empty(),
+            "brokers fenced while every one of them was heartbeating: {fenced:?}"
         );
-        MetadataResponse {
-            throttle_time_ms: 0,
-            brokers: metadata_rows.clone(),
-            cluster_id: Some(cluster_id.clone()),
-            controller_id,
-            topics: vec![],
-            cluster_authorized_operations: i32::MIN,
-            error_code: 0,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
-    };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
-
-    // Every response names a broker, and consecutive requests rotate over all
-    // of them rather than pinning every client to one node.
-    let mut advertised = BTreeSet::new();
-    for _ in 0..REQUESTS {
-        let mut resp: MetadataResponse = client
-            .send(MetadataRequest {
-                topics: Some(vec![]),
-                ..Default::default()
-            })
+    // The client-visible half (KIP-1073): `DescribeCluster` hides fenced
+    // brokers unless the caller opts in, so a fenced cluster answers with no
+    // broker rows at all.
+    for broker in &cluster.brokers {
+        let client = Client::builder()
+            .bootstrap(broker.listen_addr().to_string())
+            .build()
             .await
             .unwrap();
-        resp.brokers.sort_by_key(|row| row.node_id);
-        advertised.insert(resp.controller_id);
-        assert!(resp == expected_metadata(resp.controller_id));
-    }
-    assert!(
-        advertised == broker_ids,
-        "{REQUESTS} Metadata requests should name every broker in turn"
-    );
-
-    // DescribeCluster answers with the same node, projected into its own shape.
-    let describe_rows: Vec<DescribeClusterBroker> = metadata_rows
-        .iter()
-        .map(|row| DescribeClusterBroker {
-            broker_id: row.node_id,
-            host: row.host.clone(),
-            port: row.port,
-            rack: None,
-            is_fenced: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        })
-        .collect();
-    let expected_describe = |controller_id: i32| -> DescribeClusterResponse {
-        assert!(
-            broker_ids.contains(&controller_id),
-            "advertised controller_id {controller_id} is not one of the brokers {broker_ids:?} \
-             this response lists"
-        );
-        DescribeClusterResponse {
-            throttle_time_ms: 0,
-            error_code: 0,
-            error_message: None,
-            endpoint_type: 1,
-            cluster_id: cluster_id.clone(),
-            controller_id,
-            brokers: describe_rows.clone(),
-            cluster_authorized_operations: i32::MIN,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
-    };
-
-    let mut advertised = BTreeSet::new();
-    for _ in 0..REQUESTS {
-        let mut resp: DescribeClusterResponse = client
+        let resp = client
             .send(DescribeClusterRequest::default())
             .await
             .unwrap();
-        resp.brokers.sort_by_key(|row| row.broker_id);
-        advertised.insert(resp.controller_id);
-        assert!(resp == expected_describe(resp.controller_id));
+        assert!(resp.error_code == 0);
+        let rows: BTreeSet<(i32, bool)> = resp
+            .brokers
+            .iter()
+            .map(|row| (row.broker_id, row.is_fenced))
+            .collect();
+        assert!(
+            rows == BTreeSet::from([(2, false), (3, false)]),
+            "DescribeCluster on node {} must list both brokers unfenced",
+            broker.node_id()
+        );
+        // The advertised controller has to be one a client can resolve. A
+        // client reads `controller_id` back out of the `brokers` array of the
+        // same response, so the controller-only node's own id would be as
+        // useless to it as the -1 a wholly fenced cluster answers with.
+        assert!(
+            resp.controller_id == 2 || resp.controller_id == 3,
+            "DescribeCluster on node {} advertised controller_id {}, which is not a listed broker",
+            broker.node_id(),
+            resp.controller_id
+        );
     }
-    assert!(
-        advertised == broker_ids,
-        "{REQUESTS} DescribeCluster requests should name every broker in turn"
-    );
+
+    assert_metadata_names_a_reachable_controller(&cluster).await;
 
     cluster.shutdown().await;
 }
 
-/// The controller-only node serves client APIs on its data listener, and must
-/// not name itself there either: it is the raft leader and still has no broker
-/// endpoint to offer.
+/// `Metadata` has to name a `controller_id` the caller can resolve.
 ///
-/// This response is not compared whole. The node is the active controller, so
-/// its broker rows are narrowed by the heartbeat registry and the exact set is
-/// a function of timing rather than of the behaviour under test. What is
-/// asserted is the property the client depends on: the id it gets back is one
-/// of the rows it also got, with a host and a port.
+/// In `KRaft` the field is not the quorum leader: `apache/kafka:4.3.1` answers it
+/// with `metadataCache.getRandomAliveBrokerId().orElse(-1)`, an unfenced
+/// registered broker. A role-separated cluster is where the difference bites,
+/// because the quorum leader is a controller-only node that never appears in
+/// the `brokers` array the client resolves the id against.
+///
+/// So this asserts the id resolves *within the same response*, and that the
+/// endpoint it resolves to is one a client can actually reach.
+async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
+    for broker in &cluster.brokers {
+        let client = Client::builder()
+            .bootstrap(broker.listen_addr().to_string())
+            .build()
+            .await
+            .unwrap();
+        let resp = client.send(MetadataRequest::default()).await.unwrap();
+
+        let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
+        assert!(
+            listed == BTreeSet::from([2, 3]),
+            "Metadata on node {} must list both brokers: {listed:?}",
+            broker.node_id()
+        );
+        let named = resp
+            .brokers
+            .iter()
+            .find(|row| row.node_id == resp.controller_id);
+        assert!(
+            named.is_some(),
+            "Metadata on node {} advertised controller_id {}, which is absent from {listed:?}",
+            broker.node_id(),
+            resp.controller_id
+        );
+
+        // Reachable, not merely listed: the advertised endpoint answers.
+        let endpoint = named.unwrap();
+        let controller_client = Client::builder()
+            .bootstrap(format!("{}:{}", endpoint.host, endpoint.port))
+            .build()
+            .await
+            .unwrap();
+        let echoed = controller_client
+            .send(MetadataRequest::default())
+            .await
+            .unwrap();
+        assert!(echoed.cluster_id == resp.cluster_id);
+    }
+}
+
+/// The controller-only node serves the client APIs on its own data listener
+/// too, and must not name itself there either: it is the quorum leader and
+/// still has no broker endpoint to offer.
+///
+/// [`assert_metadata_names_a_reachable_controller`] asks the observers, which
+/// answer out of a replicated image. This asks the node that *is* the
+/// controller, where the leader's id is the one value most obviously to hand.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controller_only_node_never_advertises_itself_as_controller() {
+    support::init_tracing();
+
     let cluster = start_role_separated(2).await;
+    assert_settled_unfenced(&cluster).await;
     let controller_node_id = i32::try_from(cluster.controller.node_id()).unwrap();
 
     let client = Client::builder()
@@ -416,29 +368,25 @@ async fn controller_only_node_never_advertises_itself_as_controller() {
         .build()
         .await
         .unwrap();
-    let resp: MetadataResponse = client
-        .send(MetadataRequest {
-            topics: Some(vec![]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let resp = client.send(MetadataRequest::default()).await.unwrap();
 
+    let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
+    assert!(
+        resp.controller_id != controller_node_id,
+        "a controller-only node has no broker endpoint and must not name itself; \
+         it advertised {controller_node_id} out of {listed:?}"
+    );
     let named = resp
         .brokers
         .iter()
-        .find(|row| row.node_id == resp.controller_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "controller_id {} resolves to no broker row in {:?}",
-                resp.controller_id, resp.brokers
-            )
-        });
-    assert!(!named.host.is_empty() && named.port > 0);
+        .find(|row| row.node_id == resp.controller_id);
     assert!(
-        resp.controller_id != controller_node_id,
-        "a controller-only node has no broker endpoint and must not name itself"
+        named.is_some(),
+        "the controller-only node advertised controller_id {}, which is absent from {listed:?}",
+        resp.controller_id
     );
+    let endpoint = named.unwrap();
+    assert!(!endpoint.host.is_empty() && endpoint.port > 0);
 
     cluster.shutdown().await;
 }

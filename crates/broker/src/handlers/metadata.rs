@@ -120,7 +120,7 @@ pub(crate) async fn handle(
     // listener this request arrived on (Kafka returns the connection
     // listener's advertised address), falling back to the inter-broker
     // endpoint when the connection listener isn't recorded on that broker.
-    let brokers: Vec<MetadataResponseBroker> = image
+    let brokers = image
         .brokers()
         .map(|broker| project_broker(broker, ctx.connection_listener_name, &inter_broker_name))
         .collect();
@@ -141,19 +141,10 @@ pub(crate) async fn handle(
         },
     );
 
-    // controller_id: a broker out of the list this very response carries, not
-    // the raft leader. A role-separated controller registers no broker
-    // endpoint, so naming it would hand the client an id it cannot resolve.
-    // Kafka's KRaft brokers advertise a live broker here for the same reason.
-    // See `crate::handlers::advertised_controller`. The fenced set is the same
-    // one `offline_replicas` used above, so the id a client is pointed at and
-    // the replicas it is told are offline cannot disagree.
-    let eligible: Vec<i32> = brokers
-        .iter()
-        .filter(|row| u64::try_from(row.node_id).is_ok_and(|id| !unavailable.contains(&id)))
-        .map(|row| row.node_id)
-        .collect();
-    let controller_id = broker.controller_id_rotation.pick(&eligible);
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
 
     // KIP-430: the cluster-level field only exists on the wire for v8-10;
     // the codegen drops it on other versions. Compute when the opt-in
@@ -322,7 +313,7 @@ fn success_topic_row(
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
-        is_internal: crate::handlers::is_internal_topic(name),
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
         topic_authorized_operations,
         ..Default::default()
     }
@@ -490,100 +481,5 @@ mod tests {
         let out = project_broker(&rec, "tls", "plain");
         assert!(out.host == "legacy-host");
         assert!(out.port == 1000);
-    }
-
-    #[test]
-    fn internal_topics_are_marked_in_metadata() {
-        for (name, expected) in [
-            ("__consumer_offsets", true),
-            ("__transaction_state", true),
-            ("__remote_log_metadata", true),
-            ("orders", false),
-        ] {
-            assert!(crate::handlers::is_internal_topic(name) == expected);
-        }
-    }
-
-    /// The first flexible `Metadata` version. `controller_id` has been on the
-    /// wire since v1, so this version carries it.
-    const VERSION: i16 = 9;
-
-    crate::test_support::wire_helpers!(
-        MetadataRequest,
-        MetadataResponse,
-        version = VERSION,
-        client_id = "admin-client"
-    );
-
-    /// Register `node_id` as a broker on the controller's committed image.
-    async fn seed_broker(handle: &crate::broker::BrokerHandle, node_id: u64, host: &str) {
-        handle
-            .broker_arc_for_test()
-            .controller
-            .submit_change(vec![krabka_metadata::MetadataRecord::V1BrokerRegistration(
-                krabka_metadata::BrokerRegistrationRecord {
-                    node_id: krabka_metadata::NodeId(node_id),
-                    broker_epoch: 7,
-                    incarnation_id: uuid::Uuid::nil(),
-                    host: "legacy-host".to_string(),
-                    port: 19092,
-                    rack: None,
-                    log_dirs: vec![],
-                    endpoints: vec![endpoint("PLAINTEXT", host, 29092)],
-                    features: std::collections::BTreeMap::new(),
-                },
-            )])
-            .await
-            .expect("seed broker registration");
-    }
-
-    /// A dead or fenced broker keeps its `Metadata` row -- a client still
-    /// needs its endpoint to reach a partition it has not yet lost -- but it
-    /// is not somewhere a controller-forwarded call can land, so the
-    /// advertised `controller_id` never names it. Kafka draws that id from its
-    /// alive brokers only.
-    ///
-    /// Two brokers are seeded and one of them is fenced, so an id drawn
-    /// without regard to liveness would land on the fenced node inside the
-    /// handful of calls below.
-    #[tokio::test]
-    async fn a_fenced_broker_keeps_its_row_but_is_never_advertised_as_the_controller() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
-        )
-        .await;
-        seed_broker(&broker_handle, 42, "broker-a").await;
-        seed_broker(&broker_handle, 43, "broker-b").await;
-        let broker = broker_handle.broker_arc_for_test();
-        broker.liveness.record_fenced_heartbeat(42).await;
-        assert!(broker.liveness.apply_fencing(42, true, true).await);
-        let p = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = test_context(&p, &peer);
-        let req = encode_request(&MetadataRequest {
-            topics: Some(vec![]),
-            ..Default::default()
-        });
-
-        for _ in 0..6 {
-            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes);
-            assert!(
-                resp.brokers.iter().any(|row| row.node_id == 42),
-                "the fenced broker keeps its endpoint row: {:?}",
-                resp.brokers
-            );
-            let named = resp
-                .brokers
-                .iter()
-                .find(|row| row.node_id == resp.controller_id)
-                .expect("controller_id names a row this response carries");
-            assert!(!named.host.is_empty());
-            assert!(resp.controller_id != 42);
-        }
-
-        broker_handle.shutdown().await;
     }
 }

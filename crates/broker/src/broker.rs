@@ -105,12 +105,6 @@ pub struct Broker {
     /// disabled (interval = 0, typical in tests).
     pub(crate) disk_scanner_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     pub(crate) liveness: Arc<crate::heartbeat::controller_state::ControllerLivenessState>,
-    /// Rotation behind the `controller_id` that `Metadata` and
-    /// `DescribeCluster` advertise. Both handlers draw from it, so successive
-    /// requests to this node name different brokers and forwarded
-    /// controller-only traffic spreads over the fleet. See
-    /// [`crate::handlers::advertised_controller`].
-    pub(crate) controller_id_rotation: crate::handlers::advertised_controller::ControllerIdRotation,
     /// `Some` when `BrokerConfig::tls_config` is set. Per-listener
     /// accept loops snapshot the current `Arc<ServerConfig>` with
     /// `current()` and wrap it in a fresh `TlsAcceptor`. The TLS

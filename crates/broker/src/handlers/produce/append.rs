@@ -9,7 +9,7 @@ use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 use tokio::sync::oneshot;
 
 use super::{
-    ACKS_ALL,
+    ACKS_ALL, INVALID_OFFSET,
     prepare::{PreparedBatch, PreparedSource},
 };
 use crate::{
@@ -37,8 +37,14 @@ pub(super) async fn dispatch_prepared(
     prepared: PreparedBatch,
     context: AppendContext<'_>,
 ) -> Result<PartitionProduceResponse, BrokerError> {
+    // No offset is assigned until the writer answers with one. Every failure
+    // below — the writer channel gone, the append itself erroring, the ack
+    // timing out — leaves the row without an append, which Kafka answers with
+    // `UNKNOWN_LOG_APPEND_INFO`'s -1. `finalize_ack` overwrites this with the
+    // assigned offset on the one path that gets one.
     let mut response = PartitionProduceResponse {
         index: context.partition_index,
+        base_offset: INVALID_OFFSET,
         ..Default::default()
     };
     let commit = CommitKey {

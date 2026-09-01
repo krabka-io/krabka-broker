@@ -154,7 +154,7 @@ pub(crate) async fn handle(
             continue;
         }
 
-        let brokers = site_broker_views(&image, node_id);
+        let brokers = site_broker_views(&image, broker.config.is_broker().then_some(node_id));
         let rf = topic_rec.replication_factor;
         let new_count = t.count;
         let new_partition_indices: Vec<i32> = (existing..new_count).collect();

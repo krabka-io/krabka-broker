@@ -48,6 +48,14 @@ fn abort_partition_writers(partitions: &PartitionRegistry) {
 }
 
 impl BrokerHandle {
+    /// Test-only: the shared broker state behind this handle, for the unit
+    /// tests that drive a subsystem taking `&Arc<Broker>` directly rather than
+    /// over a socket. `BrokerControllerAdminRouter::bind` is one.
+    #[cfg(test)]
+    pub(crate) fn broker_for_test(&self) -> &std::sync::Arc<crate::broker::Broker> {
+        &self.broker
+    }
+
     /// The actual bound `SocketAddr`. This is useful when
     /// `BrokerConfig.listen_addr` used port 0 and the OS picked the port.
     #[must_use]

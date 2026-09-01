@@ -1,18 +1,21 @@
 //! A dead broker must stop being advertised as `controller_id`, on every node.
 //!
-//! `Metadata` and `DescribeCluster` name a broker rather than the raft leader
-//! (see `handlers::advertised_controller`), so the id has to be one a client
-//! can actually reach. Kafka draws it from `getRandomAliveBrokerId`, and a
-//! `KRaft` broker knows who is alive because `BrokerRegistration.fenced` is
-//! replicated to it.
+//! `Metadata` and `DescribeCluster` name a registered, unfenced broker rather
+//! than the quorum leader (see `handlers::controller_id`), so the id has to be
+//! one a client can actually reach. Kafka draws it from
+//! `getRandomAliveBrokerId`, and a `KRaft` broker knows who is alive because
+//! `BrokerRegistration.fenced` is replicated to it.
 //!
 //! Only the controller leader holds the heartbeat registry that decides
 //! fencing, so it publishes the decision as the `broker.fenced` broker config.
 //! This suite asks a node that is *not* the controller: if that node ignored
-//! the replicated state it would treat every registration as available, and
-//! its rotation would hand a client the dead broker's id — an endpoint nobody
-//! answers on, which is the controller-routed dead end the whole feature
-//! exists to avoid.
+//! the replicated state it would treat every registration as available, and it
+//! would hand a client the dead broker's id — an endpoint nobody answers on,
+//! which is the controller-routed dead end the whole feature exists to avoid.
+//!
+//! `handlers::controller_id`'s own unit test pins the choice given a fenced
+//! set. What is unproven there, and proven here, is that a follower's fenced
+//! set tracks a death it only learns about through the metadata log.
 
 use std::{collections::BTreeSet, time::Duration};
 
@@ -27,17 +30,24 @@ use krabka_protocol::owned::{
 
 mod support;
 
-/// Requests per measurement. The rotation walks the candidate list one step
-/// per request, so a run of this length visits every candidate of a
-/// three-broker cluster at least twice.
+/// Requests per measurement. The advertised id rotates one step per request,
+/// so a run of this length visits every candidate of a three-broker cluster at
+/// least twice.
 const REQUESTS: usize = 6;
 
-/// `heartbeat_timeout` (2s) plus a `liveness_tick_interval` (1s) publication
-/// and one metadata propagation, with slack for a loaded runner.
+/// `heartbeat_timeout` (2s under the test config) for a session to expire,
+/// plus a `liveness_tick_interval` (1s) for the tick that publishes the
+/// decision, plus slack.
+const FENCING_WINDOW: Duration = Duration::from_secs(4);
+
+/// A bound on [`FENCING_WINDOW`] plus metadata propagation, with room for a
+/// loaded runner. Only a stuck cluster reaches it.
 const FENCING_DEADLINE: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
+    support::init_tracing();
+
     let mut cluster = support::start_n_node_with_retry(3).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
@@ -55,12 +65,12 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     // where it was.
     let (observer_index, victim_index) = (followers[0], followers[1]);
     let observer_addr = cluster[observer_index].0.listen_addr();
-    let victim_id = node_id_of(&cluster[victim_index].0);
+    let victim_id = cluster[victim_index].0.node_id();
     let everyone: BTreeSet<i32> = cluster.iter().map(|(h, _, _)| node_id_of(h)).collect();
     let survivors: BTreeSet<i32> = everyone
         .iter()
         .copied()
-        .filter(|&id| id != victim_id)
+        .filter(|&id| id != node_id_of(&cluster[victim_index].0))
         .collect();
 
     let client = Client::builder()
@@ -69,19 +79,13 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
         .await
         .unwrap();
 
-    // The controller opens a *fenced* session for every broker it finds
-    // registered but has not yet heard from, and unfences it on that broker's
-    // first heartbeat. Both edges are published, so settle on the steady state
-    // before measuring: a run started inside the seed window would be reading
-    // the seed rather than the death.
-    //
-    // The registry settles first. An observer image that has simply not seen
-    // the seed publication yet reads exactly like one past it, so waiting on
-    // the image alone can return before the seed even lands.
-    let leader_index = (0..cluster.len())
-        .find(|&i| cluster[i].0.node_id() == leader.0)
-        .expect("the elected leader is one of these nodes");
-    wait_until_the_controller_has_unfenced_every_broker(&cluster[leader_index].0).await;
+    // A broker registers fenced and is unfenced on its first heartbeat, so a
+    // freshly booted cluster publishes an unfencing edge shortly after start.
+    // Sleeping past the window in which that happens before waiting on the
+    // empty set is what stops the wait from returning on a publication that
+    // has not landed yet: an observer image that has simply not seen the seed
+    // reads exactly like one past it.
+    tokio::time::sleep(FENCING_WINDOW).await;
     wait_until_fenced_set(&cluster[observer_index].0, &BTreeSet::new()).await;
 
     // Every broker is advertised while every broker is alive, so what the
@@ -102,6 +106,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
     // From here the observer must name only survivors, on both APIs, for every
     // turn of the rotation — while the dead broker keeps the `Metadata`
     // endpoint row a client still needs to route to it.
+    let dead_id = i32::try_from(victim_id).expect("node id fits an i32");
     for _ in 0..REQUESTS {
         let resp: MetadataResponse = client
             .send(MetadataRequest {
@@ -111,7 +116,7 @@ async fn a_non_controller_node_stops_advertising_a_broker_that_died() {
             .await
             .unwrap();
         assert!(
-            resp.brokers.iter().any(|row| row.node_id == victim_id),
+            resp.brokers.iter().any(|row| row.node_id == dead_id),
             "the dead broker keeps its Metadata endpoint row: {:?}",
             resp.brokers
         );
@@ -165,50 +170,16 @@ async fn advertised_over_a_run(client: &Client) -> BTreeSet<i32> {
     advertised
 }
 
-/// The controller-managed broker config that carries a fencing decision into
-/// the metadata log, and the value it takes on a fenced node. A client reads
-/// the same pair back through `kafka-configs --describe --entity-type brokers`.
-const BROKER_FENCED: &str = "broker.fenced";
-const FENCED_TRUE: &str = "true";
-
-/// Block until the controller's own liveness registry holds no fenced or dead
-/// broker, so no further `broker.fenced=true` publication is coming.
-async fn wait_until_the_controller_has_unfenced_every_broker(handle: &BrokerHandle) {
-    let deadline = tokio::time::Instant::now() + FENCING_DEADLINE;
-    loop {
-        let unavailable = handle.unavailable_brokers_for_test().await;
-        if unavailable.is_empty() {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the controller still treats brokers {unavailable:?} as unavailable"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 /// Block until `handle`'s own replicated image marks exactly `expected` fenced.
 ///
 /// This reads the image rather than a response, on purpose: the wait must not
 /// run through the handlers under test, or a handler that ignores the
 /// replicated state would simply hang here instead of failing on the id it
 /// advertises.
-async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<i32>) {
+async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) {
     let deadline = tokio::time::Instant::now() + FENCING_DEADLINE;
     loop {
-        let image = handle.controller_image_for_test();
-        let fenced: BTreeSet<i32> = image
-            .brokers()
-            .filter(|broker| {
-                image
-                    .broker_config(broker.node_id)
-                    .and_then(|configs| configs.get(BROKER_FENCED))
-                    .map(String::as_str)
-                    == Some(FENCED_TRUE)
-            })
-            .map(|broker| i32::try_from(broker.node_id.0).expect("node id fits an i32"))
-            .collect();
+        let fenced = handle.fenced_broker_ids_for_test();
         if fenced == *expected {
             return;
         }

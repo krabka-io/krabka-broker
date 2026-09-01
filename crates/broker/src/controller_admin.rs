@@ -31,30 +31,74 @@ macro_rules! api_version {
     };
 }
 
-/// KIP-919's controller-listener Admin subset, plus the KIP-590 `Envelope`
-/// forwarding RPC. `DescribeQuorum`, `DescribeCluster`, `ApiVersions`, and
-/// controller registration are served directly by `krabka-raft`, so only the
-/// shared broker-handler subset lives here.
+/// The Kafka 4.x controller-listener surface, in `api_key` order.
+///
+/// Apache Kafka marks each request schema with the listeners that accept it,
+/// and a controller's `ApiVersionManager` advertises exactly the ones tagged
+/// `controller`. A live `mirror.gcr.io/apache/kafka:4.3.1` controller answers
+/// `ApiVersions` with 1, 17-20, 29-33, 36-41, 43-46, 49-60, 62-64, 67, 70, 73
+/// and 80-82; 4.0.0's schemas carry the same tags.
+///
+/// This table is that set minus the RPCs the controller listener already
+/// answers without a broker handler: `Fetch`, `ApiVersions`, the KIP-595
+/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, broker and controller
+/// registration, and the KIP-853 voter RPCs. What remains is the subset that
+/// reuses a broker handler, which is what this router bridges to.
+///
+/// `BrokerHeartbeat` is the one entry here that is not an Admin API, and it
+/// belongs for the same reason the Admin subset does: KIP-919 puts it on the
+/// controller listener, and only the broker crate holds what answering it
+/// takes -- the heartbeat registry that decides fencing, the KIP-112
+/// offline-dir failover, and the controlled-shutdown drain. Routing it here is
+/// what keeps a heartbeat sent to a controller-only node from being answered
+/// by a handler that does none of that.
+///
+/// `Envelope` is the other entry that is not an Admin API, and it is the one
+/// whose payload is another API's request rather than a body a handler reads,
+/// so [`serve_envelope`] answers it instead of the registry lookup the rest
+/// share. `ApiKeys.ENVELOPE.messageType.listeners()` in
+/// `kafka-clients-4.3.1.jar` is exactly `[CONTROLLER]`, so it is advertised
+/// here and never on the client listener.
+///
+/// Four of Kafka's keys are in neither list, so krabka's controller listener
+/// advertises 37 of the 41. `SaslHandshake` and `SaslAuthenticate` are
+/// consumed by `BrokerRaftHandshake` before the controller server sees the
+/// stream, so the listener speaks them without listing them. `AlterPartition`
+/// and `AllocateProducerIds` do have broker handlers, but krabka's brokers
+/// send both to a controller's *broker* endpoint rather than to its controller
+/// listener, so routing them here would advertise a path nothing takes -- a
+/// forwarded `AllocateProducerIds` still reaches its handler, through the
+/// `Envelope` above rather than through a key of its own.
+/// `controller_listener_advertises_no_key_kafka_does_not` pins that shortfall.
+///
+/// `DescribeClientQuotas` is deliberately absent for a different reason: its
+/// schema is tagged `broker` only, so a Kafka controller neither advertises
+/// nor answers it, and neither does this listener.
 const SUPPORTED_APIS: &[ControllerApiVersion] = &[
-    // KIP-590 `Envelope`. `ApiKeys.ENVELOPE.messageType.listeners()` in
-    // `kafka-clients-4.3.1.jar` is exactly `[CONTROLLER]`, so it is advertised
-    // here and never on the client listener.
-    api_version!(envelope_request),
-    api_version!(alter_configs_request),
+    api_version!(create_topics_request),
+    api_version!(delete_topics_request),
+    api_version!(describe_acls_request),
     api_version!(create_acls_request),
     api_version!(delete_acls_request),
-    api_version!(describe_acls_request),
     api_version!(describe_configs_request),
-    api_version!(describe_client_quotas_request),
-    api_version!(alter_client_quotas_request),
-    api_version!(incremental_alter_configs_request),
+    api_version!(alter_configs_request),
+    api_version!(create_partitions_request),
+    api_version!(create_delegation_token_request),
+    api_version!(renew_delegation_token_request),
+    api_version!(expire_delegation_token_request),
     api_version!(describe_delegation_token_request),
     api_version!(elect_leaders_request),
+    api_version!(incremental_alter_configs_request),
     api_version!(alter_partition_reassignments_request),
     api_version!(list_partition_reassignments_request),
+    api_version!(alter_client_quotas_request),
     api_version!(describe_user_scram_credentials_request),
+    api_version!(alter_user_scram_credentials_request),
     api_version!(update_features_request),
+    api_version!(envelope_request),
+    api_version!(broker_heartbeat_request),
     api_version!(unregister_broker_request),
+    api_version!(assign_replicas_to_dirs_request),
 ];
 
 /// Late-bound bridge from the controller, which starts before the broker, to
@@ -93,7 +137,10 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                 // Kafka's AdminClient rejects APIs outside the KIP-919
                 // controller surface locally. A raw disabled API is rejected
                 // by the controller listener before dispatch, which closes the
-                // connection rather than inventing a response body.
+                // connection rather than inventing a response body. Send a
+                // `Metadata` request to a live
+                // `mirror.gcr.io/apache/kafka:4.3.1` controller listener and
+                // it half-closes too: no error frame comes back.
                 return Ok(None);
             };
             if !(version.min_version..=version.max_version).contains(&request.api_version) {
@@ -127,6 +174,10 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                     peer: &request.peer,
                     principal: &principal,
                     authenticated_via_token: request.authenticated_via_token,
+                    // This request arrived on the controller listener itself,
+                    // which already ran the `ClusterAction` gate for the whole
+                    // connection.
+                    listener_authorized_cluster_action: true,
                 },
             )
             .await
@@ -172,6 +223,15 @@ struct Invocation<'a> {
     /// this is the *client's* principal, not the forwarding hop's.
     principal: &'a krabka_security::Principal,
     authenticated_via_token: bool,
+    /// Whether the listener has already authorized this identity for
+    /// `ClusterAction`, which is what lets `BrokerHeartbeat` skip its own ACL
+    /// gate. See [`RequestContext::listener_authorized_cluster_action`].
+    ///
+    /// False on the `Envelope` path, and it has to be: the listener authorized
+    /// the *forwarding broker*, while the embedded request runs as the client
+    /// the envelope names. Carrying the flag across would hand every forwarded
+    /// client the inter-broker control plane.
+    listener_authorized_cluster_action: bool,
 }
 
 /// Dispatch `invocation` through the broker's Admin handler registry.
@@ -192,6 +252,7 @@ async fn invoke_registered_handler(
         peer,
         principal,
         authenticated_via_token,
+        listener_authorized_cluster_action,
     } = invocation;
     let entry = broker.handlers().get(api_key).ok_or_else(|| {
         crate::error::BrokerError::UnsupportedApi {
@@ -200,12 +261,14 @@ async fn invoke_registered_handler(
         }
     })?;
     match entry.kind() {
-        // A plain handler takes no session at all. `AllocateProducerIds` (67)
-        // is the one api key that is both `ApiKeys.forwardable` and registered
-        // this way, and a JVM broker forwards it to obtain a producer-id block
-        // before any producer of its own can initialise, so the `Envelope`
-        // path has to reach it. The envelope's `ClusterAction` gate has
-        // already run by the time this is called.
+        // A plain handler takes no session at all. `AssignReplicasToDirs` (73)
+        // reaches it straight off the listener, and `AllocateProducerIds` (67)
+        // through the `Envelope` path -- 67 is the one api key that is both
+        // `ApiKeys.forwardable` and registered this way, and a JVM broker
+        // forwards it to obtain a producer-id block before any producer of its
+        // own can initialise, so the `Envelope` path has to reach it. The
+        // envelope's `ClusterAction` gate has already run by the time this is
+        // called.
         DispatchKind::Plain(handler) => handler(broker, api_version, correlation_id, body).await,
         DispatchKind::Context(handler) => {
             let context = RequestContext::new(
@@ -216,6 +279,11 @@ async fn invoke_registered_handler(
                 false,
                 "CONTROLLER",
             );
+            let context = if listener_authorized_cluster_action {
+                context.listener_authorized_for_cluster_action()
+            } else {
+                context
+            };
             handler(broker, api_version, correlation_id, body, &context).await
         }
         DispatchKind::Auth(handler) => {
@@ -278,6 +346,10 @@ async fn serve_envelope(
                     // caller from minting or renewing another token, and that
                     // rule has to follow the identity it belongs to.
                     authenticated_via_token: token_authenticated,
+                    // The listener authorized the forwarding broker for
+                    // `ClusterAction`, not the client this request runs as, so
+                    // the embedded handler faces its own ACL gate.
+                    listener_authorized_cluster_action: false,
                 },
             )
             .await
@@ -386,14 +458,20 @@ mod tests {
 
     use super::*;
 
+    /// The Kafka 4.x controller-listener set, as a live
+    /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
+    /// set the 4.0.0 request schemas tag `controller`), minus the keys the
+    /// controller listener answers without this router and the four it does
+    /// not answer at all.
     #[test]
-    fn supported_set_matches_kip_919_shared_handlers_plus_envelope() {
+    fn supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
 
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
             keys == maplit::btreeset! {
-                29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 58, 64,
+                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 58,
+                63, 64, 73,
             }
         );
     }
@@ -420,7 +498,6 @@ mod tests {
                 })
         );
     }
-
     fn request(api_key: i16, api_version: i16) -> ControllerAdminRequest {
         ControllerAdminRequest {
             api_key,
@@ -453,5 +530,79 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// `AssignReplicasToDirs` is the one advertised key whose broker handler
+    /// takes no principal and no connection, so it is the only key that
+    /// reaches the [`DispatchKind::Plain`] arm straight off the listener
+    /// rather than through an `Envelope`. Route it against a bound broker and
+    /// decode
+    /// what comes back, which is what proves the arm hands the body to the
+    /// registry rather than falling through to the incompatible-kind error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_plain_kind_api_key_routes_to_the_broker_registry() {
+        use krabka_protocol::{Decode as _, Encode as _};
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind data listener");
+        let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind controller listener");
+        let data_addr = data_listener.local_addr().expect("data addr");
+        let controller_addr = controller_listener.local_addr().expect("controller addr");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.listen_addr = data_addr;
+        config.advertised_listener = data_addr.to_string();
+        config.controller_listen_addr = controller_addr;
+        config.controller_quorum_voters =
+            vec![(krabka_raft::NodeId(1), controller_addr.to_string())];
+        let handle = crate::Broker::start_with_listeners(
+            config,
+            Some(controller_listener),
+            Some(data_listener),
+        )
+        .await
+        .expect("broker start");
+        handle.wait_until_controller_leader().await;
+
+        let router = BrokerControllerAdminRouter::new();
+        router.bind(handle.broker_for_test()).expect("bind once");
+
+        let api_key = krabka_protocol::owned::assign_replicas_to_dirs_request::API_KEY;
+        let api_version = krabka_protocol::owned::assign_replicas_to_dirs_request::MAX_VERSION;
+        let mut body = bytes::BytesMut::new();
+        krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
+            broker_id: 1,
+            broker_epoch: -1,
+            directories: Vec::new(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }
+        .encode(&mut body, api_version)
+        .expect("encode the request body");
+
+        let answer = router
+            .route(ControllerAdminRequest {
+                body: body.freeze(),
+                ..request(api_key, api_version)
+            })
+            .await
+            .expect("the plain arm routes without error")
+            .expect("a routed key answers with a body");
+
+        let mut cursor = answer.body.clone();
+        let decoded = krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::decode(
+            &mut cursor,
+            api_version,
+        )
+        .expect("decode the routed response");
+
+        check!(answer.flexible);
+        check!(
+            decoded
+                == krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::default()
+        );
+        handle.shutdown().await;
     }
 }
