@@ -133,6 +133,16 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "connection_closes",
+            "Cumulative count of closed client connections, labelled by the \
+             reason the per-connection serve loop stopped reading frames: \
+             idle, sasl_session_expired, decode_error, peer_closed. Alert on \
+             rate(...{reason=\"idle\"}[5m]) to catch a peer that connects and \
+             then sends nothing.",
+            self.connection_closes.clone(),
+        );
+
+        registry.register(
             "request_errors",
             "Per-Kafka-API count of requests whose handler \
              returned an error (dispatcher closed the connection). \

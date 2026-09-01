@@ -3,7 +3,8 @@
 //!
 //! This is the whole source-precedence decision, one resource type at a time:
 //! a topic's dynamic overrides, a broker's per-node override over the cluster
-//! default plus the static `node.id`, a client-metrics subscription's
+//! default plus its static `node.id` and static broker configs, a
+//! client-metrics subscription's
 //! effective values, and a group's dynamic overrides over the streams
 //! defaults. Every other resource type gets an empty configs list and no
 //! error.
@@ -12,11 +13,14 @@ use krabka_protocol::owned::describe_configs_response::{
     DescribeConfigsResourceResult, DescribeConfigsResult,
 };
 
-use super::wire::{
-    CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
-    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP, CONFIG_SOURCE_DYNAMIC_TOPIC,
-    CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS,
-    RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC, make_entry,
+use super::{
+    static_configs::static_broker_entries,
+    wire::{
+        CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
+        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
+        CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER,
+        RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC, make_entry,
+    },
 };
 use crate::{codes, config_keys};
 
@@ -33,6 +37,7 @@ pub(super) fn describe_one(
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    broker_config: &crate::config::BrokerConfig,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -125,13 +130,21 @@ pub(super) fn describe_one(
                 entry
             })
             .collect();
-        if let Some(node_id) = node_id
-            && key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id"))
-        {
-            let mut entry =
-                make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
-            entry.read_only = true;
-            configs.push(entry);
+        if let Some(node_id) = node_id {
+            // The static configs go with `node.id`: both describe this node
+            // rather than the cluster, so Kafka reports neither for the
+            // cluster-default (`--entity-default`) broker resource.
+            if key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id")) {
+                let mut entry =
+                    make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
+                entry.read_only = true;
+                configs.push(entry);
+            }
+            configs.extend(
+                static_broker_entries(broker_config)
+                    .into_iter()
+                    .filter(|entry| key_filter.is_none_or(|keys| keys.contains(&entry.name))),
+            );
             configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
         }
         return ok(configs);

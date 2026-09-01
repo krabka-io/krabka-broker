@@ -43,7 +43,7 @@ use self::{
     registry::{DispatchContext, send_registry_response},
     response::{encode_response, maybe_apply_request_quota},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
-    session::{initial_connection_auth, next_connection_frame},
+    session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
 };
 use crate::{broker::Broker, codes, handlers::ApiKeyCode, network::codec};
 
@@ -219,6 +219,14 @@ async fn serve_connection_stream<S>(
     // gauge is decremented when `_conn` drops on any loop exit (EOF,
     // decode/send error, or SASL-session expiry).
     let _conn = ActiveConnectionGuard::new(&broker.metrics);
+    // Resolved once: the listener's `connections.max.idle.ms`, with its
+    // per-listener override already applied. `next_connection_frame` re-arms
+    // the deadline from it on every frame read.
+    let frame_wait = FrameWaitPolicy {
+        idle: broker.config.connections_max_idle_for(&spec.name),
+        peer,
+        metrics: broker.metrics.clone(),
+    };
     tracing::info!(listener = %spec.name, sasl = is_sasl_listener, "connection opened");
 
     // KIP-714 client software identity, populated by the first ApiVersions v3+ request.
@@ -227,7 +235,7 @@ async fn serve_connection_stream<S>(
     let mut client_software = (String::new(), String::new());
 
     loop {
-        let Some(frame) = next_connection_frame(&mut framed, &auth).await else {
+        let Some(frame) = next_connection_frame(&mut framed, &auth, &frame_wait).await else {
             break;
         };
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {

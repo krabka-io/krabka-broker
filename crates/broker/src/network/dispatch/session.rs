@@ -1,6 +1,15 @@
-//! Per-connection authentication session state. It derives the initial
-//! `ConnectionAuth` for a listener, borrows the connection's principal, and
-//! arms the KIP-368 session-expiry deadline that races the next frame read.
+//! Per-connection session state. It derives the initial `ConnectionAuth` for
+//! a listener, borrows the connection's principal, and arms the two deadlines
+//! that race the next frame read: the KIP-368 SASL session expiry and the
+//! `connections.max.idle.ms` idle window.
+//!
+//! The two are independent. The SASL deadline is a property of the credential
+//! and only exists on a connection whose token carries an `exp`; the idle
+//! deadline is a property of the listener, applies whatever the connection's
+//! auth state, and is re-armed from `Instant::now()` every time
+//! [`next_connection_frame`] is entered — that is, after every frame read.
+//! Whichever deadline is nearer closes the connection, because both are arms
+//! of the same `select!`.
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -107,31 +116,76 @@ fn auth_deadline(auth: &crate::network::auth::ConnectionAuth) -> Option<tokio::t
     }
 }
 
+/// What the connection is held to while it waits for its next frame: the
+/// listener's idle window, the peer it belongs to, and the metrics handle the
+/// close is counted on.
+///
+/// The idle window is `None` when the listener expires no connection, which is
+/// what a non-positive `connections.max.idle.ms` asks for.
+pub(super) struct FrameWaitPolicy {
+    pub(super) idle: Option<std::time::Duration>,
+    pub(super) peer: std::net::SocketAddr,
+    pub(super) metrics: crate::metrics::BrokerMetrics,
+}
+
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     auth: &crate::network::auth::ConnectionAuth,
+    policy: &FrameWaitPolicy,
 ) -> Option<Bytes>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    use crate::metrics::ConnectionCloseReason;
+
+    // Re-armed here, so every frame read resets the idle window. The SASL
+    // deadline is absolute and is not reset by traffic, so the nearer of the
+    // two is what closes the connection.
+    let idle_deadline = policy
+        .idle
+        .map(|window| tokio::time::Instant::now() + window);
     let frame_result = tokio::select! {
         biased;
         next = framed.next() => next,
         () = sleep_until_some(auth_deadline(auth)) => {
             tracing::info!(
                 principal = ?auth_principal_name(auth),
+                peer = %policy.peer,
                 "SASL session expired, closing connection (KIP-368)"
             );
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::SaslSessionExpired);
+            return None;
+        }
+        () = sleep_until_some(idle_deadline) => {
+            tracing::info!(
+                principal = principal_or_anonymous(auth).name.as_str(),
+                peer = %policy.peer,
+                idle_ms = policy.idle.unwrap_or_default().as_millis(),
+                "connection idle past connections.max.idle.ms, closing"
+            );
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::Idle);
             return None;
         }
     };
     match frame_result {
         Some(Ok(bytes)) => Some(bytes.freeze()),
         Some(Err(error)) => {
-            tracing::warn!(%error, "frame decode error, closing");
+            tracing::warn!(%error, peer = %policy.peer, "frame decode error, closing");
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::DecodeError);
             None
         }
-        None => None,
+        None => {
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::PeerClosed);
+            None
+        }
     }
 }
 

@@ -25,6 +25,39 @@ fn image_with_broker_config(node_id: u64, key: &str, value: &str) -> MetadataIma
     img
 }
 
+/// The idle-window entry a `BrokerConfig::default()` reports: Kafka's 600000,
+/// left unset, and outside the dynamically-alterable set.
+fn default_idle_entry() -> DescribeConfigsResourceResult {
+    DescribeConfigsResourceResult {
+        name: "connections.max.idle.ms".into(),
+        value: Some("600000".into()),
+        read_only: true,
+        config_source: super::CONFIG_SOURCE_DEFAULT,
+        ..Default::default()
+    }
+}
+
+/// Describes one named broker resource against `config`, with no dynamic
+/// overrides in the metadata image.
+fn describe_broker(
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    config: &crate::config::BrokerConfig,
+) -> DescribeConfigsResult {
+    super::describe_one(
+        &MetadataImage::new(Uuid::nil()),
+        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type: super::RESOURCE_TYPE_BROKER,
+            resource_name: resource_name.into(),
+            configuration_keys,
+            ..Default::default()
+        },
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        config,
+    )
+}
+
 #[test]
 fn broker_resource_name_invalid_fails_parse() {
     // Non-numeric resource_name must fail to parse as NodeId.
@@ -67,6 +100,7 @@ fn topic_describe_one_preserves_result_and_filtered_config_fields() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     let expected = DescribeConfigsResult {
@@ -116,6 +150,7 @@ fn topic_describe_reports_the_fixed_data_path_key_as_read_only() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     let expected = DescribeConfigsResult {
@@ -165,6 +200,7 @@ fn broker_describe_one_rejects_non_numeric_resource_name_with_fields() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     let expected = DescribeConfigsResult {
@@ -251,11 +287,13 @@ fn broker_describe_inherits_default_and_prefers_per_broker_override() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     assert!(
         result.configs
             == vec![
+                default_idle_entry(),
                 super::make_entry(
                     "follower.replication.throttled.rate",
                     "512",
@@ -301,6 +339,7 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     assert!(
@@ -313,6 +352,7 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
                     config_source: super::CONFIG_SOURCE_DYNAMIC_BROKER,
                     ..Default::default()
                 },
+                default_idle_entry(),
                 DescribeConfigsResourceResult {
                     name: "node.id".into(),
                     value: Some("1".into()),
@@ -331,30 +371,83 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
     );
 }
 
+/// A broker with no dynamic overrides still answers with the static values
+/// that describe the node it is: `node.id`, and the idle window at Kafka's
+/// 600000 default, which reads `DEFAULT_CONFIG` because nobody set it.
 #[test]
-fn broker_describe_without_overrides_includes_static_node_id() {
-    let result = super::describe_one(
-        &MetadataImage::new(Uuid::nil()),
-        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
-            resource_type: super::RESOURCE_TYPE_BROKER,
-            resource_name: "7".into(),
-            configuration_keys: None,
-            ..Default::default()
-        },
-        300_000,
-        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    );
+fn broker_describe_without_overrides_includes_the_static_configs() {
+    let result = describe_broker("7", None, &crate::config::BrokerConfig::default());
 
     assert!(
         result.configs
-            == vec![DescribeConfigsResourceResult {
-                name: "node.id".into(),
-                value: Some("7".into()),
-                read_only: true,
-                config_source: super::CONFIG_SOURCE_STATIC_BROKER,
-                ..Default::default()
-            }]
+            == vec![
+                default_idle_entry(),
+                DescribeConfigsResourceResult {
+                    name: "node.id".into(),
+                    value: Some("7".into()),
+                    read_only: true,
+                    config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                    ..Default::default()
+                },
+            ]
     );
+}
+
+/// An idle window an operator set, and the per-listener override that goes
+/// with it, both report as static broker configs an alter cannot move.
+#[test]
+fn broker_describe_reports_a_set_idle_window_and_its_listener_override() {
+    let config = crate::config::BrokerConfig {
+        connections_max_idle: krabka_units::secs(30),
+        connections_max_idle_overrides: std::iter::once((
+            "EXTERNAL".to_string(),
+            krabka_units::secs(5),
+        ))
+        .collect(),
+        ..crate::config::BrokerConfig::default()
+    };
+
+    let result = describe_broker("7", None, &config);
+
+    assert!(
+        result.configs
+            == vec![
+                DescribeConfigsResourceResult {
+                    name: "connections.max.idle.ms".into(),
+                    value: Some("30000".into()),
+                    read_only: true,
+                    config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                    ..Default::default()
+                },
+                DescribeConfigsResourceResult {
+                    name: "listener.name.external.connections.max.idle.ms".into(),
+                    value: Some("5000".into()),
+                    read_only: true,
+                    config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                    ..Default::default()
+                },
+                DescribeConfigsResourceResult {
+                    name: "node.id".into(),
+                    value: Some("7".into()),
+                    read_only: true,
+                    config_source: super::CONFIG_SOURCE_STATIC_BROKER,
+                    ..Default::default()
+                },
+            ]
+    );
+}
+
+/// A `configuration_keys` filter selects among the static entries the same way
+/// it selects among the dynamic ones.
+#[test]
+fn broker_describe_filters_the_static_configs_by_requested_key() {
+    let result = describe_broker(
+        "7",
+        Some(vec!["connections.max.idle.ms".into()]),
+        &crate::config::BrokerConfig::default(),
+    );
+
+    assert!(result.configs == vec![default_idle_entry()]);
 }
 
 #[test]
@@ -376,6 +469,7 @@ fn empty_broker_name_describes_cluster_defaults() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
 
     assert!(
@@ -411,6 +505,7 @@ fn client_metrics_describe_emits_defaults() {
         r,
         12_345,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
     assert2::assert!((res.error_code) == (crate::codes::NONE));
     let by_name: std::collections::HashMap<_, _> =
@@ -454,6 +549,7 @@ fn group_describe_merges_dynamic_overrides_with_defaults() {
         },
         300_000,
         &StreamsGroupConfig::default(),
+        &crate::config::BrokerConfig::default(),
     );
     let by_name: std::collections::HashMap<_, _> = result
         .configs

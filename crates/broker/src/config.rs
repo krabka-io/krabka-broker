@@ -96,6 +96,10 @@ pub const DEFAULT_TXN_ABORT_CLEANUP_INTERVAL: Time = secs(10);
 /// Default TLS material reload polling interval.
 pub const DEFAULT_TLS_RELOAD_INTERVAL: Time = secs(30);
 
+/// Default connection idle window. Matches Apache Kafka's
+/// `connections.max.idle.ms`, whose default is 600000.
+pub const DEFAULT_CONNECTIONS_MAX_IDLE: Time = minutes(10);
+
 /// Default `RemoteLogManager` copy / retention cadence.
 pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
 

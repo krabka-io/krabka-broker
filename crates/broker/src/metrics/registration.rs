@@ -92,6 +92,7 @@ impl BrokerMetrics {
             }),
             in_flight_requests: Gauge::default(),
             active_connections: Gauge::default(),
+            connection_closes: Family::default(),
             request_errors: Family::default(),
             tiered_storage_rlmm_topic_backed: Gauge::default(),
             tiered_storage_rlmm_bootstrap_attempts: Counter::default(),

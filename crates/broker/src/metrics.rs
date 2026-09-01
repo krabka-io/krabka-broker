@@ -37,8 +37,9 @@ mod traffic;
 pub(crate) use self::labels::UNKNOWN_LABEL;
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel,
+    DirectoryLabel, PartitionLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel,
+    TopicLabel, WalShardLabel, WalVoterLabel,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -225,6 +226,15 @@ pub struct BrokerMetrics {
     /// (EOF, error, or SASL-session expiry). Mirrors Kafka's
     /// `kafka.network:type=Acceptor` connection-count intent.
     pub active_connections: Gauge,
+    /// Cumulative count of closed client connections, labelled by the reason
+    /// the per-connection serve loop stopped reading frames. Kafka has no one
+    /// counterpart; the closest are
+    /// `kafka.network:type=Selector,name=connection-close-total` and the
+    /// `expired-connections-killed-count` that only counts the idle arm.
+    /// `rate(connection_closes_total{reason="idle"}[5m])` is the signal that a
+    /// peer is opening connections and then sending nothing, which the
+    /// `max.connections`/`max.connections.per.ip` caps alone do not surface.
+    pub connection_closes: Family<ConnectionCloseReasonLabel, Counter>,
     /// Per-Kafka-API counter of requests whose handler
     /// returned an error (the dispatcher closed the connection). Labelled
     /// by the `ApiKey` variant name; disjoint from

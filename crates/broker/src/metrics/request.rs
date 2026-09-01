@@ -2,7 +2,9 @@
 //! request counters, the request-latency histogram, and the resolution of a
 //! wire `api_key` to the bounded label those families share.
 
-use super::{ApiKeyLabel, BrokerMetrics, UNKNOWN_LABEL};
+use super::{
+    ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, UNKNOWN_LABEL,
+};
 
 impl BrokerMetrics {
     /// Account one dispatched request for `api_key`. The label is the
@@ -38,6 +40,16 @@ impl BrokerMetrics {
         self.request_duration_seconds
             .get_or_create(&lbl)
             .observe(seconds);
+    }
+
+    /// Account one closed client connection under the reason the
+    /// per-connection serve loop stopped reading frames. The label set is the
+    /// closed [`ConnectionCloseReason`] enum, so the family holds at most one
+    /// series per reason.
+    pub fn record_connection_close(&self, reason: ConnectionCloseReason) {
+        self.connection_closes
+            .get_or_create(&ConnectionCloseReasonLabel { reason })
+            .inc();
     }
 
     /// Account one request whose handler returned an error (the
@@ -236,5 +248,37 @@ mod tests {
         assert!(buf.contains("api_key=\"Unknown\""), "unknown label missing");
         // Keep `produce` referenced to document the intended label.
         let _ = produce;
+    }
+
+    /// Each reason is its own series, and the four together are the whole
+    /// label set: a reason the enum does not name cannot reach the counter.
+    #[tokio::test]
+    async fn connection_closes_render_one_series_per_reason() {
+        let m = BrokerMetrics::new();
+        for reason in ConnectionCloseReason::ALL {
+            m.record_connection_close(reason);
+        }
+        m.record_connection_close(ConnectionCloseReason::Idle);
+
+        let mut buf = String::new();
+        let r = m.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+
+        // A `Family` renders its series in map order, so sort before
+        // comparing: what matters is the set of series and their values.
+        let mut rendered: Vec<&str> = buf
+            .lines()
+            .filter(|line| line.starts_with("krabka_broker_connection_closes_total{"))
+            .collect();
+        rendered.sort_unstable();
+        assert!(
+            rendered
+                == vec![
+                    "krabka_broker_connection_closes_total{reason=\"decode_error\"} 1",
+                    "krabka_broker_connection_closes_total{reason=\"idle\"} 2",
+                    "krabka_broker_connection_closes_total{reason=\"peer_closed\"} 1",
+                    "krabka_broker_connection_closes_total{reason=\"sasl_session_expired\"} 1",
+                ]
+        );
     }
 }

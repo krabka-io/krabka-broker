@@ -14,6 +14,10 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
+//! A named broker resource also carries the static configs in
+//! [`static_configs`] — `connections.max.idle.ms` and its per-listener
+//! overrides — which live in `BrokerConfig` rather than in the metadata image.
+//!
 //! One stored topic override is read-only too:
 //! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
 //! when it is opened, so both alter paths refuse to change it and
@@ -52,6 +56,7 @@ use krabka_units::convert::TimeExt as _;
 
 mod authz;
 mod resources;
+mod static_configs;
 mod wire;
 
 use self::{
@@ -105,6 +110,7 @@ pub(crate) fn handle(
                         r,
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
+                        &broker.config,
                     )
                 }
             })

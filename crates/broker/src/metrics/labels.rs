@@ -219,3 +219,56 @@ pub struct BreakGlassStateLabel {
 pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
 }
+
+/// Why a per-connection serve loop stopped reading frames.
+///
+/// The four reasons are every way the frame read can end, so a closed enum
+/// bounds the `connection_closes` label set at four series however many
+/// connections the broker serves.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum ConnectionCloseReason {
+    /// The connection sent no complete frame within `connections.max.idle.ms`.
+    Idle,
+    /// KIP-368: the SASL session passed the token's expiry without an in-band
+    /// re-authentication.
+    SaslSessionExpired,
+    /// The client sent bytes that the length-delimited codec refused.
+    DecodeError,
+    /// The client closed its end of the connection.
+    PeerClosed,
+}
+
+impl ConnectionCloseReason {
+    /// Every reason, in the order the module documents them.
+    pub const ALL: [Self; 4] = [
+        Self::Idle,
+        Self::SaslSessionExpired,
+        Self::DecodeError,
+        Self::PeerClosed,
+    ];
+
+    /// The `reason` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SaslSessionExpired => "sasl_session_expired",
+            Self::DecodeError => "decode_error",
+            Self::PeerClosed => "peer_closed",
+        }
+    }
+}
+
+impl EncodeLabelValue for ConnectionCloseReason {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Connection-close label set, paired with the `connection_closes` counter
+/// family. Cardinality is bounded at four, because the field is the closed
+/// [`ConnectionCloseReason`] enum and no caller can name a fifth reason.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConnectionCloseReasonLabel {
+    pub reason: ConnectionCloseReason,
+}

@@ -92,6 +92,29 @@ impl BrokerConfig {
         }]
     }
 
+    /// The idle window a connection accepted on `listener_name` is held to.
+    ///
+    /// A per-listener override wins over the broker-wide
+    /// `connections_max_idle`; names are matched without ASCII case, because
+    /// Kafka spells the override key with a lowercased listener name
+    /// (`listener.name.plaintext.connections.max.idle.ms`) while the listener
+    /// itself is conventionally uppercase.
+    ///
+    /// `None` means this listener expires no connection. A non-positive
+    /// configured value asks for that, the way Kafka's `Selector` arms no
+    /// `IdleExpiryManager` when `connections.max.idle.ms` is not positive.
+    #[must_use]
+    pub fn connections_max_idle_for(&self, listener_name: &str) -> Option<std::time::Duration> {
+        use krabka_units::convert::TimeExt as _;
+
+        let configured = self
+            .connections_max_idle_overrides
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(listener_name))
+            .map_or(self.connections_max_idle, |(_, value)| *value);
+        (configured.millis_i64() > 0).then(|| configured.to_std())
+    }
+
     pub(super) fn validate_outbound_sasl(
         &self,
         inter_broker: &ListenerSpec,
@@ -353,5 +376,78 @@ mod tests {
             c.validate(),
             Err(BrokerError::GssapiConfigMissing)
         ));
+    }
+}
+
+#[cfg(test)]
+mod connections_max_idle_tests {
+    use assert2::assert;
+    use krabka_units::{Time, convert::TimeExt as _, millis, secs};
+
+    use crate::config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE};
+
+    /// A broker-wide window of `idle` with the named per-listener overrides.
+    fn config(idle: Time, overrides: &[(&str, Time)]) -> BrokerConfig {
+        BrokerConfig {
+            connections_max_idle: idle,
+            connections_max_idle_overrides: overrides
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), *value))
+                .collect(),
+            ..BrokerConfig::default()
+        }
+    }
+
+    #[test]
+    fn an_unnamed_listener_gets_kafkas_ten_minute_default() {
+        // Kafka spells the default 600000, which is the ten minutes below.
+        assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
+        assert!(
+            BrokerConfig::default().connections_max_idle_for("PLAINTEXT")
+                == Some(std::time::Duration::from_mins(10))
+        );
+    }
+
+    #[test]
+    fn a_listener_override_wins_over_the_broker_wide_window() {
+        let config = config(secs(600), &[("EXTERNAL", secs(20))]);
+        assert!(
+            config.connections_max_idle_for("EXTERNAL") == Some(std::time::Duration::from_secs(20))
+        );
+        assert!(
+            config.connections_max_idle_for("INTERNAL") == Some(std::time::Duration::from_mins(10))
+        );
+    }
+
+    /// Kafka lowercases the listener name in `listener.name.<name>.…`, so an
+    /// override written the Kafka way still has to find an uppercase listener.
+    #[test]
+    fn an_override_matches_its_listener_without_ascii_case() {
+        let config = config(secs(600), &[("external", secs(20))]);
+        assert!(
+            config.connections_max_idle_for("EXTERNAL") == Some(std::time::Duration::from_secs(20))
+        );
+    }
+
+    /// Kafka arms no idle-expiry manager for a non-positive
+    /// `connections.max.idle.ms`, so neither does krabka -- broker-wide and
+    /// per-listener alike.
+    #[test]
+    fn a_non_positive_window_expires_nothing() {
+        assert!(
+            config(millis(0), &[])
+                .connections_max_idle_for("PLAINTEXT")
+                .is_none()
+        );
+        assert!(
+            config(Time::from_millis(-1), &[])
+                .connections_max_idle_for("PLAINTEXT")
+                .is_none()
+        );
+        assert!(
+            config(secs(600), &[("EXTERNAL", millis(0))])
+                .connections_max_idle_for("EXTERNAL")
+                .is_none()
+        );
     }
 }

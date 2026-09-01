@@ -7,6 +7,7 @@
 //! writes them under the fill-or-replace rules the file config uses.
 
 use krabka_security::ListenerProtocol;
+use krabka_units::Time;
 
 use super::{FileClientAuthMode, FileListener, FileTlsConfig};
 
@@ -15,6 +16,7 @@ pub(super) struct ListenerSettings {
     pub(super) inter_broker_listener_name: Option<String>,
     pub(super) max_connections: Option<usize>,
     pub(super) max_connections_per_ip: Option<usize>,
+    pub(super) connections_max_idle: Option<Time>,
     pub(super) server_properties: std::collections::BTreeMap<String, String>,
     pub(super) controller_listener_protocol: Option<ListenerProtocol>,
     pub(super) tls_config: Option<FileTlsConfig>,
@@ -27,6 +29,18 @@ pub(super) fn apply_listener_settings(
 ) {
     let had_file_listeners = !settings.listeners.is_empty();
     if had_file_listeners {
+        // Read the per-listener idle overrides before `into_spec` consumes
+        // each entry. They are keyed by listener name, which is how the
+        // dispatch loop and `DescribeConfigs` both look one up.
+        cfg.connections_max_idle_overrides = settings
+            .listeners
+            .iter()
+            .filter_map(|listener| {
+                listener
+                    .connections_max_idle
+                    .map(|idle| (listener.name.clone(), idle))
+            })
+            .collect();
         cfg.listeners = settings
             .listeners
             .into_iter()
@@ -55,6 +69,11 @@ pub(super) fn apply_listener_settings(
         && cfg.max_connections_per_ip == defaults.max_connections_per_ip
     {
         cfg.max_connections_per_ip = maximum;
+    }
+    if let Some(idle) = settings.connections_max_idle
+        && cfg.connections_max_idle == defaults.connections_max_idle
+    {
+        cfg.connections_max_idle = idle;
     }
     if cfg.features.transaction_two_phase_commit_enable
         == defaults.features.transaction_two_phase_commit_enable
@@ -145,6 +164,59 @@ max_connections_per_ip = 8
         assert!(cfg.max_connections == usize::MAX);
         assert!(cfg.max_connections_per_ip == usize::MAX);
     }
+    /// The idle window comes in two places: a top-level key for the broker
+    /// and a per-listener key that wins for the listener that carries it.
+    #[test]
+    fn apply_to_maps_the_idle_window_and_its_per_listener_override() {
+        use std::time::Duration;
+
+        use crate::config::BrokerConfig;
+
+        let src = r#"
+inter_broker_listener_name = "INTERNAL"
+connections_max_idle = "45s"
+
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "demo-0:9092"
+protocol = "Plaintext"
+
+[[listeners]]
+name = "EXTERNAL"
+bind_addr = "0.0.0.0:9094"
+advertised = "10.0.1.5:32100"
+protocol = "Plaintext"
+connections_max_idle = "5s"
+"#;
+        let file: FileConfig = toml::from_str(src).unwrap();
+        let mut cfg = BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+
+        check!(cfg.connections_max_idle == krabka_units::secs(45));
+        check!(
+            cfg.connections_max_idle_overrides
+                == maplit::btreemap! {"EXTERNAL".to_string() => krabka_units::secs(5)}
+        );
+        check!(cfg.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(5)));
+        check!(cfg.connections_max_idle_for("INTERNAL") == Some(Duration::from_secs(45)));
+    }
+
+    /// Omitted everywhere, the broker keeps Kafka's 600000 default and no
+    /// listener carries an override.
+    #[test]
+    fn apply_to_omitted_idle_window_keeps_kafkas_default() {
+        use crate::config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE};
+
+        let file: FileConfig = toml::from_str("broker_id = 0").unwrap();
+        assert!(file.connections_max_idle.is_none());
+
+        let mut cfg = BrokerConfig::default();
+        file.apply_to(&mut cfg).unwrap();
+        assert!(cfg.connections_max_idle == DEFAULT_CONNECTIONS_MAX_IDLE);
+        assert!(cfg.connections_max_idle_overrides.is_empty());
+    }
+
     #[test]
     fn apply_to_reads_two_phase_commit_enable_from_server_properties() {
         use crate::config::BrokerConfig;
