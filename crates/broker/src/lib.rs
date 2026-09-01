@@ -189,6 +189,7 @@ pub mod disk_scanner;
 mod diskless;
 #[cfg(test)]
 mod diskless_crash_model;
+pub(crate) mod elr;
 mod error;
 mod features;
 pub mod fetch_session;

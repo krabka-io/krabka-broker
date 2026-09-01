@@ -27,8 +27,8 @@ pub(crate) const WRITE_FREEZE: &str = "write.freeze";
 /// krabka publishes the state as a topic config, exactly as it publishes
 /// broker fencing as [`super::broker_scope::BROKER_FENCED`]. The value holds
 /// every partition that has ELR state;
-/// [`TopicElr::parse`](crate::handlers::elr::TopicElr::parse) documents the
-/// grammar and is the only reader.
+/// [`TopicElr::parse`](crate::elr::state::TopicElr::parse) documents the
+/// grammar, and [`crate::elr::maintain`] is the only writer.
 ///
 /// The name is krabka-private, like [`super::DISKLESS`], because Kafka has no
 /// topic config for this: `eligible.leader.replicas.version` is a cluster

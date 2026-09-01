@@ -92,7 +92,6 @@ pub(crate) mod describe_user_scram_credentials;
 pub(crate) mod elect_leaders;
 // KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
 // reports, read out of the metadata image.
-pub(crate) mod elr;
 pub(crate) mod expire_delegation_token;
 pub(crate) mod fetch;
 pub(crate) mod fetch_downconvert;

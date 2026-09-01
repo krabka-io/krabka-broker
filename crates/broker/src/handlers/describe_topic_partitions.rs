@@ -34,7 +34,7 @@
 //! Every partition row carries `eligible_leader_replicas` and `last_known_elr`
 //! from what the metadata image holds for the topic, always as a list and
 //! never as null. This is the only API that reports ELR; Kafka's Metadata
-//! schema has no field for it in any version. See [`crate::handlers::elr`].
+//! schema has no field for it in any version. See [`crate::elr`].
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -54,10 +54,9 @@ use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
+    elr::TopicElr,
     error::BrokerError,
-    handlers::{
-        authorized_operations::authorized_operations_bits, elr::TopicElr, is_internal_topic,
-    },
+    handlers::{authorized_operations::authorized_operations_bits, is_internal_topic},
 };
 
 // The `async fn` shape matches the other inline-intercept handlers
@@ -153,7 +152,7 @@ pub(crate) async fn handle(
         first_topic_partition_offset = 0;
 
         // KIP-966: one read of the topic's published ELR state feeds every
-        // partition row below; see `handlers::elr`.
+        // partition row below; see `crate::elr`.
         let topic_elr = TopicElr::of_topic(&image, name);
 
         let mut row_partitions: Vec<DescribeTopicPartitionsResponsePartition> =
@@ -236,7 +235,7 @@ fn partition_response(
         // never sends null: `Replicas.toList` gives an empty list for a
         // partition with no ELR, and `kafka-topics --describe` renders a null
         // as `N/A` -- "this broker does not know" -- rather than as "none".
-        // See `handlers::elr`.
+        // See `crate::elr`.
         eligible_leader_replicas: Some(elr.eligible_leader_replicas),
         last_known_elr: Some(elr.last_known_elr),
         offline_replicas: crate::handlers::offline_replicas::offline_replicas(
