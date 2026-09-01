@@ -12,16 +12,21 @@ use std::{sync::Arc, time::Duration};
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig, codes};
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-    describe_configs_response::DescribeConfigsResourceResult,
-    list_groups_request::ListGroupsRequest,
-    offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+use krabka_protocol::{
+    owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_response::DescribeConfigsResourceResult,
+        list_groups_request::ListGroupsRequest,
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        offset_commit_request::{
+            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+        },
+        offset_delete_request::{
+            OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
+        },
     },
-    offset_delete_request::{
-        OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
-    },
+    primitives::uuid::Uuid as WireUuid,
 };
 use krabka_units::{millis, minutes};
 
@@ -38,8 +43,32 @@ const CONFIG_SOURCE_DEFAULT: i8 = 5;
 /// source says where the value came from, not whether it differs from the
 /// default.
 const CONFIG_SOURCE_STATIC_BROKER: i8 = 4;
+/// `DescribeConfigsResponse.ConfigType`, which mirrors `ConfigDef.Type`.
+/// `GroupCoordinatorConfig` declares `offsets.retention.minutes` an `INT` and
+/// `offsets.retention.check.interval.ms` a `LONG`.
+const CONFIG_TYPE_INT: i8 = 3;
+const CONFIG_TYPE_LONG: i8 = 5;
 const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
+
+/// The `topic_id` KIP-516 keys a commit by, read back through `Metadata`.
+async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
+    client
+        .send(MetadataRequest {
+            topics: Some(vec![MetadataRequestTopic {
+                name: Some(name.into()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        })
+        .await
+        .expect("Metadata for topic_id")
+        .topics
+        .iter()
+        .find(|topic| topic.name.as_deref() == Some(name))
+        .map(|topic| topic.topic_id)
+        .unwrap_or_default()
+}
 
 async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     Arc::new(
@@ -88,6 +117,7 @@ async fn describe_configs_reports_the_retention_knobs() {
                 value: Some("10080".into()),
                 read_only: true,
                 config_source: CONFIG_SOURCE_DEFAULT,
+                config_type: CONFIG_TYPE_INT,
                 ..Default::default()
             })
     );
@@ -99,6 +129,7 @@ async fn describe_configs_reports_the_retention_knobs() {
                 value: Some("600000".into()),
                 read_only: true,
                 config_source: CONFIG_SOURCE_DEFAULT,
+                config_type: CONFIG_TYPE_LONG,
                 ..Default::default()
             })
     );
@@ -146,6 +177,7 @@ async fn describe_configs_reports_a_named_knob_as_static() {
                     read_only: true,
                     // Untouched, so still inherited.
                     config_source: CONFIG_SOURCE_DEFAULT,
+                    config_type: CONFIG_TYPE_LONG,
                     ..Default::default()
                 },
                 DescribeConfigsResourceResult {
@@ -153,6 +185,7 @@ async fn describe_configs_reports_a_named_knob_as_static() {
                     value: Some("10080".into()),
                     read_only: true,
                     config_source: CONFIG_SOURCE_STATIC_BROKER,
+                    config_type: CONFIG_TYPE_INT,
                     ..Default::default()
                 },
             ]
@@ -180,6 +213,28 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     let broker = Broker::start(config).await.unwrap();
     let client = client_for(&broker).await;
 
+    // `OffsetDelete` resolves each partition against the metadata image, so
+    // the topic has to exist for the delete to reach the log.
+    let created = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: TOPIC.to_string(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 10_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    assert!(created.topics[0].error_code == codes::NONE);
+
+    // KIP-516: `OffsetCommit` negotiates to v10, which carries `topic_id`
+    // rather than the name, so a commit that names only the topic lands under
+    // an empty name and `OffsetDelete` cannot find it again.
+    let topic_id = topic_id_for(&client, TOPIC).await;
+
     let committed = client
         .send(OffsetCommitRequest {
             group_id: GROUP.to_string(),
@@ -187,6 +242,7 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
             member_id: String::new(),
             topics: vec![OffsetCommitRequestTopic {
                 name: TOPIC.to_string(),
+                topic_id,
                 partitions: vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: 5,
@@ -231,6 +287,7 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
         .await
         .expect("OffsetDelete");
     assert!(deleted.error_code == codes::NONE);
+    assert!(deleted.topics[0].partitions[0].error_code == codes::NONE);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while listed(Arc::clone(&client)).await {
