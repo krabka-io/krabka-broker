@@ -76,6 +76,7 @@ use krabka_units::convert::TimeExt as _;
 
 use super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
+    resources::StaticBrokerConfigs,
     wire::CONFIG_SOURCE_STATIC_BROKER,
 };
 use crate::{
@@ -98,7 +99,7 @@ fn listener_connections_max_idle_key(listener_name: &str) -> String {
 /// The idle-window entries a named broker resource reports, filtered by the
 /// request's `configuration_keys`. The caller sorts them in with the rest.
 pub(super) fn idle_window_entries(
-    config: &crate::config::BrokerConfig,
+    configs: StaticBrokerConfigs<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
@@ -111,17 +112,18 @@ pub(super) fn idle_window_entries(
     // Provenance, not a value comparison: an operator who spells out Kafka's
     // own 600000 has still set the key statically, and Kafka says so — so the
     // layer exists exactly when `connections_max_idle` holds a value.
-    let broker_wide = config
-        .effective_connections_max_idle()
+    let broker_wide = configs
+        .connections_max_idle
+        .unwrap_or(DEFAULT_CONNECTIONS_MAX_IDLE)
         .millis_i64()
         .to_string();
-    let broker_wide_layer = config.connections_max_idle.map(|_| Layer {
+    let broker_wide_layer = configs.connections_max_idle.map(|_| Layer {
         source: CONFIG_SOURCE_STATIC_BROKER,
         name: CONNECTIONS_MAX_IDLE_MS,
         value: broker_wide.as_str(),
     });
 
-    let mut entries = Vec::with_capacity(1 + config.connections_max_idle_overrides.len());
+    let mut entries = Vec::with_capacity(1 + configs.connections_max_idle_overrides.len());
     if wanted(CONNECTIONS_MAX_IDLE_MS) {
         let layers: Vec<Layer<'_>> = broker_wide_layer.into_iter().collect();
         entries.push(config_entry(
@@ -132,7 +134,7 @@ pub(super) fn idle_window_entries(
             options,
         ));
     }
-    for (listener, idle) in &config.connections_max_idle_overrides {
+    for (listener, idle) in configs.connections_max_idle_overrides {
         let key = listener_connections_max_idle_key(listener);
         if !wanted(&key) {
             continue;

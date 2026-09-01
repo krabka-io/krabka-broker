@@ -18,7 +18,6 @@
 use krabka_protocol::owned::describe_configs_response::{
     DescribeConfigsResourceResult, DescribeConfigsResult,
 };
-use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -38,63 +37,26 @@ use crate::{
     },
 };
 
+mod static_broker;
 mod write_freeze;
 
 #[cfg(test)]
 mod tests;
 
-use self::write_freeze::write_freeze_override;
-
-/// The broker-scoped values that live in the process's static configuration
-/// rather than in the metadata image, as the operator named them.
-///
-/// `None` is the operator naming nothing: the broker runs the built-in default
-/// and the key reports `DEFAULT_CONFIG`. `Some` is a value that reached the
-/// process through its file, CLI, or environment overlay, which Kafka reports
-/// at `STATIC_BROKER_CONFIG` whatever the value is — `ConfigHelper` asks
-/// whether the key appears in `KafkaConfig.originals`, never whether it
-/// differs from the default. Verified against `apache/kafka:4.3.1`, where a
-/// broker whose properties carry `offsets.retention.minutes=10080` — Kafka's
-/// own default — answers `synonyms={STATIC_BROKER_CONFIG:...=10080,
-/// DEFAULT_CONFIG:...=10080}`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct StaticBrokerConfigs {
-    /// `offsets.retention.minutes`. The configuration refuses a retention that
-    /// is not a whole number of minutes, so the reported value is exact.
-    pub(super) offsets_retention: Option<Time>,
-    /// `offsets.retention.check.interval.ms`.
-    pub(super) offsets_retention_check_interval: Option<Time>,
-}
-
-impl StaticBrokerConfigs {
-    /// The `(key, operator value)` pairs, in the order `DescribeConfigs`
-    /// builds them before the final sort. A `None` value is a key the operator
-    /// never named.
-    fn entries(self) -> [(&'static str, Option<String>); 2] {
-        [
-            (
-                config_keys::OFFSETS_RETENTION_MINUTES,
-                self.offsets_retention
-                    .map(|retention| (retention.millis_i64() / 60_000).to_string()),
-            ),
-            (
-                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-                self.offsets_retention_check_interval
-                    .map(|interval| interval.millis_i64().to_string()),
-            ),
-        ]
-    }
-}
+#[cfg(test)]
+pub(super) use self::static_broker::kafka_default_static_broker;
+pub(super) use self::static_broker::{StaticBrokerConfigs, StaticBrokerSetting};
+use self::{static_broker::static_broker_entries, write_freeze::write_freeze_override};
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    serving_node: krabka_metadata::NodeId,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    static_broker: StaticBrokerConfigs<'_>,
     options: EntryOptions,
-    static_broker: StaticBrokerConfigs,
-    broker_config: &crate::config::BrokerConfig,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -134,15 +96,36 @@ pub(super) fn describe_one(
                     ..Default::default()
                 };
             };
-            Some(krabka_metadata::NodeId(node_id))
+            let node_id = krabka_metadata::NodeId(node_id);
+            // Kafka's `ConfigHelper.describeConfigs`: a broker resource is
+            // answered from the serving process's own configuration, so it
+            // refuses to answer for any other node. The
+            // `kafka-transaction-coordinator`-era `kafka_2.13-4.3.1.jar`
+            // carries the message verbatim -- "Unexpected broker id, expected
+            // <id> or empty string, but received <name>" -- as an
+            // `InvalidRequestException`. The JVM `AdminClient` never sends
+            // one: it routes a broker resource to the node it names.
+            if node_id != serving_node {
+                return DescribeConfigsResult {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some(format!(
+                        "Unexpected broker id, expected {} or empty string, but received {}",
+                        serving_node.0, r.resource_name
+                    )),
+                    resource_type: r.resource_type,
+                    resource_name: r.resource_name,
+                    configs: Vec::new(),
+                    ..Default::default()
+                };
+            }
+            Some(node_id)
         };
         return ok(broker_configs(
             image,
             node_id,
+            static_broker,
             &wanted,
             options,
-            static_broker,
-            broker_config,
         ));
     }
 
@@ -237,13 +220,20 @@ fn topic_configs(
 /// An empty resource name is Kafka's cluster-wide default resource, which
 /// reports the cluster defaults alone. Only keys that hold a value are
 /// reported, which is what a Kafka broker does for this resource type.
+///
+/// A *named* node reports more: `node.id` and the static settings in
+/// [`static_broker_entries`], both read from the running process rather than
+/// from the metadata image, the way Kafka answers `--describe --all` out of a
+/// node's own `server.properties`. That is why [`describe_one`] refuses a
+/// name that is not the serving node: those values belong to this process
+/// alone, and reporting them under another node's id would label one broker's
+/// static configuration as another's.
 fn broker_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: Option<krabka_metadata::NodeId>,
+    static_broker: StaticBrokerConfigs<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
-    static_broker: StaticBrokerConfigs,
-    broker_config: &crate::config::BrokerConfig,
 ) -> Vec<DescribeConfigsResourceResult> {
     let defaults = image.default_broker_config();
     let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
@@ -313,52 +303,11 @@ fn broker_configs(
                 options,
             ));
         }
-        configs.extend(static_broker_configs(static_broker, wanted, options));
-        configs.extend(idle_window_entries(broker_config, wanted, options));
+        configs.extend(static_broker_entries(static_broker, wanted, options));
+        configs.extend(idle_window_entries(static_broker, wanted, options));
         configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     }
     configs
-}
-
-/// The keys the process reads once at startup and no alter path can change.
-///
-/// A key the operator named reports its value at `STATIC_BROKER_CONFIG` above
-/// the default it displaced; one the operator left alone reports the registry
-/// default at `DEFAULT_CONFIG`. Both are read-only because Kafka refuses to
-/// reconfigure them: `kafka-configs --alter --add-config
-/// offsets.retention.minutes=100` answers `InvalidRequestException: Cannot
-/// update these configs dynamically` on `apache/kafka:4.3.1`.
-fn static_broker_configs(
-    static_broker: StaticBrokerConfigs,
-    wanted: &impl Fn(&str) -> bool,
-    options: EntryOptions,
-) -> Vec<DescribeConfigsResourceResult> {
-    static_broker
-        .entries()
-        .into_iter()
-        .filter(|(key, _)| wanted(key))
-        .map(|(key, set_by_operator)| {
-            let row = registry::lookup(ConfigScope::Broker, key);
-            let layers: Vec<Layer<'_>> = set_by_operator
-                .iter()
-                .map(|value| Layer {
-                    source: CONFIG_SOURCE_STATIC_BROKER,
-                    name: key,
-                    value: value.as_str(),
-                })
-                .collect();
-            config_entry(
-                row,
-                key,
-                &layers,
-                DefaultLayer {
-                    value: row.and_then(|row| row.default),
-                    name: Some(key),
-                },
-                options,
-            )
-        })
-        .collect()
 }
 
 /// A KIP-714 client-metrics subscription: all three keys, with the ones the

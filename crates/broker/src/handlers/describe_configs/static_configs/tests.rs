@@ -28,15 +28,33 @@ fn everything(_: &str) -> bool {
     true
 }
 
+/// One case's static configs, owning the override map that the borrowed
+/// [`StaticBrokerConfigs`] view points at.
+struct IdleCase {
+    idle: Option<Time>,
+    overrides: std::collections::BTreeMap<String, Time>,
+}
+
+impl IdleCase {
+    /// The node's static configs, with every key but the idle window left at
+    /// Kafka's built-in default.
+    fn statics(&self) -> StaticBrokerConfigs<'_> {
+        StaticBrokerConfigs {
+            connections_max_idle: self.idle,
+            connections_max_idle_overrides: &self.overrides,
+            ..super::super::resources::kafka_default_static_broker()
+        }
+    }
+}
+
 /// A broker-wide window of `idle` with the named per-listener overrides.
-fn config_with(idle: Option<Time>, overrides: &[(&str, Time)]) -> crate::config::BrokerConfig {
-    crate::config::BrokerConfig {
-        connections_max_idle: idle,
-        connections_max_idle_overrides: overrides
+fn config_with(idle: Option<Time>, overrides: &[(&str, Time)]) -> IdleCase {
+    IdleCase {
+        idle,
+        overrides: overrides
             .iter()
             .map(|(name, value)| ((*name).to_string(), *value))
             .collect(),
-        ..crate::config::BrokerConfig::default()
     }
 }
 
@@ -101,7 +119,7 @@ fn the_idle_windows_source_is_its_provenance_and_not_its_value() {
     ];
     for (case, idle, source) in cases {
         assert!(
-            idle_window_entries(&config_with(idle, &[]), &everything, VALUES_ONLY)
+            idle_window_entries(config_with(idle, &[]).statics(), &everything, VALUES_ONLY)
                 == vec![expected(CONNECTIONS_MAX_IDLE_MS, "600000", source)],
             "{case}"
         );
@@ -111,10 +129,11 @@ fn the_idle_windows_source_is_its_provenance_and_not_its_value() {
 #[test]
 fn a_set_idle_window_and_its_listener_overrides_report_as_static() {
     let entries = idle_window_entries(
-        &config_with(
+        config_with(
             Some(secs(30)),
             &[("PLAINTEXT", millis(15_000)), ("EXTERNAL", secs(45))],
-        ),
+        )
+        .statics(),
         &everything,
         VALUES_ONLY,
     );
@@ -209,7 +228,7 @@ fn requested_synonyms_carry_the_chain_the_container_reports() {
             )
             .collect();
         assert!(
-            idle_window_entries(&config, &everything, WITH_SYNONYMS) == want,
+            idle_window_entries(config.statics(), &everything, WITH_SYNONYMS) == want,
             "{case}"
         );
     }
@@ -219,7 +238,7 @@ fn requested_synonyms_carry_the_chain_the_container_reports() {
 #[test]
 fn unrequested_synonyms_are_never_synthesised() {
     let config = config_with(Some(secs(30)), &[("PLAINTEXT", millis(15_000))]);
-    let entries = idle_window_entries(&config, &everything, VALUES_ONLY);
+    let entries = idle_window_entries(config.statics(), &everything, VALUES_ONLY);
 
     assert!(entries.len() == 2);
     assert!(entries.iter().all(|entry| entry.synonyms.is_empty()));
@@ -232,10 +251,14 @@ fn a_key_filter_selects_among_the_idle_entries() {
     let config = config_with(Some(secs(30)), &[("PLAINTEXT", millis(15_000))]);
     let listener_key = "listener.name.plaintext.connections.max.idle.ms";
 
-    let broker_wide_only =
-        idle_window_entries(&config, &|key| key == CONNECTIONS_MAX_IDLE_MS, VALUES_ONLY);
-    let listener_only = idle_window_entries(&config, &|key| key == listener_key, VALUES_ONLY);
-    let neither = idle_window_entries(&config, &|key| key == "node.id", VALUES_ONLY);
+    let broker_wide_only = idle_window_entries(
+        config.statics(),
+        &|key| key == CONNECTIONS_MAX_IDLE_MS,
+        VALUES_ONLY,
+    );
+    let listener_only =
+        idle_window_entries(config.statics(), &|key| key == listener_key, VALUES_ONLY);
+    let neither = idle_window_entries(config.statics(), &|key| key == "node.id", VALUES_ONLY);
 
     assert!(
         broker_wide_only
@@ -262,7 +285,7 @@ fn a_listener_override_documents_itself_from_the_broker_wide_row() {
     };
 
     let entries = idle_window_entries(
-        &config_with(None, &[("PLAINTEXT", millis(15_000))]),
+        config_with(None, &[("PLAINTEXT", millis(15_000))]).statics(),
         &everything,
         documented,
     );

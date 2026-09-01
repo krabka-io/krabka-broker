@@ -41,57 +41,36 @@ const VALUES_ONLY: EntryOptions = EntryOptions {
     include_documentation: false,
 };
 
-/// A process that names neither KIP-211 retention knob, which is what every
-/// case but the two retention cases runs as.
-const UNTUNED: StaticBrokerConfigs = StaticBrokerConfigs {
-    offsets_retention: None,
-    offsets_retention_check_interval: None,
-};
+/// The node that serves a request no test routes anywhere in particular.
+const SERVING_NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
 
-fn describe(
-    image: &MetadataImage,
-    resource_type: i8,
-    resource_name: &str,
-    configuration_keys: Option<Vec<String>>,
-    options: EntryOptions,
-) -> DescribeConfigsResult {
-    describe_with_static(
-        image,
-        resource_type,
-        resource_name,
-        configuration_keys,
-        options,
-        UNTUNED,
-    )
+/// A process that named none of the four static broker keys, which is what
+/// every case but the ones that tune one runs as.
+fn untuned() -> StaticBrokerConfigs<'static> {
+    super::static_broker::kafka_default_static_broker()
 }
 
-fn describe_with_static(
-    image: &MetadataImage,
-    resource_type: i8,
-    resource_name: &str,
-    configuration_keys: Option<Vec<String>>,
-    options: EntryOptions,
-    static_broker: StaticBrokerConfigs,
-) -> DescribeConfigsResult {
-    describe_with_config(
-        image,
-        resource_type,
-        resource_name,
-        configuration_keys,
-        options,
-        static_broker,
-        &crate::config::BrokerConfig::default(),
-    )
+/// The node a request reaches: a broker resource is served by the node it
+/// names, because the JVM `AdminClient` routes it there and the broker
+/// refuses to answer for anyone else.
+fn serving_node_for(resource_type: i8, resource_name: &str) -> krabka_metadata::NodeId {
+    if resource_type == RESOURCE_TYPE_BROKER {
+        resource_name
+            .parse::<u64>()
+            .map_or(SERVING_NODE, krabka_metadata::NodeId)
+    } else {
+        SERVING_NODE
+    }
 }
 
-fn describe_with_config(
+/// Describe one resource, served by `serving_node`.
+fn describe_at(
+    serving_node: krabka_metadata::NodeId,
     image: &MetadataImage,
     resource_type: i8,
     resource_name: &str,
     configuration_keys: Option<Vec<String>>,
     options: EntryOptions,
-    static_broker: StaticBrokerConfigs,
-    broker_config: &crate::config::BrokerConfig,
 ) -> DescribeConfigsResult {
     describe_one(
         image,
@@ -101,11 +80,58 @@ fn describe_with_config(
             configuration_keys,
             ..Default::default()
         },
+        serving_node,
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        untuned(),
         options,
+    )
+}
+
+/// Describe one resource the way a client reaches it.
+///
+/// The one test that probes the wrong-node refusal drives [`describe_at`]
+/// instead.
+fn describe(
+    image: &MetadataImage,
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    options: EntryOptions,
+) -> DescribeConfigsResult {
+    describe_at(
+        serving_node_for(resource_type, resource_name),
+        image,
+        resource_type,
+        resource_name,
+        configuration_keys,
+        options,
+    )
+}
+
+/// Describe one resource against a process that named some of its static
+/// broker keys.
+fn describe_with_static(
+    image: &MetadataImage,
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    options: EntryOptions,
+    static_broker: StaticBrokerConfigs<'_>,
+) -> DescribeConfigsResult {
+    describe_one(
+        image,
+        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type,
+            resource_name: resource_name.to_owned(),
+            configuration_keys,
+            ..Default::default()
+        },
+        serving_node_for(resource_type, resource_name),
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         static_broker,
-        broker_config,
+        options,
     )
 }
 
@@ -536,6 +562,139 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
 }
 
 #[test]
+fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
+    // None of these keys reaches the metadata image, so a node with no
+    // dynamic override at all is the case where the static layer is the
+    // whole response. `apache/kafka:4.3.1` answers the same way: values from
+    // the node's own configuration, read-only, and the KIP-98 expiry pair and
+    // the KIP-211 retention pair at `DEFAULT_CONFIG` because this node never
+    // moved them off Kafka's built-in defaults. The idle window reports the
+    // same way, and sorts to the head of the response.
+    let result = describe(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "7",
+        None,
+        VALUES_ONLY,
+    );
+
+    assert!(
+        result.configs
+            == vec![
+                DescribeConfigsResourceResult {
+                    name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+                    value: Some("600000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Long.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: NODE_ID.to_owned(),
+                    value: Some("7".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_STATIC_BROKER,
+                    is_sensitive: false,
+                    // The request asked for neither, so the entry carries
+                    // neither, even though the registry has both.
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
+                    value: Some("600000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Long.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
+                    value: Some("10080".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
+                    value: Some("3600000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
+                    value: Some("604800000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            ]
+    );
+}
+
+/// The cluster-default resource carries dynamic defaults alone, in Kafka and
+/// here, so the static expiry keys belong to a named node and to no other
+/// resource.
+#[test]
+fn the_static_expiry_keys_belong_to_a_named_broker_alone() {
+    let image = image_with_broker_config(
+        DEFAULT_BROKER_CONFIG_NODE_ID,
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    for (label, resource_name, expected) in [
+        (
+            "a named node reports both static expiry keys",
+            "1",
+            vec![
+                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+            ],
+        ),
+        (
+            "the cluster-default resource reports neither",
+            "",
+            Vec::new(),
+        ),
+    ] {
+        let result = describe(
+            &image,
+            RESOURCE_TYPE_BROKER,
+            resource_name,
+            Some(vec![
+                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
+                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
+            ]),
+            VALUES_ONLY,
+        );
+        let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+
+        check!(names == expected, "{label}");
+    }
+}
+
+#[test]
 fn the_key_filter_decides_what_a_broker_resource_reports() {
     let image = image_with_broker_config(
         krabka_metadata::NodeId(2),
@@ -556,6 +715,8 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
                 NODE_ID,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                 config_keys::OFFSETS_RETENTION_MINUTES,
+                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
             ],
         ),
         (
@@ -693,6 +854,68 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
             "{key}"
         );
     }
+}
+
+/// Kafka answers a broker resource that names another node with
+/// `InvalidRequestException`, not with that node's configuration:
+/// `ConfigHelper` in the pinned image's `kafka_2.13-4.3.1.jar` carries the
+/// message "Unexpected broker id, expected <id> or empty string, but received
+/// <name>". It has to, because everything a named broker resource reports
+/// beyond the dynamic overrides -- `node.id` and the static expiry settings --
+/// is read out of the serving process. Answering would label one broker's
+/// static configuration as another broker's.
+#[test]
+fn a_broker_resource_that_names_another_node_is_refused() {
+    let image = image_with_broker_config(
+        krabka_metadata::NodeId(2),
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    let result = describe_at(
+        krabka_metadata::NodeId(1),
+        &image,
+        RESOURCE_TYPE_BROKER,
+        "2",
+        None,
+        EVERYTHING,
+    );
+
+    assert!(
+        result
+            == DescribeConfigsResult {
+                error_code: crate::codes::INVALID_REQUEST,
+                error_message: Some(
+                    "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
+                ),
+                resource_type: RESOURCE_TYPE_BROKER,
+                resource_name: "2".to_owned(),
+                configs: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+}
+
+/// The cluster-default resource has no node in it, so the serving node never
+/// refuses it.
+#[test]
+fn the_cluster_default_broker_resource_is_served_by_any_node() {
+    let image = image_with_broker_config(
+        DEFAULT_BROKER_CONFIG_NODE_ID,
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+
+    let result = describe_at(
+        krabka_metadata::NodeId(9),
+        &image,
+        RESOURCE_TYPE_BROKER,
+        "",
+        None,
+        VALUES_ONLY,
+    );
+
+    check!(result.error_code == crate::codes::NONE);
+    let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+    check!(names == vec![crate::throttle::LEADER_THROTTLED_RATE_KEY]);
 }
 
 #[test]
@@ -928,6 +1151,7 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
         StaticBrokerConfigs {
             offsets_retention: Some(krabka_units::minutes(60)),
             offsets_retention_check_interval: None,
+            ..untuned()
         },
     );
 
@@ -1008,13 +1232,14 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
     };
 
     check!(
-        described(UNTUNED) == vec![entry(CONFIG_SOURCE_DEFAULT, vec![default_synonym.clone()])],
+        described(untuned()) == vec![entry(CONFIG_SOURCE_DEFAULT, vec![default_synonym.clone()])],
         "a broker that names neither key"
     );
     check!(
         described(StaticBrokerConfigs {
             offsets_retention: Some(krabka_units::minutes(10_080)),
             offsets_retention_check_interval: None,
+            ..untuned()
         }) == vec![entry(
             CONFIG_SOURCE_STATIC_BROKER,
             vec![
@@ -1065,6 +1290,8 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
                 NODE_ID,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                 config_keys::OFFSETS_RETENTION_MINUTES,
+                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
             ]
     );
     assert!(
@@ -1089,17 +1316,9 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
 #[test]
 fn a_configured_idle_window_and_its_listener_override_report_as_static() {
     let listener_key = "listener.name.external.connections.max.idle.ms";
-    let config = crate::config::BrokerConfig {
-        connections_max_idle: Some(krabka_units::secs(30)),
-        connections_max_idle_overrides: std::iter::once((
-            "EXTERNAL".to_owned(),
-            krabka_units::secs(5),
-        ))
-        .collect(),
-        ..crate::config::BrokerConfig::default()
-    };
+    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
-    let result = describe_with_config(
+    let result = describe_with_static(
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "7",
@@ -1108,8 +1327,11 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
             listener_key.to_owned(),
         ]),
         EVERYTHING,
-        UNTUNED,
-        &config,
+        StaticBrokerConfigs {
+            connections_max_idle: Some(krabka_units::secs(30)),
+            connections_max_idle_overrides: &overrides,
+            ..untuned()
+        },
     );
 
     let broker_wide_static = synonym(
@@ -1160,24 +1382,19 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
 /// and the retention keys out.
 #[test]
 fn the_cluster_default_resource_reports_no_idle_window() {
-    let config = crate::config::BrokerConfig {
-        connections_max_idle: Some(krabka_units::secs(30)),
-        connections_max_idle_overrides: std::iter::once((
-            "EXTERNAL".to_owned(),
-            krabka_units::secs(5),
-        ))
-        .collect(),
-        ..crate::config::BrokerConfig::default()
-    };
+    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
-    let result = describe_with_config(
+    let result = describe_with_static(
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "",
         None,
         EVERYTHING,
-        UNTUNED,
-        &config,
+        StaticBrokerConfigs {
+            connections_max_idle: Some(krabka_units::secs(30)),
+            connections_max_idle_overrides: &overrides,
+            ..untuned()
+        },
     );
 
     assert!(result.configs == Vec::new());

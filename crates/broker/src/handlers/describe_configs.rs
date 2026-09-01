@@ -7,9 +7,14 @@
 //!   broker config supplies reports `DYNAMIC_DEFAULT_BROKER_CONFIG (3)`; the
 //!   rest report `DEFAULT_CONFIG (5)`.
 //! - `resource_type=4` (BROKER): a numeric name returns the effective dynamic
-//!   per-broker and cluster-default overrides. An empty name returns the
-//!   cluster-wide defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)`
-//!   from `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`.
+//!   per-broker and cluster-default overrides, plus the settings read from
+//!   the serving process itself. An empty name returns the cluster-wide
+//!   defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)` from
+//!   `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`. A
+//!   numeric name that is not this node is refused with `INVALID_REQUEST`,
+//!   which is what `ConfigHelper` in the pinned image does; the JVM
+//!   `AdminClient` never sends one, because it routes a broker resource to
+//!   the node it names.
 //! - `resource_type=16` (`CLIENT_METRICS`) and `resource_type=32` (GROUP) report
 //!   their own effective values the same way.
 //! - Every other resource type receives an empty configs list and no error.
@@ -27,22 +32,27 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
-//! A numeric broker resource carries three more synthesised read-only keys,
-//! at `STATIC_BROKER_CONFIG` like `node.id` when an operator named them:
-//! KIP-211's
+//! A numeric broker resource carries five more synthesised read-only keys
+//! beside `node.id`: KIP-211's
 //! [`offsets.retention.minutes`](crate::config_keys::OFFSETS_RETENTION_MINUTES)
 //! and
 //! [`offsets.retention.check.interval.ms`](crate::config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS),
+//! KIP-98's
+//! [`transactional.id.expiration.ms`](crate::config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)
+//! and
+//! [`transaction.remove.expired.transaction.cleanup.interval.ms`](crate::config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS),
 //! and the idle window in [`static_configs`] —
 //! [`connections.max.idle.ms`](crate::config_keys::CONNECTIONS_MAX_IDLE_MS)
-//! together with its per-listener overrides. The process reads all of them
-//! once at startup, so no alter can change them and `kafka-configs` must say
-//! so. The cluster-default broker resource (an empty `resource_name`) reports
-//! dynamic defaults only, which is what Kafka does.
+//! together with its per-listener overrides, which are a key per listener
+//! rather than a registry row. The process reads all of them once at startup,
+//! so no alter can change them and `kafka-configs` must say so. The
+//! cluster-default broker resource (an empty `resource_name`) reports dynamic
+//! defaults only, which is what Kafka does.
 //!
 //! The `config_source` of each is provenance and not a value comparison: a key
-//! an operator wrote reads `STATIC_BROKER_CONFIG` even when what they wrote is
-//! Kafka's own default.
+//! an operator wrote reads `STATIC_BROKER_CONFIG` above the built-in default
+//! even when what they wrote is Kafka's own default; one left alone reports
+//! that default alone.
 //!
 //! One stored topic override is read-only too:
 //! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
@@ -91,7 +101,7 @@ mod wire;
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
-    resources::{StaticBrokerConfigs, describe_one},
+    resources::{StaticBrokerConfigs, StaticBrokerSetting, describe_one},
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -120,14 +130,37 @@ pub(crate) fn handle(
         // the client asks for it. `req.resources` is consumed below, so the
         // flags are read off the request first.
         let options = EntryOptions::from_request(&req);
-        // What the operator named, not what the broker runs: the source a
-        // key reports is provenance, so a key set to its own default is still
-        // `STATIC_BROKER_CONFIG`.
+        // The node answering the request. Kafka refuses a broker resource
+        // that names any other node, because everything a broker resource
+        // reports beyond the dynamic overrides is read out of the serving
+        // process.
+        let serving_node = krabka_metadata::NodeId(broker.config.node_id.0);
+        // This node's own static settings, which a named broker resource
+        // reports beside its dynamic overrides. The two KIP-98 keys are
+        // `ConfigDef.Type::INT` in Kafka, and the broker's config validation
+        // already refused a value wider than that. The two KIP-211 keys travel
+        // as what the operator named, not as what the broker runs: the source
+        // a key reports is provenance, so a key set to its own default is
+        // still `STATIC_BROKER_CONFIG`.
+        let origins = broker.config.static_config_origins;
         let static_broker = StaticBrokerConfigs {
+            txn_id_expiration: StaticBrokerSetting {
+                value_ms: broker.config.txn_id_expiration.millis_i32(),
+                supplied: origins.txn_id_expiration,
+            },
+            txn_id_expiration_cleanup_interval: StaticBrokerSetting {
+                value_ms: broker
+                    .config
+                    .txn_id_expiration_cleanup_interval
+                    .millis_i32(),
+                supplied: origins.txn_id_expiration_cleanup_interval,
+            },
             offsets_retention: broker.config.offsets_retention_override,
             offsets_retention_check_interval: broker
                 .config
                 .offsets_retention_check_interval_override,
+            connections_max_idle: broker.config.connections_max_idle,
+            connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
@@ -151,11 +184,11 @@ pub(crate) fn handle(
                     describe_one(
                         &image,
                         r,
+                        serving_node,
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
-                        options,
                         static_broker,
-                        &broker.config,
+                        options,
                     )
                 }
             })

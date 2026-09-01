@@ -30,7 +30,8 @@ use crate::{
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
         DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
         DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
-        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
+        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
+        DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
         ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
@@ -199,6 +200,12 @@ impl Default for BrokerConfig {
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's
             // `transaction.abort.timed.out.transaction.cleanup.interval.ms`).
             txn_abort_cleanup_interval: DEFAULT_TXN_ABORT_CLEANUP_INTERVAL,
+            // KIP-98 transactional-id expiry (Kafka's
+            // `transactional.id.expiration.ms` and
+            // `transaction.remove.expired.transaction.cleanup.interval.ms`).
+            txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
+            txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),
