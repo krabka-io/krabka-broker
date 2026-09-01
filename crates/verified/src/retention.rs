@@ -5,6 +5,26 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Decide whether one held barrier cut falls outside the retained epoch
+/// window.
+///
+/// A nonpositive retention count and an unrepresentable cutoff both fail
+/// closed by expiring nothing.
+#[ensures(result == (retained_cuts@ > 0
+    && published_epoch@ - retained_cuts@ >= i64::MIN@
+    && held_epoch@ <= published_epoch@ - retained_cuts@))]
+#[must_use]
+pub fn barrier_cut_expired(published_epoch: i64, retained_cuts: i32, held_epoch: i64) -> bool {
+    if retained_cuts <= 0 {
+        return false;
+    }
+    let retained_cuts = i64::from(retained_cuts);
+    if published_epoch < i64::MIN + retained_cuts {
+        return false;
+    }
+    held_epoch <= published_epoch - retained_cuts
+}
+
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub struct RetentionPrefix {
@@ -171,6 +191,22 @@ pub fn retention_delete_target(last_offset: Option<i64>) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn barrier_cut_expiry_is_exact_and_fails_closed_at_extremes() {
+        for (published, retained, held, expected) in [
+            (10, 3, 6, true),
+            (10, 3, 7, true),
+            (10, 3, 8, false),
+            (10, 0, i64::MIN, false),
+            (10, -1, i64::MIN, false),
+            (i64::MIN, 1, i64::MIN, false),
+            (i64::MIN + 1, 1, i64::MIN, true),
+            (i64::MAX, i32::MAX, i64::MAX, false),
+        ] {
+            assert2::check!(barrier_cut_expired(published, retained, held) == expected);
+        }
+    }
 
     #[test]
     fn retention_selection_is_a_safe_contiguous_prefix() {
