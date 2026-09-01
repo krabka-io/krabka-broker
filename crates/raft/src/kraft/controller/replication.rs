@@ -131,8 +131,8 @@ impl Engine {
         // live role and durable leader view before remembering its peer or
         // performing any response-derived mutation.
         let role_leader = match self.core.role() {
-            Role::Follower { leader_id, .. } => Some(leader_id.0),
-            Role::Observer {
+            Role::Follower { leader_id, .. }
+            | Role::Observer {
                 leader_id: Some(leader_id),
                 ..
             } => Some(leader_id.0),

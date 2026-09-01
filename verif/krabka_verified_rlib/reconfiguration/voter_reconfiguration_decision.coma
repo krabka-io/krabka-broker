@@ -1,0 +1,265 @@
+(* #"/proof-work-211b/crates/verified/src/reconfiguration.rs" 87 0 100 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sreconfiguration = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 110 30 110 31
+let%span sreconfiguration'0 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 113 31 113 32
+let%span sreconfiguration'1 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 183 40 183 41
+let%span sreconfiguration'2 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 183 72 183 73
+let%span sreconfiguration'3 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 191 36 191 37
+let%span sreconfiguration'4 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 192 30 192 34
+let%span sreconfiguration'5 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 193 37 193 41
+let%span sreconfiguration'6 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 194 32 194 37
+let%span sreconfiguration'7 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 173 58 173 59
+let%span sreconfiguration'8 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 178 37 178 42
+let%span sreconfiguration'9 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 143 40 143 41
+let%span sreconfiguration'10 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 152 38 152 39
+let%span sreconfiguration'11 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 156 56 156 57
+let%span sreconfiguration'12 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 156 34 156 57
+let%span sreconfiguration'13 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 158 30 158 34
+let%span sreconfiguration'14 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 159 37 159 42
+let%span sreconfiguration'15 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 160 32 160 37
+let%span sreconfiguration'16 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 119 40 119 41
+let%span sreconfiguration'17 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 131 73 131 74
+let%span sreconfiguration'18 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 131 41 131 75
+let%span sreconfiguration'19 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 137 30 137 34
+let%span sreconfiguration'20 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 138 37 138 42
+let%span sreconfiguration'21 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 139 32 139 37
+let%span sreconfiguration'22 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 46 10 50 1
+let%span sreconfiguration'23 = "/proof-work-211b/crates/verified/src/reconfiguration.rs" 51 10 80 1
+
+use creusot.int.UInt64
+use creusot.int.UInt16
+use creusot.prelude.Any
+use int.Int
+
+type t_VoterReconfigurationPlan = {
+  next_voter_count: UInt64.t;
+  next_kraft_version: UInt16.t;
+  write_voters: bool;
+  write_kraft_version: bool;
+  preflight_only: bool }
+
+type t_VoterReconfigurationDecision =
+  | NotLeader
+  | InProgress
+  | EpochUncommitted
+  | EmptyCurrentVoterSet
+  | UnsupportedKraftVersion
+  | DuplicateVoter
+  | IncompatibleVoter
+  | VoterNotCaughtUp
+  | VoterNotFound
+  | DirectoryMismatch
+  | LastVoter
+  | InvalidVersionTransition
+  | Admit t_VoterReconfigurationPlan
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+type t_Option_usize = None | Some UInt64.t
+
+constant const_MIN: UInt64.t = (0: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+let checked_add (self_: UInt64.t) (rhs: UInt64.t) (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (UInt64.t'int self_ + UInt64.t'int rhs < UInt64.t'int const_MIN
+      \/ gt_log_Int (UInt64.t'int self_ + UInt64.t'int rhs) (UInt64.t'int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: UInt64.t. result = Some r
+      -> UInt64.t'int r = UInt64.t'int self_ + UInt64.t'int rhs)}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type tup2_VoterChangeKind_VoterReconfigurationDecision = { f0: t_VoterChangeKind; f1: t_VoterReconfigurationDecision }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let voter_reconfiguration_decision [#"/proof-work-211b/crates/verified/src/reconfiguration.rs" 87 0 100 33]
+  (is_leader: bool) (single_flight_clear: bool) (epoch_committed: bool) (kind: t_VoterChangeKind)
+  (current_voter_count: UInt64.t) (current_kraft_version: UInt16.t) (requested_kraft_version: UInt16.t)
+  (target_present: bool) (directory_matches: bool) (target_version_compatible: bool) (target_caught_up: bool)
+  (all_voters_support_v1: bool) (return (x: t_VoterReconfigurationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {is_leader = false} (! bb1) | br1 -> {is_leader} (! bb2) ]
+  | bb2 = any [ br0 -> {single_flight_clear = false} (! bb4) | br1 -> {single_flight_clear} (! bb3) ]
+  | bb3 = any [ br0 -> {epoch_committed = false} (! bb6) | br1 -> {epoch_committed} (! bb5) ]
+  | bb5 = s0
+    [ s0 = [ &_34 <- current_voter_count = ([%#sreconfiguration] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb8) | br1 -> {_34} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- EmptyCurrentVoterSet ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = [ &_38 <- UInt16.gt current_kraft_version ([%#sreconfiguration'0] (1: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_38 = false} (! bb10) | br1 -> {_38} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- InvalidVersionTransition ] s1 | s1 = return {_ret} ]
+  | bb10 = any
+    [ br0 -> {kind = Add} (! bb18)
+    | br1 -> {kind = Remove} (! bb17)
+    | br2 -> {kind = Update} (! bb16)
+    | br3 -> {kind = FinalizeKraftVersion} (! bb15) ]
+  | bb15 = s0
+    [ s0 = [ &_99 <- current_kraft_version <> ([%#sreconfiguration'1] (0: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_99 = false} (! bb46) | br1 -> {_99} (! bb48) ] ]
+  | bb46 = s0
+    [ s0 = [ &_101 <- requested_kraft_version <> ([%#sreconfiguration'2] (1: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_101 = false} (! bb49) | br1 -> {_101} (! bb48) ] ]
+  | bb48 = s0 [ s0 = [ &_ret <- InvalidVersionTransition ] s1 | s1 = return {_ret} ]
+  | bb49 = any [ br0 -> {all_voters_support_v1 = false} (! bb51) | br1 -> {all_voters_support_v1} (! bb50) ]
+  | bb50 = s0
+    [ s0 = [ &_107 <- { next_voter_count = current_voter_count;
+                        next_kraft_version = ([%#sreconfiguration'3] (1: UInt16.t));
+                        write_voters = ([%#sreconfiguration'4] true);
+                        write_kraft_version = ([%#sreconfiguration'5] true);
+                        preflight_only = ([%#sreconfiguration'6] false) } ] s1
+    | s1 = [ &_ret <- Admit _107 ] s2
+    | s2 = return {_ret} ]
+  | bb51 = s0 [ s0 = [ &_ret <- IncompatibleVoter ] s1 | s1 = return {_ret} ]
+  | bb16 = any [ br0 -> {target_present = false} (! bb39) | br1 -> {target_present} (! bb40) ]
+  | bb40 = any [ br0 -> {directory_matches = false} (! bb42) | br1 -> {directory_matches} (! bb41) ]
+  | bb41 = any [ br0 -> {target_version_compatible = false} (! bb44) | br1 -> {target_version_compatible} (! bb43) ]
+  | bb43 = s0
+    [ s0 = [ &preflight_only'0 <- current_kraft_version = ([%#sreconfiguration'7] (0: UInt16.t)) ] s1
+    | s1 = [ &_95 <- not preflight_only'0 ] s2
+    | s2 = [ &_92 <- { next_voter_count = current_voter_count;
+                       next_kraft_version = current_kraft_version;
+                       write_voters = _95;
+                       write_kraft_version = ([%#sreconfiguration'8] false);
+                       preflight_only = preflight_only'0 } ] s3
+    | s3 = [ &_ret <- Admit _92 ] s4
+    | s4 = return {_ret} ]
+  | bb44 = s0 [ s0 = [ &_ret <- IncompatibleVoter ] s1 | s1 = return {_ret} ]
+  | bb42 = s0 [ s0 = [ &_ret <- DirectoryMismatch ] s1 | s1 = return {_ret} ]
+  | bb39 = s0 [ s0 = [ &_ret <- VoterNotFound ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = [ &_64 <- current_kraft_version <> ([%#sreconfiguration'9] (1: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_64 = false} (! bb32) | br1 -> {_64} (! bb31) ] ]
+  | bb31 = s0 [ s0 = [ &_ret <- UnsupportedKraftVersion ] s1 | s1 = return {_ret} ]
+  | bb32 = any [ br0 -> {target_present = false} (! bb34) | br1 -> {target_present} (! bb33) ]
+  | bb33 = any [ br0 -> {directory_matches = false} (! bb36) | br1 -> {directory_matches} (! bb35) ]
+  | bb35 = s0
+    [ s0 = [ &_74 <- current_voter_count = ([%#sreconfiguration'10] (1: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_74 = false} (! bb38) | br1 -> {_74} (! bb37) ] ]
+  | bb37 = s0 [ s0 = [ &_ret <- LastVoter ] s1 | s1 = return {_ret} ]
+  | bb38 = s0
+    [ s0 = UInt64.sub [%#sreconfiguration'12] {current_voter_count} {[%#sreconfiguration'11] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_78 <- _x ] s1)
+    | s1 = [ &_77 <- { next_voter_count = _78;
+                       next_kraft_version = current_kraft_version;
+                       write_voters = ([%#sreconfiguration'13] true);
+                       write_kraft_version = ([%#sreconfiguration'14] false);
+                       preflight_only = ([%#sreconfiguration'15] false) } ] s2
+    | s2 = [ &_ret <- Admit _77 ] s3
+    | s3 = return {_ret} ]
+  | bb36 = s0 [ s0 = [ &_ret <- DirectoryMismatch ] s1 | s1 = return {_ret} ]
+  | bb34 = s0 [ s0 = [ &_ret <- VoterNotFound ] s1 | s1 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = [ &_43 <- current_kraft_version <> ([%#sreconfiguration'16] (1: UInt16.t)) ] s1
+    | s1 = any [ br0 -> {_43 = false} (! bb20) | br1 -> {_43} (! bb19) ] ]
+  | bb19 = s0 [ s0 = [ &_ret <- UnsupportedKraftVersion ] s1 | s1 = return {_ret} ]
+  | bb20 = any [ br0 -> {target_present = false} (! bb22) | br1 -> {target_present} (! bb21) ]
+  | bb21 = s0 [ s0 = [ &_ret <- DuplicateVoter ] s1 | s1 = return {_ret} ]
+  | bb22 = any [ br0 -> {target_version_compatible = false} (! bb24) | br1 -> {target_version_compatible} (! bb23) ]
+  | bb23 = any [ br0 -> {target_caught_up = false} (! bb26) | br1 -> {target_caught_up} (! bb25) ]
+  | bb25 = s0
+    [ s0 = checked_add [%#sreconfiguration'18] {current_voter_count} {[%#sreconfiguration'17] (1: UInt64.t)}
+        (fun (_x: t_Option_usize) -> [ &_57 <- _x ] s1)
+    | s1 = any [ br0 -> {_57 = None} (! bb30) | br1 (x0: UInt64.t) -> {_57 = Some x0} (! bb29) ] ]
+  | bb30 = s0 [ s0 = [ &_ret <- InvalidVersionTransition ] s1 | s1 = return {_ret} ]
+  | bb29 = s0
+    [ s0 = elim_Some {_57} (fun (r0: UInt64.t) -> [ &next_voter_count'0 <- r0 ] s1)
+    | s1 = [ &_60 <- { next_voter_count = next_voter_count'0;
+                       next_kraft_version = current_kraft_version;
+                       write_voters = ([%#sreconfiguration'19] true);
+                       write_kraft_version = ([%#sreconfiguration'20] false);
+                       preflight_only = ([%#sreconfiguration'21] false) } ] s2
+    | s2 = [ &_ret <- Admit _60 ] s3
+    | s3 = return {_ret} ]
+  | bb26 = s0 [ s0 = [ &_ret <- VoterNotCaughtUp ] s1 | s1 = return {_ret} ]
+  | bb24 = s0 [ s0 = [ &_ret <- IncompatibleVoter ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- EpochUncommitted ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- InProgress ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- NotLeader ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterReconfigurationDecision = Any.any_l ()
+  | & is_leader: bool = is_leader
+  | & single_flight_clear: bool = single_flight_clear
+  | & epoch_committed: bool = epoch_committed
+  | & kind: t_VoterChangeKind = kind
+  | & current_voter_count: UInt64.t = current_voter_count
+  | & current_kraft_version: UInt16.t = current_kraft_version
+  | & requested_kraft_version: UInt16.t = requested_kraft_version
+  | & target_present: bool = target_present
+  | & directory_matches: bool = directory_matches
+  | & target_version_compatible: bool = target_version_compatible
+  | & target_caught_up: bool = target_caught_up
+  | & all_voters_support_v1: bool = all_voters_support_v1
+  | & _34: bool = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & next_voter_count'0: UInt64.t = Any.any_l ()
+  | & _57: t_Option_usize = Any.any_l ()
+  | & _60: t_VoterReconfigurationPlan = Any.any_l ()
+  | & _64: bool = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _77: t_VoterReconfigurationPlan = Any.any_l ()
+  | & _78: UInt64.t = Any.any_l ()
+  | & preflight_only'0: bool = Any.any_l ()
+  | & _92: t_VoterReconfigurationPlan = Any.any_l ()
+  | & _95: bool = Any.any_l ()
+  | & _99: bool = Any.any_l ()
+  | & _101: bool = Any.any_l ()
+  | & _107: t_VoterReconfigurationPlan = Any.any_l () ])
+  [ return (result: t_VoterReconfigurationDecision) ->
+  {[@stop_split] [@expl:voter_reconfiguration_decision ensures] ([@stop_split] [@expl:voter_reconfiguration_decision ensures #0] [%#sreconfiguration'22] match result with
+        | Admit plan -> gt_log_Int (UInt64.t'int plan.next_voter_count) 0 /\ UInt16.t'int plan.next_kraft_version <= 1
+        | _ -> true
+        end)
+    /\ ([@stop_split] [@expl:voter_reconfiguration_decision ensures #1] [%#sreconfiguration'23] match { f0 = kind;
+                                                                                                        f1 = result } with
+      | {f0 = Add; f1 = Admit plan} -> not target_present
+      /\ target_version_compatible
+      /\ target_caught_up
+      /\ UInt16.t'int current_kraft_version = 1
+      /\ UInt64.t'int plan.next_voter_count = UInt64.t'int current_voter_count + 1
+      /\ UInt16.t'int plan.next_kraft_version = UInt16.t'int current_kraft_version
+      /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+      | {f0 = Remove; f1 = Admit plan} -> target_present
+      /\ directory_matches
+      /\ gt_log_Int (UInt64.t'int current_voter_count) 1
+      /\ UInt16.t'int current_kraft_version = 1
+      /\ UInt64.t'int plan.next_voter_count + 1 = UInt64.t'int current_voter_count
+      /\ UInt16.t'int plan.next_kraft_version = UInt16.t'int current_kraft_version
+      /\ plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+      | {f0 = Update; f1 = Admit plan} -> target_present
+      /\ directory_matches
+      /\ target_version_compatible
+      /\ UInt64.t'int plan.next_voter_count = UInt64.t'int current_voter_count
+      /\ UInt16.t'int plan.next_kraft_version = UInt16.t'int current_kraft_version
+      /\ (if UInt16.t'int current_kraft_version = 0 then
+        not plan.write_voters /\ not plan.write_kraft_version /\ plan.preflight_only
+      else
+        plan.write_voters /\ not plan.write_kraft_version /\ not plan.preflight_only
+      )
+      | {f0 = FinalizeKraftVersion; f1 = Admit plan} -> UInt16.t'int current_kraft_version = 0
+      /\ UInt16.t'int requested_kraft_version = 1
+      /\ all_voters_support_v1
+      /\ UInt64.t'int plan.next_voter_count = UInt64.t'int current_voter_count
+      /\ UInt16.t'int plan.next_kraft_version = 1
+      /\ plan.write_voters /\ plan.write_kraft_version /\ not plan.preflight_only
+      | _ -> true
+      end)}
+    (! return {result}) ]

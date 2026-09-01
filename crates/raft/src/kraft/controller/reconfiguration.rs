@@ -10,6 +10,9 @@ use krabka_protocol::{
     owned::k_raft_version_record::KRaftVersionRecord as WireKRaftVersionRecord,
     records::{RecordBatch, metadata::control::ControlRecord},
 };
+use krabka_verified::{
+    VoterChangeKind, VoterReconfigurationDecision, voter_reconfiguration_decision,
+};
 use tokio::sync::oneshot;
 
 use super::{
@@ -19,9 +22,71 @@ use super::{
     records::{decode_control_record, leader_change_batch, typed_control_batch},
 };
 use crate::{
+    NodeId,
     error::RaftError,
     kraft::{role::Role, types::Epoch},
+    reconfig::ReconfigOutcome,
 };
+
+fn rejected_reconfiguration(
+    decision: VoterReconfigurationDecision,
+    leader: Option<NodeId>,
+    target_id: Option<NodeId>,
+    current_version: u16,
+    requested_version: u16,
+    lag: u64,
+) -> Result<ReconfigOutcome, RaftError> {
+    match decision {
+        VoterReconfigurationDecision::NotLeader => Ok(ReconfigOutcome::NotLeader { leader }),
+        VoterReconfigurationDecision::InProgress
+        | VoterReconfigurationDecision::EpochUncommitted => Err(RaftError::ReconfigInProgress),
+        VoterReconfigurationDecision::EmptyCurrentVoterSet => Err(RaftError::ReconfigRejected(
+            "cannot reconfigure an empty voter set".into(),
+        )),
+        VoterReconfigurationDecision::UnsupportedKraftVersion => {
+            Err(RaftError::UnsupportedKraftVersion(current_version))
+        }
+        VoterReconfigurationDecision::DuplicateVoter => Err(target_id.map_or_else(
+            || RaftError::ReconfigRejected("duplicate voter without a voter id".into()),
+            RaftError::DuplicateVoter,
+        )),
+        VoterReconfigurationDecision::IncompatibleVoter => {
+            let message = target_id.map_or_else(
+                || format!("not every voter supports kraft.version {requested_version}"),
+                |id| format!("voter {id} does not support kraft.version {current_version}"),
+            );
+            Err(RaftError::InvalidVoterUpdate(message))
+        }
+        VoterReconfigurationDecision::VoterNotCaughtUp => target_id.map_or_else(
+            || {
+                Err(RaftError::ReconfigRejected(
+                    "caught-up voter check did not identify a voter".into(),
+                ))
+            },
+            |id| Err(RaftError::VoterNotCaughtUp { id, lag }),
+        ),
+        VoterReconfigurationDecision::VoterNotFound
+        | VoterReconfigurationDecision::DirectoryMismatch => target_id.map_or_else(
+            || {
+                Err(RaftError::ReconfigRejected(
+                    "voter lookup did not identify a voter".into(),
+                ))
+            },
+            |id| Err(RaftError::VoterNotFound(id)),
+        ),
+        VoterReconfigurationDecision::LastVoter => Err(RaftError::ReconfigRejected(
+            "cannot remove the last voter".into(),
+        )),
+        VoterReconfigurationDecision::InvalidVersionTransition => {
+            Err(RaftError::InvalidVoterUpdate(format!(
+                "kraft.version transition {current_version} -> {requested_version} is not supported"
+            )))
+        }
+        VoterReconfigurationDecision::Admit(_) => Err(RaftError::ReconfigRejected(
+            "admitted voter change was handled as a rejection".into(),
+        )),
+    }
+}
 
 impl Engine {
     /// Append the leader's `LeaderChange` control marker for `epoch`.
@@ -53,165 +118,166 @@ impl Engine {
         change: crate::reconfig::VoterChange,
         reply: oneshot::Sender<Result<crate::reconfig::ReconfigOutcome, RaftError>>,
     ) {
-        use crate::reconfig::{ReconfigOutcome, VoterChange};
-
-        if !self.core.role().is_leader() {
-            let _ = reply.send(Ok(ReconfigOutcome::NotLeader {
-                leader: self.core.quorum_state().leader_id,
-            }));
-            return;
-        }
-        if self.pending_reconfig.is_some()
-            || self.controls.latest_voters() != &self.controls.committed_voters
-            || self.controls.latest_version() != self.controls.committed_version
-        {
-            let _ = reply.send(Err(RaftError::ReconfigInProgress));
-            return;
-        }
-        if let Role::Leader {
-            epoch_start_offset, ..
-        } = self.core.role()
-            && self.log.hwm().0 <= *epoch_start_offset
-        {
-            let _ = reply.send(Err(RaftError::ReconfigInProgress));
-            return;
-        }
+        use crate::reconfig::VoterChange;
 
         let current = self.controls.committed_voters.clone();
         let current_version = self.controls.committed_version;
-        let (records, ack_when_committed, removed_local_leader) = match change {
+        let is_leader = self.core.role().is_leader();
+        let single_flight_clear = self.pending_reconfig.is_none()
+            && self.controls.latest_voters() == &current
+            && self.controls.latest_version() == current_version;
+        let epoch_committed = match self.core.role() {
+            Role::Leader {
+                epoch_start_offset, ..
+            } => self.log.hwm().0 > *epoch_start_offset,
+            _ => false,
+        };
+        let (
+            kind,
+            requested_version,
+            target_id,
+            target_present,
+            directory_matches,
+            target_version_compatible,
+            target_caught_up,
+            all_voters_support_v1,
+            lag,
+        ) = match &change {
             VoterChange::Add(request) => {
-                if current_version < 1 {
-                    let _ = reply.send(Err(RaftError::UnsupportedKraftVersion(current_version)));
-                    return;
-                }
-                if current.contains(request.voter.id) {
-                    let _ = reply.send(Err(RaftError::DuplicateVoter(request.voter.id)));
-                    return;
-                }
-                if !voter_supports_version(&request.voter, current_version) {
-                    let _ = reply.send(Err(RaftError::InvalidVoterUpdate(format!(
-                        "voter {} does not support kraft.version {current_version}",
-                        request.voter.id
-                    ))));
-                    return;
-                }
                 let leader_end = self.log.log_end_offset().0;
                 let observer_end = self
                     .replica_fetch_offsets
                     .get(&request.voter.id)
                     .copied()
                     .unwrap_or(0);
-                if observer_end < leader_end {
-                    let lag =
-                        u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX);
-                    let _ = reply.send(Err(RaftError::VoterNotCaughtUp {
-                        id: request.voter.id,
-                        lag,
-                    }));
-                    return;
-                }
-                let next = current.with_voter(request.voter);
                 (
-                    vec![ControlRecord::Voters(voter_set_to_wire(&next))],
-                    request.ack_when_committed,
-                    false,
-                )
-            }
-            VoterChange::Remove(request) => {
-                if current_version < 1 {
-                    let _ = reply.send(Err(RaftError::UnsupportedKraftVersion(current_version)));
-                    return;
-                }
-                let Some(existing) = current.get(request.id) else {
-                    let _ = reply.send(Err(RaftError::VoterNotFound(request.id)));
-                    return;
-                };
-                if existing.directory_id != request.directory_id {
-                    let _ = reply.send(Err(RaftError::VoterNotFound(request.id)));
-                    return;
-                }
-                if current.len() == 1 {
-                    let _ = reply.send(Err(RaftError::ReconfigRejected(
-                        "cannot remove the last voter".into(),
-                    )));
-                    return;
-                }
-                let next = current.without_voter(request.id);
-                (
-                    vec![ControlRecord::Voters(voter_set_to_wire(&next))],
+                    VoterChangeKind::Add,
+                    current_version,
+                    Some(request.voter.id),
+                    current.contains(request.voter.id),
                     true,
-                    request.id == self.me,
-                )
-            }
-            VoterChange::Update(request) => {
-                let Some(existing) = current.get(request.voter.id) else {
-                    let _ = reply.send(Err(RaftError::VoterNotFound(request.voter.id)));
-                    return;
-                };
-                if existing.directory_id != uuid::Uuid::nil()
-                    && existing.directory_id != request.voter.directory_id
-                {
-                    let _ = reply.send(Err(RaftError::VoterNotFound(request.voter.id)));
-                    return;
-                }
-                if !voter_supports_version(&request.voter, current_version) {
-                    let _ = reply.send(Err(RaftError::InvalidVoterUpdate(format!(
-                        "voter {} does not support kraft.version {current_version}",
-                        request.voter.id
-                    ))));
-                    return;
-                }
-                if current_version == 0 {
-                    // At level 0 UpdateVoter supplies upgrade preflight data;
-                    // no VotersRecord may be written yet.
-                    let next = current.with_voter(request.voter);
-                    self.controls.committed_voters = next.clone();
-                    self.controls.voter_history.insert(-1, next.clone());
-                    let actions = self.core.apply_voter_set(next.clone(), self.now());
-                    self.peers.update_voters(&next);
-                    self.execute(actions);
-                    self.publish_leader();
-                    let _ = reply.send(Ok(ReconfigOutcome::Committed));
-                    return;
-                }
-                let next = current.with_voter(request.voter);
-                (
-                    vec![ControlRecord::Voters(voter_set_to_wire(&next))],
+                    voter_supports_version(&request.voter, current_version),
+                    observer_end >= leader_end,
                     true,
-                    false,
+                    u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX),
                 )
             }
-            VoterChange::FinalizeKraftVersion(version) => {
-                if version != 1 || current_version != 0 {
-                    let _ = reply.send(Err(RaftError::InvalidVoterUpdate(format!(
-                        "kraft.version transition {current_version} -> {version} is not supported"
-                    ))));
-                    return;
-                }
-                if current
+            VoterChange::Remove(request) => (
+                VoterChangeKind::Remove,
+                current_version,
+                Some(request.id),
+                current.contains(request.id),
+                current
+                    .get(request.id)
+                    .is_some_and(|voter| voter.directory_id == request.directory_id),
+                true,
+                true,
+                true,
+                0,
+            ),
+            VoterChange::Update(request) => (
+                VoterChangeKind::Update,
+                current_version,
+                Some(request.voter.id),
+                current.contains(request.voter.id),
+                current.get(request.voter.id).is_some_and(|voter| {
+                    voter.directory_id == uuid::Uuid::nil()
+                        || voter.directory_id == request.voter.directory_id
+                }),
+                voter_supports_version(&request.voter, current_version),
+                true,
+                true,
+                0,
+            ),
+            VoterChange::FinalizeKraftVersion(version) => (
+                VoterChangeKind::FinalizeKraftVersion,
+                *version,
+                None,
+                false,
+                true,
+                true,
+                true,
+                current
                     .iter()
-                    .any(|voter| !voter_supports_version(voter, version))
-                {
-                    let _ = reply.send(Err(RaftError::InvalidVoterUpdate(
-                        "not every voter supports kraft.version 1".into(),
-                    )));
-                    return;
-                }
-                (
-                    vec![
-                        ControlRecord::KRaftVersion(WireKRaftVersionRecord {
-                            version: 0,
-                            k_raft_version: 1,
-                            ..Default::default()
-                        }),
-                        ControlRecord::Voters(voter_set_to_wire(&current)),
-                    ],
-                    true,
-                    false,
-                )
+                    .all(|voter| voter_supports_version(voter, *version)),
+                0,
+            ),
+        };
+
+        let decision = voter_reconfiguration_decision(
+            is_leader,
+            single_flight_clear,
+            epoch_committed,
+            kind,
+            current.len(),
+            current_version,
+            requested_version,
+            target_present,
+            directory_matches,
+            target_version_compatible,
+            target_caught_up,
+            all_voters_support_v1,
+        );
+        let plan = match decision {
+            VoterReconfigurationDecision::Admit(plan) => plan,
+            rejected => {
+                let _ = reply.send(rejected_reconfiguration(
+                    rejected,
+                    self.core.quorum_state().leader_id,
+                    target_id,
+                    current_version,
+                    requested_version,
+                    lag,
+                ));
+                return;
             }
         };
+
+        let (next, ack_when_committed, removed_local_leader) = match change {
+            VoterChange::Add(request) => (
+                current.with_voter(request.voter),
+                request.ack_when_committed,
+                false,
+            ),
+            VoterChange::Remove(request) => (
+                current.without_voter(request.id),
+                true,
+                request.id == self.me,
+            ),
+            VoterChange::Update(request) => (current.with_voter(request.voter), true, false),
+            VoterChange::FinalizeKraftVersion(_) => (current.clone(), true, false),
+        };
+        if next.len() != plan.next_voter_count {
+            let _ = reply.send(Err(RaftError::ReconfigRejected(
+                "constructed voter set does not match the proved result".into(),
+            )));
+            return;
+        }
+
+        if plan.preflight_only {
+            // At level 0 UpdateVoter supplies upgrade preflight data; no
+            // VotersRecord may be written yet.
+            self.controls.committed_voters = next.clone();
+            self.controls.voter_history.insert(-1, next.clone());
+            let actions = self.core.apply_voter_set(next.clone(), self.now());
+            self.peers.update_voters(&next);
+            self.execute(actions);
+            self.publish_leader();
+            let _ = reply.send(Ok(ReconfigOutcome::Committed));
+            return;
+        }
+
+        let mut records = Vec::with_capacity(2);
+        if plan.write_kraft_version {
+            records.push(ControlRecord::KRaftVersion(WireKRaftVersionRecord {
+                version: 0,
+                k_raft_version: i16::try_from(plan.next_kraft_version).unwrap_or(i16::MAX),
+                ..Default::default()
+            }));
+        }
+        if plan.write_voters {
+            records.push(ControlRecord::Voters(voter_set_to_wire(&next)));
+        }
 
         let leader_epoch = self.core.quorum_state().leader_epoch;
         let mut batch = match typed_control_batch(leader_epoch, &records) {

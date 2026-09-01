@@ -24,6 +24,7 @@ pub mod produce;
 pub mod producer;
 pub mod raft;
 pub mod reassignment;
+pub mod reconfiguration;
 pub mod recovery;
 pub mod remote_metadata;
 pub mod remote_read;
@@ -70,6 +71,10 @@ pub use producer::{
 };
 pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
 pub use reassignment::{ReassignmentAction, reassignment_action};
+pub use reconfiguration::{
+    VoterChangeKind, VoterReconfigurationDecision, VoterReconfigurationPlan,
+    voter_reconfiguration_decision,
+};
 pub use recovery::{
     ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
     should_capture_first_downgrade,
