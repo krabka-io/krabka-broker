@@ -126,6 +126,32 @@ impl TopicElr {
             self.0.insert(partition, elr);
         }
     }
+
+    /// Move `node` out of every partition's eligible set and into its
+    /// last-known set, and report whether anything moved.
+    ///
+    /// Eligibility is a claim about the log a replica held, and this is what
+    /// withdraws the claim while keeping what is still true: the node was the
+    /// last one known to be complete, which is what an operator reads when a
+    /// partition has no leader left at all. Kafka reaches the same pair of
+    /// sets through `uncleanShutdownReplicas`, which
+    /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from
+    /// `targetElr` while `targetLastKnownElr` keeps it.
+    pub(crate) fn demote_node(&mut self, node: i32) -> bool {
+        let mut moved = false;
+        for elr in self.0.values_mut() {
+            if !elr.eligible_leader_replicas.contains(&node) {
+                continue;
+            }
+            elr.eligible_leader_replicas.retain(|id| *id != node);
+            if !elr.last_known_elr.contains(&node) {
+                elr.last_known_elr.push(node);
+                elr.last_known_elr.sort_unstable();
+            }
+            moved = true;
+        }
+        moved
+    }
 }
 
 /// Render one node-id list.

@@ -21,10 +21,10 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     config::{BackgroundUncleanRecovery, BreakGlassConfig},
-    config_keys::RecoveryStrategy,
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, RecoveryStrategy},
     heartbeat::controller_state::ControllerLivenessState,
     metadata_source::MetadataSource,
-    unclean_recovery::BackgroundRecovery,
+    unclean_recovery::{BackgroundRecovery, selection::ElectionBasis},
 };
 
 /// Minimal `MetadataSource` that drives the control flow of
@@ -129,6 +129,32 @@ fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
     img
 }
 
+/// Publish `krabka.elr` for partition 0 of topic `t`, in the grammar
+/// `TopicElr::parse` reads: these node ids are eligible, none are last-known.
+fn publish_elr(img: &mut MetadataImage, eligible: &[u64]) {
+    let ids = eligible
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    img.apply(&MetadataRecord::V1TopicConfig(
+        krabka_metadata::TopicConfigRecord {
+            topic: "t".into(),
+            overrides: [(ELIGIBLE_LEADER_REPLICAS.to_string(), format!("0:{ids}:"))]
+                .into_iter()
+                .collect(),
+        },
+    ));
+}
+
+/// The election the URM reaches when nothing but the log lengths decided it.
+fn fallback_to(leader: u64) -> Election {
+    Election {
+        leader: NodeId(leader),
+        basis: ElectionBasis::MostCompleteLog,
+    }
+}
+
 fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16) {
     img.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
@@ -143,6 +169,33 @@ fn register_broker(img: &mut MetadataImage, node_id: u64, host: &str, port: u16)
             features: std::collections::BTreeMap::new(),
         },
     ));
+}
+
+/// The registration record for `node_id` under `incarnation`. A broker that
+/// restarts registers under a new one, which is the only thing the controller
+/// sees of a wiped disk or a truncated log.
+fn broker_record(node_id: u64, incarnation: Uuid) -> BrokerRegistrationRecord {
+    BrokerRegistrationRecord {
+        node_id: NodeId(node_id),
+        broker_epoch: 0,
+        incarnation_id: incarnation,
+        host: "127.0.0.1".into(),
+        port: 1,
+        rack: None,
+        log_dirs: vec![],
+        endpoints: vec![],
+        features: std::collections::BTreeMap::new(),
+    }
+}
+
+/// One replica's answer to the poll, with the fields the ranking reads.
+fn info(broker_id: u64, log_end_offset: i64) -> ReplicaLogInfo {
+    ReplicaLogInfo {
+        broker_id: NodeId(broker_id),
+        last_written_leader_epoch: 5,
+        log_end_offset,
+        current_leader_epoch: 5,
+    }
 }
 
 async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
@@ -381,7 +434,7 @@ async fn audit_only_elects_and_records_the_bypass() {
         .expect("the partition is in the image");
 
     let outcome = mgr
-        .commit_elected_leader(&job(), &image, pr, NodeId(2))
+        .commit_elected_leader(&job(), &image, pr, fallback_to(2))
         .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
@@ -399,22 +452,87 @@ async fn audit_only_elects_and_records_the_bypass() {
     assert!(batches == vec![vec![MetadataRecord::V1Partition(elected)]]);
     check!(bypasses(&mgr.metrics) == 1);
     let event = events.try_recv().expect("a bypass reaches the audit log");
-    assert!(let AuditEvent::PrivilegedAction { phase, target, .. } = &event);
+    assert!(let AuditEvent::PrivilegedAction { phase, target, reason, .. } = &event);
     check!(*phase == PrivilegedPhase::Bypassed);
     check!(target == "t-0");
+    check!(
+        reason
+            == "unclean recovery elected broker 2 as the most complete surviving log, so \
+                committed records may be lost (strategy None), with no break-glass approval"
+    );
+    check!(mgr.metrics.unclean_leader_elections_total.get() == 1);
 }
 
+/// KIP-966: an eligible leader replica holds every committed record, so the
+/// election that picks one is not the data-losing act the two-person rule
+/// watches for and is not the election the unclean meter counts. The audit
+/// record still says what happened, and names the rule that chose the leader.
 #[tokio::test]
-async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
+async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
+    let (audit_log, mut events) = AuditLog::new(8);
+    let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+    let image = source.current_image();
+    let mgr = manager_with(
+        source,
+        liveness_with_alive(&[2]).await,
+        &gated(BackgroundUncleanRecovery::AuditOnly),
+        audit_log,
+    );
+    let pr = image
+        .partition("t", 0)
+        .expect("the partition is in the image");
+    let election = Election {
+        leader: NodeId(2),
+        basis: ElectionBasis::EligibleLeaderReplica,
+    };
+
+    let outcome = mgr
+        .commit_elected_leader(&job(), &image, pr, election)
+        .await;
+
+    assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
+    let event = events
+        .try_recv()
+        .expect("an election reaches the audit log");
+    assert!(let AuditEvent::PrivilegedAction { phase, target, reason, .. } = &event);
+    check!(*phase == PrivilegedPhase::Applied);
+    check!(target == "t-0");
+    check!(
+        reason
+            == "unclean recovery elected broker 2 from the eligible leader replicas, so no \
+                committed record is lost (strategy None)"
+    );
+    check!(bypasses(&mgr.metrics) == 0);
+    check!(mgr.metrics.unclean_leader_elections_total.get() == 0);
+}
+
+/// KFC-9 gives the three settings three distinct meanings, and `off` means the
+/// behaviour the broker had before the rule existed: no audit event and no
+/// counter. A broker that does run the rule records the election it committed
+/// with the applied phase whenever nobody bypassed anything.
+#[tokio::test]
+async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
     let cases = [
-        ("off writes nothing", BackgroundUncleanRecovery::Off, job()),
+        (
+            "off writes nothing at all",
+            BackgroundUncleanRecovery::Off,
+            job(),
+            None,
+        ),
         (
             "an approved job is not a bypass",
             BackgroundUncleanRecovery::AuditOnly,
             approved_job(),
+            Some(PrivilegedPhase::Applied),
+        ),
+        (
+            "an approved job under require is not a bypass either",
+            BackgroundUncleanRecovery::Require,
+            approved_job(),
+            Some(PrivilegedPhase::Applied),
         ),
     ];
-    for (label, mode, job) in cases {
+    for (label, mode, job, expected_phase) in cases {
         let (audit_log, mut events) = AuditLog::new(8);
         let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
         let image = source.current_image();
@@ -428,14 +546,109 @@ async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
             .partition("t", 0)
             .expect("the partition is in the image");
 
-        let outcome = mgr.commit_elected_leader(&job, &image, pr, NodeId(2)).await;
+        let outcome = mgr
+            .commit_elected_leader(&job, &image, pr, fallback_to(2))
+            .await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),
             "case {label}"
         );
         check!(bypasses(&mgr.metrics) == 0, "case {label}");
+        if let Some(expected) = expected_phase {
+            let event = events
+                .try_recv()
+                .expect("a broker that runs the rule records the election");
+            assert!(let AuditEvent::PrivilegedAction { phase, .. } = &event, "case {label}");
+            check!(*phase == expected, "case {label}");
+        }
         check!(events.try_recv().is_err(), "case {label}");
+    }
+}
+
+/// KFC-9 meets KIP-966 at the point the poll settles: `require` refuses the
+/// election that can lose a committed record and lets through the one that
+/// cannot, whatever the partition's published ELR read before the poll ran.
+#[test]
+fn require_refuses_the_fallback_election_and_not_the_elr_one() {
+    let elr = Election {
+        leader: NodeId(2),
+        basis: ElectionBasis::EligibleLeaderReplica,
+    };
+    let cases = [
+        (
+            "require refuses the fallback nobody approved",
+            BackgroundUncleanRecovery::Require,
+            job(),
+            fallback_to(2),
+            true,
+        ),
+        (
+            "require lets an ELR election through",
+            BackgroundUncleanRecovery::Require,
+            job(),
+            elr,
+            false,
+        ),
+        (
+            "an approved fallback is not refused",
+            BackgroundUncleanRecovery::Require,
+            approved_job(),
+            fallback_to(2),
+            false,
+        ),
+        (
+            "audit-only refuses nothing",
+            BackgroundUncleanRecovery::AuditOnly,
+            job(),
+            fallback_to(2),
+            false,
+        ),
+        (
+            "off refuses nothing",
+            BackgroundUncleanRecovery::Off,
+            job(),
+            fallback_to(2),
+            false,
+        ),
+    ];
+    for (label, mode, job, election, expected) in cases {
+        let rule = BackgroundRecovery::new(&gated(mode), AuditLog::disabled());
+        check!(rule.refuses_election(&job, election) == expected, "{label}");
+    }
+}
+
+/// KFC-9 meets KIP-966: the fail-closed rule refuses a recovery that can only
+/// lose data, and a partition with a surviving eligible leader replica is not
+/// one of those. The ELR case reaches the replica poll -- which the refused
+/// case never does -- and answers `NoEligibleReplica` when nothing replies.
+#[tokio::test]
+async fn require_refuses_only_a_recovery_that_no_elr_could_save() {
+    let cases = [
+        (
+            "no ELR is refused before the poll",
+            &[][..],
+            RecoveryOutcome::BreakGlassRequired,
+        ),
+        (
+            "a surviving ELR member is polled",
+            &[2][..],
+            RecoveryOutcome::NoEligibleReplica,
+        ),
+    ];
+    for (label, eligible, expected) in cases {
+        let mut image = dead_leader_with_a_survivor();
+        if !eligible.is_empty() {
+            publish_elr(&mut image, eligible);
+        }
+        let mgr = manager_with(
+            MockSource::new(Some(NODE), image),
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::Require),
+            AuditLog::disabled(),
+        );
+
+        check!(mgr.run_recovery(&job()).await == expected, "case {label}");
     }
 }
 
@@ -463,4 +676,150 @@ async fn recover_one_dedups_in_flight_job() {
     };
     mgr.clone().recover_one(j).await;
     assert!(rx.await.unwrap() == RecoveryOutcome::InProgress);
+}
+
+/// KIP-966 meets the witness role: `broker.witness` says the node serves no
+/// client, so a partition it leads is as unusable as the offline one, and ELR
+/// membership does not change that. The two cases are the same partition and
+/// the same poll, and differ only in whether broker 3 -- the partition's one
+/// eligible leader replica, and the shortest log of the two that answered --
+/// carries the role.
+#[tokio::test]
+async fn a_witness_never_wins_the_election_however_the_elr_reads() {
+    let cases = [
+        (
+            "a data ELR member wins on its membership",
+            None,
+            Election {
+                leader: NodeId(3),
+                basis: ElectionBasis::EligibleLeaderReplica,
+            },
+        ),
+        (
+            "an ELR witness leaves the fallback to decide",
+            Some(3),
+            fallback_to(2),
+        ),
+    ];
+    for (label, witness, expected) in cases {
+        let mut img = image_with_partition(1, &[1, 2, 3]);
+        publish_elr(&mut img, &[3]);
+        if let Some(id) = witness {
+            crate::leader_election::test_support::mark_witnesses_in_image(&mut img, &[id]);
+        }
+        let mgr = manager(
+            MockSource::new(Some(NODE), img),
+            liveness_with_alive(&[2, 3]).await,
+        );
+        let image = mgr.controller.current_image();
+
+        let election =
+            UncleanRecoveryManager::elect_from(&image, &[3], &[info(2, 400), info(3, 20)]);
+
+        check!(election == Some(expected), "case {label}");
+    }
+}
+
+/// KIP-966 meets a broker that came back as a new process: membership said
+/// that the log broker 3 held when it left the ISR held every committed
+/// record, and the registration that replaces broker 3's withdraws the
+/// statement, because the log the returning process holds is not that one.
+///
+/// Both halves are the same partition and the same poll. Broker 3 wins on its
+/// membership while the membership stands, and broker 2's longer log wins once
+/// it does not -- as the most complete surviving log, which is the answer that
+/// meters, audits and, under `require`, refuses.
+#[tokio::test]
+async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
+    let mut img = image_with_partition(1, &[1, 2, 3]);
+    img.apply(&MetadataRecord::V1BrokerRegistration(broker_record(
+        3,
+        Uuid::from_u128(1),
+    )));
+    publish_elr(&mut img, &[3]);
+    let poll = [info(2, 400), info(3, 20)];
+
+    check!(
+        elected_from(img.clone(), &poll).await
+            == Some(Election {
+                leader: NodeId(3),
+                basis: ElectionBasis::EligibleLeaderReplica,
+            })
+    );
+
+    for record in crate::handlers::broker_registration::registration_records(
+        &img,
+        broker_record(3, Uuid::from_u128(2)),
+    ) {
+        img.apply(&record);
+    }
+
+    check!(elected_from(img, &poll).await == Some(fallback_to(2)));
+}
+
+/// The election one recovery of `t-0` reaches against `image`, from the
+/// responses `poll` carries: the partition's published ELR and the cluster's
+/// witness set both come out of the image, which is what makes the two halves
+/// of the test above differ.
+async fn elected_from(image: MetadataImage, poll: &[ReplicaLogInfo]) -> Option<Election> {
+    let eligible = crate::elr::TopicElr::of_topic(&image, "t")
+        .partition(0)
+        .eligible_leader_replicas;
+    let mgr = manager(
+        MockSource::new(Some(NODE), image),
+        liveness_with_alive(&[2, 3]).await,
+    );
+    let image = mgr.controller.current_image();
+    UncleanRecoveryManager::elect_from(&image, &eligible, poll)
+}
+
+/// KFC-9: the applied event is what an auditor joins to the approval that
+/// authorized an election, so it has to name the proposal. A background
+/// recovery has none to name, and says so with an empty id.
+#[tokio::test]
+async fn an_applied_election_names_the_proposal_that_authorized_it() {
+    let approved = approved_job();
+    let approval = approved
+        .proposal
+        .expect("the operator path carries its proposal")
+        .to_string();
+    let cases = [
+        (
+            "an approved recovery names its approval",
+            approved,
+            approval,
+        ),
+        ("a background recovery names none", job(), String::new()),
+    ];
+    for (label, job, expected) in cases {
+        let (audit_log, mut events) = AuditLog::new(8);
+        let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
+        let image = source.current_image();
+        let mgr = manager_with(
+            source,
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::AuditOnly),
+            audit_log,
+        );
+        let pr = image
+            .partition("t", 0)
+            .expect("the partition is in the image");
+        let election = Election {
+            leader: NodeId(2),
+            basis: ElectionBasis::EligibleLeaderReplica,
+        };
+
+        let outcome = mgr.commit_elected_leader(&job, &image, pr, election).await;
+
+        check!(
+            outcome == RecoveryOutcome::Elected(NodeId(2)),
+            "case {label}"
+        );
+        let event = events
+            .try_recv()
+            .expect("an election reaches the audit log");
+        assert!(let AuditEvent::PrivilegedAction { phase, proposal_id, .. } = &event, "case {label}");
+        check!(*phase == PrivilegedPhase::Applied, "case {label}");
+        check!(*proposal_id == expected, "case {label}");
+    }
 }

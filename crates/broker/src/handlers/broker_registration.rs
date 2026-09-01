@@ -103,7 +103,7 @@ pub(crate) async fn handle(
     };
     if let Err(error) = broker
         .controller
-        .submit_change(vec![MetadataRecord::V1BrokerRegistration(record)])
+        .submit_change(registration_records(&image, record))
         .await
     {
         return response(version, raft_error_code(&error), -1);
@@ -123,6 +123,30 @@ pub(crate) async fn handle(
         },
         epoch,
     )
+}
+
+/// The records one accepted registration writes, in the order they apply.
+///
+/// A registration that replaces one the image already holds is a broker that
+/// has come back as a new process: the handler has already answered the
+/// same-incarnation retry and refused a live duplicate, so an existing
+/// registration here means a new incarnation of a broker the controller saw
+/// die. KIP-966 eligibility does not survive that, and
+/// [`records_for_restarted_broker`](crate::elr::records_for_restarted_broker)
+/// says why. The drops go ahead of the registration, so a replay that stops
+/// between the two has already stopped trusting the returning log rather than
+/// not yet started.
+pub(crate) fn registration_records(
+    image: &krabka_metadata::MetadataImage,
+    record: BrokerRegistrationRecord,
+) -> Vec<MetadataRecord> {
+    let mut records = if image.broker(record.node_id).is_some() {
+        crate::elr::records_for_restarted_broker(image, record.node_id)
+    } else {
+        Vec::new()
+    };
+    records.push(MetadataRecord::V1BrokerRegistration(record));
+    records
 }
 
 fn cluster_id_matches(request: &str, cluster_id: uuid::Uuid) -> bool {
@@ -202,6 +226,65 @@ mod tests {
     use krabka_protocol::owned::broker_registration_request::Feature;
 
     use super::*;
+
+    /// The registration of a broker the controller has never seen writes one
+    /// record. The registration that replaces a dead broker's is a new
+    /// incarnation, and it withdraws that broker's ELR membership first: the
+    /// process that holds the log now is not the one the membership was about.
+    #[test]
+    fn a_returning_incarnation_withdraws_its_elr_membership_first() {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: "t".into(),
+            topic_id: uuid::Uuid::nil(),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        image.apply(&MetadataRecord::V1TopicConfig(
+            krabka_metadata::TopicConfigRecord {
+                topic: "t".into(),
+                overrides: [("krabka.elr".to_string(), "0:3:".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ));
+        let first = registration(3, uuid::Uuid::from_u128(1));
+
+        assert2::assert!(
+            registration_records(&image, first.clone())
+                == vec![MetadataRecord::V1BrokerRegistration(first.clone())]
+        );
+
+        image.apply(&MetadataRecord::V1BrokerRegistration(first));
+        let returning = registration(3, uuid::Uuid::from_u128(2));
+
+        assert2::assert!(
+            registration_records(&image, returning.clone())
+                == vec![
+                    MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                        topic: "t".into(),
+                        overrides: [("krabka.elr".to_string(), "0::3".to_string())]
+                            .into_iter()
+                            .collect(),
+                    }),
+                    MetadataRecord::V1BrokerRegistration(returning),
+                ]
+        );
+    }
+
+    fn registration(node_id: u64, incarnation: uuid::Uuid) -> BrokerRegistrationRecord {
+        BrokerRegistrationRecord {
+            node_id: NodeId(node_id),
+            broker_epoch: 0,
+            incarnation_id: incarnation,
+            host: "127.0.0.1".into(),
+            port: 9_092,
+            rack: None,
+            endpoints: vec![],
+            log_dirs: vec![],
+            features: std::collections::BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn accepts_uuid_and_kafka_base64_cluster_ids() {

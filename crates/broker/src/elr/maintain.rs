@@ -24,10 +24,15 @@
 //! [`next_partition_elr`] is those rules. Two differences are krabka's, and
 //! both are noted where they appear: the exclusion that Kafka spells with
 //! `uncleanShutdownReplicas` is spelled here as "no longer in the replica
-//! set", because krabka does not track per-replica unclean shutdown; and the
+//! set", because this function tracks no per-replica unclean shutdown; and the
 //! unclean-election test is "the elected leader was in neither the previous
 //! ISR nor the ELR" rather than "the change carries an ISR", because krabka's
 //! election paths always carry one.
+//!
+//! Kafka's other use of `uncleanShutdownReplicas` is a separate event, and
+//! [`records_for_restarted_broker`] is where krabka answers it: a broker that
+//! comes back under a new incarnation id is dropped from every ELR that names
+//! it, because membership was a claim about the log the old process held.
 //!
 //! Kafka gates the whole thing on the `eligible.leader.replicas.version`
 //! feature. krabka has no such feature to finalize -- the registry in
@@ -249,6 +254,102 @@ fn next_partition_elr(
         eligible_leader_replicas: eligible.into_iter().collect(),
         last_known_elr: last_known.into_iter().collect(),
     }
+}
+
+/// The records that drop `node` from every partition's published ELR, for a
+/// broker that has re-registered under a new incarnation id.
+///
+/// # Membership is a claim about one log, not about a node id
+///
+/// A replica becomes eligible because the log it held when it left the ISR
+/// held every committed record. A broker that comes back as a new process need
+/// not hold that log: an unclean stop drops the unflushed tail, a replaced
+/// disk starts empty, and the id it registers under says nothing about either.
+/// Left published, that membership makes
+/// [`select_leader`](crate::unclean_recovery::select_leader) elect the
+/// returning broker ahead of a longer surviving log *and* report the election
+/// as lossless -- which is worse than the loss on its own, because the
+/// break-glass check and the unclean-election meter both read that basis, so
+/// the wrong answer hides itself.
+///
+/// Apache Kafka draws the same conclusion from the same event.
+/// `ClusterControlManager.registerBroker`, read out of
+/// `kafka-metadata-4.3.1.jar`, treats a registration whose incarnation id
+/// differs from the one it holds as a shutdown and calls
+/// `ReplicationControlManager.handleBrokerShutdown(brokerId, isCleanShutdown,
+/// records)`, which is
+///
+/// ```text
+/// if (featureControl.isElrFeatureEnabled() && !isCleanShutdown) {
+///     generateLeaderAndIsrUpdates("handleBrokerUncleanShutdown", -1, -1, brokerId,
+///         records, brokersToIsrs.partitionsWithBrokerInIsr(brokerId));
+///     generateLeaderAndIsrUpdates("handleBrokerUncleanShutdown", -1, -1, brokerId,
+///         records, brokersToElrs.partitionsWithBrokerInElr(brokerId));
+/// } else { ... }
+/// ```
+///
+/// where that third int is the `uncleanShutdownReplicas` the builder subtracts
+/// from `targetElr`. `isCleanShutdown` is `apiVersion >= 3 &&
+/// registration.epoch() == request.previousBrokerEpoch()`, so a controller
+/// that cannot prove the shutdown was clean assumes it was not. krabka can
+/// prove it for no restart at all -- nothing persists a broker epoch across a
+/// stop or checks one at registration -- so every returning incarnation takes
+/// that branch here.
+///
+/// # This is one of Kafka's two halves, and the other one is missing
+///
+/// Kafka's unclean branch above makes two calls, not one, and the first is over
+/// `partitionsWithBrokerInIsr`. That half is not here, and its absence is a
+/// hole rather than a simplification: [`next_partition_elr`] derives the next
+/// eligible set from `old_isr ∪ eligible_before`, and this function clears only
+/// the second term. The image's ISR still names the returning broker, so on any
+/// partition where it does, the next change that leaves the ISR below
+/// `min.insync.replicas` re-derives the membership this function withdrew --
+/// and the partition whose ISR is healthy at registration publishes no ELR to
+/// withdraw at all, yet feeds the same `old_isr` into the same derivation
+/// later.
+///
+/// The failover scan usually gets there first: it visits every partition whose
+/// replicas or ISR name a broker that went `alive → dead`, and shrinks the ISR
+/// for the follower case. That is an ordering, not an invariant. Registration
+/// is accepted exactly when liveness says the broker is dead, so a fast restart
+/// can be processed before the scan's batch commits, and a controller that
+/// never saw the transition never scanned at all.
+///
+/// Closing it takes the ISR removal *and* an `uncleanShutdownReplicas`-shaped
+/// exclusion threaded into [`ElrPublisher`], so the batch that removes the
+/// broker cannot re-add it. That is tracked in krabka-io/krabka-broker#314; the
+/// withdrawal here is worth having on its own, because it is what stops a
+/// membership that has already been published from being read by the next
+/// election.
+pub(crate) fn records_for_restarted_broker(
+    image: &MetadataImage,
+    node: krabka_metadata::NodeId,
+) -> Vec<MetadataRecord> {
+    let Ok(node) = i32::try_from(node.0) else {
+        // An id too wide for the wire was never published as eligible.
+        return Vec::new();
+    };
+    image
+        .topics()
+        .filter_map(|topic| {
+            let mut elr = TopicElr::of_topic(image, &topic.name);
+            if !elr.demote_node(node) {
+                return None;
+            }
+            let mut overrides = image.topic_config(&topic.name).cloned().unwrap_or_default();
+            let rendered = elr.render();
+            if rendered.is_empty() {
+                overrides.remove(ELIGIBLE_LEADER_REPLICAS);
+            } else {
+                overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), rendered);
+            }
+            Some(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: topic.name.clone(),
+                overrides,
+            }))
+        })
+        .collect()
 }
 
 /// The wire ids of a node list, as a set. Node ids too wide for the wire drop,
