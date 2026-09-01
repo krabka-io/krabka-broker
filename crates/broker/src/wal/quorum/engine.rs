@@ -659,4 +659,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn exact_batch_range_rejects_internal_gaps_overlaps_and_reordering() {
+        fn exact(ranges: &[(i64, i32)], start: i64, target: i64) -> bool {
+            let mut wire = BytesMut::new();
+            for &(base_offset, records) in ranges {
+                let mut record_batch = batch(records);
+                record_batch.base_offset = base_offset;
+                record_batch.encode(&mut wire).expect("encode test batch");
+            }
+            let decoded = split_batches(&wire.freeze()).expect("decode test batches");
+            batches::exact_batches(decoded, Offset(start), Offset(target)).is_ok()
+        }
+
+        assert!(exact(&[], 4, 4));
+        assert!(exact(&[(4, 2), (6, 3)], 4, 9));
+        assert!(!exact(&[(4, 2), (7, 2)], 4, 9));
+        assert!(!exact(&[(4, 2), (5, 4)], 4, 9));
+        assert!(!exact(&[(6, 3), (4, 2)], 4, 9));
+        assert!(!exact(&[(i64::MAX, 1)], i64::MAX, i64::MAX));
+        assert!(exact(&[(i64::MAX - 1, 1)], i64::MAX - 1, i64::MAX));
+    }
 }

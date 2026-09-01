@@ -89,4 +89,6 @@ pub use vote::{
     VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,
     vote_encode_decision, vote_wire_decision,
 };
-pub use wal::{WalFetchAdmission, select_wal_voter_index, wal_fetch_admission};
+pub use wal::{
+    WalFetchAdmission, exact_wal_batch_range, select_wal_voter_index, wal_fetch_admission,
+};

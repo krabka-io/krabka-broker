@@ -5,6 +5,73 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+#[logic]
+#[requires(bases.len() == lasts.len())]
+#[requires(0 <= index && index <= bases.len())]
+#[variant(bases.len() - index)]
+fn exact_wal_batch_suffix(
+    bases: Seq<i64>,
+    lasts: Seq<i64>,
+    index: Int,
+    expected: Int,
+    target: Int,
+) -> bool {
+    pearlite! {
+        if index == bases.len() {
+            expected == target
+        } else {
+            bases[index]@ == expected
+                && bases[index] <= lasts[index]
+                && lasts[index] < i64::MAX
+                && exact_wal_batch_suffix(
+                    bases,
+                    lasts,
+                    index + 1,
+                    lasts[index]@ + 1,
+                    target,
+                )
+        }
+    }
+}
+
+/// Check that decoded WAL batches cover exactly one contiguous half-open range.
+#[cfg_attr(creusot, ensures(result == (bases@.len() == lasts@.len()
+    && if start@ == target@ {
+        bases@.len() == 0
+    } else {
+        exact_wal_batch_suffix(bases@, lasts@, 0, start@, target@)
+    })))]
+#[allow(clippy::len_zero, reason = "Creusot models slice length, not is_empty")]
+#[must_use]
+pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i64) -> bool {
+    if bases.len() != lasts.len() {
+        return false;
+    }
+    if start == target {
+        return bases.len() == 0;
+    }
+
+    let mut expected = start;
+    let mut i = 0usize;
+    #[cfg_attr(creusot, invariant(i@ <= bases@.len()))]
+    #[cfg_attr(creusot, invariant(bases@.len() == lasts@.len()))]
+    #[cfg_attr(creusot, invariant(exact_wal_batch_suffix(bases@, lasts@, 0, start@, target@)
+        == exact_wal_batch_suffix(bases@, lasts@, i@, expected@, target@)))]
+    #[cfg_attr(creusot, variant(bases@.len() - i@))]
+    while i < bases.len() {
+        if bases[i] != expected || bases[i] > lasts[i] {
+            return false;
+        }
+        let Some(next) = lasts[i].checked_add(1) else {
+            return false;
+        };
+        expected = next;
+        i += 1;
+    }
+    expected == target
+}
+
 /// Result of authorizing and epoch-fencing one diskless WAL Fetch.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -144,6 +211,29 @@ pub fn wal_fetch_admission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_wal_range_rejects_every_discontinuity_and_overflow() {
+        assert2::assert!(exact_wal_batch_range(&[], &[], 4, 4));
+        assert2::assert!(exact_wal_batch_range(&[4, 6], &[5, 8], 4, 9));
+        assert2::assert!(!exact_wal_batch_range(&[4, 7], &[5, 8], 4, 9));
+        assert2::assert!(!exact_wal_batch_range(&[4, 5], &[5, 8], 4, 9));
+        assert2::assert!(!exact_wal_batch_range(&[6, 4], &[8, 5], 4, 9));
+        assert2::assert!(!exact_wal_batch_range(&[4], &[3], 4, 4));
+        assert2::assert!(!exact_wal_batch_range(
+            &[i64::MAX],
+            &[i64::MAX],
+            i64::MAX,
+            i64::MAX
+        ));
+        assert2::assert!(exact_wal_batch_range(
+            &[i64::MAX - 1],
+            &[i64::MAX - 1],
+            i64::MAX - 1,
+            i64::MAX
+        ));
+        assert2::assert!(!exact_wal_batch_range(&[4], &[], 4, 5));
+    }
 
     #[test]
     fn wal_fetch_admission_fails_closed_and_classifies_epochs() {
