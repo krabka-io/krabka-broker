@@ -22,6 +22,7 @@ pub mod directory;
 pub mod diskless;
 pub mod epoch;
 pub mod features;
+pub mod freeze;
 pub mod group_migration;
 pub mod isr;
 pub mod leader_epoch;
@@ -107,6 +108,12 @@ pub use diskless::{
 };
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};
+pub use freeze::{
+    FreezeIdentityState, FreezeReplacementDecision, FreezeReplacementFacts, FreezeScopeDecision,
+    FreezeScopeRank, FreezeSignatureDecision, FreezeSignatureFacts, FreezeStoredState,
+    freeze_replacement_decision, freeze_scope_decision, freeze_signature_decision,
+    freeze_timestamp_in_window,
+};
 pub use group_migration::{
     GroupMigrationDirection, GroupMigrationRecordAction, GroupMigrationRecordPlan,
     classic_upgrade_epoch, consumer_downgrade_epoch, group_migration_record_plan,

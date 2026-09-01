@@ -264,6 +264,116 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
 }
 
 #[tokio::test]
+async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit() {
+    use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
+    use uuid::Uuid;
+
+    fn freeze(scope: &str, set_at_ms: i64, frozen: bool) -> TopicFreezeRecord {
+        TopicFreezeRecord {
+            scope: scope.to_owned(),
+            pattern_type: PatternType::Literal,
+            frozen,
+            reason: "incident".to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }
+    }
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    let epoch = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: epoch.leader_epoch,
+        fetch_offset: epoch.log_end_offset,
+    })
+    .await
+    .unwrap();
+
+    let create_ctrl = ctrl.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze(
+                "orders", 10, true,
+            ))])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    for rejected in [
+        freeze("orders", 10, true),
+        freeze("orders", 9, true),
+        freeze("missing", 11, false),
+    ] {
+        let result = ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(rejected)])
+            .await;
+        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    }
+    let batch = ctrl
+        .submit_change(vec![
+            MetadataRecord::V1TopicFreeze(freeze("a", 11, true)),
+            MetadataRecord::V1TopicFreeze(freeze("b", 11, true)),
+        ])
+        .await;
+    assert2::assert!(matches!(batch, Err(RaftError::ChangeRejected(_))));
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let replacement = freeze("orders", i64::MAX, true);
+    let replace_ctrl = ctrl.clone();
+    let first = replacement.clone();
+    let replace = tokio::spawn(async move {
+        replace_ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(first)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_change(vec![MetadataRecord::V1TopicFreeze(replacement.clone())]),
+    )
+    .await
+    .expect("a concurrent replacement must be rejected before append");
+    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    replace.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .topic_freeze("orders")
+            .is_some_and(|stored| stored.set_at_ms == i64::MAX)
+    );
+
+    let retry = ctrl
+        .submit_change(vec![MetadataRecord::V1TopicFreeze(replacement)])
+        .await;
+    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
 async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
     use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
 

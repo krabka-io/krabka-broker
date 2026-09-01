@@ -3,7 +3,9 @@
 //! the parked commit waiters that the high watermark later resolves or fails.
 
 use krabka_ids::Offset;
-use krabka_metadata::{BreakGlassProposalRecord, MetadataRecord, to_kraft_values};
+use krabka_metadata::{
+    BreakGlassProposalRecord, MetadataRecord, TopicFreezeRecord, to_kraft_values,
+};
 use tokio::sync::oneshot;
 
 use super::{
@@ -57,6 +59,33 @@ impl Engine {
         )
     }
 
+    fn freeze_replacement_decision(
+        &self,
+        incoming: &TopicFreezeRecord,
+        another_freeze_in_batch: bool,
+    ) -> krabka_verified::FreezeReplacementDecision {
+        let stored = self
+            .image
+            .topic_freezes()
+            .find(|stored| {
+                stored.pattern_type == incoming.pattern_type && stored.scope == incoming.scope
+            })
+            .map_or(krabka_verified::FreezeStoredState::Missing, |stored| {
+                krabka_verified::FreezeStoredState::Present {
+                    set_at_ms: stored.set_at_ms,
+                }
+            });
+        krabka_verified::freeze_replacement_decision(krabka_verified::FreezeReplacementFacts {
+            stored,
+            incoming_frozen: incoming.frozen,
+            incoming_set_at_ms: incoming.set_at_ms,
+            // Like proposal consumption, replacement is a compare-and-set
+            // against the committed image. A retained tail or a second
+            // freeze in this batch must commit or fail before retry.
+            uncommitted_tail: another_freeze_in_batch || self.log.hwm() < self.log.log_end_offset(),
+        })
+    }
+
     /// Handle a `submit_change`: leader appends + parks a waiter; non-leader
     /// rejects immediately with the leader hint.
     #[tracing::instrument(
@@ -100,20 +129,31 @@ impl Engine {
             return;
         }
 
+        let mut freeze_in_batch = false;
         for record in records {
-            let MetadataRecord::V1BreakGlassProposal(consumed) = record else {
-                continue;
-            };
-            if consumed.consumed_at_ms == 0 {
-                continue;
-            }
-            let decision = self.break_glass_consumption_decision(consumed);
-            if decision != krabka_verified::BreakGlassConsumptionDecision::Append {
-                let _ = reply.send(Err(RaftError::ChangeRejected(format!(
-                    "break-glass consume {} rejected: {decision:?}",
-                    consumed.proposal_id
-                ))));
-                return;
+            match record {
+                MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
+                    let decision = self.break_glass_consumption_decision(consumed);
+                    if decision != krabka_verified::BreakGlassConsumptionDecision::Append {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "break-glass consume {} rejected: {decision:?}",
+                            consumed.proposal_id
+                        ))));
+                        return;
+                    }
+                }
+                MetadataRecord::V1TopicFreeze(freeze) => {
+                    let decision = self.freeze_replacement_decision(freeze, freeze_in_batch);
+                    if decision != krabka_verified::FreezeReplacementDecision::Append {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "topic-freeze mutation {:?}:{} rejected: {decision:?}",
+                            freeze.pattern_type, freeze.scope
+                        ))));
+                        return;
+                    }
+                    freeze_in_batch = true;
+                }
+                _ => {}
             }
         }
 

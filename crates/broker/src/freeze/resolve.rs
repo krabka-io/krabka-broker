@@ -6,29 +6,51 @@
 //! partition of the topic then pays one test of an [`Option`] and nothing
 //! else.
 //!
-//! The precedence rules live on
-//! [`MetadataImage::topic_freeze`][krabka_metadata::MetadataImage::topic_freeze],
-//! which holds the two indexes that answer them: a cluster with no freeze
-//! costs two emptiness tests, a literal entry beats every prefix entry, the
-//! longest matching prefix wins, and a name that starts with `__` never
-//! matches. This module adds no rule of its own. It gives the produce path a
-//! borrow of the entry, and [`FreezeVerdict`] turns that entry into the
-//! `error_message` the producer reads.
+//! The image supplies the live entries. The verified precedence kernel makes a
+//! literal entry beat every prefix and makes the longest matching prefix win.
+//! A name that starts with `__` never matches. Every enforcement path calls
+//! this resolver, and its tests compare the result with the image's indexed
+//! lookup. [`FreezeVerdict`] turns the selected borrow into the `error_message`
+//! the producer reads.
 
 use krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord};
+use krabka_verified::{FreezeScopeDecision, FreezeScopeRank, freeze_scope_decision};
 
 use crate::freeze::pattern_type_name;
 
 /// The write-freeze entry that covers `topic`, or `None` when the topic
 /// accepts writes.
 ///
-/// This is the whole of the produce-path gate's read. An unfrozen cluster pays
-/// the image's own fast path, and the call allocates nothing.
+/// This is the whole of the produce-path gate's read. The registry is bounded
+/// by configuration, and the fold allocates nothing.
 pub(crate) fn resolve_topic_freeze<'a>(
     image: &'a MetadataImage,
     topic: &str,
 ) -> Option<&'a TopicFreezeRecord> {
-    image.topic_freeze(topic)
+    let mut best = None;
+    for candidate in image.topic_freezes() {
+        let current_rank = best.map_or(FreezeScopeRank::NoMatch, |current| {
+            scope_rank(current, topic)
+        });
+        let candidate_rank = scope_rank(candidate, topic);
+        if freeze_scope_decision(current_rank, candidate_rank) == FreezeScopeDecision::Replace {
+            best = Some(candidate);
+        }
+    }
+    best
+}
+
+fn scope_rank(record: &TopicFreezeRecord, topic: &str) -> FreezeScopeRank {
+    if topic.starts_with("__") {
+        return FreezeScopeRank::NoMatch;
+    }
+    match record.pattern_type {
+        PatternType::Literal if record.scope == topic => FreezeScopeRank::Literal,
+        PatternType::Prefixed if topic.starts_with(&record.scope) => FreezeScopeRank::Prefix {
+            length: u64::try_from(record.scope.len()).unwrap_or(u64::MAX),
+        },
+        _ => FreezeScopeRank::NoMatch,
+    }
 }
 
 /// The refusal that one frozen topic gives every produce partition of a
@@ -107,10 +129,10 @@ pub(crate) fn resolve_freeze_verdict(image: &MetadataImage, topic: &str) -> Opti
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_metadata::MetadataRecord;
+    use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord};
     use uuid::Uuid;
 
-    use super::*;
+    use super::{FreezeVerdict, resolve_freeze_verdict, resolve_topic_freeze};
 
     fn image() -> MetadataImage {
         MetadataImage::new(Uuid::from_u128(0x5150))
@@ -193,6 +215,10 @@ mod tests {
         ] {
             check!(
                 resolve_topic_freeze(&image, topic).map(|f| f.scope.as_str()) == expected,
+                "{label}"
+            );
+            check!(
+                resolve_topic_freeze(&image, topic) == image.topic_freeze(topic),
                 "{label}"
             );
             check!(
