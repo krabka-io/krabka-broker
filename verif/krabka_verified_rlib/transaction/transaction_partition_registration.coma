@@ -1,0 +1,114 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 375 0 377 36 *)
+
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 328 10 329 38
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 330 10 334 57
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 335 10 340 42
+let%span stransaction'2 = "/workspace/crates/verified/src/transaction.rs" 341 10 347 53
+let%span stransaction'3 = "/workspace/crates/verified/src/transaction.rs" 348 10 355 50
+let%span stransaction'4 = "/workspace/crates/verified/src/transaction.rs" 356 10 364 51
+let%span stransaction'5 = "/workspace/crates/verified/src/transaction.rs" 365 10 373 52
+
+use creusot.prelude.Any
+
+type t_TransactionRegistrationOwnershipFacts = { is_coordinator: bool; producer_id_valid: bool; entry_exists: bool }
+
+type t_TransactionRegistrationIdentityFacts = {
+  transactional_id_matches: bool;
+  staged_identity: bool;
+  producer_identity_matches: bool }
+
+type t_TransactionRegistrationStateFacts = { state_allows_registration: bool; exact_partitions_registered: bool }
+
+type t_TransactionRegistrationFacts = {
+  ownership: t_TransactionRegistrationOwnershipFacts;
+  identity: t_TransactionRegistrationIdentityFacts;
+  state: t_TransactionRegistrationStateFacts }
+
+type t_TransactionRegistrationDecision =
+  | RejectNotCoordinator
+  | RejectUnknownProducer
+  | RejectStagedIdentity
+  | RejectStaleIdentity
+  | RejectState
+  | PersistRetry
+  | PersistRegistration
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_partition_registration [#"/workspace/crates/verified/src/transaction.rs" 375 0 377 36]
+  (facts: t_TransactionRegistrationFacts) (return (x: t_TransactionRegistrationDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.ownership.is_coordinator = false} (! bb1) | br1 -> {facts.ownership.is_coordinator} (! bb2) ]
+  | bb2 = any
+    [ br0 -> {facts.ownership.producer_id_valid = false} (! bb5) | br1 -> {facts.ownership.producer_id_valid} (! bb3) ]
+  | bb3 = any [ br0 -> {facts.ownership.entry_exists = false} (! bb5) | br1 -> {facts.ownership.entry_exists} (! bb4) ]
+  | bb4 = any
+    [ br0 -> {facts.identity.transactional_id_matches = false} (! bb5)
+    | br1 -> {facts.identity.transactional_id_matches} (! bb6) ]
+  | bb6 = any
+    [ br0 -> {facts.identity.staged_identity = false} (! bb8) | br1 -> {facts.identity.staged_identity} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- RejectStagedIdentity ] s1 | s1 = return {_ret} ]
+  | bb8 = any
+    [ br0 -> {facts.identity.producer_identity_matches = false} (! bb9)
+    | br1 -> {facts.identity.producer_identity_matches} (! bb10) ]
+  | bb10 = any
+    [ br0 -> {facts.state.state_allows_registration = false} (! bb11)
+    | br1 -> {facts.state.state_allows_registration} (! bb12) ]
+  | bb12 = any
+    [ br0 -> {facts.state.exact_partitions_registered = false} (! bb14)
+    | br1 -> {facts.state.exact_partitions_registered} (! bb13) ]
+  | bb13 = s0 [ s0 = [ &_ret <- PersistRetry ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- PersistRegistration ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- RejectState ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- RejectStaleIdentity ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- RejectUnknownProducer ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- RejectNotCoordinator ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionRegistrationDecision = Any.any_l () | & facts: t_TransactionRegistrationFacts = facts ])
+  [ return (result: t_TransactionRegistrationDecision) ->
+  {[@stop_split] [@expl:transaction_partition_registration ensures] ([@stop_split] [@expl:transaction_partition_registration ensures #0] [%#stransaction] (result
+        = RejectNotCoordinator)
+      = (not facts.ownership.is_coordinator))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #1] [%#stransaction'0] (result
+        = RejectUnknownProducer)
+      = (facts.ownership.is_coordinator
+      /\ (not facts.ownership.producer_id_valid
+      \/ not facts.ownership.entry_exists \/ not facts.identity.transactional_id_matches)))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #2] [%#stransaction'1] (result
+        = RejectStagedIdentity)
+      = (facts.ownership.is_coordinator
+      /\ facts.ownership.producer_id_valid
+      /\ facts.ownership.entry_exists /\ facts.identity.transactional_id_matches /\ facts.identity.staged_identity))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #3] [%#stransaction'2] (result
+        = RejectStaleIdentity)
+      = (facts.ownership.is_coordinator
+      /\ facts.ownership.producer_id_valid
+      /\ facts.ownership.entry_exists
+      /\ facts.identity.transactional_id_matches
+      /\ not facts.identity.staged_identity /\ not facts.identity.producer_identity_matches))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #4] [%#stransaction'3] (result = RejectState)
+      = (facts.ownership.is_coordinator
+      /\ facts.ownership.producer_id_valid
+      /\ facts.ownership.entry_exists
+      /\ facts.identity.transactional_id_matches
+      /\ not facts.identity.staged_identity
+      /\ facts.identity.producer_identity_matches /\ not facts.state.state_allows_registration))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #5] [%#stransaction'4] (result = PersistRetry)
+      = (facts.ownership.is_coordinator
+      /\ facts.ownership.producer_id_valid
+      /\ facts.ownership.entry_exists
+      /\ facts.identity.transactional_id_matches
+      /\ not facts.identity.staged_identity
+      /\ facts.identity.producer_identity_matches
+      /\ facts.state.state_allows_registration /\ facts.state.exact_partitions_registered))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #6] [%#stransaction'5] (result
+      = PersistRegistration)
+    = (facts.ownership.is_coordinator
+    /\ facts.ownership.producer_id_valid
+    /\ facts.ownership.entry_exists
+    /\ facts.identity.transactional_id_matches
+    /\ not facts.identity.staged_identity
+    /\ facts.identity.producer_identity_matches
+    /\ facts.state.state_allows_registration /\ not facts.state.exact_partitions_registered))}
+    (! return {result}) ]

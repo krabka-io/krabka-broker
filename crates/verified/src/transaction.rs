@@ -291,78 +291,104 @@ pub enum TransactionRegistrationDecision {
     PersistRegistration,
 }
 
+/// Facts used to fence one transaction partition registration.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionRegistrationFacts {
+    pub ownership: TransactionRegistrationOwnershipFacts,
+    pub identity: TransactionRegistrationIdentityFacts,
+    pub state: TransactionRegistrationStateFacts,
+}
+
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionRegistrationOwnershipFacts {
+    pub is_coordinator: bool,
+    pub producer_id_valid: bool,
+    pub entry_exists: bool,
+}
+
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionRegistrationIdentityFacts {
+    pub transactional_id_matches: bool,
+    pub staged_identity: bool,
+    pub producer_identity_matches: bool,
+}
+
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionRegistrationStateFacts {
+    pub state_allows_registration: bool,
+    pub exact_partitions_registered: bool,
+}
+
 /// Fence a partition registration against coordinator ownership and one exact
 /// transactional-id, producer-id, and producer-epoch generation.
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent transaction-registration facts"
-)]
 #[ensures((result == TransactionRegistrationDecision::RejectNotCoordinator)
-    == !is_coordinator)]
+    == !facts.ownership.is_coordinator)]
 #[ensures((result == TransactionRegistrationDecision::RejectUnknownProducer)
-    == (is_coordinator
-        && (!producer_id_valid || !entry_exists || !transactional_id_matches)))]
+    == (facts.ownership.is_coordinator
+        && (!facts.ownership.producer_id_valid
+            || !facts.ownership.entry_exists
+            || !facts.identity.transactional_id_matches)))]
 #[ensures((result == TransactionRegistrationDecision::RejectStagedIdentity)
-    == (is_coordinator
-        && producer_id_valid
-        && entry_exists
-        && transactional_id_matches
-        && staged_identity))]
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.transactional_id_matches
+        && facts.identity.staged_identity))]
 #[ensures((result == TransactionRegistrationDecision::RejectStaleIdentity)
-    == (is_coordinator
-        && producer_id_valid
-        && entry_exists
-        && transactional_id_matches
-        && !staged_identity
-        && !producer_identity_matches))]
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.transactional_id_matches
+        && !facts.identity.staged_identity
+        && !facts.identity.producer_identity_matches))]
 #[ensures((result == TransactionRegistrationDecision::RejectState)
-    == (is_coordinator
-        && producer_id_valid
-        && entry_exists
-        && transactional_id_matches
-        && !staged_identity
-        && producer_identity_matches
-        && !state_allows_registration))]
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.transactional_id_matches
+        && !facts.identity.staged_identity
+        && facts.identity.producer_identity_matches
+        && !facts.state.state_allows_registration))]
 #[ensures((result == TransactionRegistrationDecision::PersistRetry)
-    == (is_coordinator
-        && producer_id_valid
-        && entry_exists
-        && transactional_id_matches
-        && !staged_identity
-        && producer_identity_matches
-        && state_allows_registration
-        && exact_partitions_registered))]
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.transactional_id_matches
+        && !facts.identity.staged_identity
+        && facts.identity.producer_identity_matches
+        && facts.state.state_allows_registration
+        && facts.state.exact_partitions_registered))]
 #[ensures((result == TransactionRegistrationDecision::PersistRegistration)
-    == (is_coordinator
-        && producer_id_valid
-        && entry_exists
-        && transactional_id_matches
-        && !staged_identity
-        && producer_identity_matches
-        && state_allows_registration
-        && !exact_partitions_registered))]
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.transactional_id_matches
+        && !facts.identity.staged_identity
+        && facts.identity.producer_identity_matches
+        && facts.state.state_allows_registration
+        && !facts.state.exact_partitions_registered))]
 #[must_use]
 pub fn transaction_partition_registration(
-    is_coordinator: bool,
-    producer_id_valid: bool,
-    entry_exists: bool,
-    transactional_id_matches: bool,
-    staged_identity: bool,
-    producer_identity_matches: bool,
-    state_allows_registration: bool,
-    exact_partitions_registered: bool,
+    facts: TransactionRegistrationFacts,
 ) -> TransactionRegistrationDecision {
-    if !is_coordinator {
+    if !facts.ownership.is_coordinator {
         TransactionRegistrationDecision::RejectNotCoordinator
-    } else if !producer_id_valid || !entry_exists || !transactional_id_matches {
+    } else if !facts.ownership.producer_id_valid
+        || !facts.ownership.entry_exists
+        || !facts.identity.transactional_id_matches
+    {
         TransactionRegistrationDecision::RejectUnknownProducer
-    } else if staged_identity {
+    } else if facts.identity.staged_identity {
         TransactionRegistrationDecision::RejectStagedIdentity
-    } else if !producer_identity_matches {
+    } else if !facts.identity.producer_identity_matches {
         TransactionRegistrationDecision::RejectStaleIdentity
-    } else if !state_allows_registration {
+    } else if !facts.state.state_allows_registration {
         TransactionRegistrationDecision::RejectState
-    } else if exact_partitions_registered {
+    } else if facts.state.exact_partitions_registered {
         TransactionRegistrationDecision::PersistRetry
     } else {
         TransactionRegistrationDecision::PersistRegistration
@@ -838,48 +864,55 @@ mod tests {
             RejectStaleIdentity, RejectState, RejectUnknownProducer,
         };
 
-        assert!(
-            transaction_partition_registration(false, true, true, true, false, true, true, false)
-                == RejectNotCoordinator
-        );
+        let admitted = TransactionRegistrationFacts {
+            ownership: TransactionRegistrationOwnershipFacts {
+                is_coordinator: true,
+                producer_id_valid: true,
+                entry_exists: true,
+            },
+            identity: TransactionRegistrationIdentityFacts {
+                transactional_id_matches: true,
+                staged_identity: false,
+                producer_identity_matches: true,
+            },
+            state: TransactionRegistrationStateFacts {
+                state_allows_registration: true,
+                exact_partitions_registered: false,
+            },
+        };
+
+        let mut facts = admitted;
+        facts.ownership.is_coordinator = false;
+        assert!(transaction_partition_registration(facts) == RejectNotCoordinator);
         for malformed in [
             (false, true, true),
             (true, false, true),
             (true, true, false),
         ] {
-            assert!(
-                transaction_partition_registration(
-                    true,
-                    malformed.0,
-                    malformed.1,
-                    malformed.2,
-                    false,
-                    true,
-                    true,
-                    false,
-                ) == RejectUnknownProducer
-            );
+            let mut facts = admitted;
+            facts.ownership.producer_id_valid = malformed.0;
+            facts.ownership.entry_exists = malformed.1;
+            facts.identity.transactional_id_matches = malformed.2;
+            assert!(transaction_partition_registration(facts) == RejectUnknownProducer);
         }
-        assert!(
-            transaction_partition_registration(true, true, true, true, true, true, true, false)
-                == RejectStagedIdentity
-        );
-        assert!(
-            transaction_partition_registration(true, true, true, true, false, false, true, false)
-                == RejectStaleIdentity
-        );
-        assert!(
-            transaction_partition_registration(true, true, true, true, false, true, false, false)
-                == RejectState
-        );
-        assert!(
-            transaction_partition_registration(true, true, true, true, false, true, true, true)
-                == PersistRetry
-        );
-        assert!(
-            transaction_partition_registration(true, true, true, true, false, true, true, false)
-                == PersistRegistration
-        );
+
+        let mut facts = admitted;
+        facts.identity.staged_identity = true;
+        assert!(transaction_partition_registration(facts) == RejectStagedIdentity);
+
+        let mut facts = admitted;
+        facts.identity.producer_identity_matches = false;
+        assert!(transaction_partition_registration(facts) == RejectStaleIdentity);
+
+        let mut facts = admitted;
+        facts.state.state_allows_registration = false;
+        assert!(transaction_partition_registration(facts) == RejectState);
+
+        let mut facts = admitted;
+        facts.state.exact_partitions_registered = true;
+        assert!(transaction_partition_registration(facts) == PersistRetry);
+
+        assert!(transaction_partition_registration(admitted) == PersistRegistration);
     }
 
     #[test]

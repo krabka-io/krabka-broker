@@ -13,7 +13,9 @@ use krabka_protocol::owned::{
     common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
 };
 use krabka_verified::transaction::{
-    TransactionRegistrationDecision, transaction_partition_registration,
+    TransactionRegistrationDecision, TransactionRegistrationFacts,
+    TransactionRegistrationIdentityFacts, TransactionRegistrationOwnershipFacts,
+    TransactionRegistrationStateFacts, transaction_partition_registration,
 };
 
 use super::TxnCoordinator;
@@ -37,34 +39,64 @@ impl TxnCoordinator {
         let is_coordinator = self.is_coordinator_for(tid).await;
         if !is_coordinator {
             return registration_code(transaction_partition_registration(
-                false, true, false, false, false, false, false, false,
+                TransactionRegistrationFacts {
+                    ownership: TransactionRegistrationOwnershipFacts {
+                        is_coordinator: false,
+                        producer_id_valid: true,
+                        entry_exists: false,
+                    },
+                    identity: TransactionRegistrationIdentityFacts {
+                        transactional_id_matches: false,
+                        staged_identity: false,
+                        producer_identity_matches: false,
+                    },
+                    state: TransactionRegistrationStateFacts {
+                        state_allows_registration: false,
+                        exact_partitions_registered: false,
+                    },
+                },
             ));
         }
         let Some(entry_mutex) = self.get(tid) else {
             return registration_code(transaction_partition_registration(
-                true,
-                producer_id.get() >= 0,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
+                TransactionRegistrationFacts {
+                    ownership: TransactionRegistrationOwnershipFacts {
+                        is_coordinator: true,
+                        producer_id_valid: producer_id.get() >= 0,
+                        entry_exists: false,
+                    },
+                    identity: TransactionRegistrationIdentityFacts {
+                        transactional_id_matches: false,
+                        staged_identity: false,
+                        producer_identity_matches: false,
+                    },
+                    state: TransactionRegistrationStateFacts {
+                        state_allows_registration: false,
+                        exact_partitions_registered: false,
+                    },
+                },
             ));
         };
         let mut entry = entry_mutex.lock().await;
-        let decision = transaction_partition_registration(
-            true,
-            producer_id.get() >= 0,
-            true,
-            entry.transactional_id == tid,
-            entry.has_staged_producer_identity(),
-            entry.producer_id == producer_id && entry.producer_epoch == producer_epoch,
-            entry.state.can_transition_to(TxnState::Ongoing),
-            partitions
-                .iter()
-                .all(|partition| entry.partitions.contains(partition)),
-        );
+        let decision = transaction_partition_registration(TransactionRegistrationFacts {
+            ownership: TransactionRegistrationOwnershipFacts {
+                is_coordinator: true,
+                producer_id_valid: producer_id.get() >= 0,
+                entry_exists: true,
+            },
+            identity: TransactionRegistrationIdentityFacts {
+                transactional_id_matches: entry.transactional_id == tid,
+                staged_identity: entry.has_staged_producer_identity(),
+                producer_identity_matches: entry.producer_id == producer_id
+                    && entry.producer_epoch == producer_epoch,
+            },
+            state: TransactionRegistrationStateFacts {
+                state_allows_registration: entry.state.can_transition_to(TxnState::Ongoing),
+                exact_partitions_registered: partitions
+                    .iter()
+                    .all(|partition| entry.partitions.contains(partition)),
+            },
+        });
         if !matches!(
             decision,
             TransactionRegistrationDecision::PersistRetry
