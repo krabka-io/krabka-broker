@@ -500,6 +500,50 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
     );
 }
 
+/// KIP-966 ELR state is stored on the topic like any other override, so only
+/// the `read_only` flag tells an operator that no alter path will take it. It
+/// is the controller-managed key that *is* stored; `write.freeze` is
+/// synthesised and has its own entry.
+#[test]
+fn the_controller_managed_elr_key_is_read_only_and_typed() {
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "events".into(),
+        overrides: maplit::btreemap! {
+        config_keys::ELIGIBLE_LEADER_REPLICAS.to_string() => "0:2:3".to_string()},
+    }));
+
+    let result = describe_topic(
+        &image,
+        "events",
+        Some(vec![config_keys::ELIGIBLE_LEADER_REPLICAS.to_owned()]),
+    );
+
+    assert!(
+        result.configs
+            == vec![DescribeConfigsResourceResult {
+                name: config_keys::ELIGIBLE_LEADER_REPLICAS.to_owned(),
+                value: Some("0:2:3".to_owned()),
+                read_only: true,
+                config_source: CONFIG_SOURCE_DYNAMIC_TOPIC,
+                is_sensitive: false,
+                synonyms: vec![synonym(
+                    config_keys::ELIGIBLE_LEADER_REPLICAS,
+                    "0:2:3",
+                    CONFIG_SOURCE_DYNAMIC_TOPIC
+                )],
+                config_type: ConfigType::String.wire(),
+                documentation: Some(
+                    registry::lookup(ConfigScope::Topic, config_keys::ELIGIBLE_LEADER_REPLICAS)
+                        .expect("krabka.elr")
+                        .doc
+                        .to_owned()
+                ),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }]
+    );
+}
+
 #[test]
 fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
     let mut image = image_with_broker_config(

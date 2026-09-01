@@ -20,7 +20,8 @@ use super::{
 /// `DescribeConfigs` describe. Four keys carry a parser their own module
 /// owns; the rest are a closed value list or a numeric floor.
 pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String> {
-    let Some(row) = registry::lookup(ConfigScope::Topic, key).filter(|row| row.is_stored()) else {
+    let Some(row) = registry::lookup(ConfigScope::Topic, key).filter(|row| row.is_alterable())
+    else {
         return Err(format!("unrecognized config key `{key}`"));
     };
     match row.check {
@@ -37,8 +38,8 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
             }
             other => Err(format!("unrecognized config key `{other}`")),
         },
-        // A stored key is never `NotAltered`, and the `let ... else` above
-        // has already refused the unstored ones.
+        // The `let ... else` above has already refused every key an alter
+        // path may not write, which is every `NotAltered` row.
         ValueCheck::NotAltered => Err(format!("unrecognized config key `{key}`")),
     }
 }
@@ -171,10 +172,11 @@ fn parse_i32_at_least(min: i32, value: &str) -> Result<i32, String> {
 
 /// Returns `true` if `key` is one of the recognized topic-config keys.
 /// This helps `IncrementalAlterConfigs` DELETE-op validation, which then
-/// needs no sentinel probe value. A synthesised key such as
-/// [`super::WRITE_FREEZE`] is not recognized: no alter path may write it.
+/// needs no sentinel probe value. A controller-written key such as
+/// [`super::WRITE_FREEZE`] or [`super::ELIGIBLE_LEADER_REPLICAS`] is not
+/// recognized: no alter path may write it.
 pub(crate) fn is_recognized(key: &str) -> bool {
-    registry::lookup(ConfigScope::Topic, key).is_some_and(registry::ConfigKey::is_stored)
+    registry::lookup(ConfigScope::Topic, key).is_some_and(registry::ConfigKey::is_alterable)
 }
 
 #[cfg(test)]

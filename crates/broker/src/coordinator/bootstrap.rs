@@ -231,7 +231,7 @@ pub async fn bootstrap(
         );
         partitions.insert(OFFSETS_TOPIC.into(), partition_id, partition);
     }
-    finalize(coordinator, replayed);
+    finalize(coordinator, replayed).await;
     Ok(())
 }
 

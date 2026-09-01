@@ -6,7 +6,10 @@
 //! streams records straight into the coordinator's seed map, and then
 //! classifies each group and spawns its actor.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use krabka_ids::PartitionIndex;
 use krabka_protocol::records::RecordBatch;
@@ -53,6 +56,27 @@ pub(super) struct Replayed {
     /// restarts does not hand every dead group another full
     /// `offsets.retention.minutes`.
     pub(super) empty_since: HashMap<String, i64>,
+    /// KIP-447: the offset commits of transactions the log ends without a
+    /// marker for, keyed by group and then by the producer that wrote them.
+    ///
+    /// Those offsets are not committed, so they never reach `committed`. The
+    /// transaction is still open, though: its marker can still arrive after
+    /// the reload, so the group has to keep answering a `require_stable`
+    /// `OffsetFetch` with `UNSTABLE_OFFSET_COMMIT` for these keys, exactly as
+    /// it did before.
+    pub(super) pending_txn: HashMap<String, HashMap<i64, PendingTxnKeys>>,
+}
+
+/// One producer's unresolved transactional offset commits for one group, as
+/// replay recovered them from the log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct PendingTxnKeys {
+    /// Highest offsets-log position the producer's deferred records were found
+    /// at. The marker that resolves them can only arrive after the reload, and
+    /// so lands above it, which is what keeps the group actor from mistaking
+    /// this recovered mark for one the marker already resolved.
+    pub(super) written_at: i64,
+    pub(super) keys: HashSet<(String, i32)>,
 }
 
 impl Replayed {
@@ -60,12 +84,13 @@ impl Replayed {
         self.classic.extend(other.classic);
         self.committed.extend(other.committed);
         self.empty_since.extend(other.empty_since);
+        self.pending_txn.extend(other.pending_txn);
     }
 }
 
 /// Replay one newly-led offsets partition into the coordinator after a
 /// metadata leadership change.
-pub(crate) fn replay_partition(
+pub(crate) async fn replay_partition(
     partitions: &PartitionRegistry,
     coordinator: &Arc<GroupCoordinator>,
     partition_id: PartitionIndex,
@@ -76,15 +101,18 @@ pub(crate) fn replay_partition(
             partition_id.get()
         ))
     })?;
-    let log = partition.log.lock().map_err(|_| {
-        BrokerError::Startup(format!(
-            "{OFFSETS_TOPIC}-{} log lock poisoned during leadership replay",
-            partition_id.get()
-        ))
-    })?;
-    let replayed = replay_records(&log, coordinator)?;
-    drop(log);
-    finalize(coordinator, replayed);
+    // The log guard is not `Send`, so it lives and dies inside this block:
+    // `finalize` awaits, and this function runs inside a spawned task.
+    let replayed = {
+        let log = partition.log.lock().map_err(|_| {
+            BrokerError::Startup(format!(
+                "{OFFSETS_TOPIC}-{} log lock poisoned during leadership replay",
+                partition_id.get()
+            ))
+        })?;
+        replay_records(&log, coordinator)?
+    };
+    finalize(coordinator, replayed).await;
     Ok(())
 }
 
@@ -99,6 +127,9 @@ pub(super) fn replay_records(
         key: Key,
         value: Option<bytes::Bytes>,
         timestamp_ms: i64,
+        /// Offset of the batch the record arrived in, kept for the records
+        /// that turn out to belong to a transaction the log never resolved.
+        written_at: i64,
     }
 
     let mut acc = Replayed::default();
@@ -151,6 +182,7 @@ pub(super) fn replay_records(
                             key,
                             value: record.value.clone(),
                             timestamp_ms: batch.max_timestamp,
+                            written_at: batch.base_offset,
                         });
                     continue;
                 }
@@ -172,6 +204,29 @@ pub(super) fn replay_records(
             break;
         }
         next = advanced_to;
+    }
+    // Whatever is still deferred belongs to a transaction the log ends without
+    // a marker for. Its offset commits are not visible and must not be
+    // applied, but the transaction can still be resolved after the reload, so
+    // its keys carry forward as KIP-447 pending marks.
+    for (producer_id, records) in pending_transactions {
+        for record in records {
+            if let Key::OffsetCommit {
+                group_id,
+                topic,
+                partition,
+            } = record.key
+            {
+                let pending = acc
+                    .pending_txn
+                    .entry(group_id)
+                    .or_default()
+                    .entry(producer_id)
+                    .or_default();
+                pending.written_at = pending.written_at.max(record.written_at);
+                pending.keys.insert((topic, partition));
+            }
+        }
     }
     Ok(acc)
 }
@@ -280,9 +335,16 @@ pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, acc: &mut Rep
 ///
 /// The next-gen groups are the groups that accumulated next-gen records.
 /// `finalize_bootstrap` spawns them, and the function attaches their committed
-/// offsets afterward. Every other group with classic metadata or committed
-/// offsets replays as a classic actor.
-pub(super) fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: Replayed) {
+/// offsets and open-transaction marks afterward. Every other group with
+/// classic metadata, committed offsets, or an open transaction replays as a
+/// classic actor.
+///
+/// Recovered state reaches a spawned actor through its mailbox, so the
+/// function awaits each hand-off rather than dropping what does not fit: a
+/// group can have more open producer transactions than the mailbox holds, and
+/// a mark lost here is a partition that answers a `require_stable`
+/// `OffsetFetch` with a stale committed offset until the next replay.
+pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: Replayed) {
     // Next-gen group ids are those present in the coordinator's seed map.
     let next_gen_ids: std::collections::HashSet<String> =
         coordinator.seeds.iter().map(|e| e.key().clone()).collect();
@@ -299,22 +361,63 @@ pub(super) fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: Replay
         {
             let entries: Vec<((String, i32), OffsetEntry)> = offsets.into_iter().collect();
             let (tx, _rx) = tokio::sync::oneshot::channel();
-            let _ = handle.tx.try_send(
-                crate::coordinator::unified::actor::GroupActorMessage::UpdateCommitted {
-                    entries,
-                    reply: tx,
-                },
-            );
+            if handle
+                .tx
+                .send(
+                    crate::coordinator::unified::actor::GroupActorMessage::UpdateCommitted {
+                        entries,
+                        reply: tx,
+                    },
+                )
+                .await
+                .is_err()
+            {
+                tracing::warn!(group = %gid, "replay could not seed the group's committed offsets");
+            }
         }
     }
 
-    // Classic groups: those with classic metadata, plus offset-only groups
-    // that are not next-gen.
+    // Attach open-transaction marks to consumer groups, so a `require_stable`
+    // fetch keeps reporting UNSTABLE_OFFSET_COMMIT across the reload.
+    let pending_groups: Vec<String> = replayed.pending_txn.keys().cloned().collect();
+    for gid in pending_groups {
+        if next_gen_ids.contains(&gid)
+            && let Some(by_producer) = replayed.pending_txn.remove(&gid)
+            && let Some(handle) = coordinator.find(&gid)
+        {
+            for (producer_id, pending) in by_producer {
+                let (tx, _rx) = tokio::sync::oneshot::channel();
+                if handle
+                    .tx
+                    .send(
+                        crate::coordinator::unified::actor::GroupActorMessage::AddPendingTxnOffsets {
+                            producer_id,
+                            written_at: pending.written_at,
+                            keys: pending.keys.into_iter().collect(),
+                            reply: tx,
+                        },
+                    )
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        group = %gid,
+                        producer_id,
+                        "replay could not seed the group's open transaction marks"
+                    );
+                }
+            }
+        }
+    }
+
+    // Classic groups: those with classic metadata, plus offset-only and
+    // open-transaction-only groups that are not next-gen.
     let classic_ids: std::collections::HashSet<String> = replayed
         .classic
         .keys()
         .cloned()
         .chain(replayed.committed.keys().cloned())
+        .chain(replayed.pending_txn.keys().cloned())
         .filter(|gid| !next_gen_ids.contains(gid))
         .collect();
     for gid in classic_ids {
@@ -323,12 +426,12 @@ pub(super) fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: Replay
             .remove(&gid)
             .unwrap_or_else(|| ClassicState::new(gid.clone()));
         let committed_offsets = replayed.committed.remove(&gid).unwrap_or_default();
-        let group = Box::new(CoordinatorGroup {
-            group_id: gid.clone(),
-            kind: GroupKind::Classic(state),
-            committed_offsets,
-            empty_since_ms: replayed.empty_since.remove(&gid),
-        });
-        coordinator.seed_classic(&gid, group);
+        let mut group =
+            CoordinatorGroup::seeded(gid.clone(), GroupKind::Classic(state), committed_offsets);
+        group.empty_since_ms = replayed.empty_since.remove(&gid);
+        for (producer_id, pending) in replayed.pending_txn.remove(&gid).unwrap_or_default() {
+            group.add_pending_txn_offsets(producer_id, pending.written_at, pending.keys);
+        }
+        coordinator.seed_classic(&gid, Box::new(group));
     }
 }

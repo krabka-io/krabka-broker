@@ -76,15 +76,14 @@ fn seed_group_with_member(broker: &Broker) {
     ));
     state.state = GroupState::Stable;
     state.generation_id = GENERATION;
-    broker.group_coordinator.seed_classic(
+    let group = CoordinatorGroup::seeded(
         GROUP,
-        Box::new(CoordinatorGroup {
-            group_id: GROUP.into(),
-            kind: GroupKind::Classic(state),
-            committed_offsets: std::collections::HashMap::new(),
-            empty_since_ms: None,
-        }),
+        GroupKind::Classic(state),
+        std::collections::HashMap::new(),
     );
+    broker
+        .group_coordinator
+        .seed_classic(GROUP, Box::new(group));
 }
 
 /// Seed a group the way bootstrap replay leaves one after a restart: its
@@ -99,25 +98,25 @@ fn seed_replayed_group(
 ) {
     let mut state = ClassicGroup::new(GROUP);
     state.protocol_type = protocol_type.map(str::to_string);
-    broker.group_coordinator.seed_classic(
+    let mut group = CoordinatorGroup::seeded(
         GROUP,
-        Box::new(CoordinatorGroup {
-            group_id: GROUP.into(),
-            kind: GroupKind::Classic(state),
-            committed_offsets: [(
-                (TOPIC.to_string(), 0),
-                OffsetEntry {
-                    offset: krabka_log::Offset(42),
-                    leader_epoch: -1,
-                    metadata: String::new(),
-                    commit_timestamp_ms,
-                    expire_timestamp_ms: None,
-                },
-            )]
-            .into(),
-            empty_since_ms,
-        }),
+        GroupKind::Classic(state),
+        [(
+            (TOPIC.to_string(), 0),
+            OffsetEntry {
+                offset: krabka_log::Offset(42),
+                leader_epoch: -1,
+                metadata: String::new(),
+                commit_timestamp_ms,
+                expire_timestamp_ms: None,
+            },
+        )]
+        .into(),
     );
+    group.empty_since_ms = empty_since_ms;
+    broker
+        .group_coordinator
+        .seed_classic(GROUP, Box::new(group));
 }
 
 /// Commit one offset through the `OffsetCommit` handler.
@@ -709,10 +708,10 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
         // next sweep takes it and the group with it.
         broker.group_coordinator.seed_classic(
             &group,
-            Box::new(CoordinatorGroup {
-                group_id: group.clone(),
-                kind: GroupKind::Classic(ClassicGroup::new(&group)),
-                committed_offsets: [(
+            Box::new(CoordinatorGroup::seeded(
+                group.clone(),
+                GroupKind::Classic(ClassicGroup::new(&group)),
+                [(
                     (TOPIC.to_string(), 0),
                     OffsetEntry {
                         offset: krabka_log::Offset(1),
@@ -723,8 +722,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
                     },
                 )]
                 .into(),
-                empty_since_ms: None,
-            }),
+            )),
         );
 
         let committing = {

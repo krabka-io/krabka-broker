@@ -162,14 +162,35 @@ pub(super) async fn handle_actor_message(
             let _ = reply.send(());
             true
         }
-        GroupActorMessage::FetchCommitted { reply } => {
-            let _ = reply.send(group.committed_offsets.clone());
+        GroupActorMessage::FetchOffsets { reply } => {
+            let _ = reply.send(group.offsets());
             true
         }
         GroupActorMessage::RemoveCommitted { keys, reply } => {
             for key in keys {
                 group.committed_offsets.remove(&key);
             }
+            let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::AddPendingTxnOffsets {
+            producer_id,
+            written_at,
+            keys,
+            reply,
+        } => {
+            group.add_pending_txn_offsets(producer_id, written_at, keys);
+            let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::ResolveTxnOffsets {
+            producer_id,
+            resolved_through,
+            committed,
+            reply,
+        } => {
+            group.committed_offsets.extend(committed);
+            group.resolve_pending_txn_offsets(producer_id, resolved_through);
             let _ = reply.send(());
             true
         }
@@ -239,11 +260,10 @@ mod tests {
             Duration::from_mins(1),
             vec![("range".into(), bytes::Bytes::new())],
         ));
-        let group = Box::new(CoordinatorGroup {
-            empty_since_ms: None,
-            group_id: "g".into(),
-            kind: GroupKind::Classic(cs),
-            committed_offsets: [(
+        let group = Box::new(CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Classic(cs),
+            [(
                 ("t".to_string(), 0),
                 OffsetEntry {
                     offset: Offset(7),
@@ -254,7 +274,7 @@ mod tests {
                 },
             )]
             .into(),
-        });
+        ));
         coord.seed_classic("g", group);
 
         // Seeded committed offsets and member are visible.
@@ -262,10 +282,18 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
-            .send(GroupActorMessage::FetchCommitted { reply: tx })
+            .send(GroupActorMessage::FetchOffsets { reply: tx })
             .await
             .unwrap();
-        assert!(rx.await.unwrap().get(&("t".to_string(), 0)).unwrap().offset == 7);
+        assert!(
+            rx.await
+                .unwrap()
+                .committed
+                .get(&("t".to_string(), 0))
+                .unwrap()
+                .offset
+                == 7
+        );
         // Non-empty group cannot be deleted.
         assert!(
             coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty)
