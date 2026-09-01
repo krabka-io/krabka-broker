@@ -52,6 +52,7 @@ pub mod transaction;
 pub mod vote;
 pub mod voter_set;
 pub mod wal;
+pub mod worm;
 
 pub use audit::{SpoolAppendDecision, spool_append_decision};
 pub use authz::{
@@ -191,4 +192,8 @@ pub use voter_set::{
 };
 pub use wal::{
     WalFetchAdmission, exact_wal_batch_range, select_wal_voter_index, wal_fetch_admission,
+};
+pub use worm::{
+    WormObjectSetDecision, WormObjectSetFacts, WormSignatureDecision, worm_object_set_decision,
+    worm_signature_decision,
 };
