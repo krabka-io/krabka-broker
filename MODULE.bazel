@@ -63,6 +63,11 @@ bazel_dep(name = "rules_apko", version = "1.5.56")
 # `sh_test`, for the wrapper that loads those images before a suite runs.
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
+# `@platforms//os:linux`, which //tools/creusot constrains its toolchain layer
+# to. It is already in the resolved graph as a transitive dependency, but a
+# repository is only visible to the main module when that module names it.
+bazel_dep(name = "platforms", version = "1.1.0")
+
 # A hermetic JDK. `jvm_tiered_storage` drives a small Java probe against Kafka's
 # own storage classes, so it needs a `java` on PATH; without one it fails
 # identically under Cargo, which is how the monorepo leaves it. Declaring the
