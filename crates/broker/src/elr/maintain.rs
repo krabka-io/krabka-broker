@@ -24,10 +24,16 @@
 //! [`next_partition_elr`] is those rules. Two differences are krabka's, and
 //! both are noted where they appear: the exclusion that Kafka spells with
 //! `uncleanShutdownReplicas` is spelled here as "no longer in the replica
-//! set", because krabka does not track per-replica unclean shutdown; and the
+//! set", because this function tracks no per-replica unclean shutdown; and the
 //! unclean-election test is "the elected leader was in neither the previous
 //! ISR nor the ELR" rather than "the change carries an ISR", because krabka's
 //! election paths always carry one.
+//!
+//! Kafka's other use of `uncleanShutdownReplicas` is a separate event, and
+//! [`super::unclean_restart`] is where krabka answers it: a broker that
+//! rejoins without proving it stopped gracefully is dropped from every ELR
+//! that names it, because membership was a claim about the log it held before
+//! the stop.
 //!
 //! Kafka gates the whole thing on the `eligible.leader.replicas.version`
 //! feature. krabka has no such feature to finalize -- the registry in

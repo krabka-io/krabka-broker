@@ -80,22 +80,7 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
 fn topic_record(image: &MetadataImage, topic: &str, node: i32) -> Option<MetadataRecord> {
     let before = image.topic_config(topic)?;
     let mut elr = TopicElr::parse(before.get(ELIGIBLE_LEADER_REPLICAS)?);
-
-    let mut withdrawn = false;
-    for partition in elr.partitions() {
-        let mut state = elr.partition(partition);
-        if !state.eligible_leader_replicas.contains(&node) {
-            continue;
-        }
-        state.eligible_leader_replicas.retain(|id| *id != node);
-        if !state.last_known_elr.contains(&node) {
-            state.last_known_elr.push(node);
-            state.last_known_elr.sort_unstable();
-        }
-        elr.set_partition(partition, state);
-        withdrawn = true;
-    }
-    if !withdrawn {
+    if !elr.demote_node(node) {
         return None;
     }
 

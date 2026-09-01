@@ -110,15 +110,6 @@ impl TopicElr {
             .join(";")
     }
 
-    /// Every partition this value carries state for, in partition order.
-    ///
-    /// The caller gets an owned list because the walks that use it -- taking
-    /// one replica out of a whole topic's ELR, for one -- edit the value as
-    /// they go.
-    pub(crate) fn partitions(&self) -> Vec<i32> {
-        self.0.keys().copied().collect()
-    }
-
     /// The ELR state of one partition. Absent partitions project as two empty
     /// lists, which is the "no ELR" answer Kafka gives.
     pub(crate) fn partition(&self, partition: i32) -> PartitionElr {
@@ -134,6 +125,32 @@ impl TopicElr {
         } else {
             self.0.insert(partition, elr);
         }
+    }
+
+    /// Move `node` out of every partition's eligible set and into its
+    /// last-known set, and report whether anything moved.
+    ///
+    /// Eligibility is a claim about the log a replica held, and this is what
+    /// withdraws the claim while keeping what is still true: the node was the
+    /// last one known to be complete, which is what an operator reads when a
+    /// partition has no leader left at all. Kafka reaches the same pair of
+    /// sets through `uncleanShutdownReplicas`, which
+    /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from
+    /// `targetElr` while `targetLastKnownElr` keeps it.
+    pub(crate) fn demote_node(&mut self, node: i32) -> bool {
+        let mut moved = false;
+        for elr in self.0.values_mut() {
+            if !elr.eligible_leader_replicas.contains(&node) {
+                continue;
+            }
+            elr.eligible_leader_replicas.retain(|id| *id != node);
+            if !elr.last_known_elr.contains(&node) {
+                elr.last_known_elr.push(node);
+                elr.last_known_elr.sort_unstable();
+            }
+            moved = true;
+        }
+        moved
     }
 }
 

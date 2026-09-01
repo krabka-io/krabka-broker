@@ -36,6 +36,22 @@
 //! partition's ISR or leader hands its emitted records to an
 //! [`ElrPublisher`], which recomputes the affected partitions and appends the
 //! `V1TopicConfig` records that carry the new state.
+//!
+//! The columns are not the only reader. KIP-966's point is that the set is
+//! *elected from*: `unclean_recovery`'s
+//! [`select_leader`](crate::unclean_recovery::select_leader) reads the same
+//! projection and elects a surviving ELR member ahead of any longer log that
+//! is not one, because only the ELR member is known to hold every committed
+//! record.
+//!
+//! That is also why the state has to be withdrawn when it stops being true.
+//! [`unclean_restart`] withdraws the published half of it for the one event
+//! that ends a membership without any partition changing: a broker rejoining
+//! without proving it stopped gracefully, whose current log need not be the
+//! log that made it eligible. A broker that *can* prove it -- the
+//! clean-shutdown record [`crate::clean_shutdown`] keeps, offered back as
+//! `previousBrokerEpoch` -- keeps its membership, because its log is still the
+//! log the claim was about.
 
 pub(crate) mod maintain;
 pub(crate) mod state;
