@@ -21,18 +21,22 @@
 //! election: the replica it elects need not hold every committed record, so
 //! nothing that came before is still known to be complete.
 //!
-//! [`next_partition_elr`] is those rules. Two differences are krabka's, and
-//! both are noted where they appear: the exclusion that Kafka spells with
-//! `uncleanShutdownReplicas` is spelled here as "no longer in the replica
-//! set", because this function tracks no per-replica unclean shutdown; and the
-//! unclean-election test is "the elected leader was in neither the previous
-//! ISR nor the ELR" rather than "the change carries an ISR", because krabka's
-//! election paths always carry one.
+//! [`next_partition_elr`] is those rules, `uncleanShutdownReplicas` included:
+//! [`ElrPublisher::after_unclean_shutdown`] is how a batch names one. krabka
+//! subtracts a second set Kafka does not, the replicas that are no longer in
+//! the replica set, because the partition can no longer elect them. One
+//! difference is krabka's: the unclean-election test is "the elected leader
+//! was in neither the previous ISR nor the ELR" rather than "the change
+//! carries an ISR", because krabka's election paths always carry one.
 //!
-//! Kafka's other use of `uncleanShutdownReplicas` is a separate event, and
-//! [`records_for_restarted_broker`] is where krabka answers it: a broker that
-//! comes back under a new incarnation id is dropped from every ELR that names
-//! it, because membership was a claim about the log the old process held.
+//! Kafka reaches `uncleanShutdownReplicas` from
+//! `ReplicationControlManager.handleBrokerShutdown`, which is a broker
+//! returning under a new incarnation id. krabka answers that event in two
+//! places, one per Kafka call: [`records_for_restarted_broker`] withdraws the
+//! published membership, and
+//! [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+//! drops the broker from the ISRs that still name it and runs this publisher
+//! over the result with the broker excluded.
 //!
 //! Kafka gates the whole thing on the `eligible.leader.replicas.version`
 //! feature. krabka has no such feature to finalize -- the registry in
@@ -68,13 +72,50 @@ use crate::config_keys::{ELIGIBLE_LEADER_REPLICAS, effective_min_insync_replicas
 /// of every rule is the partition as the controller saw it.
 pub(crate) struct ElrPublisher<'a> {
     image: &'a MetadataImage,
+    /// Kafka's `uncleanShutdownReplicas`: ids the batch may not derive back
+    /// into an eligible set, whatever the ISR it is leaving says.
+    unclean_shutdown: BTreeSet<i32>,
 }
 
 impl<'a> ElrPublisher<'a> {
     /// Read ELR state against `image`, the metadata as it stands before the
     /// batch applies.
     pub(crate) fn new(image: &'a MetadataImage) -> Self {
-        Self { image }
+        Self {
+            image,
+            unclean_shutdown: BTreeSet::new(),
+        }
+    }
+
+    /// Read ELR state against `image` for a batch that is reacting to `node`
+    /// coming back from an unclean stop, so that no partition in the batch
+    /// derives `node` back into its eligible set.
+    ///
+    /// This is Kafka's
+    /// `PartitionChangeBuilder.setUncleanShutdownReplicas(List.of(brokerId))`,
+    /// which `ReplicationControlManager.handleBrokerShutdown` sets on both of
+    /// the `generateLeaderAndIsrUpdates` calls it makes for an unclean
+    /// shutdown. Read out of `kafka-metadata-4.3.1.jar`,
+    /// `maybePopulateTargetElr` subtracts the list from `targetElr` and from
+    /// nothing else, so an excluded id still lands in `targetLastKnownElr`:
+    /// it *was* the last replica known to hold every committed record, and
+    /// that stays true even though the process holding the log now is a
+    /// different one.
+    ///
+    /// Without it, [`next_partition_elr`] would re-derive `node` from the
+    /// `old_isr` half of its candidate set -- the very ISR the batch is
+    /// removing it from -- and the withdrawal would not survive its own
+    /// batch.
+    pub(crate) fn after_unclean_shutdown(
+        image: &'a MetadataImage,
+        node: krabka_metadata::NodeId,
+    ) -> Self {
+        Self {
+            image,
+            // An id too wide for the wire can never be named in a published
+            // value, so there is nothing to exclude.
+            unclean_shutdown: i32::try_from(node.0).ok().into_iter().collect(),
+        }
     }
 
     /// Append to `changes` the `V1TopicConfig` records that carry the ELR
@@ -117,7 +158,13 @@ impl<'a> ElrPublisher<'a> {
 
         for (partition, record) in partitions {
             let previous = self.image.partition(topic, *partition);
-            let next = next_partition_elr(self.image, previous, record, &elr.partition(*partition));
+            let next = next_partition_elr(
+                self.image,
+                previous,
+                record,
+                &elr.partition(*partition),
+                &self.unclean_shutdown,
+            );
             elr.set_partition(*partition, next);
         }
 
@@ -194,12 +241,15 @@ impl<'a> Batch<'a> {
 ///
 /// `previous` is the partition as the image holds it, `None` for a partition
 /// the batch creates. `published` is the ELR the topic config currently
-/// carries for it.
+/// carries for it. `unclean_shutdown` is Kafka's `uncleanShutdownReplicas`:
+/// replicas the batch has just stopped trusting, which no rule here may make
+/// eligible again.
 fn next_partition_elr(
     image: &MetadataImage,
     previous: Option<&PartitionRecord>,
     next: &PartitionRecord,
     published: &PartitionElr,
+    unclean_shutdown: &BTreeSet<i32>,
 ) -> PartitionElr {
     // A partition the batch creates has no history, so no replica of it is
     // known to hold records the ISR does not.
@@ -232,14 +282,15 @@ fn next_partition_elr(
     // Everything that held every committed record before the change: the ISR
     // it is leaving plus whatever was already eligible.
     let complete: BTreeSet<i32> = old_isr.union(&eligible_before).copied().collect();
-    // Kafka drops the replicas that reported an unclean shutdown, which
-    // krabka does not track. krabka drops replicas that left the replica set,
-    // for the same reason: the partition can no longer elect them, so calling
-    // them eligible would offer an election that cannot happen.
+    // Kafka drops the replicas its caller named as unclean-shutdown ones, and
+    // so does this: `unclean_shutdown` is that list. krabka drops replicas
+    // that left the replica set as well, for a related reason: the partition
+    // can no longer elect them, so calling them eligible would offer an
+    // election that cannot happen.
     let eligible: BTreeSet<i32> = complete
         .difference(&new_isr)
         .copied()
-        .filter(|id| replicas.contains(id))
+        .filter(|id| replicas.contains(id) && !unclean_shutdown.contains(id))
         .collect();
     // What is left is what was last known to be complete but is not eligible
     // now -- exactly the replicas the previous filter dropped, plus any the
@@ -296,32 +347,31 @@ fn next_partition_elr(
 /// stop or checks one at registration -- so every returning incarnation takes
 /// that branch here.
 ///
-/// # This is one of Kafka's two halves, and the other one is missing
+/// # This is one of Kafka's two halves, and the other one is here too
 ///
-/// Kafka's unclean branch above makes two calls, not one, and the first is over
-/// `partitionsWithBrokerInIsr`. That half is not here, and its absence is a
-/// hole rather than a simplification: [`next_partition_elr`] derives the next
-/// eligible set from `old_isr ∪ eligible_before`, and this function clears only
-/// the second term. The image's ISR still names the returning broker, so on any
-/// partition where it does, the next change that leaves the ISR below
-/// `min.insync.replicas` re-derives the membership this function withdrew --
-/// and the partition whose ISR is healthy at registration publishes no ELR to
-/// withdraw at all, yet feeds the same `old_isr` into the same derivation
-/// later.
+/// Kafka's unclean branch above makes two calls, not one, and the first is
+/// over `partitionsWithBrokerInIsr`. This function is the second call. The
+/// first is
+/// [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes),
+/// which the registration handler runs in the same batch, and it matters for
+/// the reason the withdrawal alone did not settle: [`next_partition_elr`]
+/// derives the next eligible set from `old_isr ∪ eligible_before`, and this
+/// function clears only the second term. Left there, the image's ISR would
+/// still name the returning broker, so the next change that took the ISR
+/// below `min.insync.replicas` would re-derive the membership withdrawn here
+/// -- and a partition whose ISR is healthy at registration publishes no ELR
+/// to withdraw at all, yet would feed the same `old_isr` into the same
+/// derivation later.
 ///
-/// The failover scan usually gets there first: it visits every partition whose
-/// replicas or ISR name a broker that went `alive → dead`, and shrinks the ISR
-/// for the follower case. That is an ordering, not an invariant. Registration
-/// is accepted exactly when liveness says the broker is dead, so a fast restart
-/// can be processed before the scan's batch commits, and a controller that
-/// never saw the transition never scanned at all.
-///
-/// Closing it takes the ISR removal *and* an `uncleanShutdownReplicas`-shaped
-/// exclusion threaded into [`ElrPublisher`], so the batch that removes the
-/// broker cannot re-add it. That is tracked in krabka-io/krabka-broker#314; the
-/// withdrawal here is worth having on its own, because it is what stops a
-/// membership that has already been published from being read by the next
-/// election.
+/// The failover scan usually got there first, because it visits every
+/// partition whose replicas or ISR name a broker that went `alive → dead` and
+/// shrinks the ISR for the follower case. That was an ordering, not an
+/// invariant: registration is accepted exactly when liveness says the broker
+/// is dead, so a fast restart can be processed before the scan's batch
+/// commits, and a controller that never saw the transition never scanned at
+/// all. The registration batch now carries the removal itself, and
+/// [`ElrPublisher::after_unclean_shutdown`] is what stops that same batch from
+/// re-deriving what it just removed.
 pub(crate) fn records_for_restarted_broker(
     image: &MetadataImage,
     node: krabka_metadata::NodeId,

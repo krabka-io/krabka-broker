@@ -31,7 +31,8 @@ pub(crate) use self::{
         ElectError, ElectionType, select_new_leader_for_partition,
         select_replacement_leader_for_shutdown,
     },
-    scan::compute_offline_dir_failover_changes,
+    policy::FailoverPlan,
+    scan::{compute_offline_dir_failover_changes, compute_unclean_restart_changes},
 };
 
 #[cfg(test)]

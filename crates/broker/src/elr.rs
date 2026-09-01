@@ -45,10 +45,15 @@
 //! record.
 //!
 //! That is also why the state has to be withdrawn when it stops being true.
-//! [`records_for_restarted_broker`] withdraws the published half of it for the
-//! one event that ends a membership without any partition changing: a broker
-//! returning under a new incarnation id, whose current log need not be the log
-//! that made it eligible. Its own docs carry what that leaves open.
+//! The one event that ends a membership without any partition changing is a
+//! broker returning under a new incarnation id, whose current log need not be
+//! the log that made it eligible. [`records_for_restarted_broker`] withdraws
+//! the published half of that, and
+//! [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+//! -- which is what the registration handler actually calls -- drops the
+//! broker from the ISRs the next eligibility would be derived from and runs
+//! [`ElrPublisher`] over the whole batch with the broker excluded, so the
+//! batch cannot re-derive what it just withdrew.
 
 pub(crate) mod maintain;
 pub(crate) mod state;

@@ -101,12 +101,53 @@ pub(crate) async fn handle(
         log_dirs,
         features,
     };
+    // A registration that replaces one the image already holds is a broker
+    // that has come back as a new process: the handler has already answered
+    // the same-incarnation retry and refused a live duplicate, so an existing
+    // registration here means a new incarnation of a broker the controller
+    // saw die. That is Kafka's unclean shutdown, and
+    // `compute_unclean_restart_changes` is what one costs.
+    let restart = if image.broker(node_id).is_some() {
+        crate::leader_election::compute_unclean_restart_changes(
+            &image,
+            node_id,
+            &broker.liveness,
+            &broker.metrics,
+        )
+        .await
+    } else {
+        crate::leader_election::FailoverPlan::default()
+    };
+    for (topic, partition) in &restart.unavailable {
+        tracing::warn!(
+            %topic, partition, node_id = node_id.0,
+            "returning broker led this partition and no live ISR replica can take it; partition unavailable"
+        );
+    }
     if let Err(error) = broker
         .controller
-        .submit_change(registration_records(&image, record))
+        .submit_change(registration_records(restart.changes, record))
         .await
     {
         return response(version, raft_error_code(&error), -1);
+    }
+    // KIP-966: a partition whose topic opted into an offset-aware recovery
+    // strategy is handed to the Unclean Recovery Manager, the same way the
+    // dead-broker failover hands one over. Fire and forget.
+    for (topic, partition, strategy) in restart.recoveries {
+        broker
+            .unclean_recovery
+            .enqueue(crate::unclean_recovery::RecoveryJob {
+                topic,
+                partition,
+                strategy,
+                reply: None,
+                // Nobody asked for this recovery, so there is no proposal to
+                // name and nobody to refuse; `break_glass` decides whether the
+                // URM runs it.
+                proposal: None,
+            })
+            .await;
     }
 
     let epoch = broker
@@ -127,26 +168,18 @@ pub(crate) async fn handle(
 
 /// The records one accepted registration writes, in the order they apply.
 ///
-/// A registration that replaces one the image already holds is a broker that
-/// has come back as a new process: the handler has already answered the
-/// same-incarnation retry and refused a live duplicate, so an existing
-/// registration here means a new incarnation of a broker the controller saw
-/// die. KIP-966 eligibility does not survive that, and
-/// [`records_for_restarted_broker`](crate::elr::records_for_restarted_broker)
-/// says why. The drops go ahead of the registration, so a replay that stops
-/// between the two has already stopped trusting the returning log rather than
-/// not yet started.
-pub(crate) fn registration_records(
-    image: &krabka_metadata::MetadataImage,
+/// `restart` is what a returning incarnation costs, empty for a broker the
+/// controller has never seen: the ELR withdrawals and ISR removals
+/// [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
+/// decided. They go ahead of the registration, so a replay that stops between
+/// the two has already stopped trusting the returning log rather than not yet
+/// started.
+fn registration_records(
+    mut restart: Vec<MetadataRecord>,
     record: BrokerRegistrationRecord,
 ) -> Vec<MetadataRecord> {
-    let mut records = if image.broker(record.node_id).is_some() {
-        crate::elr::records_for_restarted_broker(image, record.node_id)
-    } else {
-        Vec::new()
-    };
-    records.push(MetadataRecord::V1BrokerRegistration(record));
-    records
+    restart.push(MetadataRecord::V1BrokerRegistration(record));
+    restart
 }
 
 fn cluster_id_matches(request: &str, cluster_id: uuid::Uuid) -> bool {
@@ -226,65 +259,6 @@ mod tests {
     use krabka_protocol::owned::broker_registration_request::Feature;
 
     use super::*;
-
-    /// The registration of a broker the controller has never seen writes one
-    /// record. The registration that replaces a dead broker's is a new
-    /// incarnation, and it withdraws that broker's ELR membership first: the
-    /// process that holds the log now is not the one the membership was about.
-    #[test]
-    fn a_returning_incarnation_withdraws_its_elr_membership_first() {
-        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-            name: "t".into(),
-            topic_id: uuid::Uuid::nil(),
-            partitions: 1,
-            replication_factor: 3,
-        }));
-        image.apply(&MetadataRecord::V1TopicConfig(
-            krabka_metadata::TopicConfigRecord {
-                topic: "t".into(),
-                overrides: [("krabka.elr".to_string(), "0:3:".to_string())]
-                    .into_iter()
-                    .collect(),
-            },
-        ));
-        let first = registration(3, uuid::Uuid::from_u128(1));
-
-        assert2::assert!(
-            registration_records(&image, first.clone())
-                == vec![MetadataRecord::V1BrokerRegistration(first.clone())]
-        );
-
-        image.apply(&MetadataRecord::V1BrokerRegistration(first));
-        let returning = registration(3, uuid::Uuid::from_u128(2));
-
-        assert2::assert!(
-            registration_records(&image, returning.clone())
-                == vec![
-                    MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
-                        topic: "t".into(),
-                        overrides: [("krabka.elr".to_string(), "0::3".to_string())]
-                            .into_iter()
-                            .collect(),
-                    }),
-                    MetadataRecord::V1BrokerRegistration(returning),
-                ]
-        );
-    }
-
-    fn registration(node_id: u64, incarnation: uuid::Uuid) -> BrokerRegistrationRecord {
-        BrokerRegistrationRecord {
-            node_id: NodeId(node_id),
-            broker_epoch: 0,
-            incarnation_id: incarnation,
-            host: "127.0.0.1".into(),
-            port: 9_092,
-            rack: None,
-            endpoints: vec![],
-            log_dirs: vec![],
-            features: std::collections::BTreeMap::new(),
-        }
-    }
 
     #[test]
     fn accepts_uuid_and_kafka_base64_cluster_ids() {

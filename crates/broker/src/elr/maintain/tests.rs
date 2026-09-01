@@ -168,7 +168,13 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
         ),
     ] {
         let image = image(min_isr, None, &before);
-        let got = next_partition_elr(&image, Some(&before), &after, &published);
+        let got = next_partition_elr(
+            &image,
+            Some(&before),
+            &after,
+            &published,
+            &std::collections::BTreeSet::new(),
+        );
         assert!(got == want, "{label}");
     }
 }
@@ -180,9 +186,56 @@ fn a_new_partition_starts_with_no_elr() {
     let created = partition(1, &[1, 2, 3], &[1]);
     let image = image(Some("3"), None, &created);
 
-    let got = next_partition_elr(&image, None, &created, &elr(&[], &[]));
+    let got = next_partition_elr(
+        &image,
+        None,
+        &created,
+        &elr(&[], &[]),
+        &std::collections::BTreeSet::new(),
+    );
 
     assert!(got == elr(&[], &[]));
+}
+
+/// Kafka's `uncleanShutdownReplicas`, which the batch that reacts to a
+/// returning broker names it with.
+///
+/// The ISR removal and the recompute are the same batch, so without the
+/// exclusion the recompute reads the broker straight back out of the ISR the
+/// removal is leaving -- `old_isr ∪ eligible_before` -- and publishes it as
+/// eligible. The two rows are the same change; only the exclusion differs,
+/// and the second is the one the withdrawal survives.
+///
+/// The excluded id still lands in the last-known set, because
+/// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts
+/// `uncleanShutdownReplicas` from `targetElr` and from nothing else: broker 3
+/// *was* the last replica known to hold every committed record, whatever the
+/// process holding that node id now has on disk.
+#[test]
+fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
+    let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
+    let image = image(Some("3"), None, &before);
+    let shrink = MetadataRecord::V1Partition(partition(1, &[1, 2, 3], &[1, 2]));
+
+    let published = |value: &str| {
+        MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: TOPIC.into(),
+            overrides: [
+                (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
+                (ELIGIBLE_LEADER_REPLICAS.to_string(), value.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        })
+    };
+
+    let mut plain = vec![shrink.clone()];
+    ElrPublisher::new(&image).extend(&mut plain);
+    assert!(plain == vec![shrink.clone(), published("0:3:")]);
+
+    let mut excluded = vec![shrink.clone()];
+    ElrPublisher::after_unclean_shutdown(&image, NodeId(3)).extend(&mut excluded);
+    assert!(excluded == vec![shrink, published("0::3")]);
 }
 
 /// The published record replaces a topic's whole override map, so it has to

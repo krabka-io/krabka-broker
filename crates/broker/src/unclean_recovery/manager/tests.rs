@@ -747,10 +747,20 @@ async fn a_returning_incarnation_loses_its_eligible_leader_priority() {
             })
     );
 
-    for record in crate::handlers::broker_registration::registration_records(
+    let liveness = liveness_with_alive(&[2, 3]).await;
+    let mut batch = crate::leader_election::compute_unclean_restart_changes(
         &img,
-        broker_record(3, Uuid::from_u128(2)),
-    ) {
+        NodeId(3),
+        &liveness,
+        &crate::metrics::BrokerMetrics::new(),
+    )
+    .await
+    .changes;
+    batch.push(MetadataRecord::V1BrokerRegistration(broker_record(
+        3,
+        Uuid::from_u128(2),
+    )));
+    for record in batch {
         img.apply(&record);
     }
 
