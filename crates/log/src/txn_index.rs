@@ -115,6 +115,42 @@ impl TxnIndex {
         Ok(())
     }
 
+    /// Remove entries whose inclusive end reaches the truncated suffix and
+    /// rewrite the sidecar before it is reused as the active transaction index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the transaction-index sidecar cannot be
+    /// rewritten or synchronized.
+    pub fn truncate_from(&mut self, offset: Offset) -> Result<(), LogError> {
+        let entries: Vec<_> = self
+            .entries
+            .iter()
+            .copied()
+            .filter(|entry| entry.last_offset < offset)
+            .collect();
+        if entries.len() == self.entries.len() {
+            return Ok(());
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.path)
+            .map_err(LogError::Io)?;
+        for entry in &entries {
+            let raw = AbortedTxnRaw {
+                start_offset: I64::new(entry.start_offset.0),
+                last_offset: I64::new(entry.last_offset.0),
+                producer_id: I64::new(entry.producer_id.0),
+            };
+            file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
+        }
+        file.sync_data().map_err(LogError::Io)?;
+        self.entries = entries;
+        Ok(())
+    }
+
     #[must_use]
     pub fn entries(&self) -> &[AbortedTxn] {
         &self.entries
@@ -208,6 +244,30 @@ mod tests {
                     },
                 ]
         );
+    }
+
+    #[test]
+    fn truncate_from_removes_overlapping_tail_entries_and_is_retryable() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        for (start, last) in [(0, 4), (5, 9)] {
+            index
+                .append(AbortedTxn {
+                    start_offset: Offset(start),
+                    last_offset: Offset(last),
+                    producer_id: ProducerId(1),
+                })
+                .unwrap();
+        }
+
+        for _ in 0..2 {
+            index.truncate_from(Offset(5)).unwrap();
+            assert2::assert!(index.entries().len() == 1);
+            assert2::assert!(index.entries()[0].last_offset == Offset(4));
+        }
+        let reopened = TxnIndex::open(path).unwrap();
+        assert2::assert!(reopened.entries() == index.entries());
     }
 
     #[test]

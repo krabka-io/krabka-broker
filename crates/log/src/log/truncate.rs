@@ -44,27 +44,34 @@ impl Log {
             producer_snapshot::remove_after(&self.dir, offset)?;
         }
 
-        // Drop sealed segments whose base_offset >= offset.
-        while let Some(last_sealed) = self.segments.last() {
-            if last_sealed.base_offset() >= offset {
-                let popped = self.segments.pop().expect("non-empty by while-let");
-                let base = popped.base_offset();
-                drop(popped);
-                let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-                let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-                let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-                let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-                let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
-                self.sealed_txn_indexes.remove(&base);
-                self.stamp_indexes.remove(&base);
-            } else {
-                break;
-            }
+        let sealed_bases: Vec<i64> = self
+            .segments
+            .iter()
+            .map(|segment| segment.base_offset().0)
+            .collect();
+        let plan = krabka_verified::local_truncation_plan(
+            &sealed_bases,
+            self.active.as_ref().map(|segment| segment.base_offset().0),
+            offset.0,
+        );
+
+        // Drop exactly the sealed suffix selected by the verified plan.
+        while self.segments.len() > plan.retained_sealed {
+            let popped = self.segments.pop().expect("length exceeds retained prefix");
+            let base = popped.base_offset();
+            drop(popped);
+            let _ = fs::remove_file(name::log_path(&self.dir, base.0));
+            let _ = fs::remove_file(name::index_path(&self.dir, base.0));
+            let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
+            let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
+            let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+            self.sealed_txn_indexes.remove(&base);
+            self.stamp_indexes.remove(&base);
         }
 
         // Drop the active segment if its base_offset >= offset.
-        if let Some(active) = &self.active
-            && active.base_offset() >= offset
+        if !plan.keep_active
+            && let Some(active) = &self.active
         {
             let base = active.base_offset();
             self.active = None;
@@ -81,13 +88,15 @@ impl Log {
         if self.active.is_none() {
             if let Some(mut seg) = self.segments.pop() {
                 let base = seg.base_offset();
-                let rel = u32::try_from(offset.0 - seg.base_offset().0)
-                    .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+                let rel = krabka_verified::truncation_relative_offset(base.0, offset.0)
+                    .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
                 seg.truncate_to_relative(rel)?;
-                self.active_txn_index = self
+                let mut active_txn_index = self
                     .sealed_txn_indexes
                     .remove(&base)
                     .expect("sealed segment must have a cached transaction index");
+                active_txn_index.truncate_from(offset)?;
+                self.active_txn_index = active_txn_index;
                 let stamp_index_path = seg.stamp_index_path();
                 self.active = Some(seg);
                 self.stamp_indexes
@@ -111,10 +120,11 @@ impl Log {
         {
             // The surviving active segment contains records at or past
             // `offset`; truncate them in place.
-            let rel = u32::try_from(offset.0 - active.base_offset().0)
-                .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+            let rel = krabka_verified::truncation_relative_offset(active.base_offset().0, offset.0)
+                .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
             active.truncate_to_relative(rel)?;
             self.active_txn_index = TxnIndex::open(active.txn_index_path())?;
+            self.active_txn_index.truncate_from(offset)?;
             let base = active.base_offset();
             let stamp_index_path = active.stamp_index_path();
             self.reopen_active_stamp_index(base, stamp_index_path)?;
@@ -125,13 +135,15 @@ impl Log {
         if !self.producer_state.is_empty() {
             self.rebuild_producer_and_transaction_state()?;
         }
-        // After truncation, LSO can't exceed log_end_offset.
-        self.lso = self.lso.min(self.log_end_offset());
+        let new_end = self.log_end_offset();
+        // Every cached visibility frontier is clamped to the actual retained
+        // batch prefix, which can end before a cut that lands inside a batch.
+        self.lso = Offset(krabka_verified::truncation_frontier(self.lso.0, new_end.0));
+        self.invalidate_delivery_schedule(new_end);
         // Drop leader-epoch checkpoint entries for the truncated-away tail so
         // latest_epoch()/end_offset_for_epoch() don't report epochs that no
         // longer have records (mirrors Kafka's truncateFromEnd).
-        self.epoch_checkpoint
-            .truncate_from_end(self.log_end_offset())?;
+        self.epoch_checkpoint.truncate_from_end(new_end)?;
         Ok(())
     }
 
