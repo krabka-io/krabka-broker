@@ -215,9 +215,8 @@ impl Log {
                     .entry(pid)
                     .or_default()
                     .push((base_offset, last_offset));
-            } else if self.pending.is_empty() {
-                self.lso = self.log_end_offset();
             }
+            self.refresh_lso()?;
 
             self.update_data_producer_entry(
                 (batch.producer_id, batch.producer_epoch),

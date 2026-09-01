@@ -19,15 +19,22 @@ use super::{
 use crate::{error::LogError, txn_index::AbortedTxn};
 
 impl Log {
-    /// Move the last-stable-offset to the log end when no transaction is open.
+    /// Recompute the last-stable-offset from every open transaction.
     ///
-    /// An open transaction holds the LSO at its first offset. Every append
-    /// that is not transactional data goes through this method, so a barrier
-    /// marker and an ordinary data batch move the LSO the same way.
-    pub(super) fn advance_lso_when_no_open_transaction(&mut self) {
-        if self.pending.is_empty() {
-            self.lso = self.log_end_offset();
-        }
+    /// The earliest open transaction holds the LSO at its first offset. With
+    /// none open, the LSO advances to the exact log end. Every append path and
+    /// recovery use this same selection.
+    pub(super) fn refresh_lso(&mut self) -> Result<(), LogError> {
+        let starts: Vec<_> = self.pending.values().map(|offset| offset.0).collect();
+        let log_end = self.log_end_offset();
+        self.lso = krabka_verified::first_unstable_offset(&starts, log_end.0)
+            .map(Offset)
+            .ok_or_else(|| {
+                LogError::Corrupt(format!(
+                    "pending transaction starts beyond log end {log_end}"
+                ))
+            })?;
+        Ok(())
     }
 
     /// Apply one transaction end marker to the in-memory transaction state.
@@ -51,7 +58,15 @@ impl Log {
             .first()
             .and_then(|record| record.key.as_deref())
             .and_then(parse_control_marker_type);
-        if producer_id.get() >= 0
+        let is_abort = marker_type == Some(ABORT_CONTROL_TYPE);
+        let is_commit = marker_type == Some(COMMIT_CONTROL_TYPE);
+        let closes = krabka_verified::transaction_marker_closes(
+            is_abort,
+            is_commit,
+            self.pending.contains_key(&producer_id),
+        );
+        if (is_abort || is_commit)
+            && producer_id.get() >= 0
             && let Some(epoch) = batch
                 .records
                 .first()
@@ -60,12 +75,20 @@ impl Log {
         {
             self.coordinator_epochs.insert(producer_id, epoch);
         }
-        if marker_type == Some(ABORT_CONTROL_TYPE)
-            && let Some(start) = self.pending.get(&producer_id).copied()
-        {
+        if closes && is_abort {
+            let pending_start = self.pending.get(&producer_id).map(|offset| offset.0);
+            let Some((start, last)) = krabka_verified::aborted_transaction_interval(
+                pending_start,
+                last_offset.0,
+                producer_id.get(),
+            ) else {
+                return Err(LogError::Corrupt(format!(
+                    "invalid aborted transaction interval for producer {producer_id}"
+                )));
+            };
             self.active_txn_index.append(AbortedTxn {
-                start_offset: start,
-                last_offset,
+                start_offset: Offset(start),
+                last_offset: Offset(last),
                 producer_id,
             })?;
         }
@@ -74,7 +97,7 @@ impl Log {
             .get(&producer_id)
             .cloned()
             .unwrap_or_default();
-        if marker_type == Some(COMMIT_CONTROL_TYPE) && !stamp_ranges.is_empty() {
+        if closes && is_commit && !stamp_ranges.is_empty() {
             let stamp = transaction_stamp
                 .or_else(|| self.stamp_source.as_ref().map(|source| source.next_stamp()));
             if let Some(stamp) = stamp {
@@ -86,14 +109,17 @@ impl Log {
         // Keep the in-memory transaction state until all durable sidecar
         // writes succeed. A caller can then retry a marker whose log append
         // succeeded but whose index update failed.
-        self.pending.remove(&producer_id);
-        self.pending_stamp_ranges.remove(&producer_id);
+        if closes {
+            self.pending.remove(&producer_id);
+            self.pending_stamp_ranges.remove(&producer_id);
+        }
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use krabka_ids::LeaderEpoch;
     use krabka_units::prelude::bytes;
     use tempfile::tempdir;
@@ -288,11 +314,54 @@ mod tests {
         // Commit producer 1000. LSO must still be held back by 2000.
         let mut c1 = commit_marker(1000, 0);
         log.append(&mut c1).unwrap();
-        assert2::assert!(log.lso() == lso_after_open);
+        assert2::assert!(log.lso() == Offset(2));
+        assert2::assert!(log.lso() > lso_after_open);
 
         // Commit producer 2000. LSO advances to log_end_offset.
         let mut c2 = commit_marker(2000, 0);
         log.append(&mut c2).unwrap();
         assert2::assert!(log.lso() == log.log_end_offset());
+    }
+
+    #[test]
+    fn only_a_valid_marker_for_the_pending_producer_closes_it() {
+        for case in ["malformed", "different-producer"] {
+            let dir = tempdir().unwrap();
+            {
+                let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+                log.append(&mut transactional_batch(1000, 0, &["a", "b"]))
+                    .unwrap();
+                let held = log.lso();
+                let mut marker = if case == "malformed" {
+                    let mut marker = commit_marker(1000, 0);
+                    marker.records[0].key = Some(Bytes::from_static(&[0, 0, 0]));
+                    marker
+                } else {
+                    commit_marker(2000, 0)
+                };
+                log.append(&mut marker).unwrap();
+                assert2::assert!(log.lso() == held, "case {case}");
+                assert2::assert!(
+                    log.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)),
+                    "case {case}"
+                );
+            }
+            let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+            assert2::assert!(reopened.lso() == Offset(0), "case {case}");
+            assert2::assert!(
+                reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_pending_start_beyond_log_end_is_rejected() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.pending.insert(ProducerId(1000), Offset(1));
+        let error = log.refresh_lso().unwrap_err();
+        assert2::assert!(let LogError::Corrupt(_) = error);
+        assert2::assert!(log.lso() == Offset(0));
     }
 }

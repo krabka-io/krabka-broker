@@ -218,12 +218,12 @@ impl Log {
 
             let is_barrier = match control_kind {
                 Some(ControlBatchKind::Barrier) => {
-                    self.advance_lso_when_no_open_transaction();
+                    self.refresh_lso()?;
                     true
                 }
                 Some(ControlBatchKind::Transaction) => {
                     self.apply_transaction_marker(batch, pid, last_offset, transaction_stamp)?;
-                    self.advance_lso_when_no_open_transaction();
+                    self.refresh_lso()?;
                     false
                 }
                 None if is_transactional => {
@@ -232,10 +232,11 @@ impl Log {
                         .entry(pid)
                         .or_default()
                         .push((base_offset, last_offset));
+                    self.refresh_lso()?;
                     false
                 }
                 None => {
-                    self.advance_lso_when_no_open_transaction();
+                    self.refresh_lso()?;
                     false
                 }
             };

@@ -149,8 +149,9 @@ pub use timestamp::{
 };
 pub use transaction::{
     IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS, TransactionCompletionDecision,
-    TransactionIdentity, TransactionSnapshot, resolve_transaction_timeout,
-    should_abort_idle_transaction, transaction_completion_decision,
+    TransactionIdentity, TransactionSnapshot, aborted_transaction_interval,
+    aborted_transaction_overlaps, first_unstable_offset, resolve_transaction_timeout,
+    should_abort_idle_transaction, transaction_completion_decision, transaction_marker_closes,
 };
 pub use vote::{
     VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,

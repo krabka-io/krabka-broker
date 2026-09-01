@@ -18,7 +18,10 @@ use tracing::instrument;
 
 use super::{
     Log,
-    control::{ControlBatchKind, control_batch_kind, parse_control_marker_coordinator_epoch},
+    control::{
+        ABORT_CONTROL_TYPE, COMMIT_CONTROL_TYPE, ControlBatchKind, control_batch_kind,
+        parse_control_marker_coordinator_epoch, parse_control_marker_type,
+    },
 };
 use crate::{
     config::LogConfig,
@@ -224,12 +227,7 @@ impl Log {
             next = advanced_to;
         }
         self.rebuild_pending_stamp_ranges()?;
-        self.lso = self
-            .pending
-            .values()
-            .copied()
-            .min()
-            .unwrap_or_else(|| self.log_end_offset());
+        self.refresh_lso()?;
         Ok(())
     }
 
@@ -245,12 +243,26 @@ impl Log {
         }
         self.update_owned_producer_entry(batch)?;
         if batch.attributes.is_control_batch() {
-            self.pending.remove(&producer_id);
-            if let Some(epoch) = batch
+            let marker_type = batch
                 .records
                 .first()
-                .and_then(|record| record.value.as_deref())
-                .and_then(parse_control_marker_coordinator_epoch)
+                .and_then(|record| record.key.as_deref())
+                .and_then(parse_control_marker_type);
+            let is_abort = marker_type == Some(ABORT_CONTROL_TYPE);
+            let is_commit = marker_type == Some(COMMIT_CONTROL_TYPE);
+            if krabka_verified::transaction_marker_closes(
+                is_abort,
+                is_commit,
+                self.pending.contains_key(&producer_id),
+            ) {
+                self.pending.remove(&producer_id);
+            }
+            if (is_abort || is_commit)
+                && let Some(epoch) = batch
+                    .records
+                    .first()
+                    .and_then(|record| record.value.as_deref())
+                    .and_then(parse_control_marker_coordinator_epoch)
             {
                 self.coordinator_epochs.insert(producer_id, epoch);
             }
@@ -350,12 +362,20 @@ impl Log {
             }
             entry.producer_epoch = batch.producer_epoch;
             entry.timestamp = batch.max_timestamp;
-            entry.current_txn_first_offset = None;
-            if let Some(epoch) = batch
+            let marker_type = batch
                 .records
                 .first()
-                .and_then(|record| record.value.as_deref())
-                .and_then(parse_control_marker_coordinator_epoch)
+                .and_then(|record| record.key.as_deref())
+                .and_then(parse_control_marker_type);
+            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE)) {
+                entry.current_txn_first_offset = None;
+            }
+            if matches!(marker_type, Some(ABORT_CONTROL_TYPE | COMMIT_CONTROL_TYPE))
+                && let Some(epoch) = batch
+                    .records
+                    .first()
+                    .and_then(|record| record.value.as_deref())
+                    .and_then(parse_control_marker_coordinator_epoch)
             {
                 entry.coordinator_epoch = epoch;
             }

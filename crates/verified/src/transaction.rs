@@ -18,6 +18,94 @@ pub enum TransactionCompletionDecision {
 /// Sentinel persisted for a transaction controlled by an external 2PC owner.
 pub const NO_TRANSACTION_TIMEOUT_MS: i32 = i32::MAX;
 
+/// Select the first unstable transaction offset, or the log end when no
+/// transaction is open. A pending start beyond the log end is rejected.
+#[ensures(match result {
+    Some(lso) => lso@ <= log_end@
+        && ((starts@.len() == 0 && lso@ == log_end@)
+            || (starts@.len() > 0
+                && (exists<i: Int> 0 <= i && i < starts@.len() && lso@ == starts@[i]@)
+                && (forall<i: Int> 0 <= i && i < starts@.len() ==> lso@ <= starts@[i]@))),
+    None => exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > log_end@,
+})]
+#[must_use]
+pub fn first_unstable_offset(starts: &[i64], log_end: i64) -> Option<i64> {
+    let mut lso = log_end;
+    let mut index = 0usize;
+    #[invariant(index@ <= starts@.len())]
+    #[invariant(lso@ <= log_end@)]
+    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> starts@[i]@ <= log_end@)]
+    #[invariant(index@ == 0 ==> lso@ == log_end@)]
+    #[invariant(index@ > 0 ==> exists<i: Int> 0 <= i && i < index@ && lso@ == starts@[i]@)]
+    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lso@ <= starts@[i]@)]
+    #[variant(starts@.len() - index@)]
+    while index < starts.len() {
+        let start = starts[index];
+        if start > log_end {
+            return None;
+        }
+        if start < lso {
+            lso = start;
+        }
+        index += 1;
+    }
+    Some(lso)
+}
+
+/// A valid COMMIT or ABORT marker closes state only for its matching pending
+/// producer.
+#[ensures(result == ((is_abort || is_commit) && !(is_abort && is_commit) && has_pending))]
+#[must_use]
+pub fn transaction_marker_closes(is_abort: bool, is_commit: bool, has_pending: bool) -> bool {
+    (is_abort || is_commit) && !(is_abort && is_commit) && has_pending
+}
+
+/// Construct one aborted transaction's inclusive interval only from a live,
+/// nonnegative producer and ordered marker bounds.
+#[ensures(match result {
+    Some((start, last)) => producer_id@ >= 0
+        && pending_start == Some(start)
+        && last@ == marker_last@
+        && start@ <= last@,
+    None => producer_id@ < 0
+        || pending_start == None
+        || match pending_start { Some(start) => start@ > marker_last@, None => false },
+})]
+#[must_use]
+pub fn aborted_transaction_interval(
+    pending_start: Option<i64>,
+    marker_last: i64,
+    producer_id: i64,
+) -> Option<(i64, i64)> {
+    if producer_id < 0 {
+        return None;
+    }
+    let start = pending_start?;
+    if start > marker_last {
+        return None;
+    }
+    Some((start, marker_last))
+}
+
+/// Whether a valid inclusive aborted interval intersects a nonempty half-open
+/// Fetch range.
+#[ensures(result == (entry_start@ <= entry_last@
+    && query_start@ < query_end@
+    && entry_start@ < query_end@
+    && entry_last@ >= query_start@))]
+#[must_use]
+pub fn aborted_transaction_overlaps(
+    entry_start: i64,
+    entry_last: i64,
+    query_start: i64,
+    query_end: i64,
+) -> bool {
+    entry_start <= entry_last
+        && query_start < query_end
+        && entry_start < query_end
+        && entry_last >= query_start
+}
+
 /// State fact needed by the idle-transaction reaper.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -279,6 +367,24 @@ mod tests {
 
     const PREPARE_COMMIT: i8 = 2;
     const COMPLETE_COMMIT: i8 = 4;
+
+    #[test]
+    fn local_lso_marker_and_aborted_interval_decisions_fail_closed() {
+        assert2::assert!(first_unstable_offset(&[], 20) == Some(20));
+        assert2::assert!(first_unstable_offset(&[9, 3, 14], 20) == Some(3));
+        assert2::assert!(first_unstable_offset(&[9, 21], 20).is_none());
+        assert2::assert!(transaction_marker_closes(true, false, true));
+        assert2::assert!(!transaction_marker_closes(false, false, true));
+        assert2::assert!(!transaction_marker_closes(true, false, false));
+        assert2::assert!(aborted_transaction_interval(Some(3), 7, 1) == Some((3, 7)));
+        assert2::assert!(aborted_transaction_interval(Some(8), 7, 1).is_none());
+        assert2::assert!(aborted_transaction_interval(Some(3), 7, -1).is_none());
+        assert2::assert!(aborted_transaction_interval(None, 7, 1).is_none());
+        assert2::assert!(aborted_transaction_overlaps(10, 14, 0, 11));
+        assert2::assert!(!aborted_transaction_overlaps(10, 14, 0, 10));
+        assert2::assert!(!aborted_transaction_overlaps(14, 10, 0, 20));
+        assert2::assert!(!aborted_transaction_overlaps(10, 14, 20, 20));
+    }
 
     #[test]
     fn two_pc_timeout_and_reaper_are_fail_closed() {
