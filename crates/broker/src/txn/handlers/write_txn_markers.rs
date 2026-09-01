@@ -239,7 +239,11 @@ mod tests {
             offset: Offset(42),
             leader_epoch: 3,
             metadata: "txn".into(),
-            commit_timestamp_ms: 123,
+            // A real commit timestamp: an epoch-relative one is older than
+            // `offsets.retention.minutes`, so the KIP-211 sweep would
+            // correctly reap the offset this test is about.
+            commit_timestamp_ms: crate::time_util::now_ms(),
+            expire_timestamp_ms: None,
         };
         part.produce_batch(RecordBatch {
             producer_id: 91,
