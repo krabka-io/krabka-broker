@@ -25,6 +25,7 @@ pub mod features;
 pub mod freeze;
 pub mod group_migration;
 pub mod isr;
+pub mod jwks;
 pub mod leader_epoch;
 pub mod local_recovery;
 pub mod log_index;
@@ -120,6 +121,10 @@ pub use freeze::{
 pub use group_migration::{
     GroupMigrationDirection, GroupMigrationRecordAction, GroupMigrationRecordPlan,
     classic_upgrade_epoch, consumer_downgrade_epoch, group_migration_record_plan,
+};
+pub use jwks::{
+    JwksCacheDecision, JwksCacheFacts, JwksOnDemandDecision, jwks_cache_admission,
+    jwks_on_demand_refresh_decision,
 };
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use local_recovery::{

@@ -64,6 +64,7 @@ pub(super) fn spawn_storage_security_maintenance(
             min_on_demand_pause: config.oauthbearer_jwks_min_on_demand_pause,
             http_timeout: config.oauth_jwks_http_timeout,
             last_successful_fetch_ms: Arc::clone(&config.oauthbearer_jwks_last_successful_fetch_ms),
+            cache_generation: Arc::clone(&config.oauthbearer_jwks_cache_generation),
             last_on_demand_refresh_ms: Arc::clone(
                 &config.oauthbearer_jwks_last_on_demand_refresh_ms,
             ),

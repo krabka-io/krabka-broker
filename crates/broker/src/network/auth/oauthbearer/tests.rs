@@ -28,6 +28,71 @@ fn oauthbearer_client_response(token: &str) -> SaslAuthenticateRequest {
     }
 }
 
+fn signed_validator(cache_expiry: Option<Time>) -> krabka_security::OAuthBearerValidator {
+    let mut validator =
+        krabka_security::SignedJwsValidator::new(krabka_security::JwksHandle::default());
+    validator.cache_expiry = cache_expiry;
+    krabka_security::OAuthBearerValidator::Signed(validator)
+}
+
+#[tokio::test]
+async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
+    let now_ms = 1_000_000;
+    let request = oauthbearer_client_response(&unsecured_token("alice", 2_000));
+    let validator = signed_validator(Some(secs(1)));
+    let generation = AtomicU64::new(1);
+    let last_successful = AtomicI64::new(now_ms);
+
+    let changing = validate_bearer(
+        &request.auth_bytes,
+        &validator,
+        Some((&generation, &last_successful)),
+        now_ms,
+    )
+    .await;
+    assert!(changing == Err("JWKS cache is stale or changing"));
+
+    generation.store(2, Ordering::Release);
+    last_successful.store(0, Ordering::Release);
+    let never_fetched = validate_bearer(
+        &request.auth_bytes,
+        &validator,
+        Some((&generation, &last_successful)),
+        now_ms,
+    )
+    .await;
+    assert!(never_fetched == Err("JWKS cache is stale or changing"));
+
+    last_successful.store(now_ms - 1_001, Ordering::Release);
+    let stale = validate_bearer(
+        &request.auth_bytes,
+        &validator,
+        Some((&generation, &last_successful)),
+        now_ms,
+    )
+    .await;
+    assert!(stale == Err("JWKS cache is stale or changing"));
+}
+
+#[tokio::test]
+async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
+    let now_ms = 1_000_000;
+    let request = oauthbearer_client_response(&unsecured_token("alice", 2_000));
+    let validator = signed_validator(Some(secs(1)));
+    let generation = AtomicU64::new(2);
+    let last_successful = AtomicI64::new(now_ms);
+
+    let result = validate_bearer(
+        &request.auth_bytes,
+        &validator,
+        Some((&generation, &last_successful)),
+        now_ms,
+    )
+    .await;
+
+    assert!(result == Err("token validation failed"));
+}
+
 #[tokio::test]
 async fn oauthbearer_valid_token_authenticates() {
     let validator = krabka_security::OAuthBearerValidator::default();

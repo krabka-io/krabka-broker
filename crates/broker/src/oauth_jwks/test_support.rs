@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
 };
 
@@ -92,6 +92,7 @@ pub fn test_refresher(
         signal_rx: rx,
         min_on_demand_pause: secs(1),
         last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
+        cache_generation: Arc::new(AtomicU64::new(0)),
         last_on_demand_refresh_ms: Arc::new(AtomicI64::new(0)),
         ignore_key_use: false,
         timer,
@@ -214,12 +215,13 @@ pub async fn serve_jwks_counting(
 
 /// Builds a refresher with a 1-hour periodic interval, so that only
 /// on-demand signals matter for the test. It returns the shared signal
-/// sender, the rate-limit timestamp, and the success timestamp.
+/// sender, the rate-limit timestamp, success timestamp, and cache generation.
 pub type SignalRefresher = (
     JwksRefresher,
     mpsc::Sender<()>,
     Arc<AtomicI64>,
     Arc<AtomicI64>,
+    Arc<AtomicU64>,
     CancellationToken,
     JwksHandle,
 );
@@ -229,6 +231,7 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
     let shutdown = CancellationToken::new();
     let last_successful = Arc::new(AtomicI64::new(0));
     let last_on_demand = Arc::new(AtomicI64::new(0));
+    let cache_generation = Arc::new(AtomicU64::new(0));
     let handle = JwksHandle::new_with_refresher_handles(
         Jwks::empty(),
         last_successful.clone(),
@@ -244,6 +247,7 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
         signal_rx,
         min_on_demand_pause,
         last_successful_fetch_ms: last_successful.clone(),
+        cache_generation: cache_generation.clone(),
         last_on_demand_refresh_ms: last_on_demand.clone(),
         ignore_key_use: false,
         // Signal tests isolate the on-demand arm; periodic refreshes have
@@ -257,6 +261,7 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
         signal_tx,
         last_successful,
         last_on_demand,
+        cache_generation,
         shutdown,
         handle,
     )

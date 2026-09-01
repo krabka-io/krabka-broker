@@ -126,6 +126,7 @@ pub(super) fn apply_oauthbearer(
             // `try_send` on the producer ⇒ signals coalesce.
             let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<()>(1);
             let last_successful = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+            let cache_generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             let last_on_demand = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
 
             let handle = krabka_security::JwksHandle::new_with_refresher_handles(
@@ -169,6 +170,7 @@ pub(super) fn apply_oauthbearer(
             // Park signal_rx + shared state for Broker::start.
             *cfg.oauthbearer_jwks_signal_rx.lock().unwrap() = Some(signal_rx);
             cfg.oauthbearer_jwks_last_successful_fetch_ms = last_successful;
+            cfg.oauthbearer_jwks_cache_generation = cache_generation;
             cfg.oauthbearer_jwks_last_on_demand_refresh_ms = last_on_demand;
             cfg.oauthbearer_jwks_min_on_demand_pause = oauth
                 .jwks_min_refresh_pause_seconds

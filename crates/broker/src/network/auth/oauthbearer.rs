@@ -4,6 +4,8 @@
 //! module also holds the session-lifetime clamp that KIP-368 re-authentication
 //! reads, together with the two-message failure handshake RFC 7628 requires.
 
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+
 use krabka_protocol::owned::{
     sasl_authenticate_request::SaslAuthenticateRequest,
     sasl_authenticate_response::SaslAuthenticateResponse,
@@ -43,6 +45,38 @@ pub async fn handle_authenticate_oauthbearer(
     now_ms: i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
+    handle_authenticate_oauthbearer_inner(req, auth, validator, None, now_ms, max_session_lifetime)
+        .await
+}
+
+pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    validator: &krabka_security::OAuthBearerValidator,
+    cache_generation: &AtomicU64,
+    last_successful_fetch_ms: &AtomicI64,
+    now_ms: i64,
+    max_session_lifetime: Option<Time>,
+) -> SaslAuthenticateResponse {
+    handle_authenticate_oauthbearer_inner(
+        req,
+        auth,
+        validator,
+        Some((cache_generation, last_successful_fetch_ms)),
+        now_ms,
+        max_session_lifetime,
+    )
+    .await
+}
+
+async fn handle_authenticate_oauthbearer_inner(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    validator: &krabka_security::OAuthBearerValidator,
+    jwks_cache: Option<(&AtomicU64, &AtomicI64)>,
+    now_ms: i64,
+    max_session_lifetime: Option<Time>,
+) -> SaslAuthenticateResponse {
     match auth {
         ConnectionAuth::Negotiating {
             exchange: SaslExchange::OAuthBearer,
@@ -53,7 +87,7 @@ pub async fn handle_authenticate_oauthbearer(
             pending_token_expiry_ms: _,
         } => {
             let mech = *mechanism;
-            match validate_bearer(&req.auth_bytes, validator, now_ms).await {
+            match validate_bearer(&req.auth_bytes, validator, jwks_cache, now_ms).await {
                 Ok(outcome) => {
                     // Clamp `session_lifetime_ms` to the optional
                     // broker cap, then anchor `Authenticated.expires_at_ms`
@@ -110,7 +144,7 @@ pub async fn handle_authenticate_oauthbearer(
         } => {
             let prev_mech = previous.mechanism;
             let prev_name = previous.principal.name.clone();
-            match validate_bearer(&req.auth_bytes, validator, now_ms).await {
+            match validate_bearer(&req.auth_bytes, validator, jwks_cache, now_ms).await {
                 Ok(outcome) => {
                     if outcome.principal.name != prev_name {
                         tracing::debug!(
@@ -187,14 +221,50 @@ fn successful_authentication(session_lifetime_ms: i64) -> SaslAuthenticateRespon
 async fn validate_bearer(
     auth_bytes: &[u8],
     validator: &krabka_security::OAuthBearerValidator,
+    jwks_cache: Option<(&AtomicU64, &AtomicI64)>,
     now_ms: i64,
 ) -> Result<krabka_security::AuthOutcome, &'static str> {
     let parsed = krabka_security::parse_client_initial_response(auth_bytes)
         .map_err(|_| "malformed OAUTHBEARER client response")?;
+    let cache_guard = match (validator, jwks_cache) {
+        (
+            krabka_security::OAuthBearerValidator::Signed(signed),
+            Some((generation, last_successful)),
+        ) => {
+            let generation_before = generation.load(Ordering::Acquire);
+            let last_successful_fetch_ms = last_successful.load(Ordering::Acquire);
+            let generation_after = generation.load(Ordering::Acquire);
+            let (expiry_enabled, expiry_ms) = signed
+                .cache_expiry
+                .map_or((false, 0), |expiry| (true, expiry.millis_i64()));
+            let facts = krabka_verified::JwksCacheFacts {
+                generation_before,
+                generation_after,
+                last_successful_fetch_ms,
+                now_ms,
+                expiry_enabled,
+                expiry_ms,
+            };
+            if krabka_verified::jwks_cache_admission(facts)
+                != krabka_verified::JwksCacheDecision::Admit
+            {
+                return Err("JWKS cache is stale or changing");
+            }
+            Some((generation, facts))
+        }
+        _ => None,
+    };
     let outcome = validator
         .validate(&parsed.token, now_ms)
         .await
         .map_err(|_| "token validation failed")?;
+    if let Some((generation, mut facts)) = cache_guard {
+        facts.generation_after = generation.load(Ordering::Acquire);
+        if krabka_verified::jwks_cache_admission(facts) != krabka_verified::JwksCacheDecision::Admit
+        {
+            return Err("JWKS cache changed during validation");
+        }
+    }
     if let Some(authzid) = parsed.authzid
         && authzid != outcome.principal.name
     {

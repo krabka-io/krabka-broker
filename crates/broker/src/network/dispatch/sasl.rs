@@ -92,10 +92,12 @@ async fn handle_sasl_frame(
                         let now_ms = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-                        crate::network::auth::handle_authenticate_oauthbearer(
+                        crate::network::auth::handle_authenticate_oauthbearer_with_jwks_cache(
                             &req,
                             auth,
                             &broker.config.oauthbearer_validator,
+                            &broker.config.oauthbearer_jwks_cache_generation,
+                            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
                             now_ms,
                             broker.config.oauthbearer_max_session_lifetime,
                         )
