@@ -139,7 +139,6 @@ impl Default for ProfilingConfig {
 mod tests {
     use assert2::assert;
     use clap::Parser;
-    use krabka_units::convert::FrequencyExt as _;
 
     use super::*;
 

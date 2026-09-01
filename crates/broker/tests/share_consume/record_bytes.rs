@@ -42,7 +42,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     // One 3-record batch at offsets 0..2.
     produce_n(&client, "t", tid, 0, 3).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
@@ -175,7 +175,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;
     produce_one(&client, "t", tid, 0, "v1").await;

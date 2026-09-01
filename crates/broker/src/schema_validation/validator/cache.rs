@@ -125,12 +125,27 @@ impl SchemaValidator {
 
     /// Turn a registry failure into the reason it stands for.
     ///
-    /// A 404 is the registry answering: this id is not registered. Anything
-    /// else is the registry failing to answer, which `fail_open` governs.
+    /// A 404 is an unknown ID. Transport errors, request timeouts, throttling,
+    /// and 5xx responses are transient; other statuses and malformed success
+    /// responses fail closed.
     fn fetch_error(id: u32, error: &SchemaSerdeError) -> RejectReason {
+        use krabka_verified::SchemaFailureKind::{Malformed, Permanent};
+
         match error {
             SchemaSerdeError::RegistryStatus { status: 404, .. } => RejectReason::UnknownId(id),
-            other => RejectReason::RegistryUnavailable(other.to_string()),
+            SchemaSerdeError::RegistryTransport(_)
+            | SchemaSerdeError::RegistryStatus {
+                status: 408 | 429 | 500..=599,
+                ..
+            } => RejectReason::RegistryUnavailable(error.to_string()),
+            SchemaSerdeError::RegistryDecode(_) => RejectReason::RegistryRejected {
+                kind: Malformed,
+                detail: error.to_string(),
+            },
+            _ => RejectReason::RegistryRejected {
+                kind: Permanent,
+                detail: error.to_string(),
+            },
         }
     }
 }

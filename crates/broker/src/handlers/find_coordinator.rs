@@ -27,19 +27,38 @@ mod response;
 mod tests;
 
 use self::{
-    authz::authorize_keys,
+    authz::{KeySlot, authorize_keys},
     listener::local_advertised_for_listener,
     resolve::{
-        local_coordinators, parse_share_key, resolve_partition_coordinator,
-        resolve_transaction_keys,
+        parse_share_key, resolve_partition_coordinator, resolve_transaction_keys,
+        unavailable_coordinator,
     },
-    response::{encode_coordinators, encode_error_response},
+    response::encode_coordinators,
 };
 use crate::{broker::Broker, codes, error::BrokerError};
 
 const KEY_TYPE_GROUP: i8 = 0;
 const KEY_TYPE_TRANSACTION: i8 = 1;
 const KEY_TYPE_SHARE: i8 = 2;
+
+fn unavailable_for_keys(keys: Vec<String>, message: &str) -> Vec<Coordinator> {
+    keys.into_iter()
+        .map(|key| unavailable_coordinator(key, message))
+        .collect()
+}
+
+fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> Vec<Coordinator> {
+    let mut resolved = coordinators.into_iter();
+    key_slots
+        .into_iter()
+        .map(|slot| match slot {
+            KeySlot::Rejected(coordinator) => coordinator,
+            KeySlot::Resolve(_) => resolved
+                .next()
+                .expect("one coordinator result per admitted key"),
+        })
+        .collect()
+}
 
 // cargo-mutants: the surviving mutant here flips the `-1` fallback in
 // `i32::try_from(leader.0).unwrap_or(-1)` (a coordinator broker's node id).
@@ -77,21 +96,32 @@ pub(crate) async fn handle(
         // `key` field is what the client cares about — populate the legacy
         // top-level fields and also emit a single `Coordinator` entry for
         // that key so the encode path is uniform.
-        let keys: Vec<String> = if req.coordinator_keys.is_empty() {
+        let keys: Vec<String> = if version < 4 {
             vec![req.key.clone()]
         } else {
             req.coordinator_keys.clone()
         };
 
         // ── ACL preamble ────────────────────────────────────────────
-        // Per-key `Describe`: GROUP → `Group(key)`; TRANSACTION →
-        // `TransactionalId(key)`. Denied keys are emitted with the
-        // authorization-failed code (per-entry for the v4+ multi-key
-        // array; the v0-v3 top-level fields are derived from the first
-        // entry below). Authorized keys resolve normally — so we split
-        // `keys` into denied entries + the still-to-resolve list.
-        let (mut denied_entries, keys) =
-            authorize_keys(broker, &controller.current_image(), ctx, req.key_type, keys);
+        // Per-key authorization: GROUP and TRANSACTION require `Describe` on
+        // their keyed resources; SHARE v6+ requires `ClusterAction` on the
+        // singleton Cluster resource. Denied or malformed keys retain their
+        // original response slots while admitted keys resolve normally.
+        let key_slots = authorize_keys(
+            broker,
+            &controller.current_image(),
+            ctx,
+            version,
+            req.key_type,
+            keys,
+        );
+        let keys: Vec<String> = key_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                KeySlot::Resolve(key) => Some(key.clone()),
+                KeySlot::Rejected(_) => None,
+            })
+            .collect();
 
         let mut coordinators: Vec<Coordinator> = match req.key_type {
             KEY_TYPE_GROUP => {
@@ -112,35 +142,31 @@ pub(crate) async fn handle(
                     })
                     .collect()
             }
+            KEY_TYPE_TRANSACTION | KEY_TYPE_SHARE if keys.is_empty() => Vec::new(),
             KEY_TYPE_TRANSACTION => {
                 // Ensure __transaction_state topic exists before we try to
                 // look up partitions in it.
-                if let Err(e) = crate::txn::bootstrap::ensure_topic(
+                match crate::txn::bootstrap::ensure_topic(
                     &controller,
                     broker.config.transaction_state_num_partitions,
                     broker.config.transaction_state_replication_factor,
                 )
                 .await
                 {
-                    tracing::warn!(
-                        error = %e,
-                        "txn bootstrap failed; replying COORDINATOR_NOT_AVAILABLE"
-                    );
-                    return encode_error_response(
-                        broker_id,
-                        &advertised,
-                        version,
-                        codes::COORDINATOR_NOT_AVAILABLE,
-                        Some("txn topic bootstrap failed"),
-                    );
+                    Ok(()) => resolve_transaction_keys(broker, keys, &advertised, ctx),
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            "txn bootstrap failed; replying COORDINATOR_NOT_AVAILABLE"
+                        );
+                        unavailable_for_keys(keys, "txn topic bootstrap failed")
+                    }
                 }
-
-                resolve_transaction_keys(broker, keys, &advertised, ctx)
             }
             KEY_TYPE_SHARE => {
                 // Ensure __share_group_state exists before resolving its
                 // partitions' leaders.
-                if let Err(e) = crate::share_coordinator::bootstrap::ensure_topic(
+                let topic_ready = crate::share_coordinator::bootstrap::ensure_topic(
                     &controller,
                     broker.config.share_coordinator.state_topic_num_partitions,
                     broker
@@ -148,72 +174,60 @@ pub(crate) async fn handle(
                         .share_coordinator
                         .state_topic_replication_factor,
                 )
-                .await
-                {
+                .await;
+                if let Err(error) = topic_ready {
                     tracing::warn!(
-                        error = %e,
+                        %error,
                         "share-state bootstrap failed; replying COORDINATOR_NOT_AVAILABLE"
                     );
-                    return encode_error_response(
-                        broker_id,
-                        &advertised,
-                        version,
-                        codes::COORDINATOR_NOT_AVAILABLE,
-                        Some("share-state topic bootstrap failed"),
-                    );
-                }
+                    unavailable_for_keys(keys, "share-state topic bootstrap failed")
+                } else {
+                    let mut result = Vec::with_capacity(keys.len());
+                    for k in keys {
+                        // Kafka's share-coordinator key is `group:topicId:partition`.
+                        // Group ids may contain ':', so split from the right: the
+                        // last segment is the partition, the next is the topic id,
+                        // and everything before that is the group.
+                        let Some((group, topic_uuid, partition)) = parse_share_key(&k) else {
+                            result.push(Coordinator {
+                                key: k,
+                                node_id: -1,
+                                host: String::new(),
+                                port: -1,
+                                error_code: codes::INVALID_REQUEST,
+                                error_message: Some("malformed share-state key".into()),
+                                ..Default::default()
+                            });
+                            continue;
+                        };
 
-                let mut result = Vec::with_capacity(keys.len());
-                for k in keys {
-                    // Kafka's share-coordinator key is `group:topicId:partition`.
-                    // Group ids may contain ':', so split from the right: the
-                    // last segment is the partition, the next is the topic id,
-                    // and everything before that is the group.
-                    let Some((group, topic_uuid, partition)) = parse_share_key(&k) else {
-                        result.push(Coordinator {
-                            key: k,
-                            node_id: -1,
-                            host: String::new(),
-                            port: -1,
-                            error_code: codes::COORDINATOR_NOT_AVAILABLE,
-                            error_message: Some("malformed share-state key".into()),
-                            ..Default::default()
-                        });
-                        continue;
-                    };
-
-                    let p = crate::share_coordinator::partitioner::partition_for_share_key(
-                        group,
-                        &topic_uuid,
-                        partition,
-                        broker.config.share_coordinator.state_topic_num_partitions,
-                    );
-                    let image = controller.current_image();
-                    result.push(resolve_partition_coordinator(
-                        broker,
-                        &image,
-                        crate::share_coordinator::bootstrap::TOPIC,
-                        p,
-                        k,
-                        &advertised,
-                        ctx,
-                    ));
+                        let p = crate::share_coordinator::partitioner::partition_for_share_key(
+                            group,
+                            &topic_uuid,
+                            partition,
+                            broker.config.share_coordinator.state_topic_num_partitions,
+                        );
+                        let image = controller.current_image();
+                        result.push(resolve_partition_coordinator(
+                            broker,
+                            &image,
+                            crate::share_coordinator::bootstrap::TOPIC,
+                            p,
+                            k,
+                            &advertised,
+                            ctx,
+                        ));
+                    }
+                    result
                 }
-                result
             }
-            unknown => {
-                tracing::warn!(key_type = unknown, "unknown FindCoordinator key_type");
-                local_coordinators(keys, broker_id, &advertised)
-            }
+            _ => Vec::new(),
         };
 
-        // Re-attach the authorization-denied entries. They lead the list so
-        // a v0-v3 single-key request whose only key was denied surfaces the
-        // authorization-failed code in the derived top-level fields below.
-        if !denied_entries.is_empty() {
-            denied_entries.extend(coordinators);
-            coordinators = denied_entries;
-        }
+        // Re-attach rejected entries in their original request slots. Kafka's
+        // batched response preserves input order even when authorization and
+        // resolution produce different errors for adjacent keys.
+        coordinators = merge_key_slots(key_slots, coordinators);
 
         encode_coordinators(broker_id, &advertised, version, coordinators)
     }

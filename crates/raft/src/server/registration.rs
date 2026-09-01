@@ -1,26 +1,29 @@
-//! Kafka broker/controller lifecycle RPCs served on the controller listener.
+//! Kafka registration RPCs served by the controller listener itself.
 //!
 //! This root routes an `api_key` to the handler that answers it, and owns what
-//! all three handlers share: the Kafka error codes these APIs reply with, the
+//! both handlers share: the Kafka error codes these APIs reply with, the
 //! declared API/version table, the leadership guard, and the mapping from a
 //! [`RaftError`] to the code a client acts on. Each RPC has its own submodule,
 //! with the listener grammar in `listeners` and the response encoders in
 //! `response`.
+//!
+//! `BrokerHeartbeat` is deliberately absent. It is the one lifecycle RPC whose
+//! answer is not a function of the metadata image alone: it also drives the
+//! controller's heartbeat registry, the KIP-112 offline-dir failover, and the
+//! controlled-shutdown drain, all of which live in the broker crate. It
+//! therefore reaches the controller listener through the KIP-919 Admin router
+//! like the other broker-owned APIs, so there is exactly one implementation of
+//! it rather than a second one here that silently skips the bookkeeping.
 
 use bytes::Bytes;
-use krabka_protocol::owned::{
-    broker_heartbeat_request, broker_registration_request, controller_registration_request,
-};
+use krabka_protocol::owned::{broker_registration_request, controller_registration_request};
 
 mod broker;
 mod controller;
-mod heartbeat;
 mod listeners;
 mod response;
 
-use self::{
-    broker::broker_registration, controller::controller_registration, heartbeat::broker_heartbeat,
-};
+use self::{broker::broker_registration, controller::controller_registration};
 use crate::{RaftError, kraft::KraftController};
 
 const SUCCESS: i16 = 0;
@@ -28,30 +31,22 @@ const UNKNOWN_SERVER_ERROR: i16 = -1;
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 const UNSUPPORTED_VERSION: i16 = 35;
 const NOT_CONTROLLER: i16 = 41;
-const STALE_BROKER_EPOCH: i16 = 77;
 const DUPLICATE_BROKER_REGISTRATION: i16 = 101;
 const BROKER_ID_NOT_REGISTERED: i16 = 102;
 const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
 
-pub(super) const SUPPORTED_APIS: [(i16, i16); 3] = [
-    (
-        broker_registration_request::API_KEY,
-        broker_registration_request::MAX_VERSION,
-    ),
-    (
-        broker_heartbeat_request::API_KEY,
-        broker_heartbeat_request::MAX_VERSION,
-    ),
-    (
-        controller_registration_request::API_KEY,
-        controller_registration_request::MAX_VERSION,
-    ),
+/// The lifecycle API keys this module answers. The versions they are served at
+/// are declared once, with the rest of the listener's surface, in
+/// [`super::api_versions::table`].
+pub(super) const SUPPORTED_APIS: [i16; 2] = [
+    broker_registration_request::API_KEY,
+    controller_registration_request::API_KEY,
 ];
 
 pub(super) fn is_controller_api(api_key: i16) -> bool {
-    SUPPORTED_APIS.iter().any(|&(key, _)| key == api_key)
+    SUPPORTED_APIS.contains(&api_key)
 }
 
 pub(super) async fn dispatch(
@@ -65,7 +60,6 @@ pub(super) async fn dispatch(
         broker_registration_request::API_KEY => {
             broker_registration(version, body, engine, authorized).await
         }
-        broker_heartbeat_request::API_KEY => broker_heartbeat(version, body, engine, authorized),
         controller_registration_request::API_KEY => {
             controller_registration(version, body, engine, authorized).await
         }
@@ -96,12 +90,18 @@ mod tests {
     /// The controller answers the lifecycle APIs it declares and nothing else.
     #[test]
     fn only_the_declared_apis_are_controller_apis() {
-        for &(key, _) in &SUPPORTED_APIS {
+        for key in SUPPORTED_APIS {
             check!(is_controller_api(key), "declared api {key}");
         }
         // A key nothing declares: Produce is a broker API, never a controller one.
         check!(!is_controller_api(0), "Produce is not a controller api");
         check!(!is_controller_api(i16::MAX));
+        // `BrokerHeartbeat` is answered by the broker's handler through the
+        // Admin router, so this table must not claim it.
+        check!(
+            !is_controller_api(krabka_protocol::owned::broker_heartbeat_request::API_KEY),
+            "BrokerHeartbeat belongs to the Admin router"
+        );
     }
 
     /// Each raft failure maps to the error code a Kafka client acts on: a
@@ -115,8 +115,11 @@ mod tests {
         check!(raft_error_code(&RaftError::Shutdown) == UNKNOWN_SERVER_ERROR);
     }
 
+    /// The declared keys are the generated ones. The versions these are served
+    /// at are asserted with the rest of the advertised table, in
+    /// [`super::super::api_versions::table`].
     #[test]
-    fn lifecycle_api_table_matches_generated_schemas() {
-        assert2::assert!(SUPPORTED_APIS == [(62, 4), (63, 2), (70, 0)]);
+    fn lifecycle_api_keys_match_generated_schemas() {
+        assert2::assert!(SUPPORTED_APIS == [62, 70]);
     }
 }

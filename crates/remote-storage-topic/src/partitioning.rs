@@ -6,9 +6,8 @@
 //! which match the identity of `TopicIdPartition`. A topic rename therefore
 //! does not move the bucket.
 
-use std::{collections::hash_map::DefaultHasher, hash::Hasher};
-
 use krabka_remote_storage::TopicIdPartition;
+use krabka_verified::remote_metadata_partition;
 
 /// Pick the metadata-topic partition for `tp`, given the
 /// `partition_count` of `__remote_log_metadata`.
@@ -18,15 +17,8 @@ use krabka_remote_storage::TopicIdPartition;
 /// Panics when `partition_count <= 0`.
 #[must_use]
 pub fn metadata_partition_for(tp: &TopicIdPartition, partition_count: i32) -> i32 {
-    assert2::assert!(partition_count > 0, "partition_count must be positive");
-    let mut h = DefaultHasher::new();
-    for byte in tp.topic_id.as_bytes() {
-        h.write_u8(*byte);
-    }
-    h.write_i32(tp.partition);
-    let partition_count = u64::try_from(partition_count).expect("partition count is positive");
-    let partition = h.finish() % partition_count;
-    i32::try_from(partition).expect("partition is less than the i32 partition count")
+    remote_metadata_partition(tp.topic_id.as_u128(), tp.partition, partition_count)
+        .expect("partition_count must be positive")
 }
 
 /// Deduped, sorted set of `__remote_log_metadata` partitions that carry
@@ -43,6 +35,7 @@ pub fn metadata_partitions_for<'a, I>(tps: I, partition_count: i32) -> Vec<i32>
 where
     I: IntoIterator<Item = &'a TopicIdPartition>,
 {
+    assert2::assert!(partition_count > 0, "partition_count must be positive");
     let mut set: Vec<i32> = tps
         .into_iter()
         .map(|tp| metadata_partition_for(tp, partition_count))
@@ -72,6 +65,13 @@ mod tests {
         for p in 0..10 {
             let bucket = metadata_partition_for(&tp("orders", p), 50);
             assert!((0..50).contains(&bucket), "bucket {bucket} out of [0,50)");
+        }
+    }
+
+    #[test]
+    fn matches_jvm_remote_metadata_partitioner_goldens() {
+        for (partition, expected) in [(0, 6), (1, 36), (3, 2), (7, 26)] {
+            assert!(metadata_partition_for(&tp("orders", partition), 50) == expected);
         }
     }
 
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed")]
+    #[should_panic(expected = "partition_count must be positive")]
     fn rejects_zero_partition_count() {
         let _ = metadata_partition_for(&tp("t", 0), 0);
     }
@@ -137,5 +137,14 @@ mod tests {
     fn metadata_partitions_for_empty_is_empty() {
         let none: [TopicIdPartition; 0] = [];
         assert!(metadata_partitions_for(none.iter(), 50).is_empty());
+    }
+
+    #[test]
+    fn metadata_partitions_for_empty_rejects_nonpositive_count() {
+        let none: [TopicIdPartition; 0] = [];
+        for count in [0, -1] {
+            let result = std::panic::catch_unwind(|| metadata_partitions_for(none.iter(), count));
+            assert!(result.is_err(), "count {count} must panic before iteration");
+        }
     }
 }

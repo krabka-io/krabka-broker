@@ -125,6 +125,7 @@ mod tests {
             connection_id: "connection-a",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
+            listener_authorized_cluster_action: false,
         };
 
         assert!(acl_denied(
@@ -152,6 +153,7 @@ mod tests {
             connection_id: "connection-a",
             sendfile_capable: false,
             connection_listener_name: "PLAINTEXT",
+            listener_authorized_cluster_action: false,
         };
 
         for (label, super_users, denied) in [

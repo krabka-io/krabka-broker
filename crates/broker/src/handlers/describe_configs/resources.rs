@@ -251,7 +251,9 @@ fn broker_configs(
                     name: Some(key.as_str()),
                 })
                 .unwrap_or_default();
-            config_entry(row, key, &layers, default, options)
+            let mut entry = config_entry(row, key, &layers, default, options);
+            entry.read_only |= config_keys::is_controller_managed_broker_config(key);
+            entry
         })
         .collect();
 

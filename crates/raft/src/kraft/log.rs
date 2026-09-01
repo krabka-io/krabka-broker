@@ -137,13 +137,15 @@ impl KraftLog {
     /// Advances the high watermark. The move is monotonic, and it never goes
     /// past the log end.
     pub fn advance_hwm(&mut self, new_hwm: Offset) {
-        let clamped = new_hwm.min(self.log.log_end_offset());
-        let next = self.hwm.max(clamped);
+        let log_end = self.log.log_end_offset();
+        let next = Offset(krabka_verified::raft::advance_high_watermark(
+            self.hwm.0, new_hwm.0, log_end.0,
+        ));
         if next > self.hwm {
             self.hwm = next;
             self.persist_hwm();
         }
-        assert2::assert!(self.hwm <= self.log.log_end_offset());
+        assert2::assert!(self.hwm <= log_end);
     }
 
     /// Truncates the log so that no record at offset `>= offset` remains, and

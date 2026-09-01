@@ -24,7 +24,8 @@ use super::{
     LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
     RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     broker_scope::{
-        BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        BROKER_FENCED, BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        STRETCH_PREFERRED_LEADER_SITE,
     },
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
@@ -556,6 +557,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Boolean,
             Some("false"),
             "Marks this node as a data-bearing witness: it replicates and votes but serves no client and leads no partition. Only the controller writes it.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            BROKER_FENCED,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("false"),
+            "Marks this node as fenced: it is past its heartbeat deadline, or has not yet proved metadata catch-up, so every node reports its replicas offline. Only the controller writes it.",
             ValueCheck::NotAltered,
         )
     },
