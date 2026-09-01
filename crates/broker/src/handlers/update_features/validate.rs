@@ -34,7 +34,7 @@ pub(super) fn validate_updates(
     let mut seen = std::collections::HashSet::new();
     let mut results = Vec::new();
     let mut records = Vec::new();
-    let mut metadata_version_record = None;
+    let mut metadata_version_records = None;
     for upd in &request.feature_updates {
         let name = upd.feature.clone();
         if !seen.insert(name.clone()) {
@@ -134,14 +134,6 @@ pub(super) fn validate_updates(
                 continue;
             }
             downgrade_records = image.metadata_version_downgrade_records(level);
-            if !downgrade_records.is_empty() && update_type != UpdateType::UnsafeDowngrade {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Refusing a lossy metadata.version downgrade; retry with UNSAFE_DOWNGRADE to discard incompatible metadata.",
-                ));
-                continue;
-            }
             if !downgrade_records.is_empty() {
                 let mut projected = image.clone();
                 for record in &downgrade_records {
@@ -203,14 +195,39 @@ pub(super) fn validate_updates(
             }
         }
 
-        // Accepted.
+        let cleanup_required = !downgrade_records.is_empty();
+        let decision = krabka_verified::feature_update_decision(
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            cleanup_required,
+            update_type == UpdateType::UnsafeDowngrade,
+        );
+        let planned_cleanup = match decision {
+            krabka_verified::FeatureUpdateDecision::Reject => {
+                results.push(row(
+                    name,
+                    codes::INVALID_UPDATE_VERSION,
+                    "Refusing a lossy metadata.version downgrade; retry with UNSAFE_DOWNGRADE to discard incompatible metadata.",
+                ));
+                continue;
+            }
+            krabka_verified::FeatureUpdateDecision::EmitFeature => Vec::new(),
+            krabka_verified::FeatureUpdateDecision::EmitCleanupThenFeature => downgrade_records,
+        };
+
+        // Accepted. The verified cleanup result is kept with the deferred
+        // metadata.version record so no intervening append can reverse them.
         let feature_record = MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: name.clone(),
             level,
         });
         if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE {
-            records.extend(downgrade_records);
-            metadata_version_record = Some(feature_record);
+            metadata_version_records = Some((planned_cleanup, feature_record));
         } else {
             records.push(feature_record);
         }
@@ -218,7 +235,10 @@ pub(super) fn validate_updates(
     }
     // KIP-1155: the metadata.version record is always emitted last, after any
     // records that remove fields unavailable at the target version.
-    records.extend(metadata_version_record);
+    if let Some((cleanup_records, feature_record)) = metadata_version_records {
+        records.extend(cleanup_records);
+        records.push(feature_record);
+    }
     (results, records)
 }
 

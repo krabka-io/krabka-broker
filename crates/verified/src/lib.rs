@@ -18,6 +18,7 @@ pub mod delegation_token;
 pub mod delivery;
 pub mod diskless;
 pub mod epoch;
+pub mod features;
 pub mod isr;
 pub mod leader_epoch;
 pub mod log_index;
@@ -77,6 +78,7 @@ pub use diskless::{
     diskless_span_extension, diskless_trim_decision,
 };
 pub use epoch::exact_epoch_successor;
+pub use features::{FeatureUpdateDecision, feature_update_decision};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;
