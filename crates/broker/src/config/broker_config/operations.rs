@@ -50,6 +50,19 @@ macro_rules! operations_fields {
             /// Transport used by the KIP-714 client-metrics forwarder.
             pub client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol,
 
+            /// The live `tracing` filter behind Kafka's `BROKER_LOGGER` config
+            /// resource, which `kafka-configs --entity-type broker-loggers`
+            /// describes and alters.
+            ///
+            /// The binary takes it from
+            /// [`krabka_telemetry::TelemetryGuard::log_levels`], so a level an
+            /// operator writes lands on the subscriber this process installed.
+            /// A change is node-local and never reaches cluster metadata,
+            /// exactly as on a JVM broker. A config built without a
+            /// subscriber gets a controller that tracks levels and drives no
+            /// layer.
+            pub log_levels: krabka_telemetry::LogLevelController,
+
             /// KIP-227: maximum number of incremental-fetch sessions kept in the
             /// per-broker cache. Each session tracks the (topic, partition) set a
             /// client is subscribed to, so later fetches can be deltas. When the

@@ -26,7 +26,8 @@ use super::{
         CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DYNAMIC_BROKER,
         CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
         CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER,
-        RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+        RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
+        RESOURCE_TYPE_TOPIC,
     },
 };
 use crate::{
@@ -37,6 +38,7 @@ use crate::{
     },
 };
 
+mod broker_logger;
 mod static_broker;
 mod write_freeze;
 
@@ -45,17 +47,39 @@ mod tests;
 
 #[cfg(test)]
 pub(super) use self::static_broker::kafka_default_static_broker;
-pub(super) use self::static_broker::{StaticBrokerConfigs, StaticBrokerSetting};
+pub(super) use self::{
+    broker_logger::BrokerLoggers,
+    static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
+};
 use self::{static_broker::static_broker_entries, write_freeze::write_freeze_override};
+
+/// What a broker-scoped resource reports out of the serving process itself
+/// rather than out of the metadata image.
+///
+/// The three travel together because they answer the same question from three
+/// angles -- which node is replying, what it was started with, and what it is
+/// logging right now -- and because a `BROKER` or `BROKER_LOGGER` resource is
+/// meaningless without the node that serves it.
+#[derive(Clone, Copy)]
+pub(super) struct ServingBroker<'a> {
+    /// The node answering the request. A `BROKER` resource that names any
+    /// other node is refused.
+    pub(super) node: krabka_metadata::NodeId,
+    /// The static broker keys this node was started with, which a named
+    /// `BROKER` resource reports beside its dynamic overrides.
+    pub(super) static_broker: StaticBrokerConfigs<'a>,
+    /// This node's live log levels, and the broker id a `BROKER_LOGGER`
+    /// resource must name.
+    pub(super) loggers: BrokerLoggers<'a>,
+}
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
-    serving_node: krabka_metadata::NodeId,
+    serving: ServingBroker<'_>,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
-    static_broker: StaticBrokerConfigs<'_>,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
@@ -105,12 +129,12 @@ pub(super) fn describe_one(
             // <id> or empty string, but received <name>" -- as an
             // `InvalidRequestException`. The JVM `AdminClient` never sends
             // one: it routes a broker resource to the node it names.
-            if node_id != serving_node {
+            if node_id != serving.node {
                 return DescribeConfigsResult {
                     error_code: codes::INVALID_REQUEST,
                     error_message: Some(format!(
                         "Unexpected broker id, expected {} or empty string, but received {}",
-                        serving_node.0, r.resource_name
+                        serving.node.0, r.resource_name
                     )),
                     resource_type: r.resource_type,
                     resource_name: r.resource_name,
@@ -123,9 +147,28 @@ pub(super) fn describe_one(
         return ok(broker_configs(
             image,
             node_id,
-            static_broker,
+            serving.static_broker,
             &wanted,
             options,
+        ));
+    }
+
+    if r.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+        if let Err(message) =
+            broker_logger::validate_resource_name(&r.resource_name, serving.loggers.node_id)
+        {
+            return DescribeConfigsResult {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(message),
+                resource_type: r.resource_type,
+                resource_name: r.resource_name,
+                configs: Vec::new(),
+                ..Default::default()
+            };
+        }
+        return ok(broker_logger::logger_configs(
+            serving.loggers.levels,
+            &wanted,
         ));
     }
 
