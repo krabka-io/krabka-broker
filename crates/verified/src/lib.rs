@@ -24,6 +24,7 @@ pub mod log_index;
 pub mod offset_allocator;
 pub mod produce;
 pub mod producer;
+pub mod quorum_state;
 pub mod raft;
 pub mod reassignment;
 pub mod reconfiguration;
@@ -80,6 +81,10 @@ pub use offset_allocator::reserve_offsets;
 pub use produce::{ProduceBatchAdmission, produce_batch_admission};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
+};
+pub use quorum_state::{
+    QuorumStateLoadDecision, QuorumStateWriteDecision, quorum_state_load_decision,
+    quorum_state_write_decision,
 };
 pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
 pub use reassignment::{ReassignmentAction, reassignment_action};
