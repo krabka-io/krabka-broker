@@ -195,6 +195,8 @@ pub struct RuntimeArgs {
     pub log_timestamp_scan_window: Option<ByteSize>,
     #[arg(long, env = "KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY", value_parser = krabka_units::parse::positive_time)]
     pub log_delivery_clock_uncertainty: Option<Time>,
+    #[arg(long, env = "KRABKA_MESSAGE_MAX_BYTES", value_parser = parse_kafka_int_byte_size)]
+    pub message_max_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_REQUEST_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_request_max: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SENDFILE_MIN", value_parser = krabka_units::parse::positive_byte_size)]
@@ -301,8 +303,70 @@ fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
     ConnectionDispatchQueueCapacity::new(value).map(ConnectionDispatchQueueCapacity::get)
 }
 
+/// Parse a byte count in the domain Kafka gives an `INT` config with
+/// `atLeast(0)`, which is what `message.max.bytes` is.
+///
+/// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
+/// "Value must be at least 0", and refuses `2147483648` with "Not a number of
+/// type INT". The topic-level `max.message.bytes` this key defaults is the
+/// same `INT`, so the flag, the TOML file, and `kafka-configs --alter` accept
+/// and reject the same values rather than three overlapping domains.
+fn parse_kafka_int_byte_size(value: &str) -> Result<ByteSize, String> {
+    use krabka_units::convert::ByteSizeExt as _;
+
+    const KAFKA_INT_MAX: u64 = 2_147_483_647;
+    const DOMAIN: &str = "must be a whole number of bytes from 0 to 2147483647";
+
+    let size =
+        krabka_units::parse::non_negative_byte_size(value).map_err(|error| error.to_string())?;
+    let bytes = size.bytes_u64();
+    if ByteSize::from_bytes(bytes) != size || bytes > KAFKA_INT_MAX {
+        return Err(DOMAIN.to_owned());
+    }
+    Ok(size)
+}
+
 fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
     let value =
         krabka_units::parse::positive_byte_size(value).map_err(|error| error.to_string())?;
     ClientFrameMax::try_from(value).map(ClientFrameMax::size)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use clap::Parser as _;
+    use krabka_units::convert::ByteSizeExt;
+
+    use crate::{cli::Args, test_support::env_guard};
+
+    /// `--message-max-bytes` takes exactly the values Kafka's `INT` with
+    /// `atLeast(0)` takes.
+    ///
+    /// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
+    /// "Value must be at least 0", and refuses `2147483648` with "Not a number
+    /// of type INT". The topic-level `max.message.bytes` this key defaults
+    /// enforces the same domain, so an operator cannot set a broker-wide cap
+    /// through the flag that `kafka-configs --alter` would refuse on a topic.
+    #[test]
+    fn message_max_bytes_takes_kafkas_int_at_least_zero() {
+        let _guard = env_guard();
+
+        for (value, expected) in [
+            ("0B", Some(0)),
+            ("2048B", Some(2048)),
+            ("2147483647B", Some(2_147_483_647)),
+            ("1MiB", Some(1_048_576)),
+            ("-1B", None),
+            ("2147483648B", None),
+            ("2GiB", None),
+            ("1.5B", None),
+        ] {
+            let parsed = Args::try_parse_from(["krabka-broker", "--message-max-bytes", value])
+                .ok()
+                .and_then(|args| args.runtime.message_max_bytes)
+                .map(ByteSizeExt::bytes_u64);
+            check!(parsed == expected, "--message-max-bytes={value}");
+        }
+    }
 }

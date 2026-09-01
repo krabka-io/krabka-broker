@@ -3,10 +3,10 @@
 //!
 //! This is the whole source-precedence decision, one resource type at a time:
 //! a topic's effective configuration, a broker's per-node override over the
-//! cluster default plus the static `node.id`, a client-metrics subscription's
-//! effective values, and a group's dynamic overrides over the streams
-//! defaults. Every other resource type gets an empty configs list and no
-//! error.
+//! cluster default plus its static `node.id` and idle window, a client-metrics
+//! subscription's effective values, and a group's dynamic overrides over the
+//! streams defaults. Every other resource type gets an empty configs list and
+//! no error.
 //!
 //! A topic reports every key in the registry, not only the ones it overrides.
 //! `kafka-configs --describe --all` and `AdminClient.describeConfigs` exist to
@@ -21,6 +21,7 @@ use krabka_protocol::owned::describe_configs_response::{
 
 use super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
+    static_configs::idle_window_entries,
     wire::{
         CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DYNAMIC_BROKER,
         CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
@@ -44,6 +45,8 @@ mod write_freeze;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(super) use self::static_broker::kafka_default_static_broker;
 pub(super) use self::{
     broker_logger::BrokerLoggers,
     static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
@@ -64,7 +67,7 @@ pub(super) struct ServingBroker<'a> {
     pub(super) node: krabka_metadata::NodeId,
     /// The static broker keys this node was started with, which a named
     /// `BROKER` resource reports beside its dynamic overrides.
-    pub(super) static_broker: StaticBrokerConfigs,
+    pub(super) static_broker: StaticBrokerConfigs<'a>,
     /// This node's live log levels, and the broker id a `BROKER_LOGGER`
     /// resource must name.
     pub(super) loggers: BrokerLoggers<'a>,
@@ -254,7 +257,8 @@ fn topic_configs(
 }
 
 /// A broker resource: the dynamic overrides it holds, plus the static
-/// `node.id` when the request named one node.
+/// `node.id` and the static configs in [`super::static_configs`] when the
+/// request named one node.
 ///
 /// An empty resource name is Kafka's cluster-wide default resource, which
 /// reports the cluster defaults alone. Only keys that hold a value are
@@ -270,7 +274,7 @@ fn topic_configs(
 fn broker_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: Option<krabka_metadata::NodeId>,
-    static_broker: StaticBrokerConfigs,
+    static_broker: StaticBrokerConfigs<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
@@ -343,6 +347,7 @@ fn broker_configs(
             ));
         }
         configs.extend(static_broker_entries(static_broker, wanted, options));
+        configs.extend(idle_window_entries(static_broker, wanted, options));
         configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     }
     configs

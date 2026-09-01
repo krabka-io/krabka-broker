@@ -1,7 +1,26 @@
-//! Per-connection authentication session state. It derives the initial
-//! `ConnectionAuth` for a listener, borrows the connection's principal, arms
-//! the KIP-368 session-expiry deadline that races the next frame read, and
-//! holds the read off for the KIP-219 mute window a throttled request earned.
+//! Per-connection session state. It derives the initial `ConnectionAuth` for
+//! a listener, borrows the connection's principal, holds the read off for the
+//! KIP-219 mute window a throttled request earned, and arms the two deadlines
+//! that race the next frame read: the KIP-368 SASL session expiry and the
+//! `connections.max.idle.ms` idle window.
+//!
+//! The two deadlines are independent. The SASL deadline is a property of the
+//! credential and only exists on a connection whose token carries an `exp`;
+//! the idle deadline is a property of the listener, applies whatever the
+//! connection's auth state, and is re-armed from `Instant::now()` on every
+//! pass through [`next_connection_frame`] — that is, after every frame read.
+//! Whichever deadline is nearer closes the connection, because both are arms
+//! of the same `select!`.
+//!
+//! The idle window is armed after the mute rather than before it, so a pause
+//! the broker itself imposed to shed load never counts as the client falling
+//! silent. The SASL deadline does race the mute, because a session that
+//! expires mid-mute must still close on time.
+//!
+//! The idle window covers a connection only from the moment it reaches this
+//! loop. On a TLS listener the handshake that runs before it is held to the
+//! same window by `accept::handshake_within_idle_window`, so a peer that opens
+//! the socket and never negotiates is reclaimed too.
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -108,12 +127,28 @@ fn auth_deadline(auth: &crate::network::auth::ConnectionAuth) -> Option<tokio::t
     }
 }
 
-/// Logs the KIP-368 session expiry that ends the connection.
-fn log_session_expiry(auth: &crate::network::auth::ConnectionAuth) {
+/// What the connection is held to while it waits for its next frame: the
+/// listener's idle window, the peer it belongs to, and the metrics handle the
+/// close is counted on.
+///
+/// The idle window is `None` when the listener expires no connection, which is
+/// what a non-positive `connections.max.idle.ms` asks for.
+pub(super) struct FrameWaitPolicy {
+    pub(super) idle: Option<std::time::Duration>,
+    pub(super) peer: std::net::SocketAddr,
+    pub(super) metrics: crate::metrics::BrokerMetrics,
+}
+
+/// Logs and counts the KIP-368 session expiry that ends the connection.
+fn close_on_session_expiry(auth: &crate::network::auth::ConnectionAuth, policy: &FrameWaitPolicy) {
     tracing::info!(
         principal = ?auth_principal_name(auth),
+        peer = %policy.peer,
         "SASL session expired, closing connection (KIP-368)"
     );
+    policy
+        .metrics
+        .record_connection_close(crate::metrics::ConnectionCloseReason::SaslSessionExpired);
 }
 
 /// Reads the next request frame, after honouring any KIP-219 mute window.
@@ -126,29 +161,53 @@ fn log_session_expiry(auth: &crate::network::auth::ConnectionAuth) {
 /// the quota that is shedding load.
 ///
 /// The KIP-368 session-expiry deadline races the mute as well as the read, so
-/// an expiring session still closes the connection on time.
+/// an expiring session still closes the connection on time. The idle window is
+/// armed once the mute has drained, so the broker's own backpressure never
+/// spends the client's idle budget.
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     auth: &crate::network::auth::ConnectionAuth,
     mute_until: Option<tokio::time::Instant>,
+    policy: &FrameWaitPolicy,
 ) -> Option<Bytes>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    use crate::metrics::ConnectionCloseReason;
+
     if let Some(mute_until) = mute_until {
         tokio::select! {
             biased;
             () = sleep_until_some(auth_deadline(auth)) => {
-                log_session_expiry(auth);
+                close_on_session_expiry(auth, policy);
                 return None;
             }
             () = tokio::time::sleep_until(mute_until) => {}
         }
     }
+    // Armed after the mute has drained, so every frame read resets the idle
+    // window and a pause the broker imposed is not charged to the client. The
+    // SASL deadline is absolute and is not reset by traffic, so the nearer of
+    // the two is what closes the connection.
+    let idle_deadline = policy
+        .idle
+        .map(|window| tokio::time::Instant::now() + window);
     let frame_result = tokio::select! {
         biased;
         () = sleep_until_some(auth_deadline(auth)) => {
-            log_session_expiry(auth);
+            close_on_session_expiry(auth, policy);
+            return None;
+        }
+        () = sleep_until_some(idle_deadline) => {
+            tracing::info!(
+                principal = principal_or_anonymous(auth).name.as_str(),
+                peer = %policy.peer,
+                idle_ms = policy.idle.unwrap_or_default().as_millis(),
+                "connection idle past connections.max.idle.ms, closing"
+            );
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::Idle);
             return None;
         },
         next = framed.next() => next,
@@ -156,10 +215,18 @@ where
     match frame_result {
         Some(Ok(bytes)) => Some(bytes.freeze()),
         Some(Err(error)) => {
-            tracing::warn!(%error, "frame decode error, closing");
+            tracing::warn!(%error, peer = %policy.peer, "frame decode error, closing");
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::DecodeError);
             None
         }
-        None => None,
+        None => {
+            policy
+                .metrics
+                .record_connection_close(ConnectionCloseReason::PeerClosed);
+            None
+        }
     }
 }
 
@@ -270,7 +337,15 @@ mod tests {
             tokio_util::codec::Framed::new(server, crate::network::codec::codec(MAX_FRAME_BYTES));
 
         let mute_until = tokio::time::Instant::now() + Duration::from_secs(5);
-        let frame = next_connection_frame(&mut server_framed, &auth, Some(mute_until)).await;
+        // No idle window, so the only deadline that can end this connection is
+        // the session expiry the case is about.
+        let policy = FrameWaitPolicy {
+            idle: None,
+            peer: "127.0.0.1:9092".parse().expect("a literal socket address"),
+            metrics: crate::metrics::BrokerMetrics::default(),
+        };
+        let frame =
+            next_connection_frame(&mut server_framed, &auth, Some(mute_until), &policy).await;
 
         assert!(
             frame.is_none(),

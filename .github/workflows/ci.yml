@@ -73,31 +73,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # A GitHub-hosted `ubuntu-latest` runner boots with roughly 25 GB free,
-      # and this job does not fit in it. The restored Bazel disk cache is ~11
-      # GiB compressed before it is unpacked, the repository cache another ~5
-      # GiB, and a coverage-instrumented build of the workspace then has to
-      # link 300-file test binaries carrying full LLVM profile instrumentation
-      # on top of that. The root filesystem fills partway through.
+      # This job was running the runner out of disk, roughly one PR in three.
+      # Measured on an `ubuntu-latest` runner: the root filesystem is 145 GB
+      # with 87 GB free at boot, and a coverage run needs about 86 GB of it --
+      # a ~10 GB compressed disk cache and a ~4 GB repository cache to unpack,
+      # then a coverage-instrumented build of the whole workspace, where the
+      # broker's 300-file test binaries each carry full LLVM profile
+      # instrumentation. The margin was under a gigabyte, so whether a given
+      # run fit came down to how large a cache it happened to restore. That is
+      # the intermittency: re-running sometimes "fixed" it.
       #
-      # It surfaces twice over, and neither message says "disk": clang++ dies
-      # with `Bus error (core dumped)` when a write to an mmap'd object file
-      # lands past the end of the device, and the cache save reports `zstd:
-      # error 70 : Write error : cannot write block`. Because the shortfall
-      # depends on how large a cache the run restored and how far it got, a
-      # re-run sometimes clears it -- which is what made this look flaky.
-      # Every occurrence skipped `codecov-action`, so no report was ever
-      # uploaded and `codecov/patch` never posted.
+      # It surfaced twice over, and neither message says "disk": clang++ takes
+      # `Bus error (core dumped)` when a write to an mmap'd object file lands
+      # past the end of a full device, and the cache save reports `zstd: error
+      # 70 : Write error : cannot write block`. Every occurrence skipped
+      # `codecov-action`, so no report was uploaded and `codecov/patch` never
+      # posted -- which made a disk problem look like a coverage-threshold one.
       #
-      # Nothing removed here is an input to `bazel coverage`. The C++
-      # toolchain is the hermetic `@llvm` one, the JDK is `remotejdk_21` (see
-      # .bazelrc), and the coverage run filters out every container suite
+      # Removing the preinstalled toolchains this job never uses frees ~27 GB
+      # and takes the post-build headroom from under 1 GB to 28 GB. Nothing
+      # removed here is an input to `bazel coverage`: the C++ toolchain is the
+      # hermetic `@llvm` one, the JDK is `remotejdk_21` (both per .bazelrc),
+      # and the coverage run tag-filters out every container suite
       # (`--test_tag_filters=-docker`), so the preinstalled Docker images have
-      # no consumer in this job either.
+      # no consumer here either. Only the CodeQL subtree goes from
+      # hostedtoolcache, so the runner's own Node and Python survive for
+      # `checkout` and `codecov-action`.
       #
       # The `df` lines bracket the reclaim and the build so the headroom this
-      # job actually has stays visible in the log -- if it trends back toward
-      # zero as the workspace grows, that is the signal to act on.
+      # job actually has stays a number in the log rather than something
+      # inferred from a crash. If it trends back toward zero as the workspace
+      # grows, that is the signal to act -- next levers would be the debug-info
+      # level on the instrumented build, or scoping the disk cache.
       - name: reclaim runner disk
         run: |
           echo "::group::free space before"

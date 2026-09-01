@@ -82,6 +82,8 @@ fn broker_key_types_match_apache_kafka() {
         // `offsets.retention.check.interval.ms` is `LONG`.
         (OFFSETS_RETENTION_MINUTES, ConfigType::Int),
         (OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long),
+        // `SocketServerConfigs`: `connections.max.idle.ms` is `LONG`.
+        (CONNECTIONS_MAX_IDLE_MS, ConfigType::Long),
         (NODE_ID, ConfigType::Int),
         (TRANSACTIONAL_ID_EXPIRATION_MS, ConfigType::Int),
         (
@@ -193,6 +195,7 @@ fn the_synthesised_keys_are_the_only_unstored_rows() {
                 WRITE_FREEZE,
                 OFFSETS_RETENTION_MINUTES,
                 OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                CONNECTIONS_MAX_IDLE_MS,
                 TRANSACTIONAL_ID_EXPIRATION_MS,
                 TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
                 NODE_ID,

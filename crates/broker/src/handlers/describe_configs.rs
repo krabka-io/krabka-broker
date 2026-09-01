@@ -35,20 +35,27 @@
 //! `read_only` set, next to the static `node.id` entry. See
 //! [`crate::config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS`].
 //!
-//! A numeric broker resource carries four more synthesised read-only keys
+//! A numeric broker resource carries five more synthesised read-only keys
 //! beside `node.id`: KIP-211's
 //! [`offsets.retention.minutes`](crate::config_keys::OFFSETS_RETENTION_MINUTES)
 //! and
 //! [`offsets.retention.check.interval.ms`](crate::config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS),
-//! and KIP-98's
+//! KIP-98's
 //! [`transactional.id.expiration.ms`](crate::config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)
 //! and
-//! [`transaction.remove.expired.transaction.cleanup.interval.ms`](crate::config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS).
-//! The process reads all four once at startup, so no alter can change them and
-//! `kafka-configs` must say so. A key the operator named reports its value at
-//! `STATIC_BROKER_CONFIG` above the built-in default; one left alone reports
-//! that default alone. The cluster-default broker resource (an empty
-//! `resource_name`) reports dynamic defaults only, which is what Kafka does.
+//! [`transaction.remove.expired.transaction.cleanup.interval.ms`](crate::config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS),
+//! and the idle window in [`static_configs`] —
+//! [`connections.max.idle.ms`](crate::config_keys::CONNECTIONS_MAX_IDLE_MS)
+//! together with its per-listener overrides, which are a key per listener
+//! rather than a registry row. The process reads all of them once at startup,
+//! so no alter can change them and `kafka-configs` must say so. The
+//! cluster-default broker resource (an empty `resource_name`) reports dynamic
+//! defaults only, which is what Kafka does.
+//!
+//! The `config_source` of each is provenance and not a value comparison: a key
+//! an operator wrote reads `STATIC_BROKER_CONFIG` above the built-in default
+//! even when what they wrote is Kafka's own default; one left alone reports
+//! that default alone.
 //!
 //! One stored topic override is read-only too:
 //! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
@@ -91,6 +98,7 @@ use krabka_units::convert::TimeExt as _;
 mod authz;
 mod entry;
 mod resources;
+mod static_configs;
 mod wire;
 
 use self::{
@@ -123,6 +131,9 @@ pub(crate) fn handle(
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
         let image = controller.current_image();
+        // KIP-226: the chain of sources behind each value goes out only when
+        // the client asks for it. `req.resources` is consumed below, so the
+        // flags are read off the request first.
         let options = EntryOptions::from_request(&req);
         // The node answering the request. Kafka refuses a broker resource
         // that names any other node, because everything a broker resource
@@ -153,6 +164,8 @@ pub(crate) fn handle(
             offsets_retention_check_interval: broker
                 .config
                 .offsets_retention_check_interval_override,
+            connections_max_idle: broker.config.connections_max_idle,
+            connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →

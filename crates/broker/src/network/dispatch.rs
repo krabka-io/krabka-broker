@@ -48,7 +48,7 @@ use self::{
     registry::{DispatchContext, send_registry_response},
     response::{ResponseShape, apply_request_quota, encode_response},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
-    session::{initial_connection_auth, next_connection_frame},
+    session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
 };
 use crate::{broker::Broker, codes, handlers::ApiKeyCode, network::codec};
 
@@ -255,6 +255,14 @@ async fn serve_connection_stream<S>(
     // gauge is decremented when `_conn` drops on any loop exit (EOF,
     // decode/send error, or SASL-session expiry).
     let _conn = ActiveConnectionGuard::new(&broker.metrics);
+    // Resolved once: the listener's `connections.max.idle.ms`, with its
+    // per-listener override already applied. `next_connection_frame` re-arms
+    // the deadline from it on every frame read.
+    let frame_wait = FrameWaitPolicy {
+        idle: broker.config.connections_max_idle_for(&spec.name),
+        peer,
+        metrics: broker.metrics.clone(),
+    };
     tracing::info!(listener = %spec.name, sasl = is_sasl_listener, "connection opened");
 
     // KIP-714 client software identity, populated by the first ApiVersions v3+ request.
@@ -268,10 +276,18 @@ async fn serve_connection_stream<S>(
     let mut mute_until: Option<tokio::time::Instant> = None;
 
     loop {
-        let Some(frame) = next_connection_frame(&mut framed, &auth, mute_until.take()).await else {
+        let Some(frame) =
+            next_connection_frame(&mut framed, &auth, mute_until.take(), &frame_wait).await
+        else {
             break;
         };
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
+            // Bytes the broker cannot read as a request are the same reason
+            // as bytes the codec refused, one layer further in: the peer sent
+            // something that is not a Kafka request and the connection ends.
+            broker
+                .metrics
+                .record_connection_close(crate::metrics::ConnectionCloseReason::DecodeError);
             break;
         };
         // Per-state request gate: on SASL listeners, gate every api_key
@@ -300,6 +316,20 @@ async fn serve_connection_stream<S>(
                 "request blocked by per-state auth gate (ILLEGAL_SASL_STATE), closing connection"
             );
             let _ = codes::ILLEGAL_SASL_STATE; // referenced for docs/grep
+            // An ILLEGAL_SASL_STATE reject is an authentication failure, the
+            // same as the one `try_handle_sasl_frame` records for a
+            // `SaslAuthenticate` that arrives with no handshake behind it, so
+            // it is counted the same way: under the mechanism a handshake
+            // named, or under the `Unknown` sentinel when none did. Without
+            // it a peer that opens a connection on a SASL listener and
+            // immediately sends Produce is closed and counted nowhere.
+            broker.metrics.record_authentication(
+                auth.negotiated_mechanism()
+                    .map_or(crate::metrics::UNKNOWN_LABEL, |mechanism| {
+                        mechanism.wire_name()
+                    }),
+                false,
+            );
             break;
         }
         let Some(entry) = broker.handlers().get(parsed.api_key) else {

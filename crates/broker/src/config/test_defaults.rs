@@ -264,6 +264,11 @@ impl BrokerConfig {
             // as "no cap" and never increments the per-IP map.
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
+            // Unset, so a fixture runs Kafka's ten-minute window -- far
+            // longer than any fixture lives. A test that wants to see the
+            // timer fire sets its own.
+            connections_max_idle: None,
+            connections_max_idle_overrides: std::collections::BTreeMap::new(),
             // Tests opt into delegation tokens by setting
             // `delegation_token_secret_key`; default off keeps the
             // four DT RPCs returning DELEGATION_TOKEN_AUTH_DISABLED.

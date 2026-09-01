@@ -46,7 +46,7 @@ const SERVING_NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
 
 /// A process that named none of the four static broker keys, which is what
 /// every case but the ones that tune one runs as.
-fn untuned() -> StaticBrokerConfigs {
+fn untuned() -> StaticBrokerConfigs<'static> {
     super::static_broker::kafka_default_static_broker()
 }
 
@@ -154,7 +154,7 @@ fn describe_with_static(
     resource_name: &str,
     configuration_keys: Option<Vec<String>>,
     options: EntryOptions,
-    static_broker: StaticBrokerConfigs,
+    static_broker: StaticBrokerConfigs<'_>,
 ) -> DescribeConfigsResult {
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
@@ -699,7 +699,8 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     // whole response. `apache/kafka:4.3.1` answers the same way: values from
     // the node's own configuration, read-only, and the KIP-98 expiry pair and
     // the KIP-211 retention pair at `DEFAULT_CONFIG` because this node never
-    // moved them off Kafka's built-in defaults.
+    // moved them off Kafka's built-in defaults. The idle window reports the
+    // same way, and sorts to the head of the response.
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
@@ -711,6 +712,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     assert!(
         result.configs
             == vec![
+                DescribeConfigsResourceResult {
+                    name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+                    value: Some("600000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Long.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
                 DescribeConfigsResourceResult {
                     name: NODE_ID.to_owned(),
                     value: Some("7".to_owned()),
@@ -828,6 +840,7 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             "no filter reports every stored key beside the static ones",
             None,
             vec![
+                config_keys::CONNECTIONS_MAX_IDLE_MS,
                 crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
@@ -1371,4 +1384,149 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
         )],
         "a broker whose properties name the key at that same value"
     );
+}
+
+/// The idle-window doc string, which both the broker-wide key and every
+/// per-listener override report.
+fn idle_documentation() -> String {
+    registry::lookup(ConfigScope::Broker, config_keys::CONNECTIONS_MAX_IDLE_MS)
+        .expect("connections.max.idle.ms")
+        .doc
+        .to_owned()
+}
+
+/// A named broker resource reports the idle window beside the static
+/// `node.id`, because both describe the node this process is rather than the
+/// cluster it belongs to. A process that names no window reports Kafka's
+/// 600000 at `DEFAULT_CONFIG`.
+#[test]
+fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
+    let result = describe(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "7",
+        None,
+        VALUES_ONLY,
+    );
+
+    let names: Vec<&str> = result
+        .configs
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert!(
+        names
+            == vec![
+                config_keys::CONNECTIONS_MAX_IDLE_MS,
+                NODE_ID,
+                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+            ]
+    );
+    assert!(
+        *entry_named(&result, config_keys::CONNECTIONS_MAX_IDLE_MS)
+            == DescribeConfigsResourceResult {
+                name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+                value: Some("600000".to_owned()),
+                read_only: true,
+                config_source: CONFIG_SOURCE_DEFAULT,
+                is_sensitive: false,
+                synonyms: Vec::new(),
+                config_type: ConfigType::Long.wire(),
+                documentation: None,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
+}
+
+/// A window the operator set, and the per-listener override beside it, both
+/// report at `STATIC_BROKER_CONFIG` with the chain `kafka-configs --all`
+/// renders after the value.
+#[test]
+fn a_configured_idle_window_and_its_listener_override_report_as_static() {
+    let listener_key = "listener.name.external.connections.max.idle.ms";
+    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
+
+    let result = describe_with_static(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "7",
+        Some(vec![
+            config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+            listener_key.to_owned(),
+        ]),
+        EVERYTHING,
+        StaticBrokerConfigs {
+            connections_max_idle: Some(krabka_units::secs(30)),
+            connections_max_idle_overrides: &overrides,
+            ..untuned()
+        },
+    );
+
+    let broker_wide_static = synonym(
+        config_keys::CONNECTIONS_MAX_IDLE_MS,
+        "30000",
+        CONFIG_SOURCE_STATIC_BROKER,
+    );
+    let broker_wide_default = synonym(
+        config_keys::CONNECTIONS_MAX_IDLE_MS,
+        "600000",
+        CONFIG_SOURCE_DEFAULT,
+    );
+    assert!(
+        result.configs
+            == vec![
+                DescribeConfigsResourceResult {
+                    name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
+                    value: Some("30000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_STATIC_BROKER,
+                    is_sensitive: false,
+                    synonyms: vec![broker_wide_static.clone(), broker_wide_default.clone()],
+                    config_type: ConfigType::Long.wire(),
+                    documentation: Some(idle_documentation()),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: listener_key.to_owned(),
+                    value: Some("5000".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_STATIC_BROKER,
+                    is_sensitive: false,
+                    synonyms: vec![
+                        synonym(listener_key, "5000", CONFIG_SOURCE_STATIC_BROKER),
+                        broker_wide_static,
+                        broker_wide_default,
+                    ],
+                    config_type: ConfigType::Long.wire(),
+                    documentation: Some(idle_documentation()),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            ]
+    );
+}
+
+/// The cluster-default broker resource describes the cluster, not a node, so
+/// the idle window has no place in it — the same rule that keeps `node.id`
+/// and the retention keys out.
+#[test]
+fn the_cluster_default_resource_reports_no_idle_window() {
+    let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
+
+    let result = describe_with_static(
+        &MetadataImage::new(Uuid::nil()),
+        RESOURCE_TYPE_BROKER,
+        "",
+        None,
+        EVERYTHING,
+        StaticBrokerConfigs {
+            connections_max_idle: Some(krabka_units::secs(30)),
+            connections_max_idle_overrides: &overrides,
+            ..untuned()
+        },
+    );
+
+    assert!(result.configs == Vec::new());
 }
