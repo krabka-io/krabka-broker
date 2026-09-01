@@ -8,8 +8,10 @@
 //! apart from any one mechanism.
 
 use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
-use krabka_verified::authz::{RequestAuthState, request_auth_admission};
-use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission, token_api_admission};
+use krabka_verified::{
+    authz::{RequestAuthState, request_auth_admission},
+    delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
+};
 
 use crate::handlers::ApiKeyCode;
 

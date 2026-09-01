@@ -24,10 +24,11 @@
 //! guarantees bind production behaviour. The callers are the idle-transaction
 //! reaper in [`super::expiration`] and the `InitProducerId` handler.
 
-use super::state::TxnState;
 use krabka_verified::transaction::{
     IdleTransactionState, resolve_transaction_timeout, should_abort_idle_transaction,
 };
+
+use super::state::TxnState;
 
 /// Test alias for the persisted 2PC timeout sentinel.
 #[cfg(test)]
