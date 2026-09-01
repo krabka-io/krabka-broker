@@ -26,6 +26,7 @@ pub mod log_index;
 pub mod offset_allocator;
 pub mod produce;
 pub mod producer;
+pub mod producer_snapshot;
 pub mod quorum_state;
 pub mod raft;
 pub mod reassignment;
@@ -93,6 +94,10 @@ pub use offset_allocator::reserve_offsets;
 pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
+};
+pub use producer_snapshot::{
+    producer_snapshot_entry_valid, producer_snapshot_latest_index, producer_snapshot_replay_start,
+    producer_snapshot_retained,
 };
 pub use quorum_state::{
     QuorumStateLoadDecision, QuorumStateWriteDecision, quorum_state_load_decision,

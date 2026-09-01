@@ -77,12 +77,25 @@ pub(crate) fn latest_at_or_before(
     dir: &Path,
     end: Offset,
 ) -> Result<Option<LoadedSnapshot>, LogError> {
-    for (offset, path) in list(dir)?.into_iter().rev() {
-        if offset > end {
+    let mut eligible = Vec::new();
+    for (offset, path) in list(dir)? {
+        if krabka_verified::producer_snapshot_retained(offset.0, end.0) {
+            eligible.push((offset, path));
+        } else {
             fs::remove_file(path)?;
-            continue;
         }
-        match read(&path) {
+    }
+
+    while !eligible.is_empty() {
+        let offsets: Vec<i64> = eligible.iter().map(|(offset, _)| offset.0).collect();
+        let Some(selected) = krabka_verified::producer_snapshot_latest_index(&offsets, end.0)
+        else {
+            return Err(LogError::Corrupt(
+                "eligible producer snapshots have no valid offset".into(),
+            ));
+        };
+        let (offset, path) = eligible.swap_remove(selected);
+        match read(&path, offset) {
             Ok(entries) => return Ok(Some((offset, entries))),
             Err(LogError::Corrupt(_)) => {
                 // Match Kafka recovery: discard a corrupt newest snapshot and
@@ -97,7 +110,7 @@ pub(crate) fn latest_at_or_before(
 
 pub(crate) fn remove_after(dir: &Path, offset: Offset) -> Result<(), LogError> {
     for (snapshot_offset, path) in list(dir)? {
-        if snapshot_offset > offset {
+        if !krabka_verified::producer_snapshot_retained(snapshot_offset.0, offset.0) {
             fs::remove_file(path)?;
         }
     }
@@ -161,7 +174,10 @@ fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8
     Ok(buffer.to_vec())
 }
 
-fn read(path: &Path) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, LogError> {
+fn read(
+    path: &Path,
+    snapshot_offset: Offset,
+) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, LogError> {
     let bytes = fs::read(path)?;
     if bytes.len() < HEADER_LEN + 4 {
         return Err(corrupt(path, "file is shorter than the snapshot header"));
@@ -197,14 +213,16 @@ fn read(path: &Path) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, LogEr
         let timestamp = take_i64(&bytes, &mut cursor);
         let coordinator_epoch = take_i32(&bytes, &mut cursor);
         let txn_offset = take_i64(&bytes, &mut cursor);
-        if producer_id.get() < 0
-            || producer_epoch < 0
-            || offset_delta < 0
-            || txn_offset < -1
-            || (last_offset.0 < 0 && last_sequence >= 0)
-            || (last_offset.0 >= 0
-                && (last_sequence < 0 || last_offset.0 < i64::from(offset_delta)))
-        {
+        if !krabka_verified::producer_snapshot_entry_valid(
+            snapshot_offset.0,
+            producer_id.get(),
+            producer_epoch,
+            last_sequence,
+            last_offset.0,
+            offset_delta,
+            coordinator_epoch,
+            txn_offset,
+        ) {
             return Err(corrupt(path, "entry contains an invalid producer state"));
         }
         let current_txn_first_offset = (txn_offset >= 0).then_some(Offset(txn_offset));
@@ -272,15 +290,18 @@ mod tests {
     fn assert_rejected(entry: ProducerSnapshotEntry) {
         let dir = tempfile::tempdir().unwrap();
         let entries = maplit::hashmap! {entry.producer_id => entry};
-        let path = write(dir.path(), Offset(1), &entries).unwrap();
-        assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
+        let path = write(dir.path(), Offset(102), &entries).unwrap();
+        assert2::assert!(matches!(
+            read(&path, Offset(102)),
+            Err(LogError::Corrupt(_))
+        ));
     }
 
     #[test]
     fn kafka_v1_snapshot_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), Offset(102), &sample()).unwrap();
-        assert2::assert!(read(&path).unwrap() == sample());
+        assert2::assert!(read(&path, Offset(102)).unwrap() == sample());
     }
 
     #[test]
@@ -290,7 +311,7 @@ mod tests {
         entry.producer_id = ProducerId(0);
         let entries = maplit::hashmap! {entry.producer_id => entry};
         let path = write(dir.path(), Offset(102), &entries).unwrap();
-        assert2::assert!(read(&path).unwrap() == entries);
+        assert2::assert!(read(&path, Offset(102)).unwrap() == entries);
     }
 
     #[test]
@@ -331,7 +352,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), Offset(0), &HashMap::new()).unwrap();
         assert2::assert!(fs::metadata(&path).unwrap().len() == 10);
-        assert2::assert!(read(&path).unwrap().is_empty());
+        assert2::assert!(read(&path, Offset(0)).unwrap().is_empty());
     }
 
     #[test]
@@ -344,7 +365,7 @@ mod tests {
                 bytes[..2].copy_from_slice(&VERSION.to_be_bytes());
             }
             fs::write(&path, bytes).unwrap();
-            assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
+            assert2::assert!(matches!(read(&path, Offset(0)), Err(LogError::Corrupt(_))));
         }
     }
 
@@ -355,7 +376,10 @@ mod tests {
         let mut bytes = fs::read(&path).unwrap();
         bytes[9] ^= 1;
         fs::write(&path, bytes).unwrap();
-        assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
+        assert2::assert!(matches!(
+            read(&path, Offset(102)),
+            Err(LogError::Corrupt(_))
+        ));
     }
 
     #[test]
@@ -365,43 +389,112 @@ mod tests {
         let mut unknown = fs::read(&path).unwrap();
         unknown[1] = 2;
         fs::write(&path, unknown).unwrap();
-        assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
+        assert2::assert!(matches!(
+            read(&path, Offset(102)),
+            Err(LogError::Corrupt(_))
+        ));
 
         fs::remove_file(&path).unwrap();
         let path = write(dir.path(), Offset(102), &sample()).unwrap();
         let mut truncated = fs::read(&path).unwrap();
         truncated.pop();
         fs::write(&path, truncated).unwrap();
-        assert2::assert!(matches!(read(&path), Err(LogError::Corrupt(_))));
+        assert2::assert!(matches!(
+            read(&path, Offset(102)),
+            Err(LogError::Corrupt(_))
+        ));
     }
 
     #[test]
     fn latest_snapshot_honors_inclusive_end_and_removes_future_files() {
         let dir = tempfile::tempdir().unwrap();
-        for offset in [1, 2, 3] {
+        for offset in [102, 103, 104] {
             write(dir.path(), Offset(offset), &sample()).unwrap();
         }
 
-        let (offset, entries) = latest_at_or_before(dir.path(), Offset(2)).unwrap().unwrap();
-        assert2::assert!(offset == Offset(2));
+        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
+            .unwrap()
+            .unwrap();
+        assert2::assert!(offset == Offset(103));
         assert2::assert!(entries == sample());
-        assert2::assert!(path(dir.path(), Offset(1)).exists());
-        assert2::assert!(path(dir.path(), Offset(2)).exists());
-        assert2::assert!(!path(dir.path(), Offset(3)).exists());
+        assert2::assert!(path(dir.path(), Offset(102)).exists());
+        assert2::assert!(path(dir.path(), Offset(103)).exists());
+        assert2::assert!(!path(dir.path(), Offset(104)).exists());
     }
 
     #[test]
     fn corrupt_latest_snapshot_is_removed_and_previous_snapshot_is_loaded() {
         let dir = tempfile::tempdir().unwrap();
-        let previous = write(dir.path(), Offset(1), &sample()).unwrap();
-        let corrupt = write(dir.path(), Offset(2), &sample()).unwrap();
+        let previous = write(dir.path(), Offset(102), &sample()).unwrap();
+        let corrupt = write(dir.path(), Offset(103), &sample()).unwrap();
         fs::write(&corrupt, b"broken").unwrap();
 
-        let (offset, entries) = latest_at_or_before(dir.path(), Offset(2)).unwrap().unwrap();
-        assert2::assert!(offset == Offset(1));
+        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
+            .unwrap()
+            .unwrap();
+        assert2::assert!(offset == Offset(102));
         assert2::assert!(entries == sample());
         assert2::assert!(previous.exists());
         assert2::assert!(!corrupt.exists());
+    }
+
+    #[test]
+    fn future_entry_state_is_removed_and_previous_snapshot_is_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = write(dir.path(), Offset(102), &sample()).unwrap();
+        let future_state = write(dir.path(), Offset(103), &sample()).unwrap();
+        let mut bytes = fs::read(&future_state).unwrap();
+        bytes[24..32].copy_from_slice(&103_i64.to_be_bytes());
+        let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
+        bytes[2..6].copy_from_slice(&crc.to_be_bytes());
+        fs::write(&future_state, bytes).unwrap();
+
+        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
+            .unwrap()
+            .unwrap();
+        assert2::assert!(offset == Offset(102));
+        assert2::assert!(entries == sample());
+        assert2::assert!(previous.exists());
+        assert2::assert!(!future_state.exists());
+    }
+
+    #[test]
+    fn duplicate_producer_ids_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), Offset(102), &sample()).unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        let duplicate = bytes[HEADER_LEN + 4..].to_vec();
+        bytes.extend_from_slice(&duplicate);
+        bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&2_i32.to_be_bytes());
+        let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
+        bytes[2..6].copy_from_slice(&crc.to_be_bytes());
+        fs::write(&path, bytes).unwrap();
+
+        assert2::assert!(matches!(
+            read(&path, Offset(102)),
+            Err(LogError::Corrupt(message)) if message.contains("duplicate producer id")
+        ));
+    }
+
+    #[test]
+    fn snapshot_write_retry_preserves_the_first_durable_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = sample();
+        let path = write(dir.path(), Offset(102), &first).unwrap();
+
+        assert2::assert!(write(dir.path(), Offset(102), &HashMap::new()).unwrap() == path);
+        assert2::assert!(read(&path, Offset(102)).unwrap() == first);
+    }
+
+    #[test]
+    fn snapshot_read_io_failure_is_not_treated_as_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(path(dir.path(), Offset(102))).unwrap();
+
+        assert2::assert!(matches!(
+            latest_at_or_before(dir.path(), Offset(102)),
+            Err(LogError::Io(_))
+        ));
     }
 
     #[test]
@@ -485,6 +578,6 @@ mod tests {
         };
         let entries = maplit::hashmap! {marker.producer_id => marker, data.producer_id => data};
         let path = write(dir.path(), Offset(1), &entries).unwrap();
-        assert2::assert!(read(&path).unwrap() == entries);
+        assert2::assert!(read(&path, Offset(1)).unwrap() == entries);
     }
 }

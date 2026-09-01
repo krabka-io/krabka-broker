@@ -231,20 +231,21 @@ fn recovered_batch_offsets_require_checked_progress() {
     let mut batch = sample_batch(3);
     batch.base_offset = 10;
     assert2::assert!(
-        Log::recovered_batch_offsets(Offset(10), &batch).unwrap() == (Offset(12), Offset(13))
+        Log::recovered_batch_offsets(Offset(10), Offset(13), &batch).unwrap()
+            == (Offset(12), Offset(13))
     );
 
     batch.last_offset_delta = -1;
     assert2::assert!(matches!(
-        Log::recovered_batch_offsets(Offset(10), &batch),
-        Err(LogError::Corrupt(message)) if message.contains("did not advance")
+        Log::recovered_batch_offsets(Offset(10), Offset(20), &batch),
+        Err(LogError::Corrupt(message)) if message.contains("rejected batch")
     ));
 
     batch.base_offset = i64::MAX;
     batch.last_offset_delta = 1;
     assert2::assert!(matches!(
-        Log::recovered_batch_offsets(Offset(i64::MAX), &batch),
-        Err(LogError::Corrupt(message)) if message.contains("offset overflow")
+        Log::recovered_batch_offsets(Offset(i64::MAX - 2), Offset(i64::MAX), &batch),
+        Err(LogError::Corrupt(message)) if message.contains("rejected batch")
     ));
 }
 

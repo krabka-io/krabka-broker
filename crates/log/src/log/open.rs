@@ -176,10 +176,10 @@ impl Log {
         self.coordinator_epochs.clear();
         self.producer_state.clear();
         let end = self.log_end_offset();
-        let mut next = self.log_start_offset();
-        if let Some((snapshot_offset, entries)) =
-            producer_snapshot::latest_at_or_before(&self.dir, end)?
-        {
+        let log_start = self.log_start_offset();
+        let snapshot = producer_snapshot::latest_at_or_before(&self.dir, end)?;
+        let snapshot_offset = snapshot.as_ref().map(|(offset, _)| offset.0);
+        if let Some((_, entries)) = snapshot {
             self.producer_state = entries;
             for (&producer_id, entry) in &self.producer_state {
                 if let Some(first_offset) = entry.current_txn_first_offset {
@@ -190,8 +190,13 @@ impl Log {
                         .insert(producer_id, entry.coordinator_epoch);
                 }
             }
-            next = snapshot_offset.max(next);
         }
+        let mut next =
+            krabka_verified::producer_snapshot_replay_start(log_start.0, end.0, snapshot_offset)
+                .map(Offset)
+                .ok_or_else(|| {
+                    LogError::Corrupt("invalid producer snapshot replay frontier".into())
+                })?;
 
         let mut boundaries: BTreeSet<Offset> = self
             .segments
@@ -211,8 +216,8 @@ impl Log {
             }
             let mut advanced_to = next;
             for batch in &read.batches {
+                (_, advanced_to) = Self::recovered_batch_offsets(advanced_to, end, batch)?;
                 self.apply_recovered_batch_state(batch)?;
-                (_, advanced_to) = Self::recovered_batch_offsets(advanced_to, batch)?;
                 let covered: Vec<_> = boundaries.range(..=advanced_to).copied().collect();
                 for boundary in covered {
                     producer_snapshot::write(&self.dir, boundary, &self.producer_state)?;
@@ -290,12 +295,7 @@ impl Log {
             }
             for batch in &read.batches {
                 let producer_id = ProducerId(batch.producer_id);
-                let (last, advanced_to) = Self::recovered_batch_offsets(next, batch)?;
-                if advanced_to <= next {
-                    return Err(LogError::Corrupt(format!(
-                        "transaction-stamp recovery did not advance past offset {next}"
-                    )));
-                }
+                let (last, advanced_to) = Self::recovered_batch_offsets(next, end, batch)?;
                 match control_batch_kind(batch) {
                     // A barrier marker closes no transaction, so it clears no
                     // stamp range. The append path reaches the same result.
@@ -320,24 +320,21 @@ impl Log {
 
     fn recovered_batch_offsets(
         current: Offset,
+        end: Offset,
         batch: &RecordBatch,
     ) -> Result<(Offset, Offset), LogError> {
-        let last = batch
-            .base_offset
-            .checked_add(i64::from(batch.last_offset_delta))
-            .map(Offset)
-            .ok_or_else(|| {
-                LogError::Corrupt(format!("log recovery offset overflow at {current}"))
-            })?;
-        let advanced_to = last.0.checked_add(1).map(Offset).ok_or_else(|| {
-            LogError::Corrupt(format!("log recovery offset overflow at {current}"))
-        })?;
-        if advanced_to <= current {
-            return Err(LogError::Corrupt(format!(
-                "log recovery did not advance past offset {current}"
-            )));
+        match krabka_verified::replay_batch_cursor_decision(
+            current.0,
+            end.0,
+            Some((batch.base_offset, batch.last_offset_delta)),
+        ) {
+            krabka_verified::ReplayCursorDecision::Advance(next) => {
+                Ok((Offset(next - 1), Offset(next)))
+            }
+            krabka_verified::ReplayCursorDecision::Stop => Err(LogError::Corrupt(format!(
+                "log recovery rejected batch at offset {current} before end {end}"
+            ))),
         }
-        Ok((last, advanced_to))
     }
 
     pub(super) fn update_owned_producer_entry(
