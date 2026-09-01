@@ -27,6 +27,7 @@ pub mod group_migration;
 pub mod isr;
 pub mod jwks;
 pub mod leader_epoch;
+pub mod list_offsets;
 pub mod local_recovery;
 pub mod log_index;
 pub mod oauth;
@@ -135,6 +136,12 @@ pub use jwks::{
     jwks_on_demand_refresh_decision,
 };
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
+pub use list_offsets::{
+    ListOffsetsBoundDecision, ListOffsetsBoundFacts, ListOffsetsEarliestFacts,
+    ListOffsetsEpochDecision, ListOffsetsKind, ListOffsetsSelectionDecision,
+    ListOffsetsSelectionFacts, list_offsets_bound_decision, list_offsets_earliest,
+    list_offsets_epoch_decision, list_offsets_kind, list_offsets_selection_decision,
+};
 pub use local_recovery::{
     LocalRecoveryStep, LocalRecoverySwapAction, local_recovery_batch_step,
     local_recovery_index_frontier, local_recovery_sealed_last, local_recovery_segment_chain,

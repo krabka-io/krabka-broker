@@ -1,0 +1,96 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 40 0 40 79 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 47 25 47 27
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 46 25 46 26
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 45 25 45 26
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 44 25 44 26
+let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 48 26 48 27
+let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 26 10 39 1
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_kind [#"/workspace/crates/verified/src/list_offsets.rs" 40 0 40 79] (timestamp: Int64.t)
+  (version: Int16.t) (return (x: t_ListOffsetsKind)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {timestamp = (-2: Int64.t)} (! bb15)
+    | br1 -> {timestamp = (-1: Int64.t)} (! bb14)
+    | br2 -> {timestamp = (-3: Int64.t)} (! bb13)
+    | br3 -> {timestamp = (-4: Int64.t)} (! bb12)
+    | br4 -> {timestamp = (-5: Int64.t)} (! bb11)
+    | br5 -> {timestamp = (-6: Int64.t)} (! bb10)
+    | default -> -{timestamp <> (-2: Int64.t)
+      /\ timestamp <> (-1: Int64.t)
+      /\ timestamp <> (-3: Int64.t)
+      /\ timestamp <> (-4: Int64.t) /\ timestamp <> (-5: Int64.t) /\ timestamp <> (-6: Int64.t)}-
+      (! bb9) ]
+  | bb10 = s0
+    [ s0 = [ &_13 <- Int16.ge version ([%#slist_offsets] (11: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb9) | br1 -> {_13} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_ret <- EarliestPendingUpload ] s1 | s1 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = [ &_11 <- Int16.ge version ([%#slist_offsets'0] (9: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb9) | br1 -> {_11} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &_ret <- LatestTiered ] s1 | s1 = return {_ret} ]
+  | bb12 = s0
+    [ s0 = [ &_9 <- Int16.ge version ([%#slist_offsets'1] (8: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb9) | br1 -> {_9} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- EarliestLocal ] s1 | s1 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = [ &_7 <- Int16.ge version ([%#slist_offsets'2] (7: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb9) | br1 -> {_7} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- MaxTimestamp ] s1 | s1 = return {_ret} ]
+  | bb9 = s0
+    [ s0 = [ &value <- timestamp ] s1
+    | s1 = [ &_17 <- Int64.ge value ([%#slist_offsets'3] (0: Int64.t)) ] s2
+    | s2 = any [ br0 -> {_17 = false} (! bb8) | br1 -> {_17} (! bb24) ] ]
+  | bb24 = s0 [ s0 = [ &_ret <- Timestamp ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Unsupported ] s1 | s1 = return {_ret} ]
+  | bb14 = s0 [ s0 = [ &_ret <- Latest ] s1 | s1 = return {_ret} ]
+  | bb15 = s0 [ s0 = [ &_ret <- Earliest ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsKind = Any.any_l ()
+  | & timestamp: Int64.t = timestamp
+  | & version: Int16.t = version
+  | & _7: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & value: Int64.t = Any.any_l ()
+  | & _17: bool = Any.any_l () ])
+  [ return (result: t_ListOffsetsKind) ->
+  {[@stop_split] [@expl:list_offsets_kind ensures] [%#slist_offsets'4] match result with
+      | Earliest -> Int64.to_int timestamp = - 2
+      | Latest -> Int64.to_int timestamp = - 1
+      | MaxTimestamp -> Int64.to_int timestamp = - 3 /\ ge_log_Int (Int16.to_int version) 7
+      | EarliestLocal -> Int64.to_int timestamp = - 4 /\ ge_log_Int (Int16.to_int version) 8
+      | LatestTiered -> Int64.to_int timestamp = - 5 /\ ge_log_Int (Int16.to_int version) 9
+      | EarliestPendingUpload -> Int64.to_int timestamp = - 6 /\ ge_log_Int (Int16.to_int version) 11
+      | Timestamp -> ge_log_Int (Int64.to_int timestamp) 0
+      | Unsupported -> Int64.to_int timestamp < - 6
+      \/ Int64.to_int timestamp = - 6 /\ Int16.to_int version < 11
+      \/ Int64.to_int timestamp = - 5 /\ Int16.to_int version < 9
+      \/ Int64.to_int timestamp = - 4 /\ Int16.to_int version < 8
+      \/ Int64.to_int timestamp = - 3 /\ Int16.to_int version < 7
+      end}
+    (! return {result}) ]

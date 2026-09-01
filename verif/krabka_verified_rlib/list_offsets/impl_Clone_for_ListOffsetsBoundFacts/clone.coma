@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 88 27 88 32 *)
+
+(* <list_offsets::ListOffsetsBoundFacts as std::clone::Clone> *)
+
+use creusot.int.Int32
+use creusot.int.Int8
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_ListOffsetsBoundFacts = {
+  replica_id: Int32.t;
+  isolation_level: Int8.t;
+  log_end: Int64.t;
+  high_watermark: Int64.t;
+  last_stable: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsBoundFacts [#"/workspace/crates/verified/src/list_offsets.rs" 88 27 88 32]
+  (self: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsBoundFacts = Any.any_l () | & self: t_ListOffsetsBoundFacts = self ])
+  [ return (result: t_ListOffsetsBoundFacts) -> (! return {result}) ]
