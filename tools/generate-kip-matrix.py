@@ -144,9 +144,15 @@ def image_for(key: str) -> str:
 
 
 def digest_for(key: str) -> str:
-    """The digest //MODULE.bazel pins image `key` to."""
+    """The digest //MODULE.bazel pins image `key` to.
+
+    The pin is the last field of the tuple, whatever the fields before it are:
+    the rules_img work widened the row from `(name, tag, digest)` to
+    `(name, registry, repository, tag, digest)`, and a pattern that counted the
+    fields in between silently stopped matching.
+    """
     return match(
-        rf'^\s*\("{re.escape(key)}",\s*"[^"]+",\s*"[^"]+",\s*"[^"]+",\s*"([^"]+)"\)',
+        rf'^\s*\("{re.escape(key)}",(?:\s*"[^"]+",)+\s*"(sha256:[^"]+)"\)',
         MODULE.read_text(),
         MODULE,
     )
