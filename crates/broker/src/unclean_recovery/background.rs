@@ -87,6 +87,18 @@ impl BackgroundRecovery {
         self.enabled && job.proposal.is_none() && self.mode == BackgroundUncleanRecovery::Require
     }
 
+    /// Whether this job must not commit the election the poll settled on.
+    ///
+    /// The same rule as [`Self::refuses`], asked once the poll has said which
+    /// of the two elections the recovery reached. An eligible leader replica
+    /// holds every committed record, so electing one is not the act the rule
+    /// exists to stop and `require` lets it through; a fallback to the most
+    /// complete surviving log is that act, and `require` refuses it however
+    /// the partition's published ELR read before the poll.
+    pub(super) fn refuses_election(&self, job: &RecoveryJob, election: Election) -> bool {
+        election.basis.loses_data() && self.refuses(job)
+    }
+
     /// Audit a recovery this rule refused. The partition stays leaderless and
     /// visibly offline, so the audit log is the only place that says why.
     pub(super) fn audit_refusal(&self, job: &RecoveryJob, node_id: NodeId) {
@@ -106,10 +118,11 @@ impl BackgroundRecovery {
     /// Record one committed election, and account it as a bypass when it was
     /// one.
     ///
-    /// Every recovery that reaches raft writes an event here, and its reason
-    /// names which rule chose the leader: an eligible leader replica, or the
-    /// most complete surviving log. The two are worth telling apart after the
-    /// fact, because only the second one can have dropped a committed record.
+    /// A broker that runs the rule writes an event for every recovery that
+    /// reaches raft, and its reason names which rule chose the leader: an
+    /// eligible leader replica, or the most complete surviving log. The two
+    /// are worth telling apart after the fact, because only the second one can
+    /// have dropped a committed record.
     ///
     /// A data-losing election that no operator approved is also a bypass of
     /// the two-person rule, and is recorded as one. `audit-only` is the
@@ -118,6 +131,11 @@ impl BackgroundRecovery {
     /// after-the-fact proof that a data-losing election happened that no
     /// second person agreed to. An ELR election is not a bypass -- it loses
     /// nothing, so there is nothing the rule would have refused.
+    ///
+    /// `off`, and a broker with no approver set, write nothing at all. KFC-9
+    /// gives `off` one meaning, the behaviour the broker had before the rule
+    /// existed with no audit event and no counter, and an `applied` event per
+    /// recovery would take it away.
     pub(super) fn audit_election(
         &self,
         job: &RecoveryJob,
@@ -125,6 +143,9 @@ impl BackgroundRecovery {
         election: Election,
         metrics: &crate::metrics::BrokerMetrics,
     ) {
+        if !self.enabled || self.mode == BackgroundUncleanRecovery::Off {
+            return;
+        }
         let elected = format!("unclean recovery elected {}", Self::choice(election, job));
         if !self.is_bypass(job, election) {
             self.emit(

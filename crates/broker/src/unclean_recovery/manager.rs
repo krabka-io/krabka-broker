@@ -143,10 +143,8 @@ impl UncleanRecoveryManager {
         // elections this recovery reached. Refusing the no-ELR case up front is
         // what keeps a recovery the broker will not commit from spending a
         // round trip to every surviving replica, which is the common case.
-        if eligible.is_empty()
-            && let Some(refused) = self.refuse_background(job)
-        {
-            return refused;
+        if eligible.is_empty() && self.policy.background.refuses(job) {
+            return self.refuse_background_now(job);
         }
         let known_epoch = pr.leader_epoch;
         let topic_id = image
@@ -204,10 +202,8 @@ impl UncleanRecoveryManager {
             return RecoveryOutcome::NoEligibleReplica;
         };
         // KFC-9 again: the ELR did not save this one, so the rule applies.
-        if election.basis.loses_data()
-            && let Some(refused) = self.refuse_background(job)
-        {
-            return refused;
+        if self.policy.background.refuses_election(job, election) {
+            return self.refuse_background_now(job);
         }
 
         // Re-read the image and re-check before committing: the leader may
@@ -224,16 +220,12 @@ impl UncleanRecoveryManager {
         self.commit_elected_leader(job, &image, pr, election).await
     }
 
-    /// KFC-9: what the background rule says about a data-losing recovery that
-    /// no operator approved.
+    /// KFC-9: carry out a refusal the background rule has already decided on,
+    /// at either of the two points that can decide it.
     ///
-    /// `Some(BreakGlassRequired)` when the rule refuses it. The refusal is
-    /// audited here, because the partition then keeps no leader and the audit
-    /// log is the only place that says why.
-    fn refuse_background(&self, job: &RecoveryJob) -> Option<RecoveryOutcome> {
-        if !self.policy.background.refuses(job) {
-            return None;
-        }
+    /// The refusal is audited here, because the partition then keeps no leader
+    /// and the audit log is the only place that says why.
+    fn refuse_background_now(&self, job: &RecoveryJob) -> RecoveryOutcome {
         self.policy.background.audit_refusal(job, self.node_id);
         warn!(
             topic = %job.topic,
@@ -241,7 +233,7 @@ impl UncleanRecoveryManager {
             "unclean recovery refused: break_glass.background_unclean_recovery is require \
              and no proposal approved it; the partition stays offline"
         );
-        Some(RecoveryOutcome::BreakGlassRequired)
+        RecoveryOutcome::BreakGlassRequired
     }
 
     /// Builds and submits the `PartitionRecord` that elects `election.leader`

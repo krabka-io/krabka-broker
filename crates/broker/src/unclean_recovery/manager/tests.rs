@@ -479,21 +479,33 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
     check!(mgr.metrics.unclean_leader_elections_total.get() == 0);
 }
 
+/// KFC-9 gives the three settings three distinct meanings, and `off` means the
+/// behaviour the broker had before the rule existed: no audit event and no
+/// counter. A broker that does run the rule records the election it committed
+/// with the applied phase whenever nobody bypassed anything.
 #[tokio::test]
 async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
     let cases = [
         (
-            "a broker that runs no rule bypasses none",
+            "off writes nothing at all",
             BackgroundUncleanRecovery::Off,
             job(),
+            None,
         ),
         (
             "an approved job is not a bypass",
             BackgroundUncleanRecovery::AuditOnly,
             approved_job(),
+            Some(PrivilegedPhase::Applied),
+        ),
+        (
+            "an approved job under require is not a bypass either",
+            BackgroundUncleanRecovery::Require,
+            approved_job(),
+            Some(PrivilegedPhase::Applied),
         ),
     ];
-    for (label, mode, job) in cases {
+    for (label, mode, job, expected_phase) in cases {
         let (audit_log, mut events) = AuditLog::new(8);
         let source = MockSource::new(Some(NODE), image_with_partition(1, &[1, 2]));
         let image = source.current_image();
@@ -516,10 +528,66 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
             "case {label}"
         );
         check!(bypasses(&mgr.metrics) == 0, "case {label}");
-        let event = events.try_recv().expect("an election is always recorded");
-        assert!(let AuditEvent::PrivilegedAction { phase, .. } = &event, "case {label}");
-        check!(*phase == PrivilegedPhase::Applied, "case {label}");
+        if let Some(expected) = expected_phase {
+            let event = events
+                .try_recv()
+                .expect("a broker that runs the rule records the election");
+            assert!(let AuditEvent::PrivilegedAction { phase, .. } = &event, "case {label}");
+            check!(*phase == expected, "case {label}");
+        }
         check!(events.try_recv().is_err(), "case {label}");
+    }
+}
+
+/// KFC-9 meets KIP-966 at the point the poll settles: `require` refuses the
+/// election that can lose a committed record and lets through the one that
+/// cannot, whatever the partition's published ELR read before the poll ran.
+#[test]
+fn require_refuses_the_fallback_election_and_not_the_elr_one() {
+    let elr = Election {
+        leader: NodeId(2),
+        basis: ElectionBasis::EligibleLeaderReplica,
+    };
+    let cases = [
+        (
+            "require refuses the fallback nobody approved",
+            BackgroundUncleanRecovery::Require,
+            job(),
+            fallback_to(2),
+            true,
+        ),
+        (
+            "require lets an ELR election through",
+            BackgroundUncleanRecovery::Require,
+            job(),
+            elr,
+            false,
+        ),
+        (
+            "an approved fallback is not refused",
+            BackgroundUncleanRecovery::Require,
+            approved_job(),
+            fallback_to(2),
+            false,
+        ),
+        (
+            "audit-only refuses nothing",
+            BackgroundUncleanRecovery::AuditOnly,
+            job(),
+            fallback_to(2),
+            false,
+        ),
+        (
+            "off refuses nothing",
+            BackgroundUncleanRecovery::Off,
+            job(),
+            fallback_to(2),
+            false,
+        ),
+    ];
+    for (label, mode, job, election, expected) in cases {
+        let rule = BackgroundRecovery::new(&gated(mode), AuditLog::disabled());
+        check!(rule.refuses_election(&job, election) == expected, "{label}");
     }
 }
 

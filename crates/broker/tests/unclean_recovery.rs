@@ -308,10 +308,6 @@ async fn unclean_recovery_prefers_an_eligible_leader_replica() {
     run_unclean_recovery(Some("0:3:"), 3).await;
 }
 
-/// A 3-broker PLAINTEXT cluster with an RF=3 topic, whose replicas are
-/// `[1, 2, 3]`. It runs the scenario the module docs describe with `elr`
-/// published as partition 0's eligible-leader-replica set, and asserts that
-/// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
 /// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
 /// surviving replicas holding logs of three different lengths.
 ///
@@ -417,6 +413,10 @@ async fn offline_partition_with_diverged_logs(
     );
 }
 
+/// A 3-broker PLAINTEXT cluster with an RF=3 topic, whose replicas are
+/// `[1, 2, 3]`. It runs the scenario the module docs describe with `elr`
+/// published as partition 0's eligible-leader-replica set, and asserts that
+/// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
 async fn run_unclean_recovery(elr: Option<&str>, expected_leader: u64) {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));

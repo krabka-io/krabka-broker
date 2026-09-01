@@ -265,9 +265,12 @@ pub struct BrokerMetrics {
     /// leader because the topic had
     /// `unclean.leader.election.enable=true` and the ISR was empty
     /// at failover time. Mirrors Kafka's
-    /// `ControllerStats.UncleanLeaderElectionsPerSec`. An operator
-    /// alert on `rate(unclean_leader_elections_total[5m]) > 0`
-    /// flags the data-loss footgun.
+    /// `ControllerStats.UncleanLeaderElectionsPerSec`, which counts the
+    /// elections Kafka's `ElectionResult` marks `unclean`. KIP-966
+    /// recovery from a surviving eligible leader replica loses no
+    /// committed record and is not one of them. An operator alert on
+    /// `rate(unclean_leader_elections_total[5m]) > 0` flags the
+    /// data-loss footgun.
     pub unclean_leader_elections_total: Counter,
     /// `FedRAMP` MLA: cumulative audit records successfully written to the
     /// audit topic. Incremented by the audit subsystem on each successful
