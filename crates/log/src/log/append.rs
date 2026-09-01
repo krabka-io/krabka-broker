@@ -55,7 +55,7 @@ impl Log {
     ///
     /// The stamp is internal metadata. It is not encoded into the marker or
     /// any client-facing bytes. The marker must be a COMMIT control batch and
-    /// a [`StampSource`] must already be installed.
+    /// a [`crate::StampSource`] must already be installed.
     ///
     /// # Errors
     /// Returns an error for a non-commit batch, a missing stamp source, or any
