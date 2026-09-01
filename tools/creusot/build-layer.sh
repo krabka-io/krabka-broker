@@ -13,9 +13,21 @@ output_dir="$(realpath "$(dirname "${output_tar}")")"
 output_name="$(basename "${output_tar}")"
 
 docker load --input "${builder_tar}"
+
+# Capture the status rather than letting `set -e` abort here: Bazel would then
+# report only "declared output ... was not created by genrule", which is the
+# message for a command that exited 0, and sends anyone reading it looking for
+# a missing write rather than a container that died.
+status=0
 docker run --rm \
   --mount "type=bind,source=${output_dir},target=/out" \
-  "${builder_image}" "/out/${output_name}"
+  "${builder_image}" "/out/${output_name}" || status=$?
+if [ "${status}" -ne 0 ]; then
+  echo "build-layer.sh: ${builder_image} exited ${status}" >&2
+  echo "build-layer.sh: it builds the Creusot toolchain in-container, so a" >&2
+  echo "build-layer.sh: non-zero status here is that build failing, not the mount" >&2
+  exit "${status}"
+fi
 
 # Bazel reports a genrule whose command exits 0 without writing its declared
 # output as "declared output ... was not created by genrule", which names
