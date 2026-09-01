@@ -25,6 +25,8 @@ use tokio::sync::Notify;
 mod batches;
 mod distributed;
 #[cfg(test)]
+mod model;
+#[cfg(test)]
 mod recovery;
 mod replica_io;
 
@@ -181,6 +183,21 @@ impl WalShardEngine {
     }
 
     #[cfg(test)]
+    fn for_model(replicas: Vec<WalReplica>, durable_watermark: Offset) -> Self {
+        let expected_voters = replicas.len();
+        Self {
+            replicas,
+            expected_voters,
+            durable_watermark: AtomicI64::new(durable_watermark.0),
+            local_durable: AtomicI64::new(durable_watermark.0),
+            distributed_required: AtomicBool::new(false),
+            distributed: Mutex::new(None),
+            durable_advanced: Notify::new(),
+            observability: OnceLock::new(),
+        }
+    }
+
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn for_logs(logs: std::collections::BTreeMap<NodeId, Arc<Mutex<Log>>>) -> Self {
         let replicas = logs
@@ -300,7 +317,10 @@ impl WalShardEngine {
 
     #[cfg(test)]
     pub(crate) fn replica_end_offsets(&self) -> Vec<Offset> {
-        self.replicas.iter().map(replica_end_offset).collect()
+        self.replicas
+            .iter()
+            .map(|replica| Offset(replica.log.end_offset()))
+            .collect()
     }
 
     #[cfg(test)]
@@ -386,12 +406,13 @@ impl WalShardEngine {
         }
 
         let mut synced = 0usize;
+        let source_start = source.lock().log_start_offset();
         for replica in &self.replicas {
             if !replica.alive.load(Ordering::Acquire) {
                 continue;
             }
-            let replica_end = replica_end_offset(replica);
-            let Ok(batches) = read_batches_exact(&source, replica_end.min(target), target) else {
+            let sync_start = committed.min(replica_end_offset(replica)).max(source_start);
+            let Ok(batches) = read_batches_exact(&source, sync_start, target) else {
                 continue;
             };
             if sync_replica(replica.log.clone(), &batches).await.is_ok() {
@@ -499,6 +520,11 @@ fn replica_end_offset(replica: &WalReplica) -> Offset {
     Offset(replica.log.end_offset())
 }
 
+#[cfg(test)]
+fn replica_start_offset(replica: &WalReplica) -> Offset {
+    replica.log.lock().log_start_offset()
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct BatchBytes {
     pub(super) base_offset: Offset,
@@ -513,7 +539,7 @@ mod tests {
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
     use krabka_log::LogConfig;
-    use krabka_protocol::records::RecordBatch;
+    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
     use crate::wal::quorum::test_support::batch;
@@ -529,6 +555,22 @@ mod tests {
         let mut log = Log::open(path, LogConfig::default()).unwrap();
         for _ in 0..records {
             log.append(&mut batch(1)).unwrap();
+        }
+        log.sync().unwrap();
+        Arc::new(Mutex::new(log))
+    }
+
+    fn log_with_values(path: &Path, values: &[&'static [u8]]) -> Arc<Mutex<Log>> {
+        let mut log = Log::open(path, LogConfig::default()).unwrap();
+        for value in values {
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    value: Some(Bytes::from_static(value)),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .unwrap();
         }
         log.sync().unwrap();
         Arc::new(Mutex::new(log))
@@ -623,6 +665,84 @@ mod tests {
             assert!(engine.durable_watermark() == Offset(expected));
             assert!(engine.replica_end_offsets() == vec![Offset(expected); 3]);
         }
+    }
+
+    #[test]
+    fn recovery_uses_byte_agreement_not_equal_length_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let majority_a =
+            log_with_values(&dir.path().join("majority-a"), &[b"common", b"committed"]);
+        let majority_b =
+            log_with_values(&dir.path().join("majority-b"), &[b"common", b"committed"]);
+        // Put the equal-length minority last. Length-only max selection used
+        // to choose this replica and overwrite the committed majority.
+        let minority = log_with_values(&dir.path().join("minority"), &[b"common", b"stale"]);
+        let committed = majority_a
+            .lock()
+            .unwrap()
+            .read_raw(Offset(0), Offset(2), ByteSize::from_bytes(u64::MAX))
+            .unwrap()
+            .bytes;
+        let replicas = vec![
+            WalReplica::for_test(NodeId(1), majority_a),
+            WalReplica::for_test(NodeId(2), majority_b),
+            WalReplica::for_test(NodeId(3), minority),
+        ];
+
+        let engine = WalShardEngine::new(replicas, OpenMode::Recover).unwrap();
+
+        assert!(engine.durable_watermark() == Offset(2));
+        for replica in &engine.replicas {
+            let recovered = replica
+                .log
+                .lock()
+                .read_raw(Offset(0), Offset(2), ByteSize::from_bytes(u64::MAX))
+                .unwrap()
+                .bytes;
+            assert!(recovered == committed);
+        }
+    }
+
+    #[test]
+    fn recovery_fails_without_a_byte_identical_majority() {
+        let dir = tempfile::tempdir().unwrap();
+        let replicas = [b"a".as_slice(), b"b".as_slice(), b"c".as_slice()]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                WalReplica::for_test(
+                    NodeId(u64::try_from(index).unwrap()),
+                    log_with_values(&dir.path().join(format!("replica-{index}")), &[value]),
+                )
+            })
+            .collect();
+
+        let error = WalShardEngine::new(replicas, OpenMode::Recover).unwrap_err();
+
+        assert!(error.to_string().contains("no byte-identical majority"));
+    }
+
+    #[tokio::test]
+    async fn acknowledgement_rejects_equal_length_divergence() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = log_with_values(&dir.path().join("leader"), &[b"leader"]);
+        let divergent = log_with_values(&dir.path().join("divergent"), &[b"stale"]);
+        let unavailable = log_with_values(&dir.path().join("unavailable"), &[]);
+        let replicas = vec![
+            WalReplica::for_test(NodeId(1), Arc::clone(&leader)),
+            WalReplica::for_test(NodeId(2), divergent),
+            WalReplica::for_test(NodeId(3), unavailable),
+        ];
+        let engine = WalShardEngine::for_model(replicas, Offset(0));
+        engine.set_replica_alive(NodeId(3), false);
+
+        let error = engine
+            .replicate_and_sync(&leader, Offset(1))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("has 1 synced replicas"));
+        assert!(engine.durable_watermark() == Offset(0));
     }
 
     #[test]

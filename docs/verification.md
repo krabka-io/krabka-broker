@@ -161,6 +161,7 @@ The current model entry points are:
 | :--- | :--- |
 | Broker data and Fetch | [`data_path_model`](../crates/broker/src/data_path_model.rs), [`producer_state_model`](../crates/broker/src/producer_state_model.rs), [`replica_state_model`](../crates/broker/src/replica_state_model.rs), [`fetch_session_model`](../crates/broker/src/fetch_session_model.rs), and [`fetch_visibility_model`](../crates/broker/src/handlers/fetch_visibility_model.rs). |
 | Broker failover and placement | [`leader_failover_model`](../crates/broker/src/leader_failover_model.rs), [`reassignment_model`](../crates/broker/src/reassignment_model.rs), [`stretch_cluster_model`](../crates/broker/src/stretch_cluster_model.rs), [`diskless_crash_model`](../crates/broker/src/diskless_crash_model.rs), and [`client_server_failover_model`](../crates/broker/src/client_server_failover_model.rs). |
+| Broker quorum WAL | [`quorum WAL model`](../crates/broker/src/wal/quorum/engine/model.rs). |
 | Broker groups and transactions | [`classic_state_model`](../crates/broker/src/coordinator/unified/classic_state_model.rs), [`consumer_group_composition_model`](../crates/broker/src/coordinator/unified/consumer_group_composition_model.rs), [`reconciler_model`](../crates/broker/src/coordinator/unified/reconciler_model.rs), [`decision_model`](../crates/broker/src/txn/decision_model.rs), [`eos_composition_model`](../crates/broker/src/txn/eos_composition_model.rs), and [`two_pc_model`](../crates/broker/src/txn/two_pc_model.rs). |
 | Broker share and break-glass | [`share_partition/state_model`](../crates/broker/src/share_partition/state_model.rs), [`break_glass/state_model`](../crates/broker/src/break_glass/state_model.rs), and [`break_glass/cross_spend_model`](../crates/broker/src/break_glass/cross_spend_model.rs). |
 | Log | [`compact_model`](../crates/log/src/compact_model.rs) and [`leader_epoch_model`](../crates/log/src/leader_epoch_model.rs). |
@@ -170,6 +171,18 @@ The current model entry points are:
 Some models drive a production kernel directly. Other models compose real
 decision functions with a small environment. Read the model's `DRIVEN` and
 `MODELED` notes before you treat its property as a production guarantee.
+
+The quorum WAL model calls the engine's real record-batch append, replica
+sync, acknowledgement, HWM advancement, recovery, truncation, and repair
+adapters. It checks three voters, at most two one-record batches, leader epochs
+0 through 2, and every ordering of up to eight enabled operations. The safety
+properties keep HWM inside the leader log, preserve every previously committed
+prefix across transitions, and require a byte-identical quorum at the committed
+frontier. Reachability checks cover successful and failed acknowledgements,
+leader changes, and divergent replicas. KRaft epoch monotonicity and election
+of only a live replica that contains the committed prefix are modeled
+preconditions. Successful filesystem calls are atomic operation boundaries;
+allocation, fsync, and crash atomicity below those calls remain I/O assumptions.
 
 ## Outside Both Tiers
 
