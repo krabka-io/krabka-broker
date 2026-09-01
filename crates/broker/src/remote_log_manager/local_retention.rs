@@ -10,7 +10,10 @@ use krabka_log::{LogConfig, Offset, SegmentExport};
 use krabka_remote_storage::{
     RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
 };
-use krabka_units::{ByteSize, Time, convert::TimeExt as _};
+use krabka_units::{
+    ByteSize, Time,
+    convert::{ByteSizeExt as _, TimeExt as _},
+};
 use tracing::{debug, warn};
 
 use super::NO_BYTES;
@@ -42,27 +45,32 @@ pub(crate) fn local_retention_target(
         .iter()
         .map(|e| e.size)
         .fold(NO_BYTES, |acc, size| acc + size);
-    let mut deletable_size_remaining =
+    let deletable_size_remaining =
         effective_local_size.map_or(NO_BYTES, |budget| (sealed_total - budget).max(NO_BYTES));
-
-    let mut delete_through_last: Option<i64> = None;
-    for ex in exports {
-        if !finished_bases.contains(&ex.base_offset.0) {
-            break;
-        }
-        let age = Time::from_millis(now_ms.saturating_sub(ex.max_timestamp));
-        let by_time = matches!(effective_local, Some(retention) if age > retention);
-        let by_size = deletable_size_remaining > NO_BYTES;
-        if !(by_time || by_size) {
-            break;
-        }
-        delete_through_last = Some(ex.last_offset.0);
-        if by_size {
-            deletable_size_remaining = (deletable_size_remaining - ex.size).max(NO_BYTES);
-        }
-    }
-
-    delete_through_last.map(|last| last + 1)
+    let finished: Vec<bool> = exports
+        .iter()
+        .map(|ex| finished_bases.contains(&ex.base_offset.0))
+        .collect();
+    let time_expired: Vec<bool> = exports
+        .iter()
+        .map(|ex| {
+            let age = Time::from_millis(now_ms.saturating_sub(ex.max_timestamp));
+            ex.max_timestamp != -1 && matches!(effective_local, Some(retention) if age > retention)
+        })
+        .collect();
+    let sizes: Vec<u64> = exports.iter().map(|ex| ex.size.bytes_u64()).collect();
+    let prefix = krabka_verified::retention::retention_prefix(
+        true,
+        &finished,
+        &time_expired,
+        &sizes,
+        deletable_size_remaining.bytes_u64(),
+    );
+    let last_offset = prefix
+        .len
+        .checked_sub(1)
+        .map(|index| exports[index].last_offset.0);
+    krabka_verified::retention::retention_delete_target(last_offset)
 }
 
 /// After the copy pass, drop local sealed segments whose
@@ -150,6 +158,34 @@ mod tests {
     }
 
     #[test]
+    fn unknown_timestamp_needs_size_pressure_for_local_eviction() {
+        let exports = vec![synth_export(0, 9, -1, 100)];
+        let finished = maplit::hashset! {0};
+
+        check!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
+        check!(
+            local_retention_target(&exports, &finished, Some(millis(1)), Some(bytes(0)), 10_000,)
+                == Some(10)
+        );
+    }
+
+    #[test]
+    fn maximum_retention_window_keeps_the_host_time_comparison() {
+        let exports = vec![synth_export(0, 9, 0, 100)];
+        let finished = maplit::hashset! {0};
+
+        check!(
+            local_retention_target(
+                &exports,
+                &finished,
+                Some(Time::from_millis(i64::MAX)),
+                None,
+                i64::MAX,
+            ) == None
+        );
+    }
+
+    #[test]
     fn local_retention_target_time_based_eviction() {
         let exports = vec![
             synth_export(0, 9, 100, 64),
@@ -212,6 +248,14 @@ mod tests {
             target == Some(10),
             "only seg0 deletable; walk stops at seg1"
         );
+    }
+
+    #[test]
+    fn local_retention_target_rejects_exhausted_offset() {
+        let exports = vec![synth_export(0, i64::MAX, 100, 64)];
+        let finished = maplit::hashset! {0};
+
+        assert!(local_retention_target(&exports, &finished, Some(millis(1)), None, 10_000) == None);
     }
 
     #[test]

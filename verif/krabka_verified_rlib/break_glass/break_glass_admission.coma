@@ -1,0 +1,69 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 37 0 45 24 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbreak_glass = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 21 10 21 65
+let%span sbreak_glass'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 22 10 22 79
+let%span sbreak_glass'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 23 10 23 90
+let%span sbreak_glass'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 24 10 25 62
+let%span sbreak_glass'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 26 10 28 45
+let%span sbreak_glass'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 29 10 31 47
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_BreakGlassAdmission = Withdrawn | Consumed | Expired | NotEnoughApprovals | Unsigned | Usable
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let break_glass_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 37 0 45 24]
+  (withdrawn: bool) (consumed: bool) (expired: bool) (held: UInt64.t) (required: UInt64.t) (signature_required: bool)
+  (all_signed: bool) (return (x: t_BreakGlassAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {withdrawn = false} (! bb2) | br1 -> {withdrawn} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Withdrawn ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {consumed = false} (! bb4) | br1 -> {consumed} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- Consumed ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {expired = false} (! bb6) | br1 -> {expired} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- Expired ] s1 | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &_42 <- UInt64.lt held required ] s1 | s1 = any [ br0 -> {_42 = false} (! bb8) | br1 -> {_42} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- NotEnoughApprovals ] s1 | s1 = return {_ret} ]
+  | bb8 = any [ br0 -> {signature_required = false} (! bb11) | br1 -> {signature_required} (! bb9) ]
+  | bb9 = any [ br0 -> {all_signed = false} (! bb10) | br1 -> {all_signed} (! bb11) ]
+  | bb10 = s0 [ s0 = [ &_ret <- Unsigned ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Usable ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassAdmission = Any.any_l ()
+  | & withdrawn: bool = withdrawn
+  | & consumed: bool = consumed
+  | & expired: bool = expired
+  | & held: UInt64.t = held
+  | & required: UInt64.t = required
+  | & signature_required: bool = signature_required
+  | & all_signed: bool = all_signed
+  | & _42: bool = Any.any_l () ])
+  [ return (result: t_BreakGlassAdmission) ->
+  {[@stop_split] [@expl:break_glass_admission ensures] ([@stop_split] [@expl:break_glass_admission ensures #0] [%#sbreak_glass] (result
+        = Withdrawn)
+      = withdrawn)
+    /\ ([@stop_split] [@expl:break_glass_admission ensures #1] [%#sbreak_glass'0] (result = Consumed)
+      = (not withdrawn /\ consumed))
+    /\ ([@stop_split] [@expl:break_glass_admission ensures #2] [%#sbreak_glass'1] (result = Expired)
+      = (not withdrawn /\ not consumed /\ expired))
+    /\ ([@stop_split] [@expl:break_glass_admission ensures #3] [%#sbreak_glass'2] (result = NotEnoughApprovals)
+      = (not withdrawn /\ not consumed /\ not expired /\ UInt64.t'int held < UInt64.t'int required))
+    /\ ([@stop_split] [@expl:break_glass_admission ensures #4] [%#sbreak_glass'3] (result = Unsigned)
+      = (not withdrawn
+      /\ not consumed
+      /\ not expired /\ ge_log_Int (UInt64.t'int held) (UInt64.t'int required) /\ signature_required /\ not all_signed))
+    /\ ([@stop_split] [@expl:break_glass_admission ensures #5] [%#sbreak_glass'4] (result = Usable)
+    = (not withdrawn
+    /\ not consumed
+    /\ not expired
+    /\ ge_log_Int (UInt64.t'int held) (UInt64.t'int required) /\ (not signature_required \/ all_signed)))}
+    (! return {result}) ]

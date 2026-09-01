@@ -58,6 +58,64 @@ pub enum RetainDecision {
     Delete,
 }
 
+/// Whether a compaction batch-stream decode is complete, made progress, or
+/// encountered corrupt input.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum CompactionDecodeStep {
+    /// The input is exhausted. This is the only successful completion state.
+    Done,
+    /// One batch decoded and consumed at least one byte.
+    Continue,
+    /// Nonempty input did not decode with strict progress.
+    Corrupt,
+}
+
+/// Classify one compaction batch-stream decode step.
+///
+/// A decode failure can never be mistaken for end-of-stream: completion is
+/// admitted only when no input remains, and a successful decode must consume
+/// at least one byte.
+#[ensures((result == CompactionDecodeStep::Done) == (remaining_before@ == 0))]
+#[ensures((result == CompactionDecodeStep::Continue) == (remaining_before@ > 0
+    && decode_succeeded
+    && remaining_after@ < remaining_before@))]
+#[ensures((result == CompactionDecodeStep::Corrupt) == (remaining_before@ > 0
+    && (!decode_succeeded || remaining_after@ >= remaining_before@)))]
+#[must_use]
+pub const fn compaction_decode_step(
+    remaining_before: usize,
+    decode_succeeded: bool,
+    remaining_after: usize,
+) -> CompactionDecodeStep {
+    if remaining_before == 0 {
+        CompactionDecodeStep::Done
+    } else if decode_succeeded && remaining_after < remaining_before {
+        CompactionDecodeStep::Continue
+    } else {
+        CompactionDecodeStep::Corrupt
+    }
+}
+
+/// Decide whether retention may evict one oldest-prefix segment.
+///
+/// The host classifies whether the segment timestamp is known and whether its
+/// native retention duration comparison has expired. An unknown timestamp
+/// fails closed for time pressure. Size pressure remains independent and may
+/// still evict it.
+#[ensures(result == (by_size || (timestamp_known && time_expired)))]
+#[ensures(by_size ==> result)]
+#[ensures(!timestamp_known && !by_size ==> !result)]
+#[ensures(!by_size && result ==> timestamp_known && time_expired)]
+#[must_use]
+pub const fn retention_segment_evict(
+    timestamp_known: bool,
+    time_expired: bool,
+    by_size: bool,
+) -> bool {
+    by_size || (timestamp_known && time_expired)
+}
+
 /// Compute the delete horizon timestamp: `now + delete.retention.ms`.
 ///
 /// The tombstone or marker is retained until the wall clock reaches this
@@ -176,6 +234,41 @@ mod tests {
             ("lower saturation", i64::MIN + 1, -50, i64::MIN),
         ] {
             assert2::assert!(compute_horizon(timestamp, lag) == expected);
+        }
+    }
+
+    #[test]
+    fn retention_admission_fails_closed_without_losing_size_pressure() {
+        for timestamp_known in [false, true] {
+            for time_expired in [false, true] {
+                for by_size in [false, true] {
+                    assert2::assert!(
+                        retention_segment_evict(timestamp_known, time_expired, by_size)
+                            == (by_size || (timestamp_known && time_expired))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_decode_step_truth_table() {
+        for remaining_before in 0..=2 {
+            for remaining_after in 0..=2 {
+                for decode_succeeded in [false, true] {
+                    let expected = if remaining_before == 0 {
+                        CompactionDecodeStep::Done
+                    } else if decode_succeeded && remaining_after < remaining_before {
+                        CompactionDecodeStep::Continue
+                    } else {
+                        CompactionDecodeStep::Corrupt
+                    };
+                    assert2::assert!(
+                        compaction_decode_step(remaining_before, decode_succeeded, remaining_after)
+                            == expected
+                    );
+                }
+            }
         }
     }
 

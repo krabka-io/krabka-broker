@@ -33,7 +33,7 @@ async fn consume_accept_restart() {
         let client = connect(&broker.listen_addr().to_string()).await;
         create_topic(&broker, &client, "t", 1).await;
         tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
         produce_n(&client, "t", tid, 0, 3).await;
         let (member, member_epoch) = join(&client, "g1", "t").await;
         // The group lifecycle initializes share state asynchronously; wait until
@@ -85,7 +85,7 @@ async fn consume_accept_restart() {
         cfg.bootstrap_mode = BootstrapMode::Rejoin;
         let broker = Broker::start(cfg).await.unwrap();
         let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
 
         // A fresh member rejoins the recovered group; a fresh-session fetch
         // must observe the recovered SPSO (past offset 2) — zero acquired.
@@ -113,7 +113,7 @@ async fn release_redelivers() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 2).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
@@ -153,7 +153,7 @@ async fn reject_archives() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 2).await;
     let (member, member_epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;

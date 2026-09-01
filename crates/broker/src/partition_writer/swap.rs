@@ -41,7 +41,10 @@ pub(super) fn swap_future_log(
     let current_stamp_source = log_guard.stamp_source();
     let current_leo = log_guard.log_end_offset();
     let mut future_guard = lock_log(future_log);
-    if future_guard.log_end_offset() < current_leo {
+    if !krabka_verified::storage::future_log_swap_admission(
+        current_leo.0,
+        future_guard.log_end_offset().0,
+    ) {
         return Ok(SwapOutcome::NotCaughtUp);
     }
     let future_stamp_source = future_guard.stamp_source();
@@ -196,6 +199,37 @@ mod tests {
         check!(result == SwapOutcome::NotCaughtUp);
         check!(leo == 2);
         check!(log_dir_now == source_partition.clone());
+        check!(log_dir.load().as_ref().clone() == source_dir);
+        check!(source_partition.exists());
+        check!(future_path.exists());
+        check!(!target_partition_path.exists());
+    }
+
+    #[test]
+    fn swap_future_log_rejects_future_ahead_of_current_leo() {
+        let dir = tempdir().expect("tempdir");
+        let source_dir = dir.path().join("source");
+        let target_dir = dir.path().join("target");
+        let source_partition = source_dir.join("t-0");
+        let future_path = target_dir.join("t-0.future");
+        let target_partition_path = target_dir.join("t-0");
+
+        let log = Arc::new(Mutex::new(open_log_with_records(&source_partition, 1)));
+        let future_log = Arc::new(Mutex::new(open_log_with_records(&future_path, 2)));
+        let log_dir = Arc::new(ArcSwap::from_pointee(source_dir.clone()));
+
+        let result = swap_future_log(
+            &log,
+            &log_dir,
+            target_dir,
+            &future_log,
+            &future_path,
+            &target_partition_path,
+        )
+        .expect("not caught up response");
+
+        check!(result == SwapOutcome::NotCaughtUp);
+        check!(log.lock().expect("source log").log_end_offset() == 1);
         check!(log_dir.load().as_ref().clone() == source_dir);
         check!(source_partition.exists());
         check!(future_path.exists());

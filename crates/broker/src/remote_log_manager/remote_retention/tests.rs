@@ -108,6 +108,49 @@ fn remote_retention_eviction_set_returns_empty_when_no_segments() {
 }
 
 #[test]
+fn unknown_timestamp_needs_size_pressure_for_remote_eviction() {
+    let segments = vec![synth_remote_md(10, 0, 9, -1, 100)];
+
+    check!(
+        remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segments,
+            Some(millis(1)),
+            None,
+            10_000,
+        )
+        .is_empty()
+    );
+    check!(
+        remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segments,
+            Some(millis(1)),
+            Some(bytes(0)),
+            10_000,
+        )
+        .len()
+            == 1
+    );
+}
+
+#[test]
+fn maximum_retention_window_keeps_the_host_time_comparison() {
+    let segments = vec![synth_remote_md(10, 0, 9, 0, 100)];
+
+    check!(
+        remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segments,
+            Some(Time::from_millis(i64::MAX)),
+            None,
+            i64::MAX,
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window() {
     let segs = vec![
         synth_remote_md(10, 0, 9, 100, 100),

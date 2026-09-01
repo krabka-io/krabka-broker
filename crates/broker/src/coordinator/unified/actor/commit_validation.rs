@@ -111,6 +111,7 @@ mod tests {
                         leader_epoch: 1,
                         metadata: String::new(),
                         commit_timestamp_ms: 0,
+                        expire_timestamp_ms: None,
                     },
                 )],
                 reply: tx,

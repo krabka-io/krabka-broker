@@ -49,6 +49,13 @@ const REPLAY_READ_MAX: ByteSize = mebibytes(1);
 pub(super) struct Replayed {
     pub(super) classic: HashMap<String, ClassicState>,
     pub(super) committed: HashMap<String, HashMap<(String, i32), OffsetEntry>>,
+    /// When each replayed classic group last became empty, read from the k2
+    /// `GroupMetadata` value's `current_state_timestamp_ms`.
+    ///
+    /// The offset-retention sweep measures from this moment, so a broker that
+    /// restarts does not hand every dead group another full
+    /// `offsets.retention.minutes`.
+    pub(super) empty_since: HashMap<String, i64>,
     /// KIP-447: the offset commits of transactions the log ends without a
     /// marker for, keyed by group and then by the producer that wrote them.
     ///
@@ -76,6 +83,7 @@ impl Replayed {
     pub(super) fn merge(&mut self, other: Self) {
         self.classic.extend(other.classic);
         self.committed.extend(other.committed);
+        self.empty_since.extend(other.empty_since);
         self.pending_txn.extend(other.pending_txn);
     }
 }
@@ -153,7 +161,7 @@ pub(super) fn replay_records(
                                 &value,
                                 record.timestamp_ms,
                             )?,
-                            None => apply_tombstone(coordinator, record.key),
+                            None => apply_tombstone(coordinator, &mut acc, record.key),
                         }
                     }
                 }
@@ -183,7 +191,7 @@ pub(super) fn replay_records(
                         apply_record(coordinator, &mut acc, key, value_bytes, batch)?;
                     }
                     None => {
-                        apply_tombstone(coordinator, key);
+                        apply_tombstone(coordinator, &mut acc, key);
                     }
                 }
             }
@@ -254,11 +262,20 @@ fn apply_record_at_timestamp(
                     leader_epoch: v.leader_epoch,
                     metadata: v.metadata,
                     commit_timestamp_ms: v.commit_timestamp_ms,
+                    expire_timestamp_ms: v.expire_timestamp_ms,
                 },
             );
         }
         Key::GroupMetadata { group_id } => {
             let v = GroupMetadataValue::decode_value(value_bytes)?;
+            // A snapshot with no members is the moment the group emptied. A
+            // pre-version-2 value has no such timestamp and decodes as -1.
+            if v.members.is_empty() && v.current_state_timestamp_ms > 0 {
+                acc.empty_since
+                    .insert(group_id.clone(), v.current_state_timestamp_ms);
+            } else {
+                acc.empty_since.remove(&group_id);
+            }
             let state = acc
                 .classic
                 .entry(group_id.clone())
@@ -278,17 +295,39 @@ fn apply_record_at_timestamp(
 
 /// Apply a tombstone, which is a record with `value = None`.
 ///
-/// Classic offset-commit and group-metadata tombstones do nothing during
-/// replay. This comes from the classic coordinator, which rebuilds its
-/// in-memory snapshot fresh on restart. Replay honors the next-gen KIP-848
-/// tombstones and the share-group KIP-932 tombstones, so the leave and
-/// eviction semantics survive a restart.
-pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, key: Key) {
+/// Every family honors its own tombstones, which is what Kafka's
+/// `GroupMetadataManager.loadGroupsAndOffsets` does: a null-valued offset key
+/// drops that committed offset, and a null-valued group key drops the group.
+/// A group tombstone does NOT drop the group's offsets, because those are
+/// separate keys with their own records; the offset-retention sweep and
+/// `OffsetDelete` write both when both should go.
+pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, acc: &mut Replayed, key: Key) {
     match key {
         Key::NextGen(ng_key) => coordinator.replay_next_gen_tombstone(&ng_key),
         Key::Share(share_key) => coordinator.replay_share_tombstone(&share_key),
         Key::Streams(streams_key) => coordinator.replay_streams_tombstone(&streams_key),
-        Key::OffsetCommit { .. } | Key::GroupMetadata { .. } => {}
+        Key::OffsetCommit {
+            group_id,
+            topic,
+            partition,
+        } => {
+            if let Some(offsets) = acc.committed.get_mut(&group_id) {
+                offsets.remove(&(topic, partition));
+                // The outer entry has to go with the last offset under it.
+                // `finalize` reads `committed`'s keys as "this group survived
+                // replay", so a group id left behind with an empty map spawns
+                // a classic actor for a group the log has already tombstoned,
+                // and `ListGroups` reports a reaped group again after every
+                // restart.
+                if offsets.is_empty() {
+                    acc.committed.remove(&group_id);
+                }
+            }
+        }
+        Key::GroupMetadata { group_id } => {
+            acc.classic.remove(&group_id);
+            acc.empty_since.remove(&group_id);
+        }
     }
 }
 
@@ -389,6 +428,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
         let committed_offsets = replayed.committed.remove(&gid).unwrap_or_default();
         let mut group =
             CoordinatorGroup::seeded(gid.clone(), GroupKind::Classic(state), committed_offsets);
+        group.empty_since_ms = replayed.empty_since.remove(&gid);
         for (producer_id, pending) in replayed.pending_txn.remove(&gid).unwrap_or_default() {
             group.add_pending_txn_offsets(producer_id, pending.written_at, pending.keys);
         }

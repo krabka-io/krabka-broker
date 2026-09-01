@@ -31,6 +31,9 @@ crate_tests(
     ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
+        # One image, used twice: as the client that reads krabka's advertised
+        # table and as the Kafka broker that table is compared against.
+        "api_versions_differential": ["apache_kafka_4_3_1"],
         "jvm_acceptance_cli": [
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
@@ -64,6 +67,7 @@ crate_tests(
             "cp_kafka_7_5_0",
         ],
         "jvm_barrier_markers": ["cp_kafka_7_5_0"],
+        "jvm_bootstrap_controller": ["apache_kafka_4_3_1"],
         "jvm_consumer_group_next_gen": [
             "apache_kafka_4_0_0",
             "cp_kafka_7_4_0",
@@ -83,7 +87,6 @@ crate_tests(
         "jvm_streams_groups": ["apache_kafka_4_1_0"],
         "kraft_checkpoint_jvm": ["apache_kafka_4_0_0"],
         "librdkafka_conformance": [
-            "kafkacat_1_5_0",
             "kcat_1_7_1",
         ],
         # Same image set as `jvm_acceptance_tiered`: the suite reuses that

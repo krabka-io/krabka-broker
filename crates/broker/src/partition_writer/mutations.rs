@@ -48,6 +48,7 @@ pub(super) async fn handle_truncate(
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
     replica_state: &tokio::sync::Mutex<ReplicaState>,
+    wal: Option<&crate::wal::SharedWal>,
     offset: Offset,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
 ) {
@@ -63,20 +64,24 @@ pub(super) async fn handle_truncate(
     )
     .await;
     let succeeded = result.is_ok();
-    let _ = ack.send(result);
     if succeeded {
+        if let Some(wal) = wal {
+            wal.invalidate_hot_tail();
+        }
         let new_leo = lock_log(log).log_end_offset();
         replica_state
             .lock()
             .await
             .recompute_hw_for_leader_append(new_leo);
     }
+    let _ = ack.send(result);
 }
 
 pub(super) async fn handle_reset(
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
     replica_state: &tokio::sync::Mutex<ReplicaState>,
+    wal: Option<&crate::wal::SharedWal>,
     new_base: Offset,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
 ) {
@@ -92,14 +97,17 @@ pub(super) async fn handle_reset(
     )
     .await;
     let succeeded = result.is_ok();
-    let _ = ack.send(result);
     if succeeded {
+        if let Some(wal) = wal {
+            wal.invalidate_hot_tail();
+        }
         let new_leo = lock_log(log).log_end_offset();
         replica_state
             .lock()
             .await
             .recompute_hw_for_leader_append(new_leo);
     }
+    let _ = ack.send(result);
 }
 
 pub(super) async fn handle_trim(

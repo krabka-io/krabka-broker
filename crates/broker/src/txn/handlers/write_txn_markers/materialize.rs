@@ -156,6 +156,7 @@ mod tests {
                         leader_epoch: 4,
                         metadata: "aborted".into(),
                         commit_timestamp_ms: 456,
+                        expire_timestamp_ms: None,
                     }
                     .encode_value(),
                 ),

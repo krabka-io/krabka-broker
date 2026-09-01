@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 9 27 9 32 *)
+
+(* <schema::SchemaFailureKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_SchemaFailureKind = Unknown | Transient | Permanent | Malformed
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_SchemaFailureKind [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 9 27 9 32]
+  (self: t_SchemaFailureKind) (return (x: t_SchemaFailureKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SchemaFailureKind = Any.any_l () | & self: t_SchemaFailureKind = self ])
+  [ return (result: t_SchemaFailureKind) -> (! return {result}) ]

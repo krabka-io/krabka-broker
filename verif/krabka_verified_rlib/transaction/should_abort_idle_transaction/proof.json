@@ -1,0 +1,13 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_should_abort_idle_transaction": {
+        "prover": "alt-ergo",
+        "time": 0.022
+      }
+    }
+  }
+}

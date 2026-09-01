@@ -45,8 +45,14 @@ pub const OFFSETS_PARTITION: i32 = 0;
 pub const OFFSETS_NUM_PARTITIONS: i32 = 50;
 
 /// Internal topic that carries tamper-evident OCSF audit records for the
-/// `FedRAMP` MLA.
-pub const AUDIT_TOPIC: &str = "__krabka_audit";
+/// `FedRAMP` MLA, under its default name.
+///
+/// This is an alias for [`crate::config::DEFAULT_AUDIT_TOPIC`] rather than a
+/// second spelling of the name: `krabka.audit.topic` renames the audit log, so
+/// every code path that has to reach the live one reads
+/// `BrokerConfig::audit_topic` instead. Tests that boot a default broker use
+/// this.
+pub const AUDIT_TOPIC: &str = crate::config::DEFAULT_AUDIT_TOPIC;
 
 /// Ensure `__consumer_offsets` exists, open every partition assigned to this
 /// broker, spawn its writer task, and replay each local log into the supplied

@@ -1,0 +1,336 @@
+"""Select the container suites a change must run."""
+
+_BROKER_TARGET_PREFIX = "//crates/broker:"
+_DOCKER_TEST_SUFFIX = "_docker_test"
+
+# Rust is one Bazel target at crate granularity, so rdeps turns every broker
+# source change into every broker container suite. These are the narrower
+# feature contracts worth gating on a PR; the complete matrix remains nightly.
+_FEATURE_RULES = [
+    ([
+        "crates/broker/src/authorizer",
+        "crates/broker/src/oauth_",
+        "crates/broker/src/audit_authorizer",
+        "crates/broker/src/network/auth",
+        "crates/broker/src/network/dispatch/sasl",
+        "crates/broker/src/raft_handshake/sasl",
+        "crates/broker/src/raft_handshake/authorization",
+        "crates/broker/src/handlers/create_acls",
+        "crates/broker/src/handlers/delete_acls",
+        "crates/broker/src/handlers/describe_acls",
+        "crates/broker/src/handlers/acl_",
+    ], ["jvm_acceptance_sasl"]),
+    ([
+        "crates/broker/src/tls_reload",
+        "crates/broker/src/network/tls",
+        "crates/broker/src/network/ktls",
+        "crates/broker/src/config/tls",
+        "crates/broker/src/config/listeners",
+    ], ["jvm_acceptance_tls"]),
+    ([
+        "crates/broker/src/quota",
+        "crates/broker/src/throttle",
+        "crates/broker/src/handlers/alter_client_quotas",
+        "crates/broker/src/handlers/describe_client_quotas",
+        "crates/broker/src/handlers/alter_user_scram_credentials",
+        "crates/broker/src/handlers/describe_user_scram_credentials",
+        "crates/broker/src/config/quota",
+        "crates/broker/src/config/throttle",
+    ], ["jvm_acceptance_quotas"]),
+    ([
+        "crates/broker/src/reassignment",
+        "crates/broker/src/future_log",
+        "crates/broker/src/leader_election",
+        "crates/broker/src/handlers/alter_partition_reassignments",
+        "crates/broker/src/handlers/list_partition_reassignments",
+        "crates/broker/src/handlers/elect_leaders",
+    ], ["jvm_acceptance_reassign"]),
+    ([
+        "crates/broker/src/remote_log_manager",
+        "crates/broker/src/remote_reader",
+        "crates/broker/src/broker/remote_storage",
+        "crates/broker/src/config/tiered_storage",
+        "crates/broker/src/config/broker_config/remote_storage",
+        "crates/broker/src/file_config/remote_storage",
+    ], ["jvm_acceptance_tiered", "worm_object_lock"]),
+    ([
+        "crates/broker/src/freeze",
+        "crates/broker/src/break_glass",
+        "crates/broker/src/operator_keys",
+        "crates/broker/src/config/freeze",
+        "crates/broker/src/config/break_glass",
+        "crates/broker/src/handlers/describe_configs/resources/write_freeze",
+    ], ["jvm_acceptance_freeze"]),
+    (["crates/broker/src/barrier"], ["jvm_barrier_markers"]),
+    ([
+        "crates/broker/src/delivery",
+        "crates/broker/src/config_keys/delivery",
+        "crates/broker/src/handlers/produce/delivery",
+        "crates/broker/src/share_partition/state/deferral",
+    ], ["jvm_deliver_at_time"]),
+    ([
+        "crates/broker/src/share_coordinator",
+        "crates/broker/src/share_partition",
+        "crates/broker/src/broker/handle/share_state",
+        "crates/broker/src/handlers/share_",
+        "crates/broker/src/handlers/alter_share",
+        "crates/broker/src/handlers/delete_share",
+        "crates/broker/src/handlers/describe_share",
+    ], ["jvm_share_groups"]),
+    ([
+        "crates/broker/src/coordinator/unified/streams",
+        "crates/broker/src/coordinator/unified/replay_streams",
+        "crates/broker/src/coordinator/unified/streams_conversion",
+        "crates/broker/src/handlers/streams_group",
+    ], ["jvm_streams_groups"]),
+    ([
+        "crates/broker/src/features.rs",
+        "crates/broker/src/handlers/update_features",
+        "crates/broker/src/handlers/api_versions/feature_keys",
+        "crates/broker/src/config/feature_flags",
+    ], ["jvm_features"]),
+    ([
+        "crates/broker/src/replicator",
+        "crates/broker/src/replicator_supervisor",
+        "crates/broker/src/future_log",
+        "crates/broker/src/handlers/offset_for_leader_epoch",
+    ], ["jvm_kip320_divergence"]),
+    ([
+        "crates/broker/src/raft_handshake",
+        "crates/broker/src/wal/quorum",
+    ], ["jvm_static_quorum_spike"]),
+    ([
+        "crates/broker/src/txn",
+        "crates/broker/src/producer_state",
+        "crates/broker/src/partition_writer",
+        "crates/broker/src/broker/replication",
+    ], ["jvm_acceptance_durability"]),
+    ([
+        "crates/broker/src/legacy_fetch",
+        "crates/broker/src/handlers/offset_fetch/legacy",
+    ], ["jvm_acceptance_legacy"]),
+]
+
+_UNIFIED_PREFIX = "crates/broker/src/coordinator/unified/"
+_UNIFIED_EXCLUSIONS = [
+    _UNIFIED_PREFIX + "streams/",
+    _UNIFIED_PREFIX + "streams_",
+    _UNIFIED_PREFIX + "replay_streams",
+    _UNIFIED_PREFIX + "share/",
+]
+
+def _starts_with_any(value, prefixes):
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            return True
+    return False
+
+def _target(suite):
+    return _BROKER_TARGET_PREFIX + suite + _DOCKER_TEST_SUFFIX
+
+def _broker_suites(available_targets):
+    suites = {}
+    for label in available_targets:
+        if label.startswith(_BROKER_TARGET_PREFIX) and label.endswith(_DOCKER_TEST_SUFFIX):
+            suites[label[len(_BROKER_TARGET_PREFIX):-len(_DOCKER_TEST_SUFFIX)]] = True
+    return suites
+
+def _mapped_suites():
+    suites = {"jvm_consumer_group_next_gen": True}
+    for _, selected in _FEATURE_RULES:
+        for suite in selected:
+            suites[suite] = True
+    return suites
+
+def _select(paths, available_targets):
+    broker_suites = _broker_suites(available_targets)
+    missing = []
+    for suite in _mapped_suites().keys():
+        if suite not in broker_suites:
+            missing.append(suite)
+    if missing:
+        fail("unknown broker container suites: " + ", ".join(sorted(missing)))
+
+    acceptance_suites = {}
+    for suite in broker_suites.keys():
+        if suite.startswith("jvm_acceptance_") or suite in ["librdkafka_conformance", "worm_object_lock"]:
+            acceptance_suites[suite] = True
+
+    suites = {}
+    for raw_path in paths:
+        path = raw_path.strip().replace("\\", "/")
+        if path:
+            if path in ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml"]:
+                for suite in broker_suites.keys():
+                    suites[suite] = True
+            elif _starts_with_any(path, ["crates/broker/tests/support/", "crates/broker/tests/fixtures/"]):
+                for suite in broker_suites.keys():
+                    suites[suite] = True
+            elif path.startswith("crates/broker/tests/jvm_acceptance/"):
+                for suite in acceptance_suites.keys():
+                    suites[suite] = True
+            elif path.startswith("crates/broker/tests/"):
+                relative = path[len("crates/broker/tests/"):]
+                root = relative.split("/")[0]
+                suite = root[:-3] if root.endswith(".rs") else root
+                if suite in broker_suites:
+                    suites[suite] = True
+
+            for prefixes, selected in _FEATURE_RULES:
+                if _starts_with_any(path, prefixes):
+                    for suite in selected:
+                        suites[suite] = True
+
+            if path.startswith(_UNIFIED_PREFIX) and not _starts_with_any(path, _UNIFIED_EXCLUSIONS):
+                suites["jvm_consumer_group_next_gen"] = True
+
+    return [_target(suite) for suite in sorted(suites.keys())]
+
+def _check(condition, message):
+    if not condition:
+        fail(message)
+
+def _self_test():
+    available = [_target(suite) for suite in _mapped_suites().keys()]
+    _check(
+        _select(["crates/broker/src/delivery/scheduler.rs"], available) == [_target("jvm_deliver_at_time")],
+        "delivery source must select deliver-at-time",
+    )
+    _check(
+        _select(["crates/broker/src/share_partition/state.rs"], available) == [_target("jvm_share_groups")],
+        "share source must select share groups",
+    )
+    _check(
+        _select(["crates/broker/src/coordinator/unified/streams/metadata.rs"], available) == [_target("jvm_streams_groups")],
+        "streams source must not select consumer group next-gen",
+    )
+    _check(
+        _select(["crates/broker/src/coordinator/unified/replay_streams.rs"], available) == [_target("jvm_streams_groups")],
+        "streams replay source must not select consumer group next-gen",
+    )
+    _check(
+        _select(["crates/broker/src/coordinator/unified/group.rs"], available) == [_target("jvm_consumer_group_next_gen")],
+        "unified coordinator source must select consumer group next-gen",
+    )
+    _check(
+        _select(["crates/broker/tests/jvm_acceptance_sasl/plain.rs"], available) == [_target("jvm_acceptance_sasl")],
+        "suite test source must select its suite",
+    )
+    _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
+    _check(
+        len(_select(["crates/broker/Cargo.toml"], available)) == len(available),
+        "broker manifest must select every suite",
+    )
+
+def _run(ctx, executable, argv):
+    result = (
+        ctx.std.process.command(executable)
+            .args(argv)
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    if result.status.code != 0:
+        detail = result.stderr.strip()
+        fail("command failed: " + executable + " " + " ".join(argv) + ("\n" + detail if detail else ""))
+    return result.stdout.splitlines()
+
+def _valid_base(ctx, base):
+    if not base:
+        return False
+    status = (
+        ctx.std.process.command("git")
+            .args(["cat-file", "-e", base + "^{commit}"])
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("null")
+            .stderr("null")
+            .spawn()
+            .wait()
+    )
+    return status.code == 0
+
+def _is_build_wide(path):
+    return path in ["MODULE.bazel", ".bazelrc", "Cargo.lock", "Cargo.toml"] or path.startswith("bazel/")
+
+def _is_deleted_source(path):
+    return path.startswith("crates/") and (
+        path.endswith(".rs") or
+        path.endswith("/Cargo.toml") or
+        path.endswith("/BUILD.bazel")
+    )
+
+def _affected_targets(ctx, base):
+    all_targets = sorted(_run(ctx, "bazel", ["query", "attr(tags, 'docker', //crates/...)"]))
+    if not _valid_base(ctx, base):
+        return all_targets
+
+    comparison = base + "...HEAD"
+    changed = _run(ctx, "git", ["diff", "--name-only", comparison])
+    for path in changed:
+        if _is_build_wide(path):
+            return all_targets
+
+    deleted = _run(ctx, "git", ["diff", "--diff-filter=D", "--name-only", comparison])
+    for path in deleted:
+        if _is_deleted_source(path):
+            return all_targets
+
+    targets = {}
+    for label in _select(changed, all_targets):
+        targets[label] = True
+
+    files = []
+    root = ctx.std.env.bazel_root_dir()
+    for path in changed:
+        if (
+            path.startswith("crates/") and
+            not path.startswith("crates/broker/") and
+            not path.endswith(".md") and
+            ctx.std.fs.exists(root + "/" + path)
+        ):
+            files.append(path)
+    if files:
+        expression = "attr(tags, 'docker', rdeps(//crates/..., set(" + " ".join(files) + ")))"
+        for label in _run(ctx, "bazel", ["query", expression]):
+            targets[label] = True
+
+    return sorted(targets.keys())
+
+def _emit(ctx, targets):
+    suites = []
+    for label in targets:
+        name = label.split(":")[1]
+        if name.endswith(_DOCKER_TEST_SUFFIX):
+            name = name[:-len(_DOCKER_TEST_SUFFIX)]
+        suites.append({"target": label, "name": name})
+
+    encoded = json.encode(suites)
+    github_output = ctx.std.env.var("GITHUB_OUTPUT")
+    if github_output:
+        record = "suites=" + encoded + "\nany=" + ("true" if targets else "false") + "\n"
+        if not ctx.std.fs.try_append(github_output, record):
+            fail("could not append container suites to GITHUB_OUTPUT")
+    print("Selected: " + encoded)
+
+def _impl(ctx: TaskContext) -> int:
+    _self_test()
+    if not ctx.args.self_test:
+        _emit(ctx, _affected_targets(ctx, ctx.args.base))
+    return 0
+
+container_suites = task(
+    summary = "Select the affected container suites; without --base, select all.",
+    implementation = _impl,
+    args = {
+        "base": args.string(
+            default = "",
+            description = "Git commit to compare with HEAD.",
+        ),
+        "self_test": args.boolean(
+            default = False,
+            description = "Run the selector's embedded tests without querying Bazel or Git.",
+        ),
+    },
+)

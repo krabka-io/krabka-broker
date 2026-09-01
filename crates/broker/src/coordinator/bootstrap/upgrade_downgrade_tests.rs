@@ -89,7 +89,7 @@ async fn downgraded_group_replays_as_classic() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
     finalize(&coord, acc).await;
@@ -157,7 +157,7 @@ async fn compacted_downgrade_residue_replays_as_classic() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
     finalize(&coord, acc).await;
@@ -211,7 +211,7 @@ async fn surviving_k6_write_resurrects_as_next_gen_without_fix() {
         let key = persistence::parse_key(&k).unwrap();
         match v {
             Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, key),
+            None => apply_tombstone(&coord, &mut acc, key),
         }
     }
 

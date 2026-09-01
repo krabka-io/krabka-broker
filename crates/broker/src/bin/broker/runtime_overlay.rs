@@ -88,6 +88,7 @@ impl RuntimeArgs {
             share_recovery_read_max,
             diskless_wal_flush_interval,
             diskless_wal_flush_max_size,
+            diskless_wal_hot_tail_max_size,
             diskless_wal_trim_safety_lag,
             diskless_wal_index_projection_timeout,
         );
@@ -117,6 +118,8 @@ impl RuntimeArgs {
             producer_id_expiration_scan_interval,
             transaction_min_timeout,
             transaction_max_timeout,
+            offsets_retention,
+            offsets_retention_check_interval,
             audit_tail_read_max,
             future_log_move_read_chunk,
             transaction_recovery_read_max,

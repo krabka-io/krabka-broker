@@ -46,6 +46,7 @@ async fn seed_committed_offset(
                 leader_epoch: 5,
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
             },
         )],
         reply: tx,

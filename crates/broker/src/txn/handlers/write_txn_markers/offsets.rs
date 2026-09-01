@@ -70,6 +70,7 @@ pub(super) fn pending_offset_entries(
                                 leader_epoch: value.leader_epoch,
                                 metadata: value.metadata,
                                 commit_timestamp_ms: value.commit_timestamp_ms,
+                                expire_timestamp_ms: value.expire_timestamp_ms,
                             },
                         ));
                     }

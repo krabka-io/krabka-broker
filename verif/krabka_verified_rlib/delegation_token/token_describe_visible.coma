@@ -1,0 +1,36 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 69 0 75 9 *)
+
+let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 79 32 79 84
+let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 79 8 79 84
+let%span sdelegation_token'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 63 10 67 1
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_describe_visible [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 69 0 75 9]
+  (authenticated_via_token: bool) (owner_filter_matches: bool) (caller_is_owner: bool) (caller_is_renewer: bool)
+  (acl_allows: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {authenticated_via_token = false} (! bb2) | br1 -> {authenticated_via_token} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- caller_is_owner ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {owner_filter_matches = false} (! bb4) | br1 -> {owner_filter_matches} (! bb3) ]
+  | bb3 = any [ br0 -> {caller_is_owner = false} (! bb5) | br1 -> {caller_is_owner} (! bb6) ]
+  | bb5 = any [ br0 -> {caller_is_renewer = false} (! bb7) | br1 -> {caller_is_renewer} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#sdelegation_token] true ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- acl_allows ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#sdelegation_token'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & authenticated_via_token: bool = authenticated_via_token
+  | & owner_filter_matches: bool = owner_filter_matches
+  | & caller_is_owner: bool = caller_is_owner
+  | & caller_is_renewer: bool = caller_is_renewer
+  | & acl_allows: bool = acl_allows ])
+  [ return (result: bool) -> {[@stop_split] [@expl:token_describe_visible ensures] [%#sdelegation_token'1] result
+    = (if authenticated_via_token then
+      caller_is_owner
+    else
+      owner_filter_matches /\ (caller_is_owner \/ caller_is_renewer \/ acl_allows)
+    )}
+    (! return {result}) ]

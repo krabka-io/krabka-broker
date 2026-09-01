@@ -283,28 +283,36 @@ impl KafkaMetadataEventLog {
         key: Option<Bytes>,
         event: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
-        if partition < 0 || partition >= self.partition_count {
-            return Err(MetadataLogError::PartitionOutOfRange {
-                partition,
-                count: self.partition_count,
-            });
-        }
-        let ack = self
-            .producer
-            .send(ProducerRecord {
-                topic: self.topic.clone(),
-                partition: Some(partition),
-                key,
-                value: event,
-                ..Default::default()
-            })
-            .await;
+        let record = producer_record(&self.topic, self.partition_count, partition, key, event)?;
+        let ack = self.producer.send(record).await;
         let meta = ack
             .await
             .map_err(|_| MetadataLogError::Publish("producer dropped before ack".into()))?
             .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
         Ok(meta.offset)
     }
+}
+
+fn producer_record(
+    topic: &str,
+    partition_count: i32,
+    partition: i32,
+    key: Option<Bytes>,
+    event: Option<Bytes>,
+) -> Result<ProducerRecord, MetadataLogError> {
+    if partition < 0 || partition >= partition_count {
+        return Err(MetadataLogError::PartitionOutOfRange {
+            partition,
+            count: partition_count,
+        });
+    }
+    Ok(ProducerRecord {
+        topic: topic.to_owned(),
+        partition: Some(partition),
+        key,
+        value: event,
+        ..Default::default()
+    })
 }
 
 fn usize_count(n: i32) -> Result<usize, MetadataLogError> {
@@ -329,5 +337,36 @@ mod tests {
             panic!("invalid policy must fail before network I/O");
         };
         assert!(error.to_string().contains("topic_create_timeout"));
+    }
+
+    #[test]
+    fn keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {
+        let record = producer_record(
+            "__diskless_wal_index",
+            3,
+            2,
+            Some(Bytes::from_static(b"range")),
+            None,
+        )
+        .unwrap();
+
+        assert!(record.topic == "__diskless_wal_index");
+        assert!(record.partition == Some(2));
+        assert!(record.key.as_deref() == Some(b"range".as_slice()));
+        assert!(record.value.is_none());
+    }
+
+    #[test]
+    fn keyed_record_rejects_out_of_range_partitions() {
+        for partition in [-1, 3] {
+            let error = producer_record("index", 3, partition, None, None).unwrap_err();
+            assert!(matches!(
+                error,
+                MetadataLogError::PartitionOutOfRange {
+                    partition: got,
+                    count: 3
+                } if got == partition
+            ));
+        }
     }
 }

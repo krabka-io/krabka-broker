@@ -308,6 +308,7 @@ async fn committed_offsets_survive_a_flip() {
                     leader_epoch: 3,
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
                 },
             )],
             reply: tx,

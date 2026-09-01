@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 63 27 63 32 *)
+
+(* <compaction::CompactionDecodeStep as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_CompactionDecodeStep = Done | Continue | Corrupt
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_CompactionDecodeStep [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 63 27 63 32]
+  (self: t_CompactionDecodeStep) (return (x: t_CompactionDecodeStep)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_CompactionDecodeStep = Any.any_l () | & self: t_CompactionDecodeStep = self ])
+  [ return (result: t_CompactionDecodeStep) -> (! return {result}) ]

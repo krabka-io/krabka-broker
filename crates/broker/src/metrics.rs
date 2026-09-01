@@ -25,20 +25,23 @@ use tokio::sync::Mutex;
 mod auth;
 mod break_glass;
 mod delivery;
+mod diskless;
 mod labels;
 mod log_cleaner;
+mod phases;
 mod registration;
 mod replication;
 mod request;
 mod schema_validation;
 mod traffic;
 
-pub(crate) use self::labels::UNKNOWN_LABEL;
 pub use self::labels::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, SaslMechanismLabel,
-    SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    BreakGlassStateLabel, ClientSoftwareLabel, DirectoryLabel, PartitionLabel, QuotaType,
+    QuotaTypeLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel,
+    WalShardLabel, WalVoterLabel,
 };
+pub(crate) use self::{labels::UNKNOWN_LABEL, phases::RequestPhases};
 
 /// Shared registry owning every metric the broker emits. Wrapped in
 /// `Arc<Mutex<…>>` because `prometheus-client` requires `&mut Registry`
@@ -48,7 +51,7 @@ pub type SharedRegistry = Arc<Mutex<Registry>>;
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
 /// in `Broker::start`; hand out clones (each clone is a single
 /// `Arc::clone`) to every subsystem that emits.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BrokerMetrics {
     pub registry: SharedRegistry,
     pub topic_bytes_in: Family<TopicLabel, Counter>,
@@ -213,6 +216,68 @@ pub struct BrokerMetrics {
     /// per api to spot handler tail-latency regressions, and use `_count`
     /// as a request-rate stream that pairs with `api_requests`.
     pub request_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent on this broker's own log
+    /// (`krabka_broker_request_local_duration_seconds{api_key}`). It is the
+    /// Produce writer round-trip — the enqueue plus the append acknowledgement
+    /// — summed over the request's partitions, and the Fetch read of every
+    /// planned partition, including the re-read a long poll performs. Mirrors
+    /// Kafka's `RequestMetrics.LocalTimeMs`.
+    ///
+    /// It is one of the three phase families that partition
+    /// [`Self::request_duration_seconds`]. See the family's rustdoc on
+    /// [`Self::request_throttle_duration_seconds`] for what the three do and
+    /// do not sum to.
+    pub request_local_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent waiting on something that is
+    /// not this broker's own log
+    /// (`krabka_broker_request_remote_duration_seconds{api_key}`). For Produce
+    /// it is the `acks=all` high-watermark gate, summed over the request's
+    /// partitions: the wait for every in-sync replica to take the append. For
+    /// Fetch it is the long poll that parks a `min_bytes`-unsatisfied read on
+    /// the partitions' notifiers, plus the object-store round trip a KIP-405
+    /// tiered read or a diskless WAL cold read makes when the local log no
+    /// longer holds the offset. Mirrors Kafka's `RequestMetrics.RemoteTimeMs`,
+    /// which covers the tiered read for the same reason: Kafka serves it out
+    /// of a `DelayedRemoteFetch` in the purgatory, and the purgatory wait is
+    /// what that metric measures.
+    ///
+    /// This is the series that separates a lagging follower or a slow object
+    /// store from a slow local disk: a produce that is slow here and fast in
+    /// [`Self::request_local_duration_seconds`] is waiting on replication, not
+    /// on this broker, and a fetch that is slow here on a tiered topic is
+    /// waiting on the tier.
+    pub request_remote_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Per-Kafka-API seconds one request spent asleep in the KIP-219 quota
+    /// throttle (`krabka_broker_request_throttle_duration_seconds{api_key}`).
+    /// Mirrors Kafka's `RequestMetrics.ThrottleTimeMs`. It is observed once
+    /// per request whose quota the broker accounts for, with an explicit zero
+    /// when no quota applied, so a throttled fleet is visible as a shift in
+    /// the distribution rather than as an appearing series. The apis the
+    /// dispatch registry marks quota-exempt are observed only where they
+    /// resolve a throttle of their own — the KIP-599 sleep on `CreateTopics`,
+    /// `CreatePartitions` and `DeleteTopics` — and not at all otherwise, so
+    /// this `_count` is at most [`Self::request_duration_seconds`]'s.
+    ///
+    /// The three phase families are disjoint: a request is in exactly one of
+    /// them at a time, and each interval is charged to exactly one. They do
+    /// **not** cover the total. `local + remote + throttle <=
+    /// request_duration_seconds`, and the remainder is the work no phase
+    /// names — request decode, authorization, record validation, response
+    /// encode. An operator checks the phases against the total by comparing
+    /// `_sum` streams; a remainder that grows is handler-side CPU, not disk
+    /// and not replication.
+    pub request_throttle_duration_seconds: Family<ApiKeyLabel, Histogram>,
+    /// Seconds of throttle this broker actually applied, by the quota that
+    /// caused it (`krabka_broker_quota_throttle_duration_seconds{quota_type}`).
+    ///
+    /// A request charges several quotas and sleeps for the largest delay of
+    /// them, so the sample lands under the [`QuotaType`] that produced that
+    /// largest delay — the quota an operator would have to raise to make the
+    /// throttle stop. Requests that no quota delayed are not observed here, so
+    /// unlike [`Self::request_throttle_duration_seconds`] the `_count` of this
+    /// family is the number of throttled requests, and `_sum` is the wall
+    /// time the broker held clients back.
+    pub quota_throttle_duration_seconds: Family<QuotaTypeLabel, Histogram>,
     /// Number of requests currently being handled by this
     /// broker (gauge). Incremented on dispatch entry, decremented on exit
     /// (including the error/close path). A sustained climb signals handler
@@ -442,4 +507,23 @@ pub struct BrokerMetrics {
     /// two-person rule, and an operator should read the audit log for the
     /// partition it names.
     pub break_glass_bypassed: Family<BreakGlassActionLabel, Counter>,
+    /// Quorum-durable offset for each diskless WAL shard led by this broker.
+    pub diskless_wal_durable_watermark: Family<WalShardLabel, Gauge>,
+    /// Leader log-end minus each WAL voter's durable offset.
+    pub diskless_wal_voter_lag: Family<WalVoterLabel, Gauge>,
+    /// Leader-side attempts that could not form a WAL quorum.
+    pub diskless_wal_quorum_loss_events_total: Counter,
+    /// Non-empty WAL objects submitted to object storage.
+    pub diskless_wal_flush_attempts_total: Counter,
+    /// Bytes successfully written as WAL objects.
+    pub diskless_wal_flush_bytes_total: Counter,
+    /// WAL object flushes that failed after an attempt began.
+    pub diskless_wal_flush_failures_total: Counter,
+    /// Durable offsets not yet represented by the committed object index.
+    pub diskless_wal_index_projection_lag: Family<WalShardLabel, Gauge>,
+    /// Local WAL log-start offset after trimming.
+    pub diskless_wal_trim_frontier: Family<WalShardLabel, Gauge>,
+    pub diskless_wal_cold_read_hits_total: Counter,
+    pub diskless_wal_cold_read_misses_total: Counter,
+    pub diskless_wal_cold_read_errors_total: Counter,
 }
