@@ -132,7 +132,7 @@ fn validate_config<'a>(
                     codes::INVALID_CONFIG,
                     format!(
                         "Cannot set the log level of {target} to {value} as it is not a supported log level. Valid log levels are {}",
-                        VALID_LOG_LEVELS.join(",")
+                        VALID_LOG_LEVELS.join(", ")
                     ),
                 ));
             };

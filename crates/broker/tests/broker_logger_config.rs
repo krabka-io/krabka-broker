@@ -44,8 +44,12 @@ const CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER: i8 = 6;
 /// classes below it.
 const CHILD_TARGET: &str = "krabka_broker::broker_logger_wire_test";
 
-/// The filter this broker starts with: the broker binary's own default.
-const STARTING_SPEC: &str = "krabka_broker=info,krabka_log=info,info";
+/// The filter this broker starts with. It is the production default rather
+/// than a spec written for the test, so the alter below exercises the logger
+/// names a real `krabka-broker` process actually has: a seed that stopped
+/// naming `krabka_broker` would fail this test with `Logger krabka_broker does
+/// not exist!` instead of passing against a fixture nobody ships.
+const STARTING_SPEC: &str = krabka_broker::config::DEFAULT_LOG_FILTER;
 
 /// Events a subscriber let through, as `target:LEVEL`.
 type Captured = Arc<Mutex<Vec<String>>>;

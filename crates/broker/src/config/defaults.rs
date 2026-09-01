@@ -224,11 +224,13 @@ impl Default for BrokerConfig {
             profiling: krabka_telemetry::profiling::ProfilingConfig::default(),
             client_metrics_otlp_endpoint: None,
             client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol::Grpc,
-            // Seeded with the same directives the broker binary's default
-            // filter carries, so a `BROKER_LOGGER` describe lists the krabka
-            // targets before anything has logged through them.
+            // The broker binary replaces this with the controller that drives
+            // the subscriber it installed. The seed matters for every other
+            // way a config is built: it carries the same directives as
+            // `DEFAULT_LOG_FILTER`, so a `BROKER_LOGGER` describe lists the
+            // krabka targets before anything has logged through them.
             log_levels: krabka_telemetry::LogLevelController::new(
-                "krabka_broker=info,krabka_log=info,info",
+                crate::config::DEFAULT_LOG_FILTER,
             )
             .0,
             partition_disk_scan_interval: secs(60),

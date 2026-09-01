@@ -142,14 +142,14 @@ fn refusals_carry_kafkas_own_message() {
             "3",
             vec![config("krabka_broker", 0, Some("VERBOSE"))],
             codes::INVALID_CONFIG,
-            "Cannot set the log level of krabka_broker to VERBOSE as it is not a supported log level. Valid log levels are DEBUG,ERROR,FATAL,INFO,TRACE,WARN",
+            "Cannot set the log level of krabka_broker to VERBOSE as it is not a supported log level. Valid log levels are DEBUG, ERROR, FATAL, INFO, TRACE, WARN",
         ),
         (
             "a set with no value at all",
             "3",
             vec![config("krabka_broker", 0, None)],
             codes::INVALID_CONFIG,
-            "Cannot set the log level of krabka_broker to null as it is not a supported log level. Valid log levels are DEBUG,ERROR,FATAL,INFO,TRACE,WARN",
+            "Cannot set the log level of krabka_broker to null as it is not a supported log level. Valid log levels are DEBUG, ERROR, FATAL, INFO, TRACE, WARN",
         ),
         (
             "a delete of the root logger",
@@ -185,6 +185,24 @@ fn refusals_carry_kafkas_own_message() {
         let (out, _levels) = apply("info,krabka_broker=info", resource_name, configs, false);
         check!(out.error_code == code, "{what}");
         check!(out.error_message.as_deref() == Some(message), "{what}");
+    }
+}
+
+#[test]
+fn the_default_filter_names_the_loggers_an_operator_reaches_for() {
+    // A `tracing` callsite registers under its module path, never under the
+    // bare crate root, so the crate-root names are loggers only because the
+    // starting spec seeds them. If that seed stops naming them, the headline
+    // `--add-config krabka_broker=DEBUG` is refused on a real broker.
+    for target in ["krabka_broker", "krabka_log"] {
+        let (out, levels) = apply(
+            crate::config::DEFAULT_LOG_FILTER,
+            "3",
+            vec![config(target, 0, Some("DEBUG"))],
+            false,
+        );
+        check!(out.error_code == codes::NONE, "{target}: {out:?}");
+        check!(levels.level(target) == Some(LogLevel::Debug), "{target}");
     }
 }
 

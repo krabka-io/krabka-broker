@@ -35,7 +35,9 @@ pub async fn broker_main() -> Result<(), Box<dyn std::error::Error>> {
         });
     let telemetry = krabka_broker::telemetry::init(
         otlp,
-        "krabka_broker=info,krabka_log=info,info",
+        // The stdout filter. This is the one `BROKER_LOGGER` retargets, and
+        // the one whose target directives seed the logger list.
+        krabka_broker::config::DEFAULT_LOG_FILTER,
         "info,krabka_broker::request=debug,krabka_log=info",
         "krabka-broker",
     )?;

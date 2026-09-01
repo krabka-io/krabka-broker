@@ -58,8 +58,9 @@ mod tests;
 pub const ROOT_LOGGER: &str = "root";
 
 /// The level names a `BROKER_LOGGER` value may carry, in the order Kafka
-/// renders them into its rejection message: `LogLevelConfig.VALID_LOG_LEVELS`
-/// sorted and comma-joined.
+/// renders them into its rejection message. `RuntimeLoggerManager` builds that
+/// list as `String.join(", ", sorted(LogLevelConfig.VALID_LOG_LEVELS))`, so a
+/// caller joins these with `", "` and not with a bare comma.
 pub const VALID_LOG_LEVELS: [&str; 6] = ["DEBUG", "ERROR", "FATAL", "INFO", "TRACE", "WARN"];
 
 /// One level in Kafka's `BROKER_LOGGER` vocabulary.
