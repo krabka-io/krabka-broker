@@ -13,7 +13,7 @@ use tracing::Instrument as _;
 
 use super::{
     AfterResponse,
-    response::{ThrottledResponse, apply_request_quota, encode_response},
+    response::{ResponseShape, ThrottledResponse, apply_request_quota, encode_response},
     session::principal_or_anonymous,
 };
 use crate::{broker::Broker, error::BrokerError};
@@ -67,6 +67,7 @@ where
             context.broker,
             response.bytes,
             context.parsed,
+            ResponseShape::mirroring_request(context.parsed),
             context.auth,
             started,
         );

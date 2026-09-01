@@ -164,8 +164,6 @@ pub(crate) struct ReplicatorSupervisor {
 }
 
 pub(crate) struct ReplicatorSupervisorConfig {
-    pub client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
-    pub client_frame_max: krabka_client_core::ClientFrameMax,
     pub node_id: NodeId,
     pub broker_id: i32,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
@@ -180,6 +178,13 @@ pub(crate) struct ReplicatorSupervisorConfig {
     pub inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
     pub inter_broker_listener_name: String,
+    /// The controller listener's protocol, its SNI / SASL server name, and the
+    /// statically configured quorum. KIP-858 dir-assignment reports are
+    /// addressed to the controller leader's CONTROLLER listener, so they
+    /// travel that channel rather than the inter-broker one.
+    pub controller_listener_protocol: krabka_security::ListenerProtocol,
+    pub controller_server_name: String,
+    pub controller_quorum_voters: Vec<(NodeId, String)>,
     pub replication: ReplicationRuntimeConfig,
     pub throttle_state: Arc<ThrottleState>,
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
@@ -197,8 +202,6 @@ pub(crate) struct ReplicatorSupervisorConfig {
 impl ReplicatorSupervisor {
     pub(crate) fn new(config: ReplicatorSupervisorConfig) -> Self {
         let ReplicatorSupervisorConfig {
-            client_dispatch_queue_capacity,
-            client_frame_max,
             node_id,
             broker_id,
             controller,
@@ -225,7 +228,19 @@ impl ReplicatorSupervisor {
             log_dir_ids,
             hot_tail,
             wal_shards,
+            controller_listener_protocol,
+            controller_server_name,
+            controller_quorum_voters,
         } = config;
+        let assign_dirs_reporter: Arc<dyn AssignDirsReporter> =
+            Arc::new(NetworkAssignDirsReporter {
+                dialer: crate::controller_endpoint::ControllerDialer {
+                    outbound_client: Arc::clone(&inter_broker_client),
+                    listener_protocol: controller_listener_protocol,
+                    server_name: controller_server_name,
+                    quorum_voters: controller_quorum_voters,
+                },
+            });
         let known_topic_ids = controller
             .current_image()
             .topics()
@@ -263,10 +278,7 @@ impl ReplicatorSupervisor {
             wal_shards,
             reported_dirs: dashmap::DashMap::new(),
             known_topic_ids: Mutex::new(known_topic_ids),
-            assign_dirs_reporter: Arc::new(NetworkAssignDirsReporter {
-                dispatch_queue_capacity: client_dispatch_queue_capacity,
-                frame_max: client_frame_max,
-            }),
+            assign_dirs_reporter,
         }
     }
 

@@ -86,7 +86,8 @@ pub(crate) use self::{
 };
 pub(crate) use self::{
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, FENCED_TRUE, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        BROKER_FENCED, BROKER_WITNESS, FENCED_TRUE, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
         STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE, fenced_node_ids,
         is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
         resolve_broker_fenced, resolve_broker_witness, resolve_preferred_leader_site,
