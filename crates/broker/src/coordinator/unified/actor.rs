@@ -280,6 +280,22 @@ async fn opt_sleep(deadline: Option<Instant>) {
     }
 }
 
+/// The wall-clock reading this actor subtree stamps records and deadlines
+/// with, in milliseconds since the Unix epoch. It reads `std::time`, not
+/// chrono, which the name predates.
+///
+/// This is deliberately **not** [`crate::time_util::now_ms`], which is
+/// otherwise the same function. The two disagree on one arm: a duration that
+/// overflows `i64` milliseconds saturates to `i64::MAX` there and to `0` here.
+/// Collapsing this into the shared helper would therefore change what the
+/// offset-retention clock reads, so it stays separate until someone decides
+/// which answer that clock wants.
+///
+/// That arm needs a system clock set roughly 292 million years ahead to reach,
+/// and the two answers fail in opposite directions: `0` dates a group to the
+/// epoch, so its offsets expire at once, while `i64::MAX` dates it to now, so
+/// they never expire. The share-group actor keeps its own copy of this same
+/// function, with the same divergence.
 fn chrono_now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

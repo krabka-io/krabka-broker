@@ -117,8 +117,14 @@ mod tests {
         let clock = ManualMonotonicClock::new_shared();
         let timer = clock.new_timer();
 
-        check!(arm(&*timer, Duration::from_secs(1), TASK).is_some());
+        // The registration lives only as long as the future does: dropping it
+        // cancels the deadline. Hold it while asserting the clock saw it.
+        let armed = arm(&*timer, Duration::from_secs(1), TASK);
+
+        check!(armed.is_some());
         check!(clock.pending_waiters() == 1);
+        drop(armed);
+        check!(clock.pending_waiters() == 0);
     }
 
     /// A clock whose elapsed span has moved off its origin, so that a

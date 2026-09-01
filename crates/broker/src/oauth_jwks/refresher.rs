@@ -13,7 +13,7 @@ use std::{
         Arc,
         atomic::{AtomicI64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use krabka_security::JwksHandle;
@@ -176,7 +176,7 @@ impl JwksRefresher {
                 // signal. Subject to `min_on_demand_pause` rate-limit.
                 // Signals coalesce via mpsc capacity 1 + `try_send`.
                 Some(()) = self.signal_rx.recv() => {
-                    let now_ms = current_epoch_ms();
+                    let now_ms = time_util::now_ms();
                     let last = self.last_on_demand_refresh_ms.load(Ordering::Relaxed);
                     let elapsed_ms = now_ms.saturating_sub(last);
                     let pause_ms = self.min_on_demand_pause.millis_i64();
@@ -216,7 +216,7 @@ impl JwksRefresher {
                 );
                 self.handle.store(jwks);
                 self.last_successful_fetch_ms
-                    .store(current_epoch_ms(), Ordering::Relaxed);
+                    .store(time_util::now_ms(), Ordering::Relaxed);
             }
             Err(e) => tracing::warn!(
                 endpoint = %self.endpoint,
@@ -225,13 +225,4 @@ impl JwksRefresher {
             ),
         }
     }
-}
-
-/// Current Unix epoch in milliseconds. It saturates on overflow and on
-/// pre-epoch clock skew. The refresher uses it to fill the shared timestamp
-/// counter that validators read for cache-expiry checks.
-fn current_epoch_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
