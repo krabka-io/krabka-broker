@@ -7,9 +7,15 @@
 
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
-use krabka_verified::reassignment::{ReassignmentAction, reassignment_action};
+use krabka_verified::{
+    FreezeMutationKind,
+    reassignment::{ReassignmentAction, reassignment_action},
+};
 
-use crate::heartbeat::controller_state::ControllerLivenessState;
+use crate::{
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+    heartbeat::controller_state::ControllerLivenessState,
+};
 
 /// Remaps a partition's `directories` vector onto a new `replicas` order. A
 /// KIP-455 reassignment changes both the replica membership and the order.
@@ -129,6 +135,17 @@ pub(crate) async fn compute_reassignment_progress(
         .map(NodeId)
         .collect();
     for pr in image.reassignments_in_flight() {
+        if matches!(
+            resolve_freeze_mutation(
+                image,
+                &pr.topic,
+                true,
+                FreezeMutationKind::ReassignmentCompletion,
+            ),
+            FreezeMutationResolution::Frozen(_)
+        ) {
+            continue;
+        }
         if let Some(next) = reassign_one(pr, &alive) {
             updates.push(MetadataRecord::V1Partition(next));
         }
@@ -142,7 +159,10 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::{assert, check};
-    use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+    use krabka_metadata::{
+        BrokerRegistrationRecord, MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord,
+        TopicRecord,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -273,6 +293,27 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn freeze_allows_completion_of_an_already_accepted_reassignment() {
+        let mut image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1);
+        Arc::make_mut(&mut image).apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: "foo".into(),
+            pattern_type: PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover".into(),
+            set_by: "User:alice".into(),
+            set_at_ms: 10,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }));
+        let l = liveness(&[1, 2, 3]).await;
+
+        let completed = compute_reassignment_progress(&image, &l).await;
+        assert!(completed.len() == 1);
+        check!(first_partition(&completed[0]).replicas == vec![NodeId(1), NodeId(3)]);
     }
 
     #[tokio::test]

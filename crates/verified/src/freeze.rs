@@ -191,6 +191,104 @@ pub fn freeze_scope_decision(
     }
 }
 
+/// Every operation whose interaction with a topic freeze is deliberate.
+///
+/// Keeping the allowed operations in the same closed enum as the refused
+/// ones makes additions visible to the proof and to its exhaustive tests.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FreezeMutationKind {
+    Produce,
+    TransactionEnlistment,
+    DeleteRecords,
+    DeleteTopic,
+    ReassignmentAlter,
+    ReassignmentCompletion,
+    Compaction,
+    Retention,
+    TransactionCompletion,
+    OffsetCommit,
+    Replication,
+    BarrierMarker,
+    TieringCopy,
+}
+
+/// The single externally observable result of authorization plus freeze
+/// admission.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FreezeMutationDecision {
+    AuthorizationDenied,
+    Frozen,
+    Admit,
+}
+
+/// Classify the complete topic-mutation inventory under a live freeze.
+#[ensures(result == freeze_refusal_model(kind))]
+#[must_use]
+pub const fn freeze_refuses(kind: FreezeMutationKind) -> bool {
+    match kind {
+        FreezeMutationKind::Produce
+        | FreezeMutationKind::TransactionEnlistment
+        | FreezeMutationKind::DeleteRecords
+        | FreezeMutationKind::DeleteTopic
+        | FreezeMutationKind::ReassignmentAlter
+        | FreezeMutationKind::Compaction
+        | FreezeMutationKind::Retention => true,
+        FreezeMutationKind::TransactionCompletion
+        | FreezeMutationKind::ReassignmentCompletion
+        | FreezeMutationKind::OffsetCommit
+        | FreezeMutationKind::Replication
+        | FreezeMutationKind::BarrierMarker
+        | FreezeMutationKind::TieringCopy => false,
+    }
+}
+
+/// Logical mirror of [`freeze_refuses`] for the mutation contract.
+#[cfg(creusot)]
+#[logic]
+fn freeze_refusal_model(kind: FreezeMutationKind) -> bool {
+    match kind {
+        FreezeMutationKind::Produce
+        | FreezeMutationKind::TransactionEnlistment
+        | FreezeMutationKind::DeleteRecords
+        | FreezeMutationKind::DeleteTopic
+        | FreezeMutationKind::ReassignmentAlter
+        | FreezeMutationKind::Compaction
+        | FreezeMutationKind::Retention => true,
+        FreezeMutationKind::TransactionCompletion
+        | FreezeMutationKind::ReassignmentCompletion
+        | FreezeMutationKind::OffsetCommit
+        | FreezeMutationKind::Replication
+        | FreezeMutationKind::BarrierMarker
+        | FreezeMutationKind::TieringCopy => false,
+    }
+}
+
+/// Rank authorization ahead of freeze detail, then apply the one refusal
+/// classification shared by every mutation adapter.
+#[ensures((result == FreezeMutationDecision::AuthorizationDenied) == !authorized)]
+#[ensures((result == FreezeMutationDecision::Frozen) == (
+    authorized && frozen && freeze_refusal_model(kind)
+))]
+#[ensures((result == FreezeMutationDecision::Admit) == (
+    authorized && (!frozen || !freeze_refusal_model(kind))
+))]
+#[must_use]
+pub const fn freeze_mutation_decision(
+    authorized: bool,
+    frozen: bool,
+    kind: FreezeMutationKind,
+) -> FreezeMutationDecision {
+    if !authorized {
+        FreezeMutationDecision::AuthorizationDenied
+    } else if frozen && freeze_refuses(kind) {
+        FreezeMutationDecision::Frozen
+    } else {
+        FreezeMutationDecision::Admit
+    }
+}
+
 /// The committed entry at the exact incoming scope key.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -248,10 +346,11 @@ pub fn freeze_replacement_decision(facts: FreezeReplacementFacts) -> FreezeRepla
 #[cfg(test)]
 mod tests {
     use super::{
-        FreezeIdentityState, FreezeReplacementDecision, FreezeReplacementFacts,
-        FreezeScopeDecision, FreezeScopeRank, FreezeSignatureDecision, FreezeSignatureFacts,
-        FreezeStoredState, freeze_replacement_decision, freeze_scope_decision,
-        freeze_signature_decision, freeze_timestamp_in_window,
+        FreezeIdentityState, FreezeMutationDecision, FreezeMutationKind, FreezeReplacementDecision,
+        FreezeReplacementFacts, FreezeScopeDecision, FreezeScopeRank, FreezeSignatureDecision,
+        FreezeSignatureFacts, FreezeStoredState, freeze_mutation_decision,
+        freeze_replacement_decision, freeze_scope_decision, freeze_signature_decision,
+        freeze_timestamp_in_window,
     };
 
     #[test]
@@ -354,6 +453,45 @@ mod tests {
                 FreezeScopeRank::Prefix { length: 5 }
             ) == FreezeScopeDecision::Keep
         );
+    }
+
+    #[test]
+    fn mutation_inventory_ranks_authorization_then_freeze() {
+        use FreezeMutationDecision::{Admit, AuthorizationDenied, Frozen};
+        use FreezeMutationKind::{
+            BarrierMarker, Compaction, DeleteRecords, DeleteTopic, OffsetCommit, Produce,
+            ReassignmentAlter, ReassignmentCompletion, Replication, Retention, TieringCopy,
+            TransactionCompletion, TransactionEnlistment,
+        };
+
+        let refused = [
+            Produce,
+            TransactionEnlistment,
+            DeleteRecords,
+            DeleteTopic,
+            ReassignmentAlter,
+            Compaction,
+            Retention,
+        ];
+        let allowed = [
+            TransactionCompletion,
+            ReassignmentCompletion,
+            OffsetCommit,
+            Replication,
+            BarrierMarker,
+            TieringCopy,
+        ];
+
+        for kind in refused {
+            assert2::check!(freeze_mutation_decision(false, true, kind) == AuthorizationDenied);
+            assert2::check!(freeze_mutation_decision(true, true, kind) == Frozen);
+            assert2::check!(freeze_mutation_decision(true, false, kind) == Admit);
+        }
+        for kind in allowed {
+            assert2::check!(freeze_mutation_decision(false, true, kind) == AuthorizationDenied);
+            assert2::check!(freeze_mutation_decision(true, true, kind) == Admit);
+            assert2::check!(freeze_mutation_decision(true, false, kind) == Admit);
+        }
     }
 
     #[test]

@@ -23,7 +23,7 @@ use super::super::{
     BrokerProducePolicy, FramedPartition, PartitionInput, PartitionServices, process_partition,
 };
 use crate::{
-    freeze::resolve::{FreezeVerdict, resolve_topic_freeze},
+    freeze::resolve::{FreezeVerdict, resolve_freeze_mutation, resolve_topic_freeze},
     handlers::produce::{
         framing::PartitionPayload,
         test_support::{encode_batch, image_with_topic},
@@ -221,7 +221,12 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     for (label, topic, payload, want) in cases {
         // The handler resolves the freeze inside its per-topic loop, which
         // is what keeps one topic's verdict off another topic's rows.
-        let freeze = resolve_topic_freeze(&image, topic);
+        let freeze = resolve_freeze_mutation(
+            &image,
+            topic,
+            true,
+            krabka_verified::FreezeMutationKind::Produce,
+        );
         let resp = process_partition(
             PartitionInput {
                 part_data: FramedPartition { index: 0, payload },
@@ -230,7 +235,6 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 delivery: None,
                 schema: None,
                 topic_name: topic.into(),
-                topic_denied: false,
                 freeze,
                 txn_id_denied: false,
                 acks: 1,

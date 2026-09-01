@@ -43,6 +43,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_raft::RaftError;
+use krabka_verified::FreezeMutationKind;
 
 use crate::{
     break_glass::{
@@ -183,7 +184,15 @@ pub(crate) async fn handle(
         // event. A freeze is not a break-glass act, and the registry entry that
         // caused the refusal is already in the metadata log and in the audit
         // record of the freeze that set it.
-        if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(&image, &name) {
+        if let crate::freeze::resolve::FreezeMutationResolution::Frozen(record) =
+            crate::freeze::resolve::resolve_freeze_mutation(
+                &image,
+                &name,
+                true,
+                FreezeMutationKind::DeleteTopic,
+            )
+        {
+            let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
             let message = verdict.removal_message();
             tracing::warn!(topic = %name, refusal = %message, "DeleteTopics refused by a freeze");
             results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));

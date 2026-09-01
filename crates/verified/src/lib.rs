@@ -119,8 +119,9 @@ pub use diskless::{
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};
 pub use freeze::{
-    FreezeIdentityState, FreezeReplacementDecision, FreezeReplacementFacts, FreezeScopeDecision,
-    FreezeScopeRank, FreezeSignatureDecision, FreezeSignatureFacts, FreezeStoredState,
+    FreezeIdentityState, FreezeMutationDecision, FreezeMutationKind, FreezeReplacementDecision,
+    FreezeReplacementFacts, FreezeScopeDecision, FreezeScopeRank, FreezeSignatureDecision,
+    FreezeSignatureFacts, FreezeStoredState, freeze_mutation_decision, freeze_refuses,
     freeze_replacement_decision, freeze_scope_decision, freeze_signature_decision,
     freeze_timestamp_in_window,
 };

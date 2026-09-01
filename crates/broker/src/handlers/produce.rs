@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
+use krabka_verified::FreezeMutationKind;
 
 use self::{
     authorization::authorize_produce,
@@ -30,7 +31,7 @@ use crate::{
     codes,
     config_keys::{resolve_max_message_bytes, resolve_schema_validation},
     error::BrokerError,
-    freeze::resolve::resolve_topic_freeze,
+    freeze::resolve::resolve_freeze_mutation,
 };
 
 mod append;
@@ -254,7 +255,12 @@ pub(crate) async fn handle(
         // partition of an unfrozen topic then pays one test of an `Option` and
         // nothing else. The borrow allocates nothing, and only a refused row
         // turns the entry into a `FreezeVerdict` and a message.
-        let freeze = resolve_topic_freeze(&image, &topic_name);
+        let freeze = resolve_freeze_mutation(
+            &image,
+            &topic_name,
+            !topic_denied,
+            FreezeMutationKind::Produce,
+        );
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
@@ -273,7 +279,6 @@ pub(crate) async fn handle(
                         delivery,
                         schema,
                         topic_name: topic_name.clone(),
-                        topic_denied,
                         freeze,
                         txn_id_denied,
                         acks: req.acks,

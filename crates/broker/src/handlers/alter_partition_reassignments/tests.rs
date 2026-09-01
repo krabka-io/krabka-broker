@@ -6,9 +6,10 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_metadata::{
-    BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
+    BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, PatternType,
+    TopicFreezeRecord, TopicRecord,
 };
 use krabka_protocol::UnknownTaggedFields;
 use krabka_raft::NodeId;
@@ -17,7 +18,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    codes::UNKNOWN_TOPIC_OR_PARTITION,
+    codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
     handlers::alter_partition_reassignments::test_support::{
         decode_response, request, test_context,
     },
@@ -330,5 +331,69 @@ async fn handle_submits_successful_reassignment_records() {
     let partition = image.partition("orders", 7).expect("partition committed");
     assert!(partition.adding_replicas == vec![NodeId(2)]);
     assert!(partition.partition_epoch == 12);
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
+    let version = 1;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    seed_reassignable_partition(&broker).await;
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+            scope: "orders".into(),
+            pattern_type: PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover".into(),
+            set_by: "User:alice".into(),
+            set_at_ms: 10,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        })])
+        .await
+        .expect("seed topic freeze");
+    let before = broker
+        .controller
+        .current_image()
+        .partition("orders", 7)
+        .expect("seeded partition")
+        .clone();
+    let principal = Principal {
+        name: "admin".into(),
+        auth_method: AuthMethod::Anonymous,
+        groups: Vec::new(),
+    };
+    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let ctx = test_context(&principal, &peer);
+
+    let bytes = handle(
+        &broker,
+        request(true, "orders", 7, Some(vec![1, 2])),
+        &ctx,
+        version,
+    )
+    .await
+    .expect("handle");
+    let response = decode_response(&bytes, version);
+    let row = &response.responses[0].partitions[0];
+    check!(row.error_code == POLICY_VIOLATION);
+    check!(
+        row.error_message.as_deref()
+            == Some(
+                "a write freeze on the literal scope \"orders\" refuses this reassignment: DR cutover"
+            )
+    );
+
+    let after = broker
+        .controller
+        .current_image()
+        .partition("orders", 7)
+        .expect("partition remains")
+        .clone();
+    check!(after == before, "the refused row must append no metadata");
     broker_handle.shutdown().await;
 }

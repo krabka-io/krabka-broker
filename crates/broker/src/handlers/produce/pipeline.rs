@@ -4,7 +4,6 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_compression::RecordDecompressionPolicy;
-use krabka_metadata::TopicFreezeRecord;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
@@ -24,7 +23,7 @@ use super::{
 use crate::{
     codes,
     error::BrokerError,
-    freeze::resolve::FreezeVerdict,
+    freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
     partition_registry::PartitionRegistry,
     schema_validation::{SchemaGate, SchemaValidator},
 };
@@ -52,12 +51,9 @@ pub(super) struct PartitionInput<'a> {
     /// `schema.validation.value` is set", and skips the check entirely.
     pub(super) schema: Option<SchemaGate>,
     pub(super) topic_name: String,
-    pub(super) topic_denied: bool,
-    /// The topic's KFC-9 write-freeze entry, resolved once per topic. `None`
-    /// is a topic that accepts writes, and skips the freeze gate entirely.
-    /// It sits beside `topic_denied` because it refuses for the same kind of
-    /// reason: nothing about this batch can earn the write.
-    pub(super) freeze: Option<&'a TopicFreezeRecord>,
+    /// The topic's authorization-and-freeze result, resolved once per topic.
+    /// Only `Frozen` carries registry detail, after authorization succeeded.
+    pub(super) freeze: FreezeMutationResolution<'a>,
     pub(super) txn_id_denied: bool,
     pub(super) acks: i16,
     pub(super) timeout: Duration,
@@ -94,7 +90,6 @@ pub(super) async fn process_partition(
         delivery,
         schema,
         topic_name,
-        topic_denied,
         freeze,
         txn_id_denied,
         acks,
@@ -133,11 +128,6 @@ pub(super) async fn process_partition(
         return Ok(out);
     }
 
-    if topic_denied {
-        out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-        return Ok(out);
-    }
-
     // ── KFC-9 write freeze ───────────────────────────────────────────
     // Beside the topic ACL denial, and ahead of `prepare_batch`, because a
     // freeze is an authority gate and not a content gate. It ranks with the
@@ -150,11 +140,18 @@ pub(super) async fn process_partition(
     // the producer state untouched and the log end offset unmoved. A refusal
     // that still appended would be the worst failure this feature can have,
     // and the error code alone does not rule it out.
-    if let Some(entry) = freeze {
-        metrics.record_topic_freeze_rejection(topic_name);
-        out.error_code = codes::POLICY_VIOLATION;
-        out.error_message = Some(FreezeVerdict::from(entry).error_message());
-        return Ok(out);
+    match freeze {
+        FreezeMutationResolution::AuthorizationDenied => {
+            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            return Ok(out);
+        }
+        FreezeMutationResolution::Frozen(entry) => {
+            metrics.record_topic_freeze_rejection(topic_name);
+            out.error_code = codes::POLICY_VIOLATION;
+            out.error_message = Some(FreezeVerdict::from(entry).error_message());
+            return Ok(out);
+        }
+        FreezeMutationResolution::Admit => {}
     }
 
     // ── max.message.bytes ────────────────────────────────────────────

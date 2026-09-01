@@ -14,7 +14,10 @@
 //! the producer reads.
 
 use krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord};
-use krabka_verified::{FreezeScopeDecision, FreezeScopeRank, freeze_scope_decision};
+use krabka_verified::{
+    FreezeMutationDecision, FreezeMutationKind, FreezeScopeDecision, FreezeScopeRank,
+    freeze_mutation_decision, freeze_scope_decision,
+};
 
 use crate::freeze::pattern_type_name;
 
@@ -38,6 +41,51 @@ pub(crate) fn resolve_topic_freeze<'a>(
         }
     }
     best
+}
+
+/// The authorization-and-freeze result shared by mutation adapters.
+///
+/// The frozen variant is the only one that carries registry detail. This
+/// keeps an unauthorized caller from observing a matching scope or reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FreezeMutationResolution<'a> {
+    AuthorizationDenied,
+    Frozen(&'a TopicFreezeRecord),
+    Admit,
+}
+
+/// Resolve one mutation through the verified authorization-first decision.
+///
+/// An unauthorized call does not inspect the freeze registry. Authorized
+/// calls use the same scope resolver as every other freeze-aware path.
+pub(crate) fn resolve_freeze_mutation<'a>(
+    image: &'a MetadataImage,
+    topic: &str,
+    authorized: bool,
+    kind: FreezeMutationKind,
+) -> FreezeMutationResolution<'a> {
+    if !authorized {
+        return match freeze_mutation_decision(false, false, kind) {
+            FreezeMutationDecision::AuthorizationDenied => {
+                FreezeMutationResolution::AuthorizationDenied
+            }
+            FreezeMutationDecision::Frozen | FreezeMutationDecision::Admit => {
+                unreachable!("an unauthorized freeze decision must deny authorization")
+            }
+        };
+    }
+
+    let freeze = resolve_topic_freeze(image, topic);
+    match freeze_mutation_decision(true, freeze.is_some(), kind) {
+        FreezeMutationDecision::AuthorizationDenied => {
+            unreachable!("an authorized freeze decision cannot deny authorization")
+        }
+        FreezeMutationDecision::Frozen => match freeze {
+            Some(record) => FreezeMutationResolution::Frozen(record),
+            None => unreachable!("a frozen decision must have a matching freeze record"),
+        },
+        FreezeMutationDecision::Admit => FreezeMutationResolution::Admit,
+    }
 }
 
 fn scope_rank(record: &TopicFreezeRecord, topic: &str) -> FreezeScopeRank {
@@ -91,6 +139,11 @@ impl FreezeVerdict {
         self.refusal("this deletion")
     }
 
+    /// The refusal text for a reassignment start, cancel, or completion.
+    pub(crate) fn reassignment_message(&self) -> String {
+        self.refusal("this reassignment")
+    }
+
     /// The refusal text, with `refused` naming what the freeze turned away.
     ///
     /// It names the freeze and the scope that matched, so the caller's on-call
@@ -132,7 +185,11 @@ mod tests {
     use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord};
     use uuid::Uuid;
 
-    use super::{FreezeVerdict, resolve_freeze_verdict, resolve_topic_freeze};
+    use super::{
+        FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation, resolve_freeze_verdict,
+        resolve_topic_freeze,
+    };
+    use krabka_verified::FreezeMutationKind;
 
     fn image() -> MetadataImage {
         MetadataImage::new(Uuid::from_u128(0x5150))
@@ -172,6 +229,29 @@ mod tests {
             check!(resolve_topic_freeze(&image, topic).is_none(), "{label}");
             check!(resolve_freeze_verdict(&image, topic).is_none(), "{label}");
         }
+    }
+
+    #[test]
+    fn mutation_resolution_hides_freeze_detail_until_authorized() {
+        let mut image = image();
+        image.apply(&MetadataRecord::V1TopicFreeze(freeze(
+            "orders",
+            PatternType::Literal,
+            "DR cutover",
+        )));
+
+        check!(
+            resolve_freeze_mutation(&image, "orders", false, FreezeMutationKind::Produce)
+                == FreezeMutationResolution::AuthorizationDenied
+        );
+        check!(matches!(
+            resolve_freeze_mutation(&image, "orders", true, FreezeMutationKind::Produce),
+            FreezeMutationResolution::Frozen(record) if record.reason == "DR cutover"
+        ));
+        check!(
+            resolve_freeze_mutation(&image, "orders", true, FreezeMutationKind::Replication)
+                == FreezeMutationResolution::Admit
+        );
     }
 
     #[test]

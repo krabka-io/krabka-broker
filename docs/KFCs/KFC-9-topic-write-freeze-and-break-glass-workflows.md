@@ -234,15 +234,17 @@ Two invariants follow, and a break in either one is a bug. A freeze never stops 
 | Follower replication | Allowed, always | Replication is what makes the frozen prefix durable. |
 | Barrier marker injection | Allowed | The broker authors it, it carries no application data, and a freeze is when an operator wants a cut. |
 | Compaction | Refused | Compaction removes records, and a promotion needs the frozen prefix byte-identical between sites. |
-| Retention eviction | Refused by the rule, with no gate to write | See below. |
+| Retention eviction | Refused | Local and remote retention both remove bytes. |
 | Tiering copy | Allowed | A copy adds a replica. The local eviction that follows removes bytes, so the broker refuses that. |
 | `DeleteRecords` and `DeleteTopics` | Refused | A break-glass approval for either one does not defeat a freeze. |
+| Reassignment start or cancel | Refused | Either request can schedule or perform replica removal. No row may consume an approval or append metadata while frozen. |
+| Reassignment completion | Allowed | The cluster accepted the reassignment before the freeze. Completion follows the same rule as a transaction marker. |
 
 The transaction marker rule is the one that most needs its reason stated. Refusing a marker would leave a permanently open transaction, which pins the last stable offset and stops every `read_committed` consumer of the partition. The freeze would then break reads, and a frozen topic that cannot be read is not the state this feature offers.
 
 That gives the rule its honest limit. **A freeze does not roll back a transaction that is already in flight.** A producer that enlisted a partition before the freeze can still commit what it already wrote. The log grows by those records after the freeze lands. The freeze stops the next `AddPartitionsToTxn` and the next produce, and it lets the open work finish. An operator who needs the log to stop at an exact offset should take a barrier cut, which is what [KFC-4](KFC-4-cross-topic-snapshots.md) is for.
 
-The retention row is a rule with nothing to enforce it, and this note is here because nothing else in the repository reports it. **Nothing in this workspace calls the log tick outside tests**, so no code path applies time retention or size retention to a live partition today. The rule is stated so that a sweeper written later gates on the freeze. A gate written into a path that nothing calls would be dead code that reads like a guarantee.
+The cleaner and remote-log-manager sweeps enforce the removal rows. A frozen topic can still copy a segment into the remote tier, but neither local nor remote retention may delete it. A thaw makes the next sweep eligible without another operator step.
 
 ### Internal Topics Are Never Freezable
 

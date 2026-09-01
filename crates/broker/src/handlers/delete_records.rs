@@ -51,6 +51,7 @@ use krabka_protocol::{
         delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     },
 };
+use krabka_verified::FreezeMutationKind;
 use uuid::Uuid;
 
 mod authz;
@@ -196,7 +197,15 @@ async fn trim_one(
     // produce gate, this refusal emits no privileged-action audit event: a
     // freeze is not a break-glass act, and the registry entry that caused it is
     // already in the metadata log.
-    if let Some(verdict) = crate::freeze::resolve::resolve_freeze_verdict(env.image, topic) {
+    if let crate::freeze::resolve::FreezeMutationResolution::Frozen(record) =
+        crate::freeze::resolve::resolve_freeze_mutation(
+            env.image,
+            topic,
+            true,
+            FreezeMutationKind::DeleteRecords,
+        )
+    {
+        let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
         tracing::warn!(
             %topic,
             partition = index,
