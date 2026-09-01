@@ -11,7 +11,7 @@ use super::QuorumStateMachine;
 use crate::{
     action::{Action, TimerKind},
     role::Role,
-    types::{NodeId, SimInstant},
+    types::{NodeId, ReplicaKey, SimInstant},
 };
 
 impl QuorumStateMachine {
@@ -96,12 +96,38 @@ impl QuorumStateMachine {
         self.adjacent_voters = None;
     }
 
+    fn voter_key_matches(&self, voters: &VoterSet, key: ReplicaKey) -> bool {
+        voters.get(key.id).is_some_and(|voter| {
+            self.state.kraft_version == 0 || voter.directory_id == key.directory_id
+        })
+    }
+
+    pub(super) fn local_voter_directory_matches(&self, directory_id: uuid::Uuid) -> bool {
+        self.state
+            .voters
+            .get(self.me)
+            .is_none_or(|voter| self.state.kraft_version == 0 || voter.directory_id == directory_id)
+    }
+
     pub(super) fn current_or_adjacent_voter(&self, id: NodeId) -> bool {
         self.state.voters.contains(id)
             || self
                 .adjacent_voters
                 .as_ref()
                 .is_some_and(|voters| voters.contains(id))
+    }
+
+    pub(super) fn current_or_adjacent_voter_key(&self, key: ReplicaKey) -> bool {
+        self.voter_key_matches(&self.state.voters, key)
+            || self
+                .adjacent_voters
+                .as_ref()
+                .is_some_and(|voters| self.voter_key_matches(voters, key))
+    }
+
+    pub(super) fn same_voter(&self, left: ReplicaKey, right: ReplicaKey) -> bool {
+        left.id == right.id
+            && (self.state.kraft_version == 0 || left.directory_id == right.directory_id)
     }
 
     /// Complete removal of the local leader after the reduced voter set has

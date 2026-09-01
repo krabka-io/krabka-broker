@@ -42,12 +42,7 @@ pub fn is_single_voter_majority(majority: usize) -> bool {
 }
 
 pub fn batch_base_in_apply_window(base_offset: i64, prev_hwm: Offset, applied_hwm: Offset) -> bool {
-    match base_offset.checked_sub(prev_hwm.0) {
-        Some(distance_from_prev) if distance_from_prev >= 0 => {
-            matches!(applied_hwm.0.checked_sub(base_offset), Some(distance_to_hwm) if distance_to_hwm > 0)
-        }
-        _ => false,
-    }
+    krabka_verified::raft::in_half_open_window(base_offset, prev_hwm.0, applied_hwm.0)
 }
 
 pub fn committed_records_since_snapshot(hwm: Offset, last_snapshot_end_offset: Offset) -> u64 {
@@ -62,31 +57,30 @@ pub fn snapshot_interval_reached(advanced: u64, snapshot_interval_records: u64) 
 }
 
 pub fn expected_hwm_after_advance(prev_hwm: Offset, new_hwm: Offset, log_end: Offset) -> Offset {
-    prev_hwm.max(new_hwm.min(log_end))
+    Offset(krabka_verified::raft::advance_high_watermark(
+        prev_hwm.0, new_hwm.0, log_end.0,
+    ))
 }
 
 pub fn hwm_advanced_as_expected(applied_hwm: Offset, expected_hwm: Offset) -> bool {
-    !applied_hwm.cmp(&expected_hwm).is_lt()
+    krabka_verified::raft::frontier_reaches(applied_hwm.0, expected_hwm.0)
 }
 
 pub fn hwm_reaches_waiter(hwm: Offset, need_offset: Offset) -> bool {
-    matches!(
-        hwm.cmp(&need_offset),
-        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater
-    )
+    krabka_verified::raft::frontier_reaches(hwm.0, need_offset.0)
 }
 
 pub fn metadata_fetch_offset_in_committed_window(
     fetch_offset: Offset,
     high_watermark: Offset,
 ) -> bool {
-    (0..high_watermark.0).contains(&fetch_offset.0)
+    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, high_watermark.0)
 }
 
 pub fn fetch_batch_committed_before_hwm(base_offset: i64, high_watermark: Offset) -> bool {
-    (i64::MIN..high_watermark.0).contains(&base_offset)
+    krabka_verified::raft::in_half_open_window(base_offset, i64::MIN, high_watermark.0)
 }
 
 pub fn fetch_offset_has_records(fetch_offset: Offset, log_end: Offset) -> bool {
-    (0..log_end.0).contains(&fetch_offset.0)
+    krabka_verified::raft::in_half_open_window(fetch_offset.0, 0, log_end.0)
 }

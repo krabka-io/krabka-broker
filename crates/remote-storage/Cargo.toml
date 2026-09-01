@@ -29,6 +29,7 @@ krabka-ids = { version = "0.4.0" }
 krabka-object-store = { version = "0.5.2", path = "../object-store" }
 krabka-protocol = { version = "0.4.0", default-features = false }
 krabka-units = { workspace = true }
+krabka-verified = { version = "0.5.2", path = "../verified" }
 derive_more = { workspace = true }
 # Streams the object listing, and the object bodies a deep verify re-hashes.
 futures-util = { workspace = true }

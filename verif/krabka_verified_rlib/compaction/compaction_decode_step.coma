@@ -1,0 +1,57 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 86 0 90 25 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span scompaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 91 27 91 28
+let%span scompaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 79 10 79 76
+let%span scompaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 80 10 82 44
+let%span scompaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 83 10 84 68
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_CompactionDecodeStep = Done | Continue | Corrupt
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let compaction_decode_step [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 86 0 90 25]
+  (remaining_before: UInt64.t) (decode_succeeded: bool) (remaining_after: UInt64.t)
+  (return (x: t_CompactionDecodeStep)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- remaining_before = ([%#scompaction] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Done ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {decode_succeeded = false} (! bb6) | br1 -> {decode_succeeded} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_17 <- UInt64.lt remaining_after remaining_before ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb6) | br1 -> {_17} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- Continue ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Corrupt ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_CompactionDecodeStep = Any.any_l ()
+  | & remaining_before: UInt64.t = remaining_before
+  | & decode_succeeded: bool = decode_succeeded
+  | & remaining_after: UInt64.t = remaining_after
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l () ])
+  [ return (result: t_CompactionDecodeStep) ->
+  {[@stop_split] [@expl:compaction_decode_step ensures] ([@stop_split] [@expl:compaction_decode_step ensures #0] [%#scompaction'0] (result
+        = Done)
+      = (UInt64.t'int remaining_before = 0))
+    /\ ([@stop_split] [@expl:compaction_decode_step ensures #1] [%#scompaction'1] (result = Continue)
+      = (gt_log_Int (UInt64.t'int remaining_before) 0
+      /\ decode_succeeded /\ UInt64.t'int remaining_after < UInt64.t'int remaining_before))
+    /\ ([@stop_split] [@expl:compaction_decode_step ensures #2] [%#scompaction'2] (result = Corrupt)
+    = (gt_log_Int (UInt64.t'int remaining_before) 0
+    /\ (not decode_succeeded \/ ge_log_Int (UInt64.t'int remaining_after) (UInt64.t'int remaining_before))))}
+    (! return {result}) ]

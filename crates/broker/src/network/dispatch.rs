@@ -34,6 +34,8 @@ mod session;
 mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod throttle_audit;
 mod unsupported_version;
 
 pub use self::accept::serve_connection_on_listener;
@@ -41,7 +43,7 @@ use self::{
     fetch::dispatch_fetch,
     guards::{ActiveConnectionGuard, InFlightGuard},
     registry::{DispatchContext, send_registry_response},
-    response::{encode_response, maybe_apply_request_quota},
+    response::{ResponseShape, encode_response, maybe_apply_request_quota},
     sasl::{SaslFrameOutcome, try_handle_sasl_frame},
     session::{initial_connection_auth, next_connection_frame},
 };
@@ -166,10 +168,19 @@ where
             return false;
         }
     };
+    // The reply is encoded at `response_version`, not at the version the
+    // client asked for, and its header flexibility follows that version. The
+    // throttle patch has to read the same pair or it writes over the wrong
+    // bytes: a request below a flexible-from-v0 API's minimum parses with a
+    // non-flexible header while the reply carries the flexible one.
+    let shape = ResponseShape {
+        version: response_version,
+        body_flexible: entry.body_flexible(response_version),
+    };
     let response = match encode_response(
         parsed.api_key,
         parsed.correlation_id,
-        entry.body_flexible(response_version),
+        shape.body_flexible,
         &body,
         broker.config.socket_request_max.bytes_usize(),
     ) {
@@ -179,7 +190,7 @@ where
             return false;
         }
     };
-    let response = maybe_apply_request_quota(broker, response, parsed, auth, started).await;
+    let response = maybe_apply_request_quota(broker, response, parsed, shape, auth, started).await;
     if let Err(error) = framed.send(response).await {
         tracing::warn!(%error, "framed.send error, closing");
         return false;

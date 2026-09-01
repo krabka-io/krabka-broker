@@ -6,6 +6,7 @@
 //! [`next_chain_stamp`] reads those receipts back and works out where the next
 //! manifest goes.
 
+use krabka_verified::{ChainStep, chain::select_chain_tip, chain_step};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -100,11 +101,15 @@ impl WormChainRecord {
     /// `None` for the request form, which has produced no head to chain onto.
     #[must_use]
     pub fn next_stamp(&self) -> Option<ChainStamp> {
-        self.head.map(|head| ChainStamp {
-            epoch_id: self.epoch_id,
-            seq: ManifestSeq(self.seq.0.saturating_add(1)),
-            prev_head: head,
-        })
+        let head = self.head?;
+        match chain_step(self.seq.0, self.seq.0, true) {
+            ChainStep::Continue(next) => Some(ChainStamp {
+                epoch_id: self.epoch_id,
+                seq: ManifestSeq(next),
+                prev_head: head,
+            }),
+            ChainStep::SequenceMismatch | ChainStep::HeadMismatch | ChainStep::Exhausted => None,
+        }
     }
 }
 
@@ -120,6 +125,9 @@ impl WormChainRecord {
 /// partition, or a restart on the non-durable in-memory metadata manager, and
 /// in both cases the old chain cannot be continued. A new epoch says so, rather
 /// than restarting the old chain at sequence zero and looking like a rewrite.
+/// Returns `None` when the selected receipt is at `u64::MAX`, because no later
+/// sequence exists and restarting at genesis would hide exhaustion as a new
+/// chain run.
 ///
 /// `new_epoch_id` is a parameter and not a `Uuid::new_v4()` call inside, so the
 /// function stays pure and testable.
@@ -127,39 +135,33 @@ impl WormChainRecord {
 pub fn next_chain_stamp(
     segments: &[RemoteLogSegmentMetadata],
     new_epoch_id: EpochId,
-) -> ChainStamp {
-    let mut best: Option<(i64, ManifestSeq, WormChainRecord)> = None;
+) -> Option<ChainStamp> {
+    let mut candidates = Vec::with_capacity(segments.len());
+    let mut receipts = Vec::with_capacity(segments.len());
     for md in segments {
-        if matches!(
+        let receipt = if matches!(
             md.state(),
             RemoteLogSegmentState::DeleteSegmentStarted
                 | RemoteLogSegmentState::DeleteSegmentFinished
         ) {
-            continue;
-        }
-        let Some(cm) = md.custom_metadata() else {
-            continue;
+            None
+        } else {
+            md.custom_metadata()
+                .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
+                .filter(|record| record.head.is_some())
         };
-        let Ok(record) = WormChainRecord::from_custom_metadata(cm) else {
-            continue;
-        };
-        if record.head.is_none() {
-            continue;
-        }
-        let rank = (md.start_offset(), record.seq);
-        if best
-            .as_ref()
-            .is_none_or(|(offset, seq, _)| (*offset, *seq) < rank)
-        {
-            best = Some((rank.0, rank.1, record));
-        }
+        let sequence = receipt.as_ref().map_or(0, |record| record.seq.0);
+        candidates.push((md.start_offset(), sequence, receipt.is_some()));
+        receipts.push(receipt);
     }
-    best.and_then(|(_, _, record)| record.next_stamp())
-        .unwrap_or(ChainStamp {
+    let Some(index) = select_chain_tip(&candidates) else {
+        return Some(ChainStamp {
             epoch_id: new_epoch_id,
             seq: ManifestSeq(0),
             prev_head: ChainHead::GENESIS,
-        })
+        });
+    };
+    receipts.get(index)?.as_ref()?.next_stamp()
 }
 
 #[cfg(test)]
@@ -223,11 +225,11 @@ mod tests {
         let fresh = EpochId(Uuid::from_u128(0xfeed));
         check!(
             next_chain_stamp(&[], fresh)
-                == ChainStamp {
+                == Some(ChainStamp {
                     epoch_id: fresh,
                     seq: ManifestSeq(0),
                     prev_head: ChainHead::GENESIS,
-                }
+                })
         );
     }
 
@@ -252,11 +254,11 @@ mod tests {
         ];
         check!(
             next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed)))
-                == ChainStamp {
+                == Some(ChainStamp {
                     epoch_id: epoch(),
                     seq: ManifestSeq(3),
                     prev_head: head(0xcc),
-                }
+                })
         );
     }
 
@@ -283,11 +285,11 @@ mod tests {
         ];
         check!(
             next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed)))
-                == ChainStamp {
+                == Some(ChainStamp {
                     epoch_id: epoch(),
                     seq: ManifestSeq(10),
                     prev_head: head(0xdd),
-                }
+                })
         );
     }
 
@@ -314,11 +316,11 @@ mod tests {
         ];
         check!(
             next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed)))
-                == ChainStamp {
+                == Some(ChainStamp {
                     epoch_id: epoch(),
                     seq: ManifestSeq(2),
                     prev_head: head(0xbb),
-                }
+                })
         );
     }
 
@@ -344,11 +346,11 @@ mod tests {
             ];
             check!(
                 next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed)))
-                    == ChainStamp {
+                    == Some(ChainStamp {
                         epoch_id: epoch(),
                         seq: ManifestSeq(2),
                         prev_head: head(0xbb),
-                    },
+                    }),
                 "case {name}"
             );
         }
@@ -386,8 +388,26 @@ mod tests {
                 RemoteLogSegmentState::CopySegmentFinished,
                 custom,
             )];
-            check!(next_chain_stamp(&segments, fresh) == expected, "case {name}");
+            check!(next_chain_stamp(&segments, fresh) == Some(expected), "case {name}");
         }
+    }
+
+    #[test]
+    fn next_chain_stamp_rejects_sequence_exhaustion() {
+        let exhausted = WormChainRecord::request(ChainStamp {
+            epoch_id: epoch(),
+            seq: ManifestSeq(u64::MAX),
+            prev_head: head(0xaa),
+        })
+        .with_head(head(0xbb))
+        .to_custom_metadata();
+        let segments = [sample_metadata(
+            100,
+            RemoteLogSegmentState::CopySegmentFinished,
+            Some(exhausted),
+        )];
+
+        check!(next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed))) == None);
     }
 
     #[test]

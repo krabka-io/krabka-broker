@@ -5,6 +5,7 @@
 
 use krabka_metadata::{MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
+use krabka_verified::consensus::{FailoverAction, FailoverRecovery, failover_action};
 
 use crate::config_keys::RecoveryStrategy;
 
@@ -71,10 +72,29 @@ pub(crate) fn failover_one(
         .filter(|n| **n != dead && alive.contains(n))
         .copied()
         .collect();
-    if pr.leader == dead {
-        // The new leader is the first alive ISR member that can serve clients.
-        let electable = alive_isr.iter().copied().find(|n| !witnesses.contains(n));
-        if let Some(new_leader) = electable {
+    // The new leader is the first alive ISR member that can serve clients.
+    let electable = alive_isr.iter().copied().find(|n| !witnesses.contains(n));
+    let unclean_candidate = pr
+        .replicas
+        .iter()
+        .find(|n| **n != dead && alive.contains(n) && !witnesses.contains(n))
+        .copied();
+    let recovery = match strategy {
+        RecoveryStrategy::None => FailoverRecovery::None,
+        RecoveryStrategy::Balanced => FailoverRecovery::Balanced,
+        RecoveryStrategy::Aggressive => FailoverRecovery::Aggressive,
+    };
+    match failover_action(
+        pr.leader == dead,
+        electable.is_some(),
+        alive_isr.is_empty(),
+        recovery,
+        unclean_enabled,
+        unclean_candidate.is_some(),
+        alive_isr.len() < pr.isr.len(),
+    ) {
+        FailoverAction::ElectClean => {
+            let new_leader = electable.expect("verified clean election has a candidate");
             // Clean: the new leader was in the ISR, so it holds every committed
             // record. No data loss.
             FailoverDecision::Elect {
@@ -82,31 +102,19 @@ pub(crate) fn failover_one(
                 isr: alive_isr,
                 unclean: false,
             }
-        } else if alive_isr.is_empty() {
-            match strategy {
-                RecoveryStrategy::Balanced | RecoveryStrategy::Aggressive => {
-                    FailoverDecision::Recover(strategy)
-                }
-                RecoveryStrategy::None if unclean_enabled => {
-                    // KIP-841: ISR is dead but the operator opted into possible
-                    // data loss. Elect the first alive replica, singleton ISR.
-                    // A witness serves no client, so it is not a candidate.
-                    match pr
-                        .replicas
-                        .iter()
-                        .find(|n| **n != dead && alive.contains(n) && !witnesses.contains(n))
-                    {
-                        Some(&new_leader) => FailoverDecision::Elect {
-                            leader: new_leader,
-                            isr: vec![new_leader],
-                            unclean: true,
-                        },
-                        None => FailoverDecision::Unavailable,
-                    }
-                }
-                RecoveryStrategy::None => FailoverDecision::Unavailable,
+        }
+        FailoverAction::Recover(_) => FailoverDecision::Recover(strategy),
+        FailoverAction::ElectUnclean => {
+            // KIP-841: ISR is dead but the operator opted into possible data
+            // loss. Elect the first alive non-witness replica, singleton ISR.
+            let new_leader = unclean_candidate.expect("verified unclean election has a candidate");
+            FailoverDecision::Elect {
+                leader: new_leader,
+                isr: vec![new_leader],
+                unclean: true,
             }
-        } else {
+        }
+        FailoverAction::Unavailable => {
             // Every alive ISR member is a witness. The partition is
             // unavailable, and that is the safe answer.
             //
@@ -120,10 +128,8 @@ pub(crate) fn failover_one(
             // still force an unclean election with `kafka-leader-election`.
             FailoverDecision::Unavailable
         }
-    } else if alive_isr.len() < pr.isr.len() {
-        FailoverDecision::ShrinkIsr { isr: alive_isr }
-    } else {
-        FailoverDecision::NoChange
+        FailoverAction::ShrinkIsr => FailoverDecision::ShrinkIsr { isr: alive_isr },
+        FailoverAction::NoChange => FailoverDecision::NoChange,
     }
 }
 

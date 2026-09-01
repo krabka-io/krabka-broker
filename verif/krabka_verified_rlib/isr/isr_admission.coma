@@ -1,0 +1,42 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 27 0 32 17 *)
+
+let%span sisr = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 19 10 19 78
+let%span sisr'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 20 10 21 70
+let%span sisr'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 22 10 23 88
+let%span sisr'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 24 10 25 87
+
+use creusot.prelude.Any
+
+type t_IsrAdmission = FencedLeaderEpoch | InvalidProposal | IneligibleReplica | Admit
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let isr_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 27 0 32 17]
+  (leader_epoch_matches: bool) (proposed_nonempty: bool) (proposed_subset: bool) (replicas_eligible: bool)
+  (return (x: t_IsrAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {leader_epoch_matches = false} (! bb1) | br1 -> {leader_epoch_matches} (! bb2) ]
+  | bb2 = any [ br0 -> {proposed_nonempty = false} (! bb4) | br1 -> {proposed_nonempty} (! bb3) ]
+  | bb3 = any [ br0 -> {proposed_subset = false} (! bb4) | br1 -> {proposed_subset} (! bb5) ]
+  | bb5 = any [ br0 -> {replicas_eligible = false} (! bb6) | br1 -> {replicas_eligible} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- IneligibleReplica ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- InvalidProposal ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- FencedLeaderEpoch ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IsrAdmission = Any.any_l ()
+  | & leader_epoch_matches: bool = leader_epoch_matches
+  | & proposed_nonempty: bool = proposed_nonempty
+  | & proposed_subset: bool = proposed_subset
+  | & replicas_eligible: bool = replicas_eligible ])
+  [ return (result: t_IsrAdmission) ->
+  {[@stop_split] [@expl:isr_admission ensures] ([@stop_split] [@expl:isr_admission ensures #0] [%#sisr] (result
+        = FencedLeaderEpoch)
+      = (not leader_epoch_matches))
+    /\ ([@stop_split] [@expl:isr_admission ensures #1] [%#sisr'0] (result = InvalidProposal)
+      = (leader_epoch_matches /\ (not proposed_nonempty \/ not proposed_subset)))
+    /\ ([@stop_split] [@expl:isr_admission ensures #2] [%#sisr'1] (result = IneligibleReplica)
+      = (leader_epoch_matches /\ proposed_nonempty /\ proposed_subset /\ not replicas_eligible))
+    /\ ([@stop_split] [@expl:isr_admission ensures #3] [%#sisr'2] (result = Admit)
+    = (leader_epoch_matches /\ proposed_nonempty /\ proposed_subset /\ replicas_eligible))}
+    (! return {result}) ]

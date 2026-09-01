@@ -22,7 +22,8 @@ pub struct StretchProfile {
     /// [`BrokerConfig::rack`] value that some node of the cluster reports.
     pub sites: Vec<String>,
     /// The site that holds the witness nodes. Nodes there carry
-    /// [`NodeRole::Witness`] and lead no partition.
+    /// [`NodeRole::Witness`][crate::config::NodeRole::Witness] and lead no
+    /// partition.
     pub witness_site: String,
     /// The site that partition leadership prefers while both data sites are
     /// up. It must not be [`witness_site`][StretchProfile::witness_site],

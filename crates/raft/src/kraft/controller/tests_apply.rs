@@ -33,7 +33,7 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
             blobs.extend(to_kraft_values(record, &scratch).expect("encode metadata"));
             scratch.apply(record);
         }
-        let mut batch = metadata_record_batch(1, &blobs);
+        let mut batch = metadata_record_batch(1, &blobs).expect("metadata batch");
         engine.log.append(&mut batch).expect("append metadata");
     }
     check!(

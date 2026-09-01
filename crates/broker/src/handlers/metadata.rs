@@ -146,12 +146,10 @@ pub(crate) async fn handle(
         },
     );
 
-    // controller_id: the current Raft leader, or -1 when unknown.
-    let controller_id: i32 = controller
-        .watch_leader()
-        .borrow()
-        .and_then(|id| i32::try_from(id.0).ok())
-        .unwrap_or(-1);
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
 
     // KIP-430: the cluster-level field only exists on the wire for v8-10;
     // the codegen drops it on other versions. Compute when the opt-in
@@ -320,7 +318,7 @@ fn success_topic_row(
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
-        is_internal: crate::handlers::is_internal_topic(name),
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
         topic_authorized_operations,
         ..Default::default()
     }
@@ -488,17 +486,5 @@ mod tests {
         let out = project_broker(&rec, "tls", "plain");
         assert!(out.host == "legacy-host");
         assert!(out.port == 1000);
-    }
-
-    #[test]
-    fn internal_topics_are_marked_in_metadata() {
-        for (name, expected) in [
-            ("__consumer_offsets", true),
-            ("__transaction_state", true),
-            ("__remote_log_metadata", true),
-            ("orders", false),
-        ] {
-            assert!(crate::handlers::is_internal_topic(name) == expected);
-        }
     }
 }

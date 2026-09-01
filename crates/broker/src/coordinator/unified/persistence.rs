@@ -99,6 +99,10 @@ pub struct OffsetCommitValue {
     pub leader_epoch: i32,
     pub metadata: String,
     pub commit_timestamp_ms: i64,
+    /// KIP-211: the per-commit expiry a v2-v4 `OffsetCommitRequest` asked for
+    /// through `retention_time_ms`, as an absolute wall-clock millisecond.
+    /// `None` means the commit takes the broker's `offsets.retention.minutes`.
+    pub expire_timestamp_ms: Option<i64>,
 }
 
 impl OffsetCommitValue {
@@ -113,15 +117,30 @@ impl OffsetCommitValue {
         buf.freeze()
     }
 
-    /// Encodes an `OffsetCommit` value, version 3.
+    /// Encodes an `OffsetCommit` value.
+    ///
+    /// The version depends on the record, exactly as Kafka's
+    /// `GroupMetadataManager.offsetCommitValue` picks it: a commit that
+    /// carries a per-commit expiry writes version 1, the newest schema with an
+    /// `expire_timestamp_ms` field, and every other commit writes version 3.
+    /// Version 1 has no `leader_epoch` field, so a per-commit expiry drops the
+    /// epoch the same way Kafka's does; a reader sees `-1`.
     #[must_use]
     pub fn encode_value(&self) -> Bytes {
         let mut buf = BytesMut::new();
-        buf.put_i16(3); // value version
+        let Some(expire_timestamp_ms) = self.expire_timestamp_ms else {
+            buf.put_i16(3); // value version
+            buf.put_i64(self.offset.0);
+            buf.put_i32(self.leader_epoch);
+            put_string(&mut buf, &self.metadata);
+            buf.put_i64(self.commit_timestamp_ms);
+            return buf.freeze();
+        };
+        buf.put_i16(1); // value version
         buf.put_i64(self.offset.0);
-        buf.put_i32(self.leader_epoch);
         put_string(&mut buf, &self.metadata);
         buf.put_i64(self.commit_timestamp_ms);
+        buf.put_i64(expire_timestamp_ms);
         buf.freeze()
     }
 
@@ -136,13 +155,18 @@ impl OffsetCommitValue {
         let leader_epoch = if version >= 3 { get_i32(&mut buf)? } else { -1 };
         let metadata = get_string(&mut buf)?;
         let commit_timestamp_ms = get_i64(&mut buf)?;
-        // Older versions carried an `expire_timestamp_ms` after commit_timestamp_ms;
-        // ignore any trailing bytes.
+        // Only version 1 carries the KIP-211 per-commit expiry.
+        let expire_timestamp_ms = if version == 1 {
+            Some(get_i64(&mut buf)?)
+        } else {
+            None
+        };
         Ok(Self {
             offset,
             leader_epoch,
             metadata,
             commit_timestamp_ms,
+            expire_timestamp_ms,
         })
     }
 }
@@ -375,6 +399,7 @@ mod tests {
             leader_epoch: 0,
             metadata: "meta".into(),
             commit_timestamp_ms: 1_000_000,
+            expire_timestamp_ms: None,
         };
         let encoded = v.encode_value();
         let decoded = OffsetCommitValue::decode_value(&encoded).unwrap();
@@ -383,6 +408,36 @@ mod tests {
         assert!(decoded.leader_epoch == 0);
         assert!(decoded.metadata == "meta");
         assert!(decoded.commit_timestamp_ms == 1_000_000);
+    }
+
+    /// KIP-211 / `GroupMetadataManager.offsetCommitValue`: a commit that
+    /// carries a per-commit expiry writes value version 1, the newest schema
+    /// with an `expire_timestamp_ms` field, and everything else writes version
+    /// 3. Version 1 has no `leader_epoch`, so a reader sees `-1`.
+    #[test]
+    fn offset_commit_value_version_follows_the_per_commit_expiry() {
+        let cases = [(None, 3_i16, 4_i32), (Some(9_999_999), 1_i16, -1_i32)];
+        for (expire_timestamp_ms, want_version, want_leader_epoch) in cases {
+            let value = OffsetCommitValue {
+                offset: Offset(42),
+                leader_epoch: 4,
+                metadata: "meta".into(),
+                commit_timestamp_ms: 1_000_000,
+                expire_timestamp_ms,
+            };
+            let encoded = value.encode_value();
+            assert!(i16::from_be_bytes([encoded[0], encoded[1]]) == want_version);
+
+            let decoded = OffsetCommitValue::decode_value(&encoded).unwrap();
+            let expected = OffsetCommitValue {
+                offset: Offset(42),
+                leader_epoch: want_leader_epoch,
+                metadata: "meta".into(),
+                commit_timestamp_ms: 1_000_000,
+                expire_timestamp_ms,
+            };
+            assert!(decoded == expected);
+        }
     }
 
     #[test]

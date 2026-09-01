@@ -35,7 +35,7 @@ async fn delete_removes_topic() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
     produce_n(&client, "t", tid, 0, 3).await;
 
     // Initialize the topic's share state via the join lifecycle + a consume, then
@@ -111,7 +111,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         let client = connect(&broker.listen_addr().to_string()).await;
         create_topic(&broker, &client, "t", 1).await;
         tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
         produce_n(&client, "t", tid, 0, 3).await;
 
         // Initialize the topic's share state via the join lifecycle + a consume,
@@ -195,7 +195,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         cfg.bootstrap_mode = BootstrapMode::Rejoin;
         let broker = Broker::start(cfg).await.unwrap();
         let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, &format!("g1:{tid}:0")).await;
+        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
 
         // After restart, the v14 seed no longer lists "t" (the rewrite removed
         // it), so the describe-by-name with empty partitions must STILL

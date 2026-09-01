@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/storage.rs" 8 0 8 81 *)
+
+let%span sstorage = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/storage.rs" 6 10 6 49
+
+use creusot.prelude.Any
+use creusot.int.Int64
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let future_log_swap_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/storage.rs" 8 0 8 81]
+  (current_leo: Int64.t) (future_leo: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- current_leo = future_leo ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & current_leo: Int64.t = current_leo | & future_leo: Int64.t = future_leo ])
+  [ return (result: bool) -> {[@stop_split] [@expl:future_log_swap_admission ensures] [%#sstorage] result
+    = (Int64.to_int current_leo = Int64.to_int future_leo)}
+    (! return {result}) ]
