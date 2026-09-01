@@ -36,6 +36,12 @@ pub(crate) struct RequestContext<'a> {
     /// on, exactly as Apache Kafka does. Handlers that do not project broker
     /// addresses ignore this field.
     pub connection_listener_name: &'a str,
+    /// KIP-219 throttle window for this request, filled in by whichever quota
+    /// the handler charged. The dispatch loop drains it with
+    /// [`RequestContext::take_throttle`] once the response is on the wire and
+    /// mutes the connection for that long. Handlers that charge no quota leave
+    /// it at zero.
+    pub throttle: crate::quota::ThrottleSlot,
     /// `true` when the listener that accepted this connection already decided
     /// that the peer may perform `ClusterAction`, so a handler must not deny
     /// the request for want of a principal.
@@ -81,6 +87,7 @@ impl<'a> RequestContext<'a> {
             connection_id,
             sendfile_capable,
             connection_listener_name,
+            throttle: crate::quota::ThrottleSlot::default(),
             listener_authorized_cluster_action: false,
         }
     }
@@ -92,6 +99,19 @@ impl<'a> RequestContext<'a> {
     pub(crate) const fn listener_authorized_for_cluster_action(mut self) -> Self {
         self.listener_authorized_cluster_action = true;
         self
+    }
+
+    /// Records the KIP-219 window this request must be throttled for. The
+    /// response still goes out immediately; the connection loop applies the
+    /// window afterwards by muting the connection.
+    pub(crate) fn record_throttle(&self, window: krabka_units::Time) {
+        self.throttle.record(window);
+    }
+
+    /// Drains the recorded KIP-219 window. It returns a zero extent when no
+    /// quota charged this request.
+    pub(crate) fn take_throttle(&self) -> krabka_units::Time {
+        self.throttle.take()
     }
 
     /// Kafka's group coordinator stores `InetAddress::toString()`, which is

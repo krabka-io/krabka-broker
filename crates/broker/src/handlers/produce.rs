@@ -307,9 +307,10 @@ pub(crate) async fn handle(
 
     // ── KIP-13 producer_byte_rate + KIP-124 request_percentage ──────
     // Combine the data (byte-rate) and request (handler-time) throttles as
-    // their max, surface it in throttle_time_ms, and mute the channel once
-    // before responding (KIP-219). The dispatch loop skips request_percentage
-    // for Produce so it is charged exactly once, here.
+    // their max, surface it in throttle_time_ms, and record it on `ctx` so the
+    // dispatch loop mutes the channel once the response is written (KIP-219).
+    // The dispatch loop skips request_percentage for Produce so it is charged
+    // exactly once, here.
     finish_produce_response(
         broker,
         &image,
@@ -319,7 +320,6 @@ pub(crate) async fn handle(
         topic_results,
         version,
     )
-    .await
 }
 
 /// Whether Kafka requires a response for this Produce request. `acks=0`
