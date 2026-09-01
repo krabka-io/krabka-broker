@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_metadata_record_coordinates": {
+        "prover": "alt-ergo",
+        "time": 0.012
+      }
+    }
+  }
+}
