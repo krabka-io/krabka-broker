@@ -43,6 +43,12 @@
 //! projection and elects a surviving ELR member ahead of any longer log that
 //! is not one, because only the ELR member is known to hold every committed
 //! record.
+//!
+//! That is also why the state has to be withdrawn when it stops being true.
+//! [`records_for_restarted_broker`] withdraws the published half of it for the
+//! one event that ends a membership without any partition changing: a broker
+//! returning under a new incarnation id, whose current log need not be the log
+//! that made it eligible. Its own docs carry what that leaves open.
 
 pub(crate) mod maintain;
 pub(crate) mod state;
@@ -50,4 +56,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{maintain::ElrPublisher, state::TopicElr};
+pub(crate) use self::{
+    maintain::{ElrPublisher, records_for_restarted_broker},
+    state::TopicElr,
+};

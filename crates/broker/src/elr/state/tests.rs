@@ -63,3 +63,51 @@ fn of_topic_reads_the_published_config_and_defaults_to_no_elr() {
     assert!(TopicElr::of_topic(&image, "orders").partition(1) == elr(&[], &[]));
     assert!(TopicElr::of_topic(&image, "payments").partition(0) == elr(&[], &[]));
 }
+
+/// A broker that has come back as a new process stops being eligible and
+/// becomes last-known, for every partition that named it, and a partition
+/// that never named it is untouched.
+#[test]
+fn demote_node_moves_it_to_the_last_known_set() {
+    for (label, value, node, moved, want) in [
+        (
+            "the only eligible member becomes last-known",
+            "0:3:",
+            3,
+            true,
+            "0::3",
+        ),
+        (
+            "the others keep their places",
+            "0:2,3:4",
+            3,
+            true,
+            "0:2:3,4",
+        ),
+        (
+            "every partition that named it moves",
+            "0:3:;1:2,3:",
+            3,
+            true,
+            "0::3;1:2:3",
+        ),
+        (
+            "a member that is already last-known is not listed twice",
+            "0:3:3",
+            3,
+            true,
+            "0::3",
+        ),
+        (
+            "a node no partition names moves nothing",
+            "0:2:4",
+            3,
+            false,
+            "0:2:4",
+        ),
+    ] {
+        let mut elr = TopicElr::parse(value);
+        assert!(elr.demote_node(node) == moved, "{label}");
+        assert!(elr.render() == want, "{label}");
+    }
+}

@@ -218,6 +218,13 @@ impl BackgroundRecovery {
     /// The event names the controller that acted rather than a person, and its
     /// source endpoint is empty, because no connection carried this recovery.
     /// That absence is the whole reason the path cannot have a gate.
+    ///
+    /// It does carry the proposal id when the job has one. An operator-typed
+    /// recovery reaches the URM with the approval its handler already spent,
+    /// and the applied event is the one that records the election as
+    /// authorized rather than a bypass; without the id, nothing joins that
+    /// record to the approval that authorized it. A background job has no
+    /// proposal and the field stays empty, which is what a refusal always is.
     fn emit(
         &self,
         phase: PrivilegedPhase,
@@ -243,7 +250,7 @@ impl BackgroundRecovery {
             phase,
             action: action_name(BreakGlassAction::UncleanRecovery).to_owned(),
             target: format!("{}-{}", job.topic, job.partition),
-            proposal_id: String::new(),
+            proposal_id: job.proposal.map(|id| id.to_string()).unwrap_or_default(),
             principal: AuditPrincipal {
                 name: format!("Controller:{}", node_id.0),
                 auth_method: "Internal".to_owned(),

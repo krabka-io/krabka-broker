@@ -198,7 +198,7 @@ impl UncleanRecoveryManager {
         if has_newer_leader(&collected, known_epoch.0) {
             return RecoveryOutcome::Stale;
         }
-        let Some(election) = select_leader(&collected, &eligible) else {
+        let Some(election) = Self::elect_from(&image, &eligible, &collected) else {
             return RecoveryOutcome::NoEligibleReplica;
         };
         // KFC-9 again: the ELR did not save this one, so the rule applies.
@@ -234,6 +234,28 @@ impl UncleanRecoveryManager {
              and no proposal approved it; the partition stays offline"
         );
         RecoveryOutcome::BreakGlassRequired
+    }
+
+    /// The leader this recovery elects out of the poll it collected, and the
+    /// rule that chose it. `None` when nothing that may lead answered.
+    ///
+    /// Both rules are pure and live in [`select_leader`]. What the image adds
+    /// is the `broker.witness` set: a witness replicates the partition and can
+    /// be published as an eligible leader replica, and it must still never
+    /// lead, because it serves no client. The poll above queries it anyway --
+    /// its `current_leader_epoch` is what tells this recovery that a newer
+    /// leader has already superseded it -- so the exclusion belongs here,
+    /// between the staleness check and the election.
+    fn elect_from(
+        image: &MetadataImage,
+        eligible: &[i32],
+        responses: &[ReplicaLogInfo],
+    ) -> Option<Election> {
+        select_leader(
+            responses,
+            eligible,
+            &crate::config_keys::witness_node_ids(image),
+        )
     }
 
     /// Builds and submits the `PartitionRecord` that elects `election.leader`

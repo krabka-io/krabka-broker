@@ -58,7 +58,7 @@ use std::{io, net::SocketAddr, time::Duration};
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
 use krabka_broker::BrokerHandle;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord};
+use krabka_metadata::{BrokerConfigRecord, MetadataRecord, PartitionRecord, TopicConfigRecord};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -79,6 +79,11 @@ const ELECT_LEADERS_VERSION: i16 = 2;
 /// `crate::config_keys::ELIGIBLE_LEADER_REPLICAS`, which a test crate cannot
 /// name.
 const ELR_CONFIG_KEY: &str = "krabka.elr";
+
+/// The controller-managed broker config that carries the witness role. It is
+/// `crate::config_keys::BROKER_WITNESS`, which a test crate cannot name, and a
+/// witness node publishes it for itself at registration.
+const WITNESS_CONFIG_KEY: &str = "broker.witness";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal wire helpers — bare TCP on PLAINTEXT, no SASL.
@@ -295,7 +300,7 @@ fn topic_config(topic: &str, elr: Option<&str>) -> MetadataRecord {
 /// is different from a simple "first alive replica" pick.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_recovery_elects_longest_log_replica() {
-    run_unclean_recovery(None, 2).await;
+    run_unclean_recovery(None, None, 2).await;
 }
 
 /// KIP-966: a surviving eligible leader replica outranks a longer log that is
@@ -305,7 +310,19 @@ async fn unclean_recovery_elects_longest_log_replica() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_recovery_prefers_an_eligible_leader_replica() {
     // `krabka.elr` grammar: partition 0 has ELR {3} and no last-known ELR.
-    run_unclean_recovery(Some("0:3:"), 3).await;
+    run_unclean_recovery(Some("0:3:"), None, 3).await;
+}
+
+/// A witness replicates the partition and can be published as an eligible
+/// leader replica, and it must still never lead: `broker.witness` means the
+/// node serves no client, so a partition it leads is as unusable as the
+/// offline one. Broker 3 is partition 0's only ELR member here and carries the
+/// role, so recovery has to fall back to broker 2's longest surviving log --
+/// the answer that is reported as data-losing rather than the one that is
+/// reported as free.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unclean_recovery_never_elects_a_witness_from_the_elr() {
+    run_unclean_recovery(Some("0:3:"), Some(3), 2).await;
 }
 
 /// Leaves partition 0 of `topic` offline on an RF=3 cluster, with the three
@@ -417,7 +434,7 @@ async fn offline_partition_with_diverged_logs(
 /// `[1, 2, 3]`. It runs the scenario the module docs describe with `elr`
 /// published as partition 0's eligible-leader-replica set, and asserts that
 /// `expected_leader` wins the `ElectLeaders(UNCLEAN)` that follows.
-async fn run_unclean_recovery(elr: Option<&str>, expected_leader: u64) {
+async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_leader: u64) {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _g = lock.lock().await;
@@ -432,6 +449,28 @@ async fn run_unclean_recovery(elr: Option<&str>, expected_leader: u64) {
     let h3 = &cluster[2].0; // broker_id 3
 
     offline_partition_with_diverged_logs(addr, topic, [h1, h2, h3]).await;
+
+    // ── Publish `broker.witness=true` for the node this case makes a witness,
+    //    which is the path a witness node's own registration takes. It goes in
+    //    before the ELR value below: a broker-config record carries no
+    //    partition change, so no controller path recomputes the ELR from it,
+    //    and this keeps the last write the one the URM reads. ──
+    if let Some(id) = witness {
+        h1.submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: krabka_broker::NodeId(id),
+            config_name: WITNESS_CONFIG_KEY.to_string(),
+            config_value: Some("true".to_string()),
+        }))
+        .await
+        .expect("publish broker.witness for the witness node");
+        // Event-driven: await the role in the image the URM reads.
+        h1.wait_for_image(|img| {
+            img.broker_config(krabka_broker::NodeId(id))
+                .and_then(|configs| configs.get(WITNESS_CONFIG_KEY))
+                .is_some_and(|value| value == "true")
+        })
+        .await;
+    }
 
     // ── Publish the eligible-leader-replica set, if this case has one. It
     //    goes in last: a `V1TopicConfig` replaces the topic's whole override

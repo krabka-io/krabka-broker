@@ -34,8 +34,29 @@
 //! The ordering does not depend on `unclean.recovery.strategy`. Kafka's check
 //! is strategy-blind, and so is this one: a `Balanced` recovery prefers an ELR
 //! member over a longer non-ELR log, and so does an `Aggressive` one.
+//!
+//! # A witness is never a candidate
+//!
+//! `isAcceptableLeader` is the second half of the test quoted above, and
+//! krabka's version of it carries one rule Kafka has no role for. A
+//! `broker.witness` node replicates the partition and counts toward
+//! `min.insync.replicas`, but it serves no client and must never lead: that is
+//! what the role means, and every other election path enforces it through
+//! [`witness_node_ids`](crate::config_keys::witness_node_ids) -- `failover_one`
+//! for both failover scans, `ElectLeaders` for the operator-typed elections. A
+//! witness elected here would be installed as the partition's singleton ISR
+//! and would then answer no produce and no fetch, leaving the partition as
+//! unusable as the offline one recovery started from.
+//!
+//! [`select_leader`] therefore drops the witnesses before either rule reads
+//! the responses, ELR membership included. A witness can be published as an
+//! eligible leader replica -- it leaves an under-min-ISR set like any other
+//! replica, and its completeness is real -- but completeness is not what
+//! disqualifies it. Losing its vote can leave the fallback as the only
+//! election available, and that election is then reported as the data-losing
+//! one it is rather than hidden behind a leader nobody can reach.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use krabka_raft::NodeId;
 
@@ -119,10 +140,25 @@ pub(crate) struct Election {
 /// only in which correct answer they give, and reusing the one comparator
 /// keeps a single ranking in the code.
 ///
-/// Returns `None` when nothing answered.
-pub(crate) fn select_leader(responses: &[ReplicaLogInfo], eligible: &[i32]) -> Option<Election> {
+/// `witnesses` is the cluster's `broker.witness` set, and neither rule may
+/// elect one, so they leave before either rule runs. A witness that is
+/// published as an eligible leader replica is still a node that serves no
+/// client, and electing it would install a leader no producer or consumer can
+/// reach.
+///
+/// Returns `None` when nothing that may lead answered.
+pub(crate) fn select_leader(
+    responses: &[ReplicaLogInfo],
+    eligible: &[i32],
+    witnesses: &HashSet<NodeId>,
+) -> Option<Election> {
     let eligible: BTreeSet<i32> = eligible.iter().copied().collect();
-    let from_elr: Vec<ReplicaLogInfo> = responses
+    let electable: Vec<ReplicaLogInfo> = responses
+        .iter()
+        .copied()
+        .filter(|r| !witnesses.contains(&r.broker_id))
+        .collect();
+    let from_elr: Vec<ReplicaLogInfo> = electable
         .iter()
         .copied()
         .filter(|r| i32::try_from(r.broker_id.0).is_ok_and(|id| eligible.contains(&id)))
@@ -133,7 +169,7 @@ pub(crate) fn select_leader(responses: &[ReplicaLogInfo], eligible: &[i32]) -> O
             basis: ElectionBasis::EligibleLeaderReplica,
         });
     }
-    select_best_replica(responses).map(|leader| Election {
+    select_best_replica(&electable).map(|leader| Election {
         leader,
         basis: ElectionBasis::MostCompleteLog,
     })
@@ -153,6 +189,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::leader_election::test_support::{no_witnesses, witnesses};
 
     fn ri(broker_id: u64, epoch: i32, leo: i64) -> ReplicaLogInfo {
         ReplicaLogInfo {
@@ -228,14 +265,70 @@ mod tests {
             ),
         ];
         for (label, eligible, expected) in cases {
-            check!(select_leader(&responses, &eligible) == expected, "{label}");
+            check!(
+                select_leader(&responses, &eligible, &no_witnesses()) == expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// A witness replicates the partition and can be published as an eligible
+    /// leader replica, and neither rule may elect one: the node serves no
+    /// client, so a partition it leads is as unusable as the offline one. Each
+    /// case gives the same three responders a different ELR and witness set,
+    /// and names the whole election it must produce.
+    #[test]
+    fn no_rule_elects_a_witness() {
+        // Broker 2 holds the longest log, broker 1 is shorter, and broker 3 is
+        // shortest.
+        let responses = [ri(1, 5, 40), ri(2, 5, 400), ri(3, 5, 20)];
+        let fallback_to = |leader: u64| {
+            Some(Election {
+                leader: NodeId(leader),
+                basis: ElectionBasis::MostCompleteLog,
+            })
+        };
+        let cases = [
+            (
+                "the only ELR member is a witness, so the fallback decides",
+                vec![3],
+                vec![3],
+                fallback_to(2),
+            ),
+            (
+                "a data ELR member still outranks the longest log",
+                vec![1, 3],
+                vec![3],
+                Some(Election {
+                    leader: NodeId(1),
+                    basis: ElectionBasis::EligibleLeaderReplica,
+                }),
+            ),
+            (
+                "the fallback skips the witness that holds the longest log",
+                vec![],
+                vec![2],
+                fallback_to(1),
+            ),
+            (
+                "nothing that may lead answered",
+                vec![3],
+                vec![1, 2, 3],
+                None,
+            ),
+        ];
+        for (label, eligible, witness_ids, expected) in cases {
+            check!(
+                select_leader(&responses, &eligible, &witnesses(&witness_ids)) == expected,
+                "{label}"
+            );
         }
     }
 
     #[test]
     fn no_response_elects_nobody_however_the_elr_reads() {
-        check!(select_leader(&[], &[]) == None);
-        check!(select_leader(&[], &[1, 2]) == None);
+        check!(select_leader(&[], &[], &no_witnesses()) == None);
+        check!(select_leader(&[], &[1, 2], &no_witnesses()) == None);
     }
 
     #[test]
