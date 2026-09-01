@@ -10,6 +10,7 @@ pub mod audit;
 pub mod authz;
 pub mod barrier;
 pub mod break_glass;
+pub mod break_glass_persistence;
 pub mod broker;
 pub mod chain;
 pub mod checkpoint;
@@ -69,6 +70,11 @@ pub use barrier::{
     barrier_marker_fence_decision, barrier_placement_decision, barrier_target_count_decision,
 };
 pub use break_glass::{BreakGlassAdmission, break_glass_admission, select_break_glass_candidate};
+pub use break_glass_persistence::{
+    BreakGlassConsumptionDecision, BreakGlassConsumptionFacts, BreakGlassLocalActionDecision,
+    BreakGlassLocalActionFacts, BreakGlassLocalSpendState, BreakGlassProposalState,
+    break_glass_consumption_decision, break_glass_local_action_decision,
+};
 pub use broker::{
     FetchVisibility, FetchWatermarks, ReplicaFetchMutation, delete_records_offset_out_of_range,
     delete_records_target, effective_share_backlog, fetch_visibility,

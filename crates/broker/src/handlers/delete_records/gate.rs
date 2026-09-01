@@ -18,6 +18,7 @@ use crate::{
         gate::{self, BreakGlassDenial},
         handlers::audit::{GatedTransition, audit_transition},
         metrics as break_glass_metrics,
+        persistence::spend_before_local_action,
     },
     broker::Broker,
     codes,
@@ -49,29 +50,6 @@ pub(super) fn authorize_trim(
     .map(Some)
 }
 
-/// The records that spending this approval appends, and the proposal they name.
-///
-/// A trim writes no metadata record, so the append carries the consume alone.
-/// The record list is empty when there is nothing to append: the broker gates
-/// nothing, or this request already spent the proposal on another partition
-/// that one topic-wide approval covers.
-fn consume_records(
-    spent: &mut HashSet<Uuid>,
-    consumed: Option<MetadataRecord>,
-) -> (Option<Uuid>, Vec<MetadataRecord>) {
-    let Some(consumed) = consumed else {
-        return (None, Vec::new());
-    };
-    let Some(proposal_id) = consumed_proposal_id(&consumed) else {
-        return (None, Vec::new());
-    };
-    if spent.insert(proposal_id) {
-        (Some(proposal_id), vec![consumed])
-    } else {
-        (Some(proposal_id), Vec::new())
-    }
-}
-
 /// Append the consumed proposal, and answer the proposal it names.
 ///
 /// # Errors
@@ -82,12 +60,17 @@ pub(super) async fn spend_approval(
     broker: &Broker,
     spent: &mut HashSet<Uuid>,
     consumed: Option<MetadataRecord>,
+    target: &str,
 ) -> Result<Option<Uuid>, krabka_raft::RaftError> {
-    let (proposal_id, records) = consume_records(spent, consumed);
-    if !records.is_empty() {
-        broker.controller.submit_change(records).await?;
-    }
-    Ok(proposal_id)
+    spend_before_local_action(
+        broker,
+        spent,
+        consumed,
+        gate::is_gated(&broker.config.break_glass),
+        BreakGlassAction::DeleteRecords,
+        target,
+    )
+    .await
 }
 
 /// Refuse one partition: count it, audit it, and build its error row.
@@ -139,11 +122,13 @@ pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
+    use krabka_metadata::{BreakGlassAction, MetadataImage};
 
-    use super::*;
+    use super::authorize_trim;
+    use crate::config::BreakGlassConfig;
     use crate::handlers::delete_records::test_support::{
-        NOW_MS, PROPOSAL, approved_proposal, gated_config, image_of,
+        approved_proposal, gated_config, image_of,
     };
 
     #[test]
@@ -188,24 +173,5 @@ mod tests {
 
         check!(denial.action == BreakGlassAction::DeleteRecords);
         check!(denial.target == "orders-3");
-    }
-
-    #[test]
-    fn the_append_carries_the_consume_alone_and_spends_it_once() {
-        let consumed =
-            MetadataRecord::V1BreakGlassProposal(krabka_metadata::BreakGlassProposalRecord {
-                consumed_at_ms: NOW_MS,
-                ..approved_proposal("orders")
-            });
-        let mut spent = HashSet::new();
-
-        let first = consume_records(&mut spent, Some(consumed.clone()));
-        let second = consume_records(&mut spent, Some(consumed.clone()));
-        let ungated = consume_records(&mut spent, None);
-
-        // A trim writes no metadata record, so the consume is the whole append.
-        assert!(first == (Some(PROPOSAL), vec![consumed]));
-        assert!(second == (Some(PROPOSAL), vec![]));
-        assert!(ungated == (None, vec![]));
     }
 }

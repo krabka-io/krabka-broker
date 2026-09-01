@@ -5,15 +5,18 @@
 use std::time::Duration as StdDuration;
 
 use assert2::{assert, check};
+use krabka_ids::Offset;
+use tokio::sync::oneshot;
 
-use super::*;
-use crate::kraft::{
-    controller::test_support::{
-        await_leader, build, build_engine_only, elect_leader_with_helper,
-        elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
-        topic_record_named,
-    },
-    transport::NullPeerSender,
+use super::CommitWaiter;
+use crate::kraft::controller::test_support::{
+    await_leader, build, build_engine_only, elect_leader_with_helper, elect_single_voter_engine,
+    one_offset_batch, submit_change_with_timeout, topic_record, topic_record_named,
+};
+use crate::{
+    SubmitChangeResult,
+    error::RaftError,
+    kraft::{event::Event, types::NodeId},
 };
 
 #[test]
@@ -157,6 +160,106 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     assert!(second.offset_reservations[0].count == 5);
     assert!(second.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
     assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(8));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
+    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
+    use uuid::Uuid;
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    let proposal = BreakGlassProposalRecord {
+        proposal_id: Uuid::from_u128(0x271),
+        action: BreakGlassAction::DeleteRecords,
+        target: "orders-3".to_owned(),
+        proposer: "User:alice".to_owned(),
+        reason: "incident".to_owned(),
+        created_at_ms: 1,
+        expires_at_ms: 1_000,
+        approvals: Vec::new(),
+        consumed_at_ms: 0,
+        withdrawn: false,
+    };
+
+    let create_ctrl = ctrl.clone();
+    let proposed = proposal.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    for malformed in [
+        BreakGlassProposalRecord {
+            consumed_at_ms: -1,
+            ..proposal.clone()
+        },
+        BreakGlassProposalRecord {
+            target: "orders-4".to_owned(),
+            consumed_at_ms: 10,
+            ..proposal.clone()
+        },
+    ] {
+        let result = ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(malformed)])
+            .await;
+        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    }
+
+    let consumed = BreakGlassProposalRecord {
+        consumed_at_ms: i64::MAX,
+        ..proposal.clone()
+    };
+    let first_ctrl = ctrl.clone();
+    let first_record = consumed.clone();
+    let first = tokio::spawn(async move {
+        first_ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(first_record)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())]),
+    )
+    .await
+    .expect("a concurrent consume must be rejected before append");
+    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    first.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .break_glass_proposal(proposal.proposal_id)
+            .is_some_and(|stored| stored.consumed_at_ms == i64::MAX)
+    );
+
+    let retry = ctrl
+        .submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed)])
+        .await;
+    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
     ctrl.shutdown().await;
 }
 

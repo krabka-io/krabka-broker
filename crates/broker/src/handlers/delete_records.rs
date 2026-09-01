@@ -262,7 +262,7 @@ async fn trim_one(
     }
 
     // KFC-9: spend the approval before the trim removes anything.
-    let proposal_id = match spend_approval(env.broker, spent, consumed).await {
+    let proposal_id = match spend_approval(env.broker, spent, consumed, &audit_target).await {
         Ok(proposal_id) => proposal_id,
         Err(error) => {
             tracing::warn!(

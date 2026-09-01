@@ -3,7 +3,7 @@
 //! the parked commit waiters that the high watermark later resolves or fails.
 
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataRecord, to_kraft_values};
+use krabka_metadata::{BreakGlassProposalRecord, MetadataRecord, to_kraft_values};
 use tokio::sync::oneshot;
 
 use super::{
@@ -18,6 +18,45 @@ use crate::kraft::role::Role;
 use crate::{OffsetReservation, SubmitChangeResult, error::RaftError};
 
 impl Engine {
+    fn consumption_matches_stored(
+        stored: &BreakGlassProposalRecord,
+        consumed: &BreakGlassProposalRecord,
+    ) -> bool {
+        let mut expected = stored.clone();
+        expected.consumed_at_ms = consumed.consumed_at_ms;
+        expected == *consumed
+    }
+
+    fn break_glass_consumption_decision(
+        &self,
+        consumed: &BreakGlassProposalRecord,
+    ) -> krabka_verified::BreakGlassConsumptionDecision {
+        let stored = self.image.break_glass_proposal(consumed.proposal_id);
+        let proposal = match stored {
+            None => krabka_verified::BreakGlassProposalState::Missing,
+            Some(stored)
+                if Self::consumption_matches_stored(stored, consumed)
+                    && stored.consumed_at_ms == 0
+                    && !stored.withdrawn =>
+            {
+                krabka_verified::BreakGlassProposalState::ExactPending
+            }
+            Some(_) => krabka_verified::BreakGlassProposalState::Stale,
+        };
+        krabka_verified::break_glass_consumption_decision(
+            krabka_verified::BreakGlassConsumptionFacts {
+                proposal,
+                consumed_at_ms: consumed.consumed_at_ms,
+                // A consume is a security-sensitive compare-and-set. Require
+                // the committed image to cover the whole log prefix before
+                // appending it. This conservative fence survives leadership
+                // loss, where a waiter can disappear while its uncommitted
+                // log entry remains and may later commit.
+                uncommitted_tail: self.log.hwm() < self.log.log_end_offset(),
+            },
+        )
+    }
+
     /// Handle a `submit_change`: leader appends + parks a waiter; non-leader
     /// rejects immediately with the leader hint.
     #[tracing::instrument(
@@ -59,6 +98,23 @@ impl Engine {
                 "leader epoch must commit before reserving offsets".to_string(),
             )));
             return;
+        }
+
+        for record in records {
+            let MetadataRecord::V1BreakGlassProposal(consumed) = record else {
+                continue;
+            };
+            if consumed.consumed_at_ms == 0 {
+                continue;
+            }
+            let decision = self.break_glass_consumption_decision(consumed);
+            if decision != krabka_verified::BreakGlassConsumptionDecision::Append {
+                let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                    "break-glass consume {} rejected: {decision:?}",
+                    consumed.proposal_id
+                ))));
+                return;
+            }
         }
 
         // Pre-validate and translate to KIP-631 value blobs in ONE pass against
@@ -186,7 +242,6 @@ impl Engine {
             return;
         }
         let need_offset = submit_waiter_need_offset(base, value_blobs.len());
-
         // Park the waiter, then try to advance the HWM immediately: a single
         // voter commits its own append with no peer fetch.
         self.commit_waiters.push(CommitWaiter {
