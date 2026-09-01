@@ -4,7 +4,8 @@
 //! react to specific codes, so a substitution changes client behavior. Every
 //! constant in the Kafka range comes from `Errors.values()` in the
 //! `kafka-clients` jar of the pinned `apache/kafka:4.3.1` image, and a guard
-//! test in [`tests`] re-checks each one against that extracted table.
+//! test in the private `tests` module re-checks each one against that extracted
+//! table.
 //!
 //! One fenced block at the end of this file holds the krabka-private codes at
 //! 1000 and above. A broker returns those only on a krabka-private api key.
