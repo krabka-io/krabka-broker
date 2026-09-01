@@ -12,6 +12,92 @@ pub struct RetentionPrefix {
     pub remaining_size_debt: u64,
 }
 
+/// Select the oldest contiguous local-log prefix allowed by age or size
+/// retention while preserving scheduled data and at least one segment.
+#[requires(time_expired@.len() == scheduled@.len())]
+#[requires(time_expired@.len() == sizes@.len())]
+#[ensures(result.len@ <= time_expired@.len())]
+#[ensures(!has_active && time_expired@.len() > 0 ==>
+    result.len@ < time_expired@.len())]
+#[ensures(result.remaining_size_debt@ <= initial_size_debt@)]
+#[ensures(forall<i: Int> 0 <= i && i < result.len@ ==> !scheduled@[i])]
+#[ensures(initial_size_debt@ == 0 ==>
+    forall<i: Int> 0 <= i && i < result.len@ ==> time_expired@[i])]
+#[ensures(initial_size_debt@ > 0
+    && time_expired@.len() > 0
+    && (has_active || time_expired@.len() > 1)
+    && !scheduled@[0]
+    && sizes@[0]@ > 0
+    ==> result.len@ > 0)]
+#[ensures(result.len@ > 0 && initial_size_debt@ > 0 && sizes@[0]@ > 0 ==>
+    result.remaining_size_debt@ < initial_size_debt@)]
+#[allow(
+    clippy::implicit_saturating_sub,
+    clippy::len_zero,
+    reason = "Creusot needs explicit length and subtraction branches for the progress proof"
+)]
+#[must_use]
+pub fn local_retention_prefix(
+    time_expired: &[bool],
+    scheduled: &[bool],
+    sizes: &[u64],
+    initial_size_debt: u64,
+    has_active: bool,
+) -> RetentionPrefix {
+    if time_expired.len() == 0 {
+        return RetentionPrefix {
+            len: 0,
+            remaining_size_debt: initial_size_debt,
+        };
+    }
+    let max_delete = if has_active {
+        time_expired.len()
+    } else {
+        time_expired.len() - 1
+    };
+    if max_delete == 0 || scheduled[0] || (!time_expired[0] && initial_size_debt == 0) {
+        return RetentionPrefix {
+            len: 0,
+            remaining_size_debt: initial_size_debt,
+        };
+    }
+    let mut len = 1usize;
+    let mut remaining_size_debt = initial_size_debt;
+    if remaining_size_debt > 0 {
+        remaining_size_debt = if sizes[0] >= remaining_size_debt {
+            0
+        } else {
+            remaining_size_debt - sizes[0]
+        };
+    }
+    #[invariant(0 < len@ && len@ <= max_delete@)]
+    #[invariant(max_delete@ <= time_expired@.len())]
+    #[invariant(remaining_size_debt@ <= initial_size_debt@)]
+    #[invariant(len@ > 0 && initial_size_debt@ > 0 && sizes@[0]@ > 0 ==>
+        remaining_size_debt@ < initial_size_debt@)]
+    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !scheduled@[i])]
+    #[invariant(initial_size_debt@ == 0 ==>
+        forall<i: Int> 0 <= i && i < len@ ==> time_expired@[i])]
+    #[variant(max_delete@ - len@)]
+    while len < max_delete {
+        if scheduled[len] || (!time_expired[len] && remaining_size_debt == 0) {
+            break;
+        }
+        if remaining_size_debt > 0 {
+            remaining_size_debt = if sizes[len] >= remaining_size_debt {
+                0
+            } else {
+                remaining_size_debt - sizes[len]
+            };
+        }
+        len += 1;
+    }
+    RetentionPrefix {
+        len,
+        remaining_size_debt,
+    }
+}
+
 #[requires(finished@.len() == time_expired@.len())]
 #[requires(finished@.len() == sizes@.len())]
 #[ensures(result.len@ <= finished@.len())]
@@ -110,6 +196,38 @@ mod tests {
         assert2::assert!(retention_prefix(false, &[true], &[true], &[1], 1).len == 0);
         assert2::assert!(
             retention_prefix(true, &[true, false, true], &[true; 3], &[1; 3], 0).len == 1
+        );
+    }
+
+    #[test]
+    fn local_selection_preserves_scheduled_data_and_the_final_segment() {
+        assert2::assert!(
+            local_retention_prefix(
+                &[true, false, true, true],
+                &[false, false, true, false],
+                &[10, 10, 10, 10],
+                15,
+                true,
+            ) == RetentionPrefix {
+                len: 2,
+                remaining_size_debt: 0,
+            }
+        );
+        assert2::assert!(local_retention_prefix(&[true], &[false], &[1], 1, false).len == 0);
+        assert2::assert!(
+            local_retention_prefix(
+                &[false, false],
+                &[false, false],
+                &[u64::MAX, 1],
+                u64::MAX,
+                true
+            ) == RetentionPrefix {
+                len: 1,
+                remaining_size_debt: 0,
+            }
+        );
+        assert2::assert!(
+            local_retention_prefix(&[true, true], &[true, false], &[1, 1], 2, true).len == 0
         );
     }
 

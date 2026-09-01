@@ -78,7 +78,9 @@ pub use remote_metadata::remote_metadata_partition;
 pub use remote_read::remote_read_relative_offset;
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{restore_batch_step, restore_record_coordinates};
-pub use retention::{RetentionPrefix, retention_delete_target, retention_prefix};
+pub use retention::{
+    RetentionPrefix, local_retention_prefix, retention_delete_target, retention_prefix,
+};
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
 pub use storage::future_log_swap_admission;
 pub use stretch::{
