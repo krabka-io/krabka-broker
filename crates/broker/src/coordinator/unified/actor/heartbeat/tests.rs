@@ -12,7 +12,7 @@ use crate::coordinator::unified::{
         GroupActorMessage,
         test_support::{
             StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic, rpc,
-            subscription_blob,
+            seed_classic_member, subscription_blob,
         },
     },
     offsets_log::fake::InMemoryOffsetsLog,
@@ -405,6 +405,37 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
     check!(describe.members.iter().any(|m| m.is_classic));
     check!(describe.members.iter().any(|m| !m.is_classic));
     check!(log.has_classic_group_metadata_tombstone("g").await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
+    let (coord, log) = make_coordinator_with_topic("t", 1);
+    let handle = seed_classic_member(&coord, "m-classic", "t", None);
+    log.fail_next
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::Heartbeat {
+            request: ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "native".into(),
+                member_epoch: 0,
+                subscribed_topic_names: Some(vec!["t".into()]),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            client_id: "client-a".into(),
+            client_host: String::new(),
+            reply: tx,
+        })
+        .await
+        .unwrap();
+
+    let response = rx.await.unwrap();
+    check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+    assert!(log.batches().await.is_empty());
 }
 
 #[test]

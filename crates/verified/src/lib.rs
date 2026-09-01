@@ -20,6 +20,7 @@ pub mod directory;
 pub mod diskless;
 pub mod epoch;
 pub mod features;
+pub mod group_migration;
 pub mod isr;
 pub mod leader_epoch;
 pub mod local_recovery;
@@ -93,6 +94,10 @@ pub use diskless::{
 };
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};
+pub use group_migration::{
+    GroupMigrationDirection, GroupMigrationRecordAction, GroupMigrationRecordPlan,
+    classic_upgrade_epoch, consumer_downgrade_epoch, group_migration_record_plan,
+};
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use local_recovery::{
     LocalRecoveryStep, LocalRecoverySwapAction, local_recovery_batch_step,
