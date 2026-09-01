@@ -9,6 +9,23 @@ use krabka_units::convert::TimeExt as _;
 use tokio_util::sync::CancellationToken;
 
 use super::{MetadataObserver, ObserverConfig, fetch::fetch_once};
+use crate::time_util;
+
+/// Names this loop in the timer-failure logs that [`time_util::arm`] and
+/// [`time_util::fired`] emit.
+const TASK: &str = "metadata observer";
+
+/// Parks for the configured poll interval on the injected timer.
+///
+/// Reports whether the timer held: `false` means the observer's only pacing
+/// mechanism is gone, and the loop must stop rather than spin at full speed
+/// through a poll that no longer waits.
+async fn park(config: &ObserverConfig) -> bool {
+    let Some(tick) = time_util::arm(&*config.timer, config.poll_interval.to_std(), TASK) else {
+        return false;
+    };
+    time_util::fired(tick.await, TASK)
+}
 
 /// Round-robin pick into a non-empty voter list: the index `idx` wrapped by
 /// the list length.
@@ -33,10 +50,9 @@ pub(super) async fn run_loop(
             return;
         }
         if config.voters.is_empty() {
-            config
-                .sleeper
-                .sleep_for_async(config.poll_interval.to_std())
-                .await;
+            if !park(&config).await {
+                return;
+            }
             continue;
         }
         let (target, addr) = voter_at(&config.voters, target_idx).clone();
@@ -53,7 +69,7 @@ pub(super) async fn run_loop(
             if new_offset == fetch_offset {
                 tokio::select! {
                     () = shutdown.cancelled() => return,
-                    () = config.sleeper.sleep_for_async(config.poll_interval.to_std()) => {}
+                    held = park(&config) => if !held { return; },
                 }
             } else {
                 fetch_offset = new_offset;
@@ -62,7 +78,7 @@ pub(super) async fn run_loop(
             target_idx = target_idx.wrapping_add(1);
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                () = config.sleeper.sleep_for_async(config.poll_interval.to_std()) => {}
+                held = park(&config) => if !held { return; },
             }
         }
     }
@@ -83,7 +99,7 @@ mod tests {
     };
     use krabka_raft::OutboundDialer;
     use krabka_units::millis;
-    use qubit_clock::{MockWaiterKind, sleep::MockSleeper};
+    use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
     use uuid::Uuid;
 
     use super::*;
@@ -180,8 +196,7 @@ mod tests {
             })
             .await;
         let dial_count = Arc::new(AtomicUsize::new(0));
-        let sleeper = MockSleeper::new();
-        let timeline = sleeper.timeline();
+        let clock = ManualMonotonicClock::new_shared();
         let observer = MetadataObserver::start(ObserverConfig {
             client_dispatch_queue_capacity:
                 krabka_client_core::ConnectionDispatchQueueCapacity::default(),
@@ -194,7 +209,7 @@ mod tests {
             cluster_id: Uuid::nil(),
             max_bytes: TEST_MAX_FETCH_BYTES,
             poll_interval: millis(250),
-            sleeper: Arc::new(sleeper),
+            timer: clock.new_timer(),
         });
 
         // Await (not sleep) for the first fetch to land. The fetch is real
@@ -212,20 +227,21 @@ mod tests {
         let after_first_fetch = fetches.load(Ordering::SeqCst);
 
         // The empty fetch left the observer caught up, so it must now be parked
-        // on `sleep_for_async(poll_interval)`. Confirm the sleep waiter is
-        // registered (blocking thread — never stalls the current-thread runtime
-        // that drives the observer to its park). Parked on a mock timeline that
-        // we never advance, the observer cannot re-fetch, so the counts are
+        // on a timer armed for `poll_interval`. That park is the loop's only
+        // registration on this clock, so confirming one waiter confirms the
+        // park (blocking thread — never stalls the current-thread runtime that
+        // drives the observer to its park). Parked on a manual timeline that we
+        // never advance, the observer cannot re-fetch, so the counts are
         // deterministically frozen at their first-fetch values.
-        let tl = timeline.clone();
+        let waiters = clock.clone();
         let parked = tokio::task::spawn_blocking(move || {
-            tl.wait_for_blocked_waiters(MockWaiterKind::Sleep, 1, Duration::from_secs(5))
+            waiters.wait_for_waiters(1, Duration::from_secs(5))
         })
         .await
         .unwrap();
         assert!(
             parked,
-            "observer should park on the poll-interval sleep after an empty fetch",
+            "observer should park on the poll-interval timer after an empty fetch",
         );
 
         assert!(fetches.load(Ordering::SeqCst) == after_first_fetch);

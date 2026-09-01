@@ -59,9 +59,12 @@ pub use self::{
     retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
-use crate::coordinator::unified::{
-    GroupCoordinator, config::NextGenConfig, group::CoordinatorGroup, offsets_log::OffsetsLog,
-    reconciler::ReconcileInput,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, config::NextGenConfig, group::CoordinatorGroup, offsets_log::OffsetsLog,
+        reconciler::ReconcileInput,
+    },
+    time_util,
 };
 
 /// A Kafka wire `error_code` value, as carried in response `error_code`
@@ -86,6 +89,11 @@ const FALLBACK_REBALANCE_TIMEOUT_MS_I32: i32 = 60_000;
 /// interval. The actor reports it when the configured interval overflows the
 /// wire `i32`.
 const FALLBACK_HEARTBEAT_INTERVAL_MS: i32 = 5_000;
+
+/// Names this actor's session-expiry cadence in the timer-failure logs that
+/// [`time_util::arm`] and [`time_util::fired`] emit, so an operator can tell
+/// which loop lost its ticker.
+const TICK_TASK: &str = "consumer group actor";
 
 /// Which protocol an actor's `Group` speaks. This value is fixed at spawn. The
 /// handle exposes it so that the coordinator can route or reject
@@ -181,15 +189,21 @@ async fn actor_loop(
     // `last_seen`-vs-`session_timeout` comparison, so its cadence only changes
     // how often we check, never the outcome.
     //
-    // Driven through the injected `AsyncSleeper` (production: real time; tests:
-    // a controlled mock timeline). A zero-duration first sleep reproduces
-    // `tokio::time::interval`'s immediate t=0 tick; each subsequent sleep is
-    // re-armed to the configured interval only after the tick body runs
+    // Driven through the injected `Timer` (production: real time; tests: a
+    // controlled manual timeline). A zero-duration first deadline reproduces
+    // `tokio::time::interval`'s immediate t=0 tick; each subsequent deadline is
+    // armed to the configured interval only after the tick body runs
     // (`MissedTickBehavior::Delay` semantics — a slow tick never bursts). The
     // future is held across loop iterations so an inbound-message stream never
-    // resets the tick schedule (matching the persistent `Interval`).
-    let sleeper = config.sleeper.clone();
-    let mut tick = sleeper.sleep_for_async(Duration::ZERO);
+    // resets the tick schedule (matching the persistent `Interval`). It owns
+    // its registration outright instead of borrowing the timer, so nothing
+    // has to be cloned out of `config` to keep it alive across the arms.
+    let Some(mut tick) = time_util::arm(&*config.timer, Duration::ZERO, TICK_TASK) else {
+        // No ticker, no actor. Take the same exit the loop body takes below,
+        // so the offset-retention clock is stamped once before we go away.
+        group.observe_membership(chrono_now_ms());
+        return;
+    };
     loop {
         let deadline = classic_deadline(&group);
         let keep_running = tokio::select! {
@@ -205,16 +219,30 @@ async fn actor_loop(
                     handle_actor_message(&mut group, &mut parked, services, msg).await
                 }
             },
-            () = &mut tick => {
-                let services = ActorServices {
-                    config: &config,
-                    metadata: &*metadata,
-                    offsets_log: &*offsets_log,
-                    coordinator: &coordinator,
-                };
-                let keep_running = handle_actor_tick(&mut group, &mut parked, services).await;
-                tick = sleeper.sleep_for_async(config.session_expiry_tick);
-                keep_running
+            outcome = &mut tick => {
+                // A ticker that failed, or that cannot be armed again, takes
+                // this actor's session-expiry sweep with it. Report it as
+                // "stop" rather than returning outright: the loop tail still
+                // has to stamp `observe_membership` and break cleanly.
+                if time_util::fired(outcome, TICK_TASK) {
+                    let services = ActorServices {
+                        config: &config,
+                        metadata: &*metadata,
+                        offsets_log: &*offsets_log,
+                        coordinator: &coordinator,
+                    };
+                    let keep_running =
+                        handle_actor_tick(&mut group, &mut parked, services).await;
+                    match time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK) {
+                        Some(next) => {
+                            tick = next;
+                            keep_running
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                }
             }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: complete with whoever is here.

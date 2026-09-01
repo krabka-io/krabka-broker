@@ -9,7 +9,7 @@
 use bytes::Bytes;
 use krabka_log::DeliveryPolicy;
 use krabka_protocol::records::{Record, RecordBatch};
-use qubit_clock::{Clock, SystemClock};
+use qubit_clock::{StdWallClock, WallClock as _};
 
 /// How far ahead of produce time a record that must activate during a case is
 /// stamped.
@@ -64,8 +64,19 @@ impl Visible {
     }
 }
 
+/// The wall-clock reading a case's expectations are written against, in
+/// milliseconds since the Unix epoch.
+///
+/// It reads the same production wall clock the broker's delivery path does, so
+/// a delivery time this returns plus `ACTIVATION_DELAY_MS` means the same thing
+/// on both sides of the wire.
 pub fn now_ms() -> i64 {
-    SystemClock::new().millis()
+    StdWallClock::new()
+        .now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| {
+            i64::try_from(since_epoch.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 // One batch whose delivery time — its `max_timestamp` — is `delivery_ms`, with

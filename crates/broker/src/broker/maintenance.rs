@@ -68,7 +68,7 @@ pub(super) fn spawn_storage_security_maintenance(
                 &config.oauthbearer_jwks_last_on_demand_refresh_ms,
             ),
             ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
-            sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+            timer: Arc::new(qubit_clock::StdTimer::new()),
         };
         tokio::spawn(refresher.run());
     }

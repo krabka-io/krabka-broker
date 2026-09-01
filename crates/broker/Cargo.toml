@@ -60,7 +60,7 @@ krabka-security.workspace = true
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
 krabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
-qubit-clock = { workspace = true, features = ["tokio"] }
+qubit-clock = { workspace = true }
 arc-swap.workspace = true
 async-trait.workspace = true
 rustls.workspace = true

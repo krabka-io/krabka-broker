@@ -18,11 +18,12 @@ use std::{
 
 use krabka_security::JwksHandle;
 use krabka_units::{Time, convert::TimeExt};
-use qubit_clock::sleep::AsyncSleeper;
+use qubit_clock::Timer;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::fetch_jwks;
+use crate::time_util;
 
 #[cfg(test)]
 mod tests;
@@ -79,18 +80,19 @@ pub(crate) struct JwksRefresher {
     ///
     /// [`Jwks::from_json`]: krabka_security::Jwks::from_json
     pub ignore_key_use: bool,
-    /// Relative sleeper that drives the periodic refresh cadence. Production
-    /// uses [`qubit_clock::sleep::SystemSleeper`], which is real time. Tests
-    /// inject a [`qubit_clock::sleep::MockSleeper`], so the refresh interval
-    /// fires on a controlled mock timeline instead of wall-clock time.
-    pub sleeper: Arc<dyn AsyncSleeper>,
+    /// Timer that drives the periodic refresh cadence. Production uses
+    /// [`qubit_clock::StdTimer`], which is real time. Tests inject a timer
+    /// taken from a [`qubit_clock::ManualMonotonicClock`], so the refresh
+    /// interval fires on a controlled manual timeline instead of on
+    /// wall-clock time.
+    pub timer: Arc<dyn Timer>,
 }
 
 impl JwksRefresher {
     /// Runs until the caller cancels the task.
     ///
     /// The first periodic fetch happens immediately, because a zero-duration
-    /// first sleep on the injected [`AsyncSleeper`] reproduces the t=0 tick of
+    /// first deadline on the injected [`Timer`] reproduces the t=0 tick of
     /// `tokio::time::interval`. Keys are therefore available soon after
     /// startup. A failed fetch logs a warning and leaves the previous key set
     /// in place, so a short identity-provider outage never crashes the broker.
@@ -99,6 +101,11 @@ impl JwksRefresher {
     /// in the same `select!`. The on-demand arm compares
     /// `last_on_demand_refresh_ms` against `min_on_demand_pause`, and drops
     /// the signal without a message when it is inside the window.
+    ///
+    /// The task also gives up when the timer refuses a deadline or fails one
+    /// it had accepted. That joins the two start-up failures -- an unreadable
+    /// TLS trust bundle and an unbuildable HTTP client -- as a reason this
+    /// loop never starts, or stops early.
     pub(crate) async fn run(mut self) {
         let mut builder = reqwest::Client::builder().timeout(self.http_timeout.to_std());
         if let Some(path) = &self.tls_trust {
@@ -126,25 +133,42 @@ impl JwksRefresher {
                 return;
             }
         };
-        // Drive the periodic refresh cadence through the injected `AsyncSleeper`
-        // (production: real time; tests: a controlled mock timeline). A
-        // zero-duration first sleep reproduces `tokio::time::interval`'s t=0
+        // Drive the periodic refresh cadence through the injected `Timer`
+        // (production: real time; tests: a controlled manual timeline). A
+        // zero-duration first deadline reproduces `tokio::time::interval`'s t=0
         // tick, so the first fetch fires immediately and keys are available
-        // shortly after startup. Each subsequent sleep is re-armed to
+        // shortly after startup. Each subsequent deadline is re-armed to
         // `self.interval` only after the fetch completes, so a slow fetch never
         // triggers a catch-up burst — this preserves the never-burst intent of
         // the original `MissedTickBehavior::Skip` (re-arm-after-work aligns the
         // next tick to `Delay` rather than `Skip`, but neither ever bursts, and
         // a JWKS fetch is far shorter than the multi-minute refresh interval).
-        // The sleeper is cloned into a local so the tick future borrows it
-        // rather than `self`, leaving `self` free for the arms below.
-        let sleeper = self.sleeper.clone();
-        let mut tick = sleeper.sleep_for_async(Duration::ZERO);
+        // The timer is cloned into a local only to leave `self` free for the
+        // `&mut self` work in the arms below; the tick future is `'static` and
+        // borrows neither.
+        //
+        // Arming a deadline and completing one are both fallible. A refresher
+        // that has lost its cadence has nothing left to drive it, and re-arming
+        // a timer that keeps refusing would spin the task, so it gives up the
+        // way the two start-up failures above do. `arm` and `fired` have
+        // already logged which loop went away.
+        const TASK: &str = "JWKS refresher";
+
+        let timer = Arc::clone(&self.timer);
+        let Some(mut tick) = time_util::arm(&*timer, Duration::ZERO, TASK) else {
+            return;
+        };
         loop {
             tokio::select! {
-                () = &mut tick => {
+                outcome = &mut tick => {
+                    if !time_util::fired(outcome, TASK) {
+                        return;
+                    }
                     self.refresh_and_swap(&client).await;
-                    tick = sleeper.sleep_for_async(self.interval.to_std());
+                    let Some(next) = time_util::arm(&*timer, self.interval.to_std(), TASK) else {
+                        return;
+                    };
+                    tick = next;
                 }
                 // On-demand refresh triggered by validator
                 // signal. Subject to `min_on_demand_pause` rate-limit.

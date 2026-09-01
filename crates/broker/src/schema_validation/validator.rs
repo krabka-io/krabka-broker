@@ -79,9 +79,10 @@ pub struct SchemaValidator {
     /// not get an answer at all.
     fail_open: bool,
     /// Clock backing the cache TTL. Production uses
-    /// [`qubit_clock::SystemClock`]; tests inject a `MockClock` so an expiry
-    /// is an assertion rather than a sleep.
-    clock: Arc<dyn qubit_clock::Clock>,
+    /// [`qubit_clock::StdWallClock`]; tests inject a
+    /// [`qubit_clock::ManualWallClock`] so an expiry is an assertion rather
+    /// than a sleep.
+    clock: Arc<dyn qubit_clock::WallClock>,
 }
 
 impl std::fmt::Debug for SchemaValidator {
@@ -114,12 +115,15 @@ impl SchemaValidator {
             maximum_cache_size,
             expire_after,
             http_timeout,
-            Arc::new(qubit_clock::SystemClock::new()),
+            Arc::new(qubit_clock::StdWallClock::new()),
         )
     }
 
-    /// [`SchemaValidator::new`] with the clock injected, for tests that drive
-    /// the cache TTL on a controlled timeline.
+    /// [`SchemaValidator::new`] with the [`qubit_clock::WallClock`] injected,
+    /// for tests that drive the cache TTL on a controlled timeline: a
+    /// [`qubit_clock::ManualWallClock`], handed out by a
+    /// [`qubit_clock::ManualMonotonicClock`], expires an entry without a
+    /// sleep.
     ///
     /// # Errors
     ///
@@ -130,7 +134,7 @@ impl SchemaValidator {
         maximum_cache_size: usize,
         expire_after: Time,
         http_timeout: Time,
-        clock: Arc<dyn qubit_clock::Clock>,
+        clock: Arc<dyn qubit_clock::WallClock>,
     ) -> Result<Self, SchemaValidatorError> {
         let capacity =
             NonZeroUsize::new(maximum_cache_size).ok_or(SchemaValidatorError::ZeroCache)?;

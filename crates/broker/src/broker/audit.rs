@@ -179,7 +179,7 @@ pub(super) fn start_audit_pipeline(
                 spool,
                 stats: Arc::clone(&stats),
                 replay_every: config.audit_spool_replay_interval,
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer_handle = tokio::spawn(writer.run());
