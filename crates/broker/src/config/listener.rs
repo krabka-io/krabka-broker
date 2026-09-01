@@ -92,6 +92,17 @@ impl BrokerConfig {
         }]
     }
 
+    /// The broker-wide idle window in force: what the operator configured, or
+    /// Kafka's `connections.max.idle.ms` default when they configured
+    /// nothing. Every path that only wants the window reads it here, so that
+    /// `connections_max_idle` can keep carrying the provenance
+    /// `DescribeConfigs` reports.
+    #[must_use]
+    pub fn effective_connections_max_idle(&self) -> krabka_units::Time {
+        self.connections_max_idle
+            .unwrap_or(crate::config::DEFAULT_CONNECTIONS_MAX_IDLE)
+    }
+
     /// The idle window a connection accepted on `listener_name` is held to.
     ///
     /// A per-listener override wins over the broker-wide
@@ -111,7 +122,10 @@ impl BrokerConfig {
             .connections_max_idle_overrides
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(listener_name))
-            .map_or(self.connections_max_idle, |(_, value)| *value);
+            .map_or_else(
+                || self.effective_connections_max_idle(),
+                |(_, value)| *value,
+            );
         (configured.millis_i64() > 0).then(|| configured.to_std())
     }
 
@@ -389,7 +403,7 @@ mod connections_max_idle_tests {
     /// A broker-wide window of `idle` with the named per-listener overrides.
     fn config(idle: Time, overrides: &[(&str, Time)]) -> BrokerConfig {
         BrokerConfig {
-            connections_max_idle: idle,
+            connections_max_idle: Some(idle),
             connections_max_idle_overrides: overrides
                 .iter()
                 .map(|(name, value)| ((*name).to_string(), *value))

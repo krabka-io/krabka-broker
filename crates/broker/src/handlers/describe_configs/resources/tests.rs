@@ -8,7 +8,9 @@ use assert2::assert;
 use krabka_metadata::{BrokerConfigRecord, MetadataImage, MetadataRecord};
 use krabka_protocol::{
     UnknownTaggedFields,
-    owned::describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    owned::describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
+    },
 };
 use uuid::Uuid;
 
@@ -43,6 +45,7 @@ fn describe_broker(
     resource_name: &str,
     configuration_keys: Option<Vec<String>>,
     config: &crate::config::BrokerConfig,
+    include_synonyms: bool,
 ) -> DescribeConfigsResult {
     super::describe_one(
         &MetadataImage::new(Uuid::nil()),
@@ -55,6 +58,7 @@ fn describe_broker(
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         config,
+        include_synonyms,
     )
 }
 
@@ -101,6 +105,7 @@ fn topic_describe_one_preserves_result_and_filtered_config_fields() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     let expected = DescribeConfigsResult {
@@ -151,6 +156,7 @@ fn topic_describe_reports_the_fixed_data_path_key_as_read_only() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     let expected = DescribeConfigsResult {
@@ -201,6 +207,7 @@ fn broker_describe_one_rejects_non_numeric_resource_name_with_fields() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     let expected = DescribeConfigsResult {
@@ -288,6 +295,7 @@ fn broker_describe_inherits_default_and_prefers_per_broker_override() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     assert!(
@@ -340,6 +348,7 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     assert!(
@@ -376,7 +385,7 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
 /// 600000 default, which reads `DEFAULT_CONFIG` because nobody set it.
 #[test]
 fn broker_describe_without_overrides_includes_the_static_configs() {
-    let result = describe_broker("7", None, &crate::config::BrokerConfig::default());
+    let result = describe_broker("7", None, &crate::config::BrokerConfig::default(), false);
 
     assert!(
         result.configs
@@ -398,7 +407,7 @@ fn broker_describe_without_overrides_includes_the_static_configs() {
 #[test]
 fn broker_describe_reports_a_set_idle_window_and_its_listener_override() {
     let config = crate::config::BrokerConfig {
-        connections_max_idle: krabka_units::secs(30),
+        connections_max_idle: Some(krabka_units::secs(30)),
         connections_max_idle_overrides: std::iter::once((
             "EXTERNAL".to_string(),
             krabka_units::secs(5),
@@ -407,7 +416,7 @@ fn broker_describe_reports_a_set_idle_window_and_its_listener_override() {
         ..crate::config::BrokerConfig::default()
     };
 
-    let result = describe_broker("7", None, &config);
+    let result = describe_broker("7", None, &config, false);
 
     assert!(
         result.configs
@@ -445,9 +454,74 @@ fn broker_describe_filters_the_static_configs_by_requested_key() {
         "7",
         Some(vec!["connections.max.idle.ms".into()]),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     assert!(result.configs == vec![default_idle_entry()]);
+}
+
+/// `include_synonyms` reaches the static entries of a named broker resource:
+/// the same describe answers with empty chains when the flag is unset and
+/// with the container's chains when it is set.
+#[test]
+fn broker_describe_builds_synonym_chains_only_when_the_request_asks() {
+    let config = crate::config::BrokerConfig {
+        connections_max_idle: Some(krabka_units::secs(30)),
+        connections_max_idle_overrides: std::iter::once((
+            "EXTERNAL".to_string(),
+            krabka_units::secs(5),
+        ))
+        .collect(),
+        ..crate::config::BrokerConfig::default()
+    };
+    let listener_key = "listener.name.external.connections.max.idle.ms";
+    let broker_wide_static = super::synonym(
+        "connections.max.idle.ms",
+        "30000",
+        super::CONFIG_SOURCE_STATIC_BROKER,
+    );
+    let broker_wide_default = super::synonym(
+        "connections.max.idle.ms",
+        "600000",
+        super::CONFIG_SOURCE_DEFAULT,
+    );
+
+    let without = describe_broker("7", None, &config, false);
+    assert!(without.configs.iter().all(|c| c.synonyms.is_empty()));
+
+    let with = describe_broker("7", None, &config, true);
+    let chains: Vec<(&str, &[DescribeConfigsSynonym])> = with
+        .configs
+        .iter()
+        .map(|c| (c.name.as_str(), c.synonyms.as_slice()))
+        .collect();
+    assert!(
+        chains
+            == vec![
+                (
+                    "connections.max.idle.ms",
+                    [broker_wide_static.clone(), broker_wide_default.clone()].as_slice(),
+                ),
+                (
+                    listener_key,
+                    [
+                        super::synonym(listener_key, "5000", super::CONFIG_SOURCE_STATIC_BROKER),
+                        broker_wide_static,
+                        broker_wide_default,
+                    ]
+                    .as_slice(),
+                ),
+                (
+                    "node.id",
+                    [super::synonym(
+                        "node.id",
+                        "7",
+                        super::CONFIG_SOURCE_STATIC_BROKER
+                    )]
+                    .as_slice(),
+                ),
+            ]
+    );
 }
 
 #[test]
@@ -470,6 +544,7 @@ fn empty_broker_name_describes_cluster_defaults() {
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
 
     assert!(
@@ -506,6 +581,7 @@ fn client_metrics_describe_emits_defaults() {
         12_345,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
     assert2::assert!((res.error_code) == (crate::codes::NONE));
     let by_name: std::collections::HashMap<_, _> =
@@ -550,6 +626,7 @@ fn group_describe_merges_dynamic_overrides_with_defaults() {
         300_000,
         &StreamsGroupConfig::default(),
         &crate::config::BrokerConfig::default(),
+        false,
     );
     let by_name: std::collections::HashMap<_, _> = result
         .configs

@@ -267,3 +267,171 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
     server.await.expect("serve loop joins after unknown API");
     handle.shutdown().await;
 }
+
+/// Boots a broker, serves exactly one connection on a listener of `protocol`
+/// offering `mechanisms`, sends `requests` down it in order, and returns once
+/// the serve loop has exited. What the loop recorded is the return value.
+async fn serve_frames(
+    protocol: krabka_security::ListenerProtocol,
+    mechanisms: Option<Vec<krabka_security::SaslMechanism>>,
+    requests: Vec<bytes::Bytes>,
+) -> crate::metrics::BrokerMetrics {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let handle = Broker::start(cfg).await.expect("start broker");
+    let broker = handle.broker_arc_for_test();
+    let metrics = broker.metrics.clone();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("listener addr");
+    let server = tokio::spawn(async move {
+        let (stream, peer) = listener.accept().await.expect("accept");
+        let spec = crate::config::ListenerSpec {
+            name: "TESTS".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol,
+            tls_config: None,
+            sasl_mechanisms: mechanisms,
+        };
+        serve_connection_stream(broker, stream, spec, peer, None).await;
+    });
+
+    let client = TcpStream::connect(addr).await.expect("connect");
+    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+    for request in requests {
+        framed.send(request).await.expect("send frame");
+    }
+    server
+        .await
+        .expect("serve loop joins once it closes the connection");
+    drop(framed);
+    handle.shutdown().await;
+    metrics
+}
+
+/// Every `connection_closes` series, in the enum's own order, so a test can
+/// compare the whole family rather than one label of it.
+fn close_counts(metrics: &crate::metrics::BrokerMetrics) -> Vec<(&'static str, u64)> {
+    crate::metrics::ConnectionCloseReason::ALL
+        .into_iter()
+        .map(|reason| {
+            (
+                reason.as_str(),
+                metrics
+                    .connection_closes
+                    .get_or_create(&crate::metrics::ConnectionCloseReasonLabel { reason })
+                    .get(),
+            )
+        })
+        .collect()
+}
+
+/// The family with no series moved, which is what every other scenario's
+/// expectation is a single edit away from.
+fn no_closes() -> Vec<(&'static str, u64)> {
+    vec![
+        ("idle", 0),
+        ("sasl_session_expired", 0),
+        ("decode_error", 0),
+        ("peer_closed", 0),
+    ]
+}
+
+/// A frame the broker cannot read as a request closes the connection, and the
+/// close is counted under the same reason as bytes the codec itself refused:
+/// the peer sent something that is not a Kafka request. Uncounted, the
+/// connection would leave `active_connections` with nothing anywhere saying
+/// why.
+#[tokio::test]
+async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error() {
+    // One byte: enough to be a frame, not enough to peek an api_key out of.
+    let metrics = serve_frames(
+        krabka_security::ListenerProtocol::Plaintext,
+        None,
+        vec![bytes::Bytes::from_static(&[0x00])],
+    )
+    .await;
+
+    assert!(
+        close_counts(&metrics)
+            == vec![
+                ("idle", 0),
+                ("sasl_session_expired", 0),
+                ("decode_error", 1),
+                ("peer_closed", 0),
+            ]
+    );
+}
+
+/// A request the pre-auth gate does not allow closes the connection with no
+/// response, and that close is an authentication failure counted under the
+/// mechanism the peer negotiated: the `Unknown` sentinel when no
+/// `SaslHandshake` ran, and the handshake's own mechanism when one did. It is
+/// not a `connection_closes` reason, because that family counts the
+/// connections that ended on their own.
+#[tokio::test]
+async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mechanism() {
+    // Produce (api_key 0) v0: a well-formed request, and not one of the three
+    // api_keys an unauthenticated connection may send.
+    let produce = || request_frame(0, 0, 1, None, None, &[]).freeze();
+    // SaslHandshake (api_key 17) v1 for PLAIN. The body is one non-flexible
+    // STRING: an i16 length and the mechanism name.
+    let handshake = || {
+        let mut body = BytesMut::new();
+        body.put_i16(5);
+        body.put_slice(b"PLAIN");
+        request_frame(17, 1, 1, None, None, &body).freeze()
+    };
+
+    let cases = [
+        (
+            "no handshake",
+            vec![produce()],
+            crate::metrics::UNKNOWN_LABEL,
+        ),
+        (
+            "after a PLAIN handshake",
+            vec![handshake(), produce()],
+            "PLAIN",
+        ),
+    ];
+    for (case, requests, mechanism) in cases {
+        let metrics = serve_frames(
+            krabka_security::ListenerProtocol::SaslPlaintext,
+            Some(vec![krabka_security::SaslMechanism::Plain]),
+            requests,
+        )
+        .await;
+
+        let label = crate::metrics::SaslMechanismLabel {
+            mechanism: mechanism.to_string(),
+        };
+        check!(
+            metrics.failed_authentication.get_or_create(&label).get() == 1,
+            "{case}"
+        );
+        check!(
+            metrics
+                .successful_authentication
+                .get_or_create(&label)
+                .get()
+                == 0,
+            "{case}"
+        );
+        // The gate rejects the frame before dispatch, so no Produce was served.
+        check!(
+            metrics
+                .api_requests
+                .get_or_create(&crate::metrics::ApiKeyLabel {
+                    api_key: "Produce".to_string(),
+                })
+                .get()
+                == 0,
+            "{case}"
+        );
+        check!(close_counts(&metrics) == no_closes(), "{case}");
+    }
+}

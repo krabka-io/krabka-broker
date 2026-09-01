@@ -132,7 +132,7 @@ impl Fixture {
 fn config_with_idle_window(idle: Time) -> (BrokerConfig, TempDir) {
     let log_dir = tempfile::tempdir().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.connections_max_idle = idle;
+    cfg.connections_max_idle = Some(idle);
     (cfg, log_dir)
 }
 
@@ -261,7 +261,7 @@ async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
     let key_path = write_pem(pem_dir.path(), "key.pem", DEV_KEY);
 
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.connections_max_idle = krabka_units::millis(250);
+    cfg.connections_max_idle = Some(krabka_units::millis(250));
     cfg.listeners = vec![loopback_listener("SSL", ListenerProtocol::Ssl)];
     cfg.inter_broker_listener_name = "SSL".to_string();
     cfg.tls_config = Some(TlsConfig {

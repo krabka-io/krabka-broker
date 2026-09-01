@@ -71,9 +71,9 @@ pub(super) fn apply_listener_settings(
         cfg.max_connections_per_ip = maximum;
     }
     if let Some(idle) = settings.connections_max_idle
-        && cfg.connections_max_idle == defaults.connections_max_idle
+        && cfg.connections_max_idle.is_none()
     {
-        cfg.connections_max_idle = idle;
+        cfg.connections_max_idle = Some(idle);
     }
     if cfg.features.transaction_two_phase_commit_enable
         == defaults.features.transaction_two_phase_commit_enable
@@ -193,7 +193,7 @@ connections_max_idle = "5s"
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
 
-        check!(cfg.connections_max_idle == krabka_units::secs(45));
+        check!(cfg.connections_max_idle == Some(krabka_units::secs(45)));
         check!(
             cfg.connections_max_idle_overrides
                 == maplit::btreemap! {"EXTERNAL".to_string() => krabka_units::secs(5)}
@@ -213,7 +213,10 @@ connections_max_idle = "5s"
 
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
-        assert!(cfg.connections_max_idle == DEFAULT_CONNECTIONS_MAX_IDLE);
+        // Unset stays unset -- that is what `DescribeConfigs` reports as
+        // DEFAULT_CONFIG -- and the window in force is Kafka's default.
+        assert!(cfg.connections_max_idle.is_none());
+        assert!(cfg.effective_connections_max_idle() == DEFAULT_CONNECTIONS_MAX_IDLE);
         assert!(cfg.connections_max_idle_overrides.is_empty());
     }
 

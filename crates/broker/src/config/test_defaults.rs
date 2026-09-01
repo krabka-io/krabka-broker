@@ -19,7 +19,7 @@ use crate::{
     config::{
         BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY,
         DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX,
-        DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC, DEFAULT_CONNECTIONS_MAX_IDLE,
+        DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC,
         DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL, DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME,
         DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL,
         DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE, DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE,
@@ -247,9 +247,10 @@ impl BrokerConfig {
             // as "no cap" and never increments the per-IP map.
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
-            // Kafka's ten-minute idle window, far longer than any fixture
-            // lives, so a test that wants to see the timer fire shortens it.
-            connections_max_idle: DEFAULT_CONNECTIONS_MAX_IDLE,
+            // Unset, so a fixture runs Kafka's ten-minute window -- far
+            // longer than any fixture lives. A test that wants to see the
+            // timer fire sets its own.
+            connections_max_idle: None,
             connections_max_idle_overrides: std::collections::BTreeMap::new(),
             // Tests opt into delegation tokens by setting
             // `delegation_token_secret_key`; default off keeps the

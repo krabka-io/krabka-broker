@@ -222,12 +222,24 @@ pub struct BreakGlassActionLabel {
 
 /// Why the broker stopped serving a client connection.
 ///
-/// The four reasons are every way the frame read can end, plus the TLS
+/// The four reasons are every way a connection ends on its own — as a peer
+/// that stopped talking, or as bytes that are not a request — plus the TLS
 /// handshake the peer never drove, so a closed enum bounds the
 /// `connection_closes` label set at four series however many connections the
-/// broker serves. Loop exits that are a consequence of a request the broker
-/// already accounted for — a blocked pre-auth `api_key`, a response that would
-/// not encode, a `framed.send` error — are not counted here.
+/// broker serves.
+///
+/// A connection the broker drops because of a request it did read is *not* a
+/// fifth reason: each such exit is already one count in another family, and
+/// counting it twice would make the two disagree. A request at an
+/// unregistered `api_key` is an `api_requests{api_key="Unknown"}`; one whose
+/// version is out of range is an `unsupported_api_requests`; one whose
+/// handler failed, or whose response would not encode or send, was counted by
+/// `api_requests` when it was dispatched; and a rejected `SaslAuthenticate` —
+/// including the pre-auth gate's `ILLEGAL_SASL_STATE`, under the mechanism a
+/// `SaslHandshake` named or the `Unknown` sentinel when none did — is a
+/// `failed_authentication`. What is left over is the broker
+/// failing to encode or to send its own answer to a SASL frame, which is a
+/// broker fault rather than anything the connection did, and is logged.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum ConnectionCloseReason {
     /// The connection went `connections.max.idle.ms` without a complete frame
@@ -237,7 +249,9 @@ pub enum ConnectionCloseReason {
     /// KIP-368: the SASL session passed the token's expiry without an in-band
     /// re-authentication.
     SaslSessionExpired,
-    /// The client sent bytes that the length-delimited codec refused.
+    /// The client sent bytes the broker could not read as a request: either
+    /// the length-delimited codec refused the frame, or the frame was too
+    /// short or too malformed to parse a request header out of.
     DecodeError,
     /// The client closed its end of the connection.
     PeerClosed,

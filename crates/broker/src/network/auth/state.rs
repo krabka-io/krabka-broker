@@ -167,6 +167,28 @@ impl ConnectionAuth {
             Self::Authenticated { .. } => true,
         }
     }
+
+    /// The mechanism a `SaslHandshake` named for the exchange now in flight,
+    /// or `None` when no exchange is in flight.
+    ///
+    /// Two states carry one: a `Negotiating` connection holds the mechanism
+    /// its handshake chose, and a `Reauthenticating` one holds the mechanism
+    /// of the session it is replacing. `Anonymous` has run no handshake, and
+    /// an `Authenticated` connection's exchange is over — its `mechanism` is
+    /// an unused placeholder on the mTLS and anonymous paths, so reporting it
+    /// would invent a mechanism the connection never used.
+    ///
+    /// It is what the `SaslAuthenticate` path and the pre-auth gate both
+    /// label their `failed_authentication` with, so a rejection is counted
+    /// under the mechanism the peer asked for whichever of the two saw it.
+    #[must_use]
+    pub fn negotiated_mechanism(&self) -> Option<SaslMechanism> {
+        match self {
+            Self::Negotiating { mechanism, .. } => Some(*mechanism),
+            Self::Reauthenticating { previous, .. } => Some(previous.mechanism),
+            Self::Anonymous | Self::Authenticated { .. } => None,
+        }
+    }
 }
 
 /// Pre-auth allowlist: `api_key`s clients may send before completing SASL.
@@ -328,6 +350,54 @@ mod tests {
         };
         for api_key in [0, 3, 17, 36] {
             assert!(auth.allows_request(api_key), "api key {api_key}");
+        }
+    }
+
+    /// The mechanism a rejection is counted under is the one a handshake
+    /// named, and nothing else: an `Authenticated` connection's placeholder
+    /// mechanism never reaches the metric, because no exchange is in flight.
+    #[test]
+    fn negotiated_mechanism_names_only_an_exchange_in_flight() {
+        let negotiating = ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::Plain,
+            exchange: SaslExchange::Plain,
+            pending_token_expiry_ms: None,
+        };
+        let reauthenticating = ConnectionAuth::Reauthenticating {
+            previous: AuthenticatedSnapshot {
+                principal: Principal {
+                    name: "alice".to_string(),
+                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                    groups: vec![],
+                },
+                mechanism: SaslMechanism::OAuthBearer,
+                expires_at_ms: Some(2_000_000),
+            },
+            exchange: SaslExchange::OAuthBearer,
+        };
+        let authenticated = ConnectionAuth::Authenticated {
+            principal: Principal {
+                name: "ANONYMOUS".into(),
+                auth_method: krabka_security::AuthMethod::Anonymous,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms: None,
+            authenticated_via_token: false,
+        };
+
+        let cases = [
+            ("anonymous", &ConnectionAuth::Anonymous, None),
+            ("negotiating", &negotiating, Some(SaslMechanism::Plain)),
+            (
+                "reauthenticating uses previous",
+                &reauthenticating,
+                Some(SaslMechanism::OAuthBearer),
+            ),
+            ("authenticated placeholder", &authenticated, None),
+        ];
+        for (case, auth, want) in cases {
+            check!(auth.negotiated_mechanism() == want, "{case}");
         }
     }
 }

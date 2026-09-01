@@ -20,6 +20,7 @@ use super::{
         CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
         CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER,
         RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC, make_entry,
+        synonym,
     },
 };
 use crate::{codes, config_keys};
@@ -32,12 +33,17 @@ mod tests;
 use self::write_freeze::write_freeze_entry;
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
+///
+/// `include_synonyms` is the request-level flag of the same name. Only the
+/// static entries build a chain for it today; the dynamic overrides carry an
+/// empty one either way.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
     broker_config: &crate::config::BrokerConfig,
+    include_synonyms: bool,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -135,13 +141,19 @@ pub(super) fn describe_one(
             // rather than the cluster, so Kafka reports neither for the
             // cluster-default (`--entity-default`) broker resource.
             if key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id")) {
-                let mut entry =
-                    make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
+                let value = node_id.to_string();
+                let mut entry = make_entry("node.id", &value, CONFIG_SOURCE_STATIC_BROKER);
                 entry.read_only = true;
+                if include_synonyms {
+                    // The container answers this key with a one-element
+                    // chain naming itself, the way it does every static
+                    // broker config that has no fallback behind it.
+                    entry.synonyms = vec![synonym("node.id", &value, CONFIG_SOURCE_STATIC_BROKER)];
+                }
                 configs.push(entry);
             }
             configs.extend(
-                static_broker_entries(broker_config)
+                static_broker_entries(broker_config, include_synonyms)
                     .into_iter()
                     .filter(|entry| key_filter.is_none_or(|keys| keys.contains(&entry.name))),
             );

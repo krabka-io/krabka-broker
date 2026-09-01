@@ -331,7 +331,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
 async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.connections_max_idle = krabka_units::millis(0);
+    cfg.connections_max_idle = Some(krabka_units::millis(0));
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),

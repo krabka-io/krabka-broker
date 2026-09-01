@@ -81,7 +81,16 @@ macro_rules! operations_fields {
             /// (and TLS) handshake and then sent nothing, and a peer that
             /// vanished without a FIN. A non-positive value disables idle
             /// expiry, the way Kafka arms no `IdleExpiryManager` for one.
-            pub connections_max_idle: Time,
+            ///
+            /// `None` is the operator having set nothing, and runs Kafka's
+            /// 600000. It is not the same state as `Some` of that same value:
+            /// Kafka's `DescribeConfigs` reports a key's source from where the
+            /// value came rather than from what it is, so an explicit
+            /// `connections.max.idle.ms=600000` reports `STATIC_BROKER_CONFIG`
+            /// while an unset one reports `DEFAULT_CONFIG`.
+            /// [`BrokerConfig::effective_connections_max_idle`] resolves the
+            /// two for every caller that only wants the window.
+            pub connections_max_idle: Option<Time>,
 
             /// Per-listener overrides of `connections_max_idle`, keyed by
             /// listener name. Kafka spells the same override

@@ -239,6 +239,12 @@ async fn serve_connection_stream<S>(
             break;
         };
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
+            // Bytes the broker cannot read as a request are the same reason
+            // as bytes the codec refused, one layer further in: the peer sent
+            // something that is not a Kafka request and the connection ends.
+            broker
+                .metrics
+                .record_connection_close(crate::metrics::ConnectionCloseReason::DecodeError);
             break;
         };
         // Per-state request gate: on SASL listeners, gate every api_key
@@ -267,6 +273,20 @@ async fn serve_connection_stream<S>(
                 "request blocked by per-state auth gate (ILLEGAL_SASL_STATE), closing connection"
             );
             let _ = codes::ILLEGAL_SASL_STATE; // referenced for docs/grep
+            // An ILLEGAL_SASL_STATE reject is an authentication failure, the
+            // same as the one `try_handle_sasl_frame` records for a
+            // `SaslAuthenticate` that arrives with no handshake behind it, so
+            // it is counted the same way: under the mechanism a handshake
+            // named, or under the `Unknown` sentinel when none did. Without
+            // it a peer that opens a connection on a SASL listener and
+            // immediately sends Produce is closed and counted nowhere.
+            broker.metrics.record_authentication(
+                auth.negotiated_mechanism()
+                    .map_or(crate::metrics::UNKNOWN_LABEL, |mechanism| {
+                        mechanism.wire_name()
+                    }),
+                false,
+            );
             break;
         }
         let Some(entry) = broker.handlers().get(parsed.api_key) else {

@@ -5,7 +5,9 @@
 //! These values are the response's contract with the JVM `AdminClient`, so
 //! they sit apart from the code that decides which configs to report.
 
-use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult;
+use krabka_protocol::owned::describe_configs_response::{
+    DescribeConfigsResourceResult, DescribeConfigsSynonym,
+};
 
 /// `ConfigSource::DYNAMIC_TOPIC_CONFIG`, the value Kafka uses for per-topic
 /// overrides held in `ZooKeeper` or `KRaft` metadata.
@@ -49,6 +51,23 @@ pub(super) fn make_entry(
         synonyms: Vec::new(),
         config_type: CONFIG_TYPE_UNKNOWN,
         documentation: None,
+        ..Default::default()
+    }
+}
+
+/// Produces one entry in a config's synonym chain: the key the value was
+/// written under, that value, and the source it came from.
+///
+/// Kafka fills the chain only when the request asks for it
+/// (`include_synonyms`), and an entry's own `config_source` is the source of
+/// the chain's head. A request that leaves the flag unset gets an empty list
+/// on every entry, so a caller that was not asked for synonyms must not
+/// synthesise any.
+pub(super) fn synonym(key: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
+    DescribeConfigsSynonym {
+        name: key.to_owned(),
+        value: Some(value.to_owned()),
+        source,
         ..Default::default()
     }
 }

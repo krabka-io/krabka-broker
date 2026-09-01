@@ -17,6 +17,15 @@
 //! A named broker resource also carries the static configs in
 //! [`static_configs`] — `connections.max.idle.ms` and its per-listener
 //! overrides — which live in `BrokerConfig` rather than in the metadata image.
+//! Their `config_source` is provenance and not a value comparison: a key an
+//! operator wrote reads `STATIC_BROKER_CONFIG` even when what they wrote is
+//! Kafka's own default.
+//!
+//! A request that sets `include_synonyms` gets the chain of sources behind
+//! each of those static values, which is what `kafka-configs --all` renders
+//! after the value. A request that leaves it unset gets an empty chain on
+//! every entry, which is what Kafka answers. The dynamic overrides carry no
+//! chain either way.
 //!
 //! One stored topic override is read-only too:
 //! [`crate::config_keys::DISKLESS`]. A partition reads the data-path flag once,
@@ -86,6 +95,10 @@ pub(crate) fn handle(
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
         let image = controller.current_image();
+        // KIP-226: the chain of sources behind each value goes out only when
+        // the client asks for it. `req.resources` is consumed below, so the
+        // flag is read off the request first.
+        let include_synonyms = req.include_synonyms;
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
         // `Cluster("kafka-cluster")`. On Deny stamp the result entry with
@@ -111,6 +124,7 @@ pub(crate) fn handle(
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
                         &broker.config,
+                        include_synonyms,
                     )
                 }
             })

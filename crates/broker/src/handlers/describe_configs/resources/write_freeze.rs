@@ -98,6 +98,7 @@ mod tests {
             300_000,
             &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
             &crate::config::BrokerConfig::default(),
+            false,
         )
     }
 
