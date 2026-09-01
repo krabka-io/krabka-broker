@@ -156,17 +156,17 @@ fn static_entry(
 /// rather than over a value the node runs with.
 fn named_entry(
     key: &'static str,
-    set_by_operator: Option<String>,
+    set_by_operator: Option<&str>,
     options: EntryOptions,
 ) -> DescribeConfigsResourceResult {
     let row = registry::lookup(ConfigScope::Broker, key);
     let layers: Vec<Layer<'_>> = set_by_operator
-        .iter()
         .map(|value| Layer {
             source: CONFIG_SOURCE_STATIC_BROKER,
             name: key,
-            value: value.as_str(),
+            value,
         })
+        .into_iter()
         .collect();
     config_entry(
         row,
@@ -218,7 +218,7 @@ pub(super) fn static_broker_entries(
         ]
         .into_iter()
         .filter(|(key, _)| wanted(key))
-        .map(|(key, set_by_operator)| named_entry(key, set_by_operator, options)),
+        .map(|(key, set_by_operator)| named_entry(key, set_by_operator.as_deref(), options)),
     );
     entries
 }
