@@ -23,9 +23,10 @@
 //!
 //! Both cases are `#[ignore]`d because they need Docker, and the Bazel lane
 //! that owns this suite runs it with `--ignored`. The unit tests over the output
-//! reader in [`parse`] and the join in [`divergence`] therefore live under a
-//! second root, `api_versions_differential_offline`, which names the same two
-//! modules and runs in the ordinary lane.
+//! reader in [`parse`], the join in [`divergence`] and the readiness deadlines
+//! in [`probe`] therefore live under a second root,
+//! `api_versions_differential_offline`, which names the same three modules and
+//! runs in the ordinary lane.
 //!
 //! ```text
 //! cargo test -p krabka-broker --test api_versions_differential -- --ignored
@@ -45,4 +46,6 @@ mod divergence;
 mod oracle;
 #[path = "api_versions_differential/parse.rs"]
 mod parse;
+#[path = "api_versions_differential/probe.rs"]
+mod probe;
 mod support;

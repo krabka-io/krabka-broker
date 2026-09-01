@@ -19,13 +19,19 @@
 //! `docs/KIP_MATRIX.md` repeats this beside the table a reader sees, because
 //! `krabka_only` otherwise reads as "Kafka does not have the API".
 
-use std::process::Command;
+use std::{
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_log::LogConfig;
 
-use crate::support::{JvmListeners, unique_container_name};
+use crate::{
+    probe::{retry_until, wait_bounded},
+    support::{JvmListeners, unique_container_name},
+};
 
 /// The Kafka release this suite compares krabka against.
 ///
@@ -37,8 +43,11 @@ pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 /// The tool, at its path inside the `apache/kafka` image.
 const TOOL: &str = "/opt/kafka/bin/kafka-broker-api-versions.sh";
 
-/// One-second attempts the oracle gets to answer before the suite gives up.
-const ORACLE_BOOT_ATTEMPTS: u32 = 60;
+/// Wall-clock budget the oracle gets to answer before the suite gives up.
+const ORACLE_BOOT_BUDGET: Duration = Duration::from_secs(60);
+
+/// The pause between a readiness probe that failed and the next one.
+const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
 
 /// Boot an in-process krabka broker on `listeners`, advertised under the name
 /// the tool containers resolve through `--add-host`.
@@ -109,7 +118,7 @@ impl OracleBroker {
     /// # Panics
     ///
     /// Panics when the container will not start, or when the broker does not
-    /// answer within [`ORACLE_BOOT_ATTEMPTS`] one-second attempts.
+    /// answer within [`ORACLE_BOOT_BUDGET`].
     pub(crate) fn start() -> Self {
         let name = unique_container_name("krabka-apiversions-oracle");
         let out = Command::new("docker")
@@ -170,31 +179,57 @@ impl OracleBroker {
         stdout
     }
 
+    /// The tool, aimed at the oracle's own loopback listener from inside its
+    /// container.
+    fn tool_command(&self) -> Command {
+        let mut command = Command::new("docker");
+        command.args([
+            "exec",
+            &self.name,
+            TOOL,
+            "--bootstrap-server",
+            "localhost:9092",
+        ]);
+        command
+    }
+
     fn exec_tool(&self) -> std::process::Output {
-        Command::new("docker")
-            .args([
-                "exec",
-                &self.name,
-                TOOL,
-                "--bootstrap-server",
-                "localhost:9092",
-            ])
+        self.tool_command()
             .output()
             .expect("spawn docker exec kafka-broker-api-versions")
     }
 
+    /// Run the tool once against the oracle, discarding its output and giving
+    /// it at most `budget` to answer.
+    ///
+    /// A broker that is still booting refuses the connection and the tool exits
+    /// quickly, but one that accepts and then never answers holds the tool for
+    /// the client's own API timeout -- a minute -- so the probe bounds the
+    /// child rather than trusting it to return. Killing `docker exec` leaves
+    /// the process it started inside the container, which goes away with the
+    /// container itself in [`Drop`].
+    fn probe_ready(&self, budget: Duration) -> bool {
+        let mut child = self
+            .tool_command()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn docker exec kafka-broker-api-versions");
+        wait_bounded(&mut child, budget).is_some_and(|status| status.success())
+    }
+
     fn wait_ready(&self) {
-        for attempt in 0..ORACLE_BOOT_ATTEMPTS {
-            if self.exec_tool().status.success() {
-                eprintln!("KRABKA[test] oracle {ORACLE_IMAGE} ready after {attempt} attempts");
-                return;
+        match retry_until(ORACLE_BOOT_BUDGET, ORACLE_BOOT_GAP, |remaining| {
+            self.probe_ready(remaining)
+        }) {
+            Ok(attempts) => {
+                eprintln!("KRABKA[test] oracle {ORACLE_IMAGE} ready after {attempts} attempts");
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            Err(attempts) => panic!(
+                "{ORACLE_IMAGE} did not answer within {ORACLE_BOOT_BUDGET:?} ({attempts} attempts); container logs:\n{}",
+                self.logs()
+            ),
         }
-        panic!(
-            "{ORACLE_IMAGE} did not answer within {ORACLE_BOOT_ATTEMPTS}s; container logs:\n{}",
-            self.logs()
-        );
     }
 
     fn logs(&self) -> String {
