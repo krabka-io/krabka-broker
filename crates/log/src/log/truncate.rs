@@ -26,7 +26,13 @@ impl Log {
     pub fn truncate_to(&mut self, offset: Offset) -> Result<(), LogError> {
         let log_start = self.log_start_offset();
         let log_end = self.log_end_offset();
-        if offset >= log_end {
+        let empty_rolled_active_at_cut = offset == log_end
+            && !self.segments.is_empty()
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.base_offset() == offset);
+        if offset > log_end || (offset == log_end && !empty_rolled_active_at_cut) {
             return Ok(()); // nothing to truncate
         }
         // The discarded tail may hold the batch that stopped the last

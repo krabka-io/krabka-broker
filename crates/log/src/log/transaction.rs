@@ -42,6 +42,7 @@ impl Log {
         &mut self,
         batch: &RecordBatch,
         producer_id: ProducerId,
+        last_offset: Offset,
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
         // Read the inner control record: key = (version: i16, type: i16) BE.
@@ -62,10 +63,9 @@ impl Log {
         if marker_type == Some(ABORT_CONTROL_TYPE)
             && let Some(start) = self.pending.get(&producer_id).copied()
         {
-            let last = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
             self.active_txn_index.append(AbortedTxn {
                 start_offset: start,
-                last_offset: last,
+                last_offset,
                 producer_id,
             })?;
         }

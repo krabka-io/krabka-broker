@@ -78,7 +78,7 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append_verbatim(&mut self, batch: &VerbatimBatch) -> Result<Offset, LogError> {
         let leader_epoch = batch.leader_epoch;
-        let assigned_base = self.log_end_offset();
+        let assigned_base = self.append_at_expected_offset();
         tracing::Span::current().record("assigned_base", assigned_base.0);
         self.append_verbatim_preserving_offset(batch, assigned_base)?;
         if leader_epoch.is_known()
@@ -86,8 +86,10 @@ impl Log {
                 .epoch_checkpoint
                 .latest_epoch()
                 .is_none_or(|e| leader_epoch > e)
+            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, assigned_base)
         {
-            self.epoch_checkpoint.append(leader_epoch, assigned_base)?;
+            self.rollback_failed_append(assigned_base)?;
+            return Err(error);
         }
         Ok(assigned_base)
     }
@@ -134,8 +136,10 @@ impl Log {
                 .epoch_checkpoint
                 .latest_epoch()
                 .is_none_or(|e| leader_epoch > e)
+            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, base_offset)
         {
-            self.epoch_checkpoint.append(leader_epoch, base_offset)?;
+            self.rollback_failed_append(base_offset)?;
+            return Err(error);
         }
         Ok(base_offset)
     }
@@ -152,6 +156,16 @@ impl Log {
         batch: &VerbatimBatch,
         base_offset: Offset,
     ) -> Result<(), LogError> {
+        let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
+            self.append_at_expected_offset().0,
+            base_offset.0,
+            batch.last_offset_delta,
+        ) else {
+            return Err(LogError::InvalidArgument(
+                "batch does not form a valid interval at the append frontier".into(),
+            ));
+        };
+        let last_offset = Offset(last_offset);
         Self::data_producer_tail(
             batch.producer_id,
             batch.base_sequence,
@@ -171,56 +185,51 @@ impl Log {
             self.roll_active_segment()?;
         }
 
-        let active = self
-            .active
-            .as_mut()
-            .expect("active segment must exist after Log::open");
-        active.append_verbatim(
-            &batch.bytes,
-            base_offset,
-            batch.last_offset_delta,
-            batch.max_timestamp,
-            batch.leader_epoch,
-            index_interval,
-        )?;
+        let result = (|| {
+            let active = self
+                .active
+                .as_mut()
+                .expect("active segment must exist after Log::open");
+            active.append_verbatim(
+                &batch.bytes,
+                base_offset,
+                batch.last_offset_delta,
+                batch.max_timestamp,
+                batch.leader_epoch,
+                index_interval,
+            )?;
 
-        if flush_on_append && let Err(error) = self.active_segment_flush() {
+            let is_transactional = batch.is_transactional && batch.producer_id.get() >= 0;
+            if flush_on_append || (self.stamp_source.is_some() && !is_transactional) {
+                self.active_segment_flush()?;
+            }
+
+            if !is_transactional {
+                self.record_stamp(base_offset, last_offset)?;
+            }
+
+            let pid = batch.producer_id;
+            if is_transactional {
+                self.pending.entry(pid).or_insert(base_offset);
+                self.pending_stamp_ranges
+                    .entry(pid)
+                    .or_default()
+                    .push((base_offset, last_offset));
+            } else if self.pending.is_empty() {
+                self.lso = self.log_end_offset();
+            }
+
+            self.update_data_producer_entry(
+                (batch.producer_id, batch.producer_epoch),
+                (batch.base_sequence, batch.last_offset_delta),
+                (base_offset, batch.max_timestamp, is_transactional),
+            )
+        })();
+
+        if let Err(error) = result {
             self.rollback_failed_append(base_offset)?;
             return Err(error);
         }
-
-        // --- .stampindex write (internal sidecar) ---
-        // Ordinary verbatim data is stamped now. Transactional verbatim data
-        // with an assigned producer is retained below and stamped only if its
-        // commit marker lands.
-        let last_offset = Offset(base_offset.0 + i64::from(batch.last_offset_delta));
-        let is_transactional = batch.is_transactional && batch.producer_id.get() >= 0;
-        if !is_transactional {
-            self.record_stamp(base_offset, last_offset)?;
-        }
-
-        // --- LSO tracking (no control batches on this path) ---
-        let pid = batch.producer_id;
-        if is_transactional {
-            // Record the first offset of this txn on this partition; LSO
-            // stays put until a commit/abort marker (which arrives via the
-            // owned control-batch path).
-            self.pending.entry(pid).or_insert(base_offset);
-            self.pending_stamp_ranges
-                .entry(pid)
-                .or_default()
-                .push((base_offset, last_offset));
-        } else if self.pending.is_empty() {
-            // Non-transactional batch with no in-flight txns: LSO advances.
-            self.lso = self.log_end_offset();
-        }
-
-        self.update_data_producer_entry(
-            (batch.producer_id, batch.producer_epoch),
-            (batch.base_sequence, batch.last_offset_delta),
-            (base_offset, batch.max_timestamp, is_transactional),
-        )?;
-
         Ok(())
     }
 }

@@ -13,6 +13,36 @@ pub struct LocalTruncationPlan {
     pub keep_active: bool,
 }
 
+/// Admit one batch only at the expected logical frontier and compute its
+/// inclusive last offset and exclusive successor without signed overflow.
+#[ensures(match result {
+    Some((last, next)) => expected_base@ >= 0
+        && supplied_base@ == expected_base@
+        && last_offset_delta@ >= 0
+        && last@ == supplied_base@ + last_offset_delta@
+        && next@ == last@ + 1
+        && supplied_base@ <= last@
+        && last@ < next@,
+    None => expected_base@ < 0
+        || supplied_base@ != expected_base@
+        || last_offset_delta@ < 0
+        || supplied_base@ + last_offset_delta@ > i64::MAX@
+        || supplied_base@ + last_offset_delta@ + 1 > i64::MAX@,
+})]
+#[must_use]
+pub fn local_append_coordinates(
+    expected_base: i64,
+    supplied_base: i64,
+    last_offset_delta: i32,
+) -> Option<(i64, i64)> {
+    if expected_base < 0 || supplied_base != expected_base || last_offset_delta < 0 {
+        return None;
+    }
+    let last = supplied_base.checked_add(i64::from(last_offset_delta))?;
+    let next = last.checked_add(1)?;
+    Some((last, next))
+}
+
 /// Keep exactly the sealed-segment prefix whose bases precede the cut and keep
 /// the current active segment exactly when its base also precedes the cut.
 #[requires(forall<i: Int, j: Int>
@@ -160,6 +190,19 @@ mod tests {
         assert2::check!(!truncation_batch_retained(20, 20));
         assert2::check!(truncation_frontier(12, 20) == 12);
         assert2::check!(truncation_frontier(21, 20) == 20);
+    }
+
+    #[test]
+    fn local_append_coordinates_are_exact_and_fail_closed() {
+        assert2::check!(local_append_coordinates(10, 10, 2) == Some((12, 13)));
+        assert2::check!(local_append_coordinates(10, 9, 0).is_none());
+        assert2::check!(local_append_coordinates(-1, -1, 0).is_none());
+        assert2::check!(local_append_coordinates(10, 10, -1).is_none());
+        assert2::check!(local_append_coordinates(i64::MAX, i64::MAX, 0).is_none());
+        assert2::check!(
+            local_append_coordinates(i64::MAX - 1, i64::MAX - 1, 0)
+                == Some((i64::MAX - 1, i64::MAX))
+        );
     }
 
     #[test]

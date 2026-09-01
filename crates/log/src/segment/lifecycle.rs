@@ -66,8 +66,13 @@ impl Segment {
         let position = u32::try_from(position)
             .map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
         self.offset_index.truncate_by_position(position)?;
-        let next_relative = u32::try_from(last_offset.0 + 1 - self.base_offset.0)
-            .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
+        let next = last_offset
+            .0
+            .checked_add(1)
+            .and_then(|next| next.checked_sub(self.base_offset.0))
+            .ok_or_else(|| LogError::BadSegmentName("offset overflow".into()))?;
+        let next_relative =
+            u32::try_from(next).map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
         self.time_index.truncate_by_relative_offset(next_relative)?;
         Ok(())
     }
