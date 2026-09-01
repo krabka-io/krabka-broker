@@ -13,6 +13,10 @@ mod eos_composition_model;
 /// skips a 2PC transaction, which has no timeout.
 pub(crate) mod expiration;
 pub(crate) mod handlers;
+/// KIP-98 transactional-id expiry sweep. It tombstones a terminal or idle
+/// transactional id out of `__transaction_state`, and never touches an
+/// `Ongoing` or `Prepare*` one.
+pub(crate) mod id_expiration;
 pub(crate) mod log_record;
 pub(crate) mod marker;
 pub(crate) mod partitioner;

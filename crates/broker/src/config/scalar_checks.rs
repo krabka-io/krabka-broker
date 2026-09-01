@@ -14,7 +14,10 @@ use crate::{BrokerError, config::BrokerConfig};
 mod tests;
 
 impl BrokerConfig {
-    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+    /// The broker-wide time knobs. They sit in their own pass, apart from the
+    /// replication timings and the size and count limits, because one function
+    /// holding all three lists outgrows the length limit.
+    fn validate_positive_broker_times(&self) -> Result<(), BrokerError> {
         for (name, value) in [
             (
                 "startup_leader_wait_timeout",
@@ -149,6 +152,36 @@ impl BrokerConfig {
         ] {
             require_positive_time(name, value)?;
         }
+        self.validate_offset_retention()?;
+        Ok(())
+    }
+
+    /// The two KIP-211 knobs, which only have a value when the operator set
+    /// one.
+    ///
+    /// `offsets.retention.minutes` is a whole number of minutes on Kafka —
+    /// `GroupCoordinatorConfig` declares it `INT` and multiplies by 60000 — so
+    /// a duration krabka cannot state in whole minutes is refused rather than
+    /// silently truncated. Truncating would make `DescribeConfigs` advertise a
+    /// retention the sweep does not enforce.
+    fn validate_offset_retention(&self) -> Result<(), BrokerError> {
+        if let Some(retention) = self.offsets_retention_override {
+            require_positive_time("offsets_retention", retention)?;
+            if retention.millis_i64() % 60_000 != 0 {
+                return Err(BrokerError::InvalidRuntimeConfig(format!(
+                    "offsets_retention must be a whole number of minutes, got {}ms",
+                    retention.millis_i64()
+                )));
+            }
+        }
+        if let Some(interval) = self.offsets_retention_check_interval_override {
+            require_positive_time("offsets_retention_check_interval", interval)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_positive_runtime_scalars(&self) -> Result<(), BrokerError> {
+        self.validate_positive_broker_times()?;
         for (name, value) in [
             (
                 "replication.fetch_max_wait",
@@ -215,6 +248,27 @@ impl BrokerConfig {
         Ok(())
     }
 
+    /// The two KIP-98 transactional-id expiry knobs.
+    ///
+    /// Both are `ConfigDef.Type::INT` in Kafka, so `DescribeConfigs` reports
+    /// each as a whole number of milliseconds an `i32` holds. A caller that
+    /// builds a [`BrokerConfig`] in process never passes through the
+    /// file-config validator, so the same bounds are restated here: without
+    /// them the value reported and the value the sweep runs on could differ,
+    /// and a zero expiry would reap every eligible id at once.
+    fn validate_txn_id_expiry_scalars(&self) -> Result<(), BrokerError> {
+        require_whole_millis_i32(
+            "txn_id_expiration",
+            self.txn_id_expiration,
+            MillisFloor::One,
+        )?;
+        require_whole_millis_i32(
+            "txn_id_expiration_cleanup_interval",
+            self.txn_id_expiration_cleanup_interval,
+            MillisFloor::Zero,
+        )
+    }
+
     pub(super) fn validate_additional_runtime_scalars(&self) -> Result<(), BrokerError> {
         // The timeout is carried verbatim in `AddRaftVoter.timeout_ms`, an
         // `int32` millisecond wire field, so it has to survive that narrowing.
@@ -229,6 +283,7 @@ impl BrokerConfig {
                 "offsets_topic_metadata_wait_timeout must be at least 1ms".into(),
             ));
         }
+        self.validate_txn_id_expiry_scalars()?;
         require_positive_size("observer_fetch_max", self.observer_fetch_max)?;
         for (name, value) in [
             (
@@ -433,6 +488,52 @@ fn require_positive_size(name: &str, value: ByteSize) -> Result<(), BrokerError>
     if value <= <ByteSize as ByteSizeExt>::ZERO {
         return Err(BrokerError::InvalidRuntimeConfig(format!(
             "{name} must be positive"
+        )));
+    }
+    Ok(())
+}
+
+/// The smallest millisecond value a [`require_whole_millis_i32`] field may
+/// hold: `One` for a knob that must always run, which is Kafka's `atLeast(1)`,
+/// and `Zero` for a cadence that zero disables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MillisFloor {
+    Zero,
+    One,
+}
+
+impl MillisFloor {
+    fn lower_bound(self) -> i64 {
+        match self {
+            MillisFloor::Zero => 0,
+            MillisFloor::One => 1,
+        }
+    }
+}
+
+/// Rejects a duration that is not a whole number of milliseconds inside the
+/// range a Kafka `ConfigDef.Type::INT` can carry. The error names the config
+/// field.
+fn require_whole_millis_i32(
+    name: &str,
+    value: Time,
+    floor: MillisFloor,
+) -> Result<(), BrokerError> {
+    if !value.secs_f64().is_finite() {
+        return Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} must be finite"
+        )));
+    }
+    let millis = value.millis_i64();
+    if <Time as TimeExt>::from_millis(millis) != value {
+        return Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} must be a whole number of milliseconds"
+        )));
+    }
+    let lower = floor.lower_bound();
+    if !(lower..=i64::from(i32::MAX)).contains(&millis) {
+        return Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} must be within {lower}ms..=2147483647ms"
         )));
     }
     Ok(())

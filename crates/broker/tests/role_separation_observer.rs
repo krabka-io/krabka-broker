@@ -10,7 +10,10 @@
 //! *unfenced*. A broker's `BrokerHeartbeat` goes to the controller leader's
 //! CONTROLLER listener, which is the only endpoint a controller-only node
 //! publishes for itself, and the controller's liveness registry fences every
-//! registered broker it does not hear from within `heartbeat_timeout`.
+//! registered broker it does not hear from within `heartbeat_timeout`. It also
+//! covers what the metadata surface then advertises: `controller_id` has to
+//! name a broker the caller can resolve out of the same response, which the
+//! controller-only node's own id never is.
 
 use std::{
     collections::BTreeSet,
@@ -23,6 +26,7 @@ use krabka_client_core::Client;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_cluster_request::DescribeClusterRequest,
+    metadata_request::MetadataRequest,
 };
 use tempfile::TempDir;
 
@@ -276,7 +280,113 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
             "DescribeCluster on node {} must list both brokers unfenced",
             broker.node_id()
         );
+        // The advertised controller has to be one a client can resolve. A
+        // client reads `controller_id` back out of the `brokers` array of the
+        // same response, so the controller-only node's own id would be as
+        // useless to it as the -1 a wholly fenced cluster answers with.
+        assert!(
+            resp.controller_id == 2 || resp.controller_id == 3,
+            "DescribeCluster on node {} advertised controller_id {}, which is not a listed broker",
+            broker.node_id(),
+            resp.controller_id
+        );
     }
+
+    assert_metadata_names_a_reachable_controller(&cluster).await;
+
+    cluster.shutdown().await;
+}
+
+/// `Metadata` has to name a `controller_id` the caller can resolve.
+///
+/// In `KRaft` the field is not the quorum leader: `apache/kafka:4.3.1` answers it
+/// with `metadataCache.getRandomAliveBrokerId().orElse(-1)`, an unfenced
+/// registered broker. A role-separated cluster is where the difference bites,
+/// because the quorum leader is a controller-only node that never appears in
+/// the `brokers` array the client resolves the id against.
+///
+/// So this asserts the id resolves *within the same response*, and that the
+/// endpoint it resolves to is one a client can actually reach.
+async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
+    for broker in &cluster.brokers {
+        let client = Client::builder()
+            .bootstrap(broker.listen_addr().to_string())
+            .build()
+            .await
+            .unwrap();
+        let resp = client.send(MetadataRequest::default()).await.unwrap();
+
+        let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
+        assert!(
+            listed == BTreeSet::from([2, 3]),
+            "Metadata on node {} must list both brokers: {listed:?}",
+            broker.node_id()
+        );
+        let named = resp
+            .brokers
+            .iter()
+            .find(|row| row.node_id == resp.controller_id);
+        assert!(
+            named.is_some(),
+            "Metadata on node {} advertised controller_id {}, which is absent from {listed:?}",
+            broker.node_id(),
+            resp.controller_id
+        );
+
+        // Reachable, not merely listed: the advertised endpoint answers.
+        let endpoint = named.unwrap();
+        let controller_client = Client::builder()
+            .bootstrap(format!("{}:{}", endpoint.host, endpoint.port))
+            .build()
+            .await
+            .unwrap();
+        let echoed = controller_client
+            .send(MetadataRequest::default())
+            .await
+            .unwrap();
+        assert!(echoed.cluster_id == resp.cluster_id);
+    }
+}
+
+/// The controller-only node serves the client APIs on its own data listener
+/// too, and must not name itself there either: it is the quorum leader and
+/// still has no broker endpoint to offer.
+///
+/// [`assert_metadata_names_a_reachable_controller`] asks the observers, which
+/// answer out of a replicated image. This asks the node that *is* the
+/// controller, where the leader's id is the one value most obviously to hand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controller_only_node_never_advertises_itself_as_controller() {
+    support::init_tracing();
+
+    let cluster = start_role_separated(2).await;
+    assert_settled_unfenced(&cluster).await;
+    let controller_node_id = i32::try_from(cluster.controller.node_id()).unwrap();
+
+    let client = Client::builder()
+        .bootstrap(cluster.controller.listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    let resp = client.send(MetadataRequest::default()).await.unwrap();
+
+    let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
+    assert!(
+        resp.controller_id != controller_node_id,
+        "a controller-only node has no broker endpoint and must not name itself; \
+         it advertised {controller_node_id} out of {listed:?}"
+    );
+    let named = resp
+        .brokers
+        .iter()
+        .find(|row| row.node_id == resp.controller_id);
+    assert!(
+        named.is_some(),
+        "the controller-only node advertised controller_id {}, which is absent from {listed:?}",
+        resp.controller_id
+    );
+    let endpoint = named.unwrap();
+    assert!(!endpoint.host.is_empty() && endpoint.port > 0);
 
     cluster.shutdown().await;
 }

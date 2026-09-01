@@ -48,7 +48,8 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{authorized_operations::authorized_operations_bits, is_internal_topic},
+    handlers::authorized_operations::authorized_operations_bits,
+    internal_topics::is_internal_topic,
 };
 
 // The `async fn` shape matches the other inline-intercept handlers
@@ -172,7 +173,7 @@ pub(crate) async fn handle(
             error_code: codes::NONE,
             name: Some(name.clone()),
             topic_id: WireUuid(t.topic_id.into_bytes()),
-            is_internal: is_internal_topic(name),
+            is_internal: is_internal_topic(&broker.config, name),
             partitions: row_partitions,
             topic_authorized_operations,
             ..Default::default()
@@ -356,21 +357,5 @@ mod tests {
             part.leader_epoch
         );
         broker_handle.shutdown().await;
-    }
-
-    #[test]
-    fn is_internal_topic_matches_known_internal_names() {
-        for (name, want) in [
-            ("__consumer_offsets", true),
-            ("__transaction_state", true),
-            ("__remote_log_metadata", true),
-            ("foo", false),
-            ("_foo", false),
-            ("__user_topic", false),
-            // No accidental prefix matching.
-            ("__consumer_offsets-2", false),
-        ] {
-            assert!(is_internal_topic(name) == want, "{name}");
-        }
     }
 }

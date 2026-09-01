@@ -78,7 +78,16 @@ fn broker_key_types_match_apache_kafka() {
         ),
         (UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean),
         (REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long),
+        // `GroupCoordinatorConfig`: `offsets.retention.minutes` is `INT` and
+        // `offsets.retention.check.interval.ms` is `LONG`.
+        (OFFSETS_RETENTION_MINUTES, ConfigType::Int),
+        (OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long),
         (NODE_ID, ConfigType::Int),
+        (TRANSACTIONAL_ID_EXPIRATION_MS, ConfigType::Int),
+        (
+            TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+            ConfigType::Int,
+        ),
     ] {
         let row = lookup(ConfigScope::Broker, name).expect(name);
         check!(row.config_type == expected, "{name}");
@@ -171,14 +180,67 @@ fn value_type_renders_the_type_and_its_note() {
 }
 
 #[test]
-fn the_two_synthesised_keys_are_the_only_unstored_rows() {
+fn the_synthesised_keys_are_the_only_unstored_rows() {
     let unstored: Vec<&str> = CONFIG_KEYS
         .iter()
         .filter(|row| !row.is_stored())
         .map(|row| row.name)
         .collect();
 
-    assert!(unstored == vec![WRITE_FREEZE, NODE_ID]);
+    assert!(
+        unstored
+            == vec![
+                WRITE_FREEZE,
+                OFFSETS_RETENTION_MINUTES,
+                OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                TRANSACTIONAL_ID_EXPIRATION_MS,
+                TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                NODE_ID,
+            ]
+    );
+}
+
+/// The two KIP-98 keys report Kafka's own defaults, so a broker that never
+/// touched either one answers `--describe --all` the way a Kafka broker does.
+#[test]
+fn transactional_id_expiry_defaults_match_apache_kafka() {
+    for (name, expected) in [
+        (TRANSACTIONAL_ID_EXPIRATION_MS, "604800000"),
+        (TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, "3600000"),
+    ] {
+        let row = lookup(ConfigScope::Broker, name).expect(name);
+        check!(row.default == Some(expected), "{name}");
+        // `kafka-configs --alter` answers `Cannot update these configs
+        // dynamically`, so `DescribeConfigs` must report them read-only.
+        check!(row.read_only, "{name}");
+    }
+}
+
+/// The defaults the registry reports are the values the broker actually runs
+/// with. A broker sweeping on a cadence `DescribeConfigs` does not report is
+/// the drift this pins.
+#[test]
+fn transactional_id_expiry_defaults_agree_with_the_broker_config() {
+    let default_of = |name| lookup(ConfigScope::Broker, name).expect(name).default;
+
+    check!(
+        default_of(TRANSACTIONAL_ID_EXPIRATION_MS)
+            == Some(
+                crate::config::DEFAULT_TXN_ID_EXPIRATION
+                    .millis_i64()
+                    .to_string()
+                    .as_str()
+            )
+    );
+    check!(
+        default_of(TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS)
+            == Some(
+                crate::config::DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL
+                    .millis_i64()
+                    .to_string()
+                    .as_str()
+            )
+    );
 }
 
 #[test]

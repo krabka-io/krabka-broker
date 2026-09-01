@@ -38,21 +38,27 @@ use crate::{
 };
 
 mod broker_logger;
+mod static_broker;
 mod write_freeze;
 
 #[cfg(test)]
 mod tests;
 
-pub(super) use self::broker_logger::BrokerLoggers;
-use self::write_freeze::write_freeze_override;
+pub(super) use self::{
+    broker_logger::BrokerLoggers,
+    static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
+};
+use self::{static_broker::static_broker_entries, write_freeze::write_freeze_override};
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    serving_node: krabka_metadata::NodeId,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
     loggers: BrokerLoggers<'_>,
+    static_broker: StaticBrokerConfigs,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
@@ -63,7 +69,13 @@ pub(super) fn describe_one(
         configs,
         ..Default::default()
     };
-    let key_filter: Option<&[String]> = r.configuration_keys.as_deref();
+    // An empty key list asks for every key, not for none: Kafka's
+    // `ConfigHelperUtils.toDescribeConfigsResult` filters with
+    // `keys == null || keys.isEmpty() || keys.contains(name)`.
+    let key_filter: Option<&[String]> = r
+        .configuration_keys
+        .as_deref()
+        .filter(|keys| !keys.is_empty());
     let wanted = |key: &str| key_filter.is_none_or(|keys| keys.iter().any(|f| f == key));
 
     if r.resource_type == RESOURCE_TYPE_TOPIC {
@@ -87,9 +99,37 @@ pub(super) fn describe_one(
                     ..Default::default()
                 };
             };
-            Some(krabka_metadata::NodeId(node_id))
+            let node_id = krabka_metadata::NodeId(node_id);
+            // Kafka's `ConfigHelper.describeConfigs`: a broker resource is
+            // answered from the serving process's own configuration, so it
+            // refuses to answer for any other node. The
+            // `kafka-transaction-coordinator`-era `kafka_2.13-4.3.1.jar`
+            // carries the message verbatim -- "Unexpected broker id, expected
+            // <id> or empty string, but received <name>" -- as an
+            // `InvalidRequestException`. The JVM `AdminClient` never sends
+            // one: it routes a broker resource to the node it names.
+            if node_id != serving_node {
+                return DescribeConfigsResult {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some(format!(
+                        "Unexpected broker id, expected {} or empty string, but received {}",
+                        serving_node.0, r.resource_name
+                    )),
+                    resource_type: r.resource_type,
+                    resource_name: r.resource_name,
+                    configs: Vec::new(),
+                    ..Default::default()
+                };
+            }
+            Some(node_id)
         };
-        return ok(broker_configs(image, node_id, &wanted, options));
+        return ok(broker_configs(
+            image,
+            node_id,
+            static_broker,
+            &wanted,
+            options,
+        ));
     }
 
     if r.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
@@ -198,9 +238,18 @@ fn topic_configs(
 /// An empty resource name is Kafka's cluster-wide default resource, which
 /// reports the cluster defaults alone. Only keys that hold a value are
 /// reported, which is what a Kafka broker does for this resource type.
+///
+/// A *named* node reports more: `node.id` and the static settings in
+/// [`static_broker_entries`], both read from the running process rather than
+/// from the metadata image, the way Kafka answers `--describe --all` out of a
+/// node's own `server.properties`. That is why [`describe_one`] refuses a
+/// name that is not the serving node: those values belong to this process
+/// alone, and reporting them under another node's id would label one broker's
+/// static configuration as another's.
 fn broker_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: Option<krabka_metadata::NodeId>,
+    static_broker: StaticBrokerConfigs,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
@@ -257,21 +306,22 @@ fn broker_configs(
         })
         .collect();
 
-    if let Some(node_id) = node_id
-        && wanted(NODE_ID)
-    {
-        let value = node_id.to_string();
-        configs.push(config_entry(
-            registry::lookup(ConfigScope::Broker, NODE_ID),
-            NODE_ID,
-            &[Layer {
-                source: CONFIG_SOURCE_STATIC_BROKER,
-                name: NODE_ID,
-                value: &value,
-            }],
-            DefaultLayer::default(),
-            options,
-        ));
+    if let Some(node_id) = node_id {
+        if wanted(NODE_ID) {
+            let value = node_id.to_string();
+            configs.push(config_entry(
+                registry::lookup(ConfigScope::Broker, NODE_ID),
+                NODE_ID,
+                &[Layer {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: NODE_ID,
+                    value: &value,
+                }],
+                DefaultLayer::default(),
+                options,
+            ));
+        }
+        configs.extend(static_broker_entries(static_broker, wanted, options));
         configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     }
     configs
