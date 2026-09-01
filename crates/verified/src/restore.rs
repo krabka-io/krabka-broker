@@ -2,6 +2,44 @@
 
 use creusot_std::prelude::*;
 
+pub const RESTORE_SNAPSHOT_MISSING: u8 = 0;
+pub const RESTORE_SNAPSHOT_LIVE: u8 = 1;
+pub const RESTORE_SNAPSHOT_DELETE_STARTED: u8 = 2;
+pub const RESTORE_SNAPSHOT_DELETE_FINISHED: u8 = 3;
+
+/// Reconcile one archive-scan observation with one snapshot lifecycle state.
+/// `Some(true)` keeps scanned bytes, `Some(false)` excludes absent or deleting
+/// bytes, and `None` reports an explicit source disagreement.
+#[ensures((result == Some(true)) ==
+    (scanned && snapshot_state@ == RESTORE_SNAPSHOT_LIVE@))]
+#[ensures((result == Some(false)) ==
+    ((!scanned && snapshot_state@ <= RESTORE_SNAPSHOT_DELETE_FINISHED@
+        && snapshot_state@ != RESTORE_SNAPSHOT_LIVE@)
+        || (scanned && snapshot_state@ == RESTORE_SNAPSHOT_DELETE_STARTED@)))]
+#[ensures((result == None) ==
+    (snapshot_state@ > RESTORE_SNAPSHOT_DELETE_FINISHED@
+        || (!scanned && snapshot_state@ == RESTORE_SNAPSHOT_LIVE@)
+        || (scanned && (snapshot_state@ == RESTORE_SNAPSHOT_MISSING@
+            || snapshot_state@ == RESTORE_SNAPSHOT_DELETE_FINISHED@))))]
+#[must_use]
+pub fn restore_archive_reconcile(scanned: bool, snapshot_state: u8) -> Option<bool> {
+    if snapshot_state > RESTORE_SNAPSHOT_DELETE_FINISHED {
+        return None;
+    }
+    if snapshot_state == RESTORE_SNAPSHOT_LIVE {
+        return if scanned { Some(true) } else { None };
+    }
+    if scanned {
+        if snapshot_state == RESTORE_SNAPSHOT_DELETE_STARTED {
+            Some(false)
+        } else {
+            None
+        }
+    } else {
+        Some(false)
+    }
+}
+
 /// Validate one archived batch and return its exclusive next offset.
 ///
 /// The caller supplies the minimum base offset the next batch may carry. Kafka
@@ -92,6 +130,26 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    #[test]
+    fn archive_reconciliation_is_pointwise_and_fail_closed() {
+        assert2::assert!(restore_archive_reconcile(true, RESTORE_SNAPSHOT_LIVE) == Some(true));
+        assert2::assert!(
+            restore_archive_reconcile(true, RESTORE_SNAPSHOT_DELETE_STARTED) == Some(false)
+        );
+        assert2::assert!(restore_archive_reconcile(true, RESTORE_SNAPSHOT_MISSING).is_none());
+        assert2::assert!(
+            restore_archive_reconcile(true, RESTORE_SNAPSHOT_DELETE_FINISHED).is_none()
+        );
+        assert2::assert!(restore_archive_reconcile(false, RESTORE_SNAPSHOT_LIVE).is_none());
+        assert2::assert!(
+            restore_archive_reconcile(false, RESTORE_SNAPSHOT_DELETE_STARTED) == Some(false)
+        );
+        assert2::assert!(
+            restore_archive_reconcile(false, RESTORE_SNAPSHOT_DELETE_FINISHED) == Some(false)
+        );
+        assert2::assert!(restore_archive_reconcile(false, u8::MAX).is_none());
+    }
 
     #[test]
     fn batch_step_is_contiguous_and_overflow_safe() {

@@ -120,7 +120,11 @@ pub use remote_read::{
     remote_read_relative_offset, remote_time_index_candidate_count, remote_time_index_offset_usable,
 };
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
-pub use restore::{restore_batch_step, restore_record_coordinates};
+pub use restore::{
+    RESTORE_SNAPSHOT_DELETE_FINISHED, RESTORE_SNAPSHOT_DELETE_STARTED, RESTORE_SNAPSHOT_LIVE,
+    RESTORE_SNAPSHOT_MISSING, restore_archive_reconcile, restore_batch_step,
+    restore_record_coordinates,
+};
 pub use retention::{
     RetentionPrefix, barrier_cut_expired, local_retention_prefix, retention_delete_target,
     retention_prefix,
