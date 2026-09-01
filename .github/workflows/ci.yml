@@ -79,6 +79,18 @@ jobs:
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
 
+      # Impact analysis may omit a model when its source did not change. Run
+      # every Stateright-bearing target explicitly so the verification catalog
+      # remains a merge gate on every pull request.
+      - name: stateright models
+        run: |
+          bazel test \
+            //crates/audit:audit_test \
+            //crates/broker:broker_test \
+            //crates/log:log_test \
+            //crates/raft:kraft_model_test \
+            //crates/throttle:bucket_model_test
+
   # Build and execute the tests with LLVM instrumentation, and upload the merged
   # LCOV report.
   #

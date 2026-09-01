@@ -1,8 +1,34 @@
 # Verification
 
-Krabka uses two formal test tiers. Creusot proves contracts for small,
+krabka uses two formal test tiers. Creusot proves contracts for small,
 executable kernels. Stateright checks all reachable states inside each model's
 stated bounds. Neither tier proves the whole broker.
+
+## Catalog Boundary
+
+This catalog covers safety-critical, deterministic decisions implemented in
+this repository. These decisions admit, reject, select, fence, order, or
+recover state in KRaft, storage, security, and protocol handling. A decision
+belongs in the Creusot ledger when a contract can describe its safety rule. It
+belongs in the Stateright inventory when the rule depends on a bounded sequence
+of events, crashes, or interleavings. Host orchestration and external systems
+remain outside both tiers as described below.
+
+The closure audit enumerated the workspace crates, traced every ledger caller
+and model entry point to production code, checked its proof artifact or bounded
+model and adapter tests, and searched the remaining mutation boundaries. The
+audit found no unlisted decision inside this boundary. The tables below are the
+authoritative inventory; counts are not used because one row can contain
+several related kernels.
+
+Every pull request runs the Creusot package-discovery check and all discovered
+proof-bearing packages. The same CI workflow explicitly runs the five Bazel
+test targets that contain every Stateright entry point in this inventory. The
+explicit run is separate from impact-based test selection, so an unrelated
+change cannot skip the model checks. A new proof-bearing package must pass the
+discovery check. A new Stateright entry point must be added to this inventory
+and to one of the explicit model-bearing targets, or that target list must be
+extended.
 
 ## Creusot Proof Ledger
 
@@ -23,7 +49,6 @@ types.
 | [`replica_fetch_mutation`](../crates/verified/src/broker.rs) rejects a follower Fetch response unless its unique topic and partition identity, in-flight request epoch, current metadata target, and any reported leader identity all agree, then selects exactly one of retry, truncation, or append. | The broker follower replicator's [Fetch loop](../crates/broker/src/replicator/fetch_loop.rs) and [response adapter](../crates/broker/src/replicator/response.rs), before any response-derived mutation | [`proof.json`](../verif/krabka_verified_rlib/broker/replica_fetch_mutation/proof.json) | The host captures the exact request epoch before sending; accepts exactly one response row whose every populated topic identity field and partition index match; accepts `current_leader` only when both fields are absent sentinels or both exactly match the configured target; and rechecks metadata plus the local replication-target lock before truncation or append. Wire decoding, record-batch validation, filesystem I/O, producer-state updates, metrics, and separately guarded error recovery remain host assumptions. |
 | [`preferred_rebalance_admission`](../crates/verified/src/broker.rs) admits only a nonempty, unique, eligible preferred-leader change set whose count is within the scanned partition total and whose exact threshold comparison succeeded. | The broker's KIP-460 [preferred-leader rebalance tick](../crates/broker/src/leader_rebalance.rs), immediately before controller submission | [`proof.json`](../verif/krabka_verified_rlib/broker/preferred_rebalance_admission/proof.json) | A successful preferred-election selection supplies the live, in-ISR, non-witness eligibility fact for the scan snapshot. The host rejects duplicate topic-partition keys and compares `selected / total` with the configured ratio's shortest exact decimal fraction by a division-only continued-fraction walk, avoiding truncation, lossy count conversion, and multiplication overflow. Liveness can change after the asynchronous check, and controller submission and metadata-image concurrency remain host assumptions; a later tick retries a failed submission. |
 | [`delete_records_trim_decision`](../crates/verified/src/broker.rs) rejects malformed offset state and out-of-range requests, resolves `-1`, caps every target at the committed high watermark and optional delivery watermark, and preserves a newer current start. [`delete_records_trim_application`](../crates/verified/src/broker.rs) orders WAL before local application, takes the maximum observed frontier on retry, and reports completion only when the WAL and local frontiers are equal. | The `DeleteRecords` [offset adapter](../crates/broker/src/handlers/delete_records/offsets.rs) and partition-writer [trim reconciliation](../crates/broker/src/partition_writer/mutations.rs) | [`admission proof`](../verif/krabka_verified_rlib/broker/delete_records_trim_decision/proof.json), [`application proof`](../verif/krabka_verified_rlib/broker/delete_records_trim_application/proof.json) | After authorization and freeze checks, the caller supplies fresh leader reads of log start, HWM, LEO, and a delivery watermark recomputed under the log mutex; an inconsistent combination fails closed. The writer serializes mutations, applies the WAL first, then advances the local log to the WAL result and checks exact equality before acknowledging. WAL, local-log, object-store, and remote-tier I/O remain host assumptions; failed I/O returns an error, and a retry re-enters the same monotonic decision. |
-| [`delete_records_offset_out_of_range`](../crates/verified/src/broker.rs) classifies targets below zero or above the log end. | [`krabka-broker`](../crates/broker/src/handlers/delete_records/offsets.rs) | [`proof.json`](../verif/krabka_verified_rlib/broker/delete_records_offset_out_of_range/proof.json) | None. |
 | [`effective_share_backlog`](../crates/verified/src/broker.rs) computes a nonnegative, saturating backlog. | [`krabka-broker`](../crates/broker/src/share_partition/backlog_poller.rs) | [`proof.json`](../verif/krabka_verified_rlib/broker/effective_share_backlog/proof.json) | None. |
 | [`unclean_recovery_commit_admission`](../crates/verified/src/broker.rs) admits a polled unclean-election winner only while the partition epoch and ordered replica assignment equal the selection snapshot, the winner remains assigned, and the current leader remains unavailable. | The broker's [`UncleanRecoveryManager`](../crates/broker/src/unclean_recovery/manager.rs) post-poll commit path | [`proof.json`](../verif/krabka_verified_rlib/broker/unclean_recovery_commit_admission/proof.json) | The host captures the exact partition epoch and ordered replica IDs before polling, maps the re-read record and liveness result immediately before commit, and submits only after kernel admission. Metadata submission remains an asynchronous host boundary. |
 | [`find_coordinator_admission`](../crates/verified/src/broker.rs) admits only known GROUP and TRANSACTION keys after their mapped Describe ACL succeeds, and well-formed SHARE keys at API v6+ after ClusterAction succeeds; malformed SHARE keys and unknown wire discriminants fail closed. | The broker's [`FindCoordinator` authorization adapter](../crates/broker/src/handlers/find_coordinator/authz.rs), before internal-topic creation or coordinator resolution | [`proof.json`](../verif/krabka_verified_rlib/broker/find_coordinator_admission/proof.json) | The host validates canonical SHARE composite keys and maps SHARE to `ClusterAction` on the singleton Cluster resource; only kernel allow outcomes enter resolution. |
