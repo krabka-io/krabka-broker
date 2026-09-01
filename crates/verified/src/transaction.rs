@@ -5,6 +5,74 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Whether one transaction record may install its live producer identities.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TransactionPidInstallDecision {
+    RejectWrongPartition,
+    RejectCurrentIdentity,
+    RejectStagedIdentity,
+    RejectCollision,
+    Apply,
+}
+
+/// Admit only a well-formed, uniquely owned producer-ID pair from the
+/// transaction log partition selected by its transactional ID.
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent PID ownership facts"
+)]
+#[ensures((result == TransactionPidInstallDecision::RejectWrongPartition)
+    == !partition_matches)]
+#[ensures((result == TransactionPidInstallDecision::RejectCurrentIdentity)
+    == (partition_matches && (producer_id@ < 0 || producer_epoch@ < 0)))]
+#[ensures((result == TransactionPidInstallDecision::RejectStagedIdentity)
+    == (partition_matches
+        && producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && !((next_producer_id@ == -1 && next_producer_epoch@ == -1)
+            || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))))]
+#[ensures((result == TransactionPidInstallDecision::RejectCollision)
+    == (partition_matches
+        && producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && ((next_producer_id@ == -1 && next_producer_epoch@ == -1)
+            || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))
+        && (!current_owner_matches
+            || (next_producer_id@ >= 0 && !next_owner_matches))))]
+#[ensures((result == TransactionPidInstallDecision::Apply)
+    == (partition_matches
+        && producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && ((next_producer_id@ == -1 && next_producer_epoch@ == -1)
+            || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))
+        && current_owner_matches
+        && (next_producer_id@ < 0 || next_owner_matches)))]
+#[must_use]
+pub fn transaction_pid_install_decision(
+    partition_matches: bool,
+    producer_id: i64,
+    producer_epoch: i16,
+    next_producer_id: i64,
+    next_producer_epoch: i16,
+    current_owner_matches: bool,
+    next_owner_matches: bool,
+) -> TransactionPidInstallDecision {
+    if !partition_matches {
+        TransactionPidInstallDecision::RejectWrongPartition
+    } else if producer_id < 0 || producer_epoch < 0 {
+        TransactionPidInstallDecision::RejectCurrentIdentity
+    } else if !((next_producer_id == -1 && next_producer_epoch == -1)
+        || (next_producer_id >= 0 && next_producer_epoch >= 0))
+    {
+        TransactionPidInstallDecision::RejectStagedIdentity
+    } else if !current_owner_matches || (next_producer_id >= 0 && !next_owner_matches) {
+        TransactionPidInstallDecision::RejectCollision
+    } else {
+        TransactionPidInstallDecision::Apply
+    }
+}
+
 /// Whether one transaction generation may persist a partition registration.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -458,6 +526,39 @@ mod tests {
 
     const PREPARE_COMMIT: i8 = 2;
     const COMPLETE_COMMIT: i8 = 4;
+
+    #[test]
+    fn pid_install_rejects_malformed_misplaced_and_colliding_records() {
+        use TransactionPidInstallDecision::{
+            Apply, RejectCollision, RejectCurrentIdentity, RejectStagedIdentity,
+            RejectWrongPartition,
+        };
+
+        for (arguments, expected) in [
+            ((false, 1, 0, -1, -1, true, true), RejectWrongPartition),
+            ((true, -1, 0, -1, -1, true, true), RejectCurrentIdentity),
+            ((true, 1, -1, -1, -1, true, true), RejectCurrentIdentity),
+            ((true, 1, 0, 2, -1, true, true), RejectStagedIdentity),
+            ((true, 1, 0, -1, 0, true, true), RejectStagedIdentity),
+            ((true, 1, 0, 1, 0, true, true), Apply),
+            ((true, 1, 0, -1, -1, false, true), RejectCollision),
+            ((true, 1, 0, 2, 0, true, false), RejectCollision),
+            ((true, 1, 0, -1, -1, true, true), Apply),
+            ((true, 1, 0, 2, 0, true, true), Apply),
+        ] {
+            assert!(
+                transaction_pid_install_decision(
+                    arguments.0,
+                    arguments.1,
+                    arguments.2,
+                    arguments.3,
+                    arguments.4,
+                    arguments.5,
+                    arguments.6,
+                ) == expected
+            );
+        }
+    }
 
     #[test]
     fn partition_registration_fences_generation_and_retries_exactly() {

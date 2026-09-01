@@ -5,7 +5,13 @@
 //! state change as a record in the matching `__transaction_state` partition.
 //! On `Broker::start` it recovers the state by replaying those partitions.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
@@ -47,6 +53,12 @@ pub(crate) struct TxnCoordinator {
     /// Reverse lookup: `producer_id` → `transactional_id`. The Produce
     /// handler reads it to verify transactional batches (KIP-1319 v2).
     pid_to_tid: DashMap<ProducerId, String>,
+    /// Serializes the multi-key PID ownership check and publication after a
+    /// durable transaction-state append.
+    pid_install: StdMutex<()>,
+    /// Latches a recovery failure so later metadata refreshes cannot restore
+    /// coordinator ownership over a partial or rejected replay image.
+    recovery_valid: AtomicBool,
     marker_transport: Option<MarkerTransport>,
     group_coordinator: Option<Arc<crate::coordinator::GroupCoordinator>>,
 }
@@ -76,6 +88,8 @@ impl TxnCoordinator {
             state: DashMap::new(),
             leader_partitions: RwLock::new(HashSet::new()),
             pid_to_tid: DashMap::new(),
+            pid_install: StdMutex::new(()),
+            recovery_valid: AtomicBool::new(true),
             marker_transport: None,
             group_coordinator: None,
         }
@@ -104,6 +118,14 @@ impl TxnCoordinator {
     /// from the current `MetadataImage`. `recover` calls it, and so does
     /// every metadata change.
     pub(crate) async fn refresh_leader_partitions(&self, image: &MetadataImage) {
+        if !self.recovery_valid.load(Ordering::Acquire) {
+            self.leader_partitions.write().await.clear();
+            return;
+        }
+        self.install_leader_partitions(image).await;
+    }
+
+    async fn install_leader_partitions(&self, image: &MetadataImage) {
         let mut set = HashSet::new();
         for p in image.partitions_of(bootstrap::TOPIC) {
             if p.leader == self.node_id {
