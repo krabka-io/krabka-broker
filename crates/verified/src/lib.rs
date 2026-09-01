@@ -127,7 +127,7 @@ pub use registration::{
     BrokerHeartbeatDecision, BrokerRegistrationDecision, broker_heartbeat_decision,
     broker_registration_decision,
 };
-pub use remote_metadata::remote_metadata_partition;
+pub use remote_metadata::{remote_metadata_partition, remote_metadata_resume_cursor};
 pub use remote_read::{
     remote_read_relative_offset, remote_time_index_candidate_count, remote_time_index_offset_usable,
 };
