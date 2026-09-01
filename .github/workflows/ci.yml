@@ -255,7 +255,20 @@ jobs:
       # `--add-host=host.docker.internal:host-gateway`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
-      - run: bazel test --config=docker ${{ matrix.suite.target }}
+      # `aspect container-suites` selects by touched path, so the matrix can
+      # name a container target that is not a test rule -- the KDC fixture's
+      # `image` and `seed_layer` are built, not run. `bazel test` exits 4 on a
+      # label with no test targets ("No test targets were found, yet testing was
+      # requested"), which failed every suite in the matrix regardless of the
+      # code under review. Dispatch on the rule kind instead.
+      - run: |
+          set -euo pipefail
+          target='${{ matrix.suite.target }}'
+          kind=$(bazel query --output=label_kind "${target}" | awk '{ print $1 }')
+          case "${kind}" in
+            *_test) bazel test --config=docker "${target}" ;;
+            *) bazel build --config=docker "${target}" ;;
+          esac
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
   # Kerberos acceptance cases visible in their own scheduled lane instead of
