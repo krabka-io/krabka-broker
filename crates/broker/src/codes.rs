@@ -154,6 +154,9 @@ kafka_codes! {
     // Transactional protocol codes.
     INVALID_TXN_STATE = 48;
     CONCURRENT_TRANSACTIONS = 51;
+    /// `TRANSACTION_COORDINATOR_FENCED` (52): the marker came from an older
+    /// transaction-coordinator generation than the partition has observed.
+    TRANSACTION_COORDINATOR_FENCED = 52;
     /// `TRANSACTION_ABORTABLE` (120, KIP-890) — the operation failed but the
     /// transaction can still be aborted by the client; e.g.
     /// `AddPartitionsToTxn` verify-only found a partition that is not part of
@@ -508,6 +511,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         BrokerError::UnknownMember { .. } => UNKNOWN_MEMBER_ID,
         BrokerError::GenerationMismatch { .. } => ILLEGAL_GENERATION,
         BrokerError::ProducerEpochFenced { .. } => INVALID_PRODUCER_EPOCH,
+        BrokerError::CoordinatorEpochFenced { .. } => TRANSACTION_COORDINATOR_FENCED,
         BrokerError::FencedLeaderEpoch { .. } => FENCED_LEADER_EPOCH,
         BrokerError::UnknownLeaderEpoch(_) => UNKNOWN_LEADER_EPOCH,
         BrokerError::Replication(_)

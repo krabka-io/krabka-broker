@@ -16,6 +16,121 @@ pub enum TransactionPidInstallDecision {
     Apply,
 }
 
+/// Whether one transaction marker may append and publish committed offsets.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TransactionMarkerMaterializationDecision {
+    RejectMalformed,
+    RejectProducerEpoch,
+    RejectCoordinatorEpoch,
+    Retry,
+    AppendWithoutOffsetPublication,
+    AppendAndPublishOffsets,
+}
+
+/// Fence a transaction marker against the partition's latest producer and
+/// coordinator generations, suppress an exact completed retry, and publish
+/// offsets only for a pending commit on `__consumer_offsets`.
+#[allow(
+    clippy::fn_params_excessive_bools,
+    clippy::too_many_arguments,
+    reason = "the proof classifies independent marker and partition facts"
+)]
+#[ensures((result == TransactionMarkerMaterializationDecision::RejectMalformed)
+    == (producer_id@ < 0
+        || producer_epoch@ < 0
+        || coordinator_epoch@ < 0
+        || current_producer_epoch@ < -1
+        || current_coordinator_epoch@ < -1
+        || (has_pending_transaction && current_producer_epoch@ == -1)))]
+#[ensures((result == TransactionMarkerMaterializationDecision::RejectProducerEpoch)
+    == (producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && coordinator_epoch@ >= 0
+        && current_producer_epoch@ >= -1
+        && current_coordinator_epoch@ >= -1
+        && (!has_pending_transaction || current_producer_epoch@ >= 0)
+        && producer_epoch@ < current_producer_epoch@))]
+#[ensures((result == TransactionMarkerMaterializationDecision::RejectCoordinatorEpoch)
+    == (producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && coordinator_epoch@ >= 0
+        && current_producer_epoch@ >= -1
+        && current_coordinator_epoch@ >= -1
+        && (!has_pending_transaction || current_producer_epoch@ >= 0)
+        && producer_epoch@ >= current_producer_epoch@
+        && coordinator_epoch@ < current_coordinator_epoch@))]
+#[ensures((result == TransactionMarkerMaterializationDecision::Retry)
+    == (producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && coordinator_epoch@ >= 0
+        && producer_epoch@ >= current_producer_epoch@
+        && coordinator_epoch@ >= current_coordinator_epoch@
+        && current_producer_epoch@ >= -1
+        && current_coordinator_epoch@ >= -1
+        && !has_pending_transaction
+        && producer_epoch@ == current_producer_epoch@
+        && coordinator_epoch@ == current_coordinator_epoch@))]
+#[ensures((result == TransactionMarkerMaterializationDecision::AppendAndPublishOffsets)
+    == (producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && coordinator_epoch@ >= 0
+        && current_producer_epoch@ >= -1
+        && current_coordinator_epoch@ >= -1
+        && (!has_pending_transaction || current_producer_epoch@ >= 0)
+        && producer_epoch@ >= current_producer_epoch@
+        && coordinator_epoch@ >= current_coordinator_epoch@
+        && has_pending_transaction
+        && is_commit
+        && is_offsets_partition))]
+#[ensures((result == TransactionMarkerMaterializationDecision::AppendWithoutOffsetPublication)
+    == (producer_id@ >= 0
+        && producer_epoch@ >= 0
+        && coordinator_epoch@ >= 0
+        && current_producer_epoch@ >= -1
+        && current_coordinator_epoch@ >= -1
+        && (!has_pending_transaction || current_producer_epoch@ >= 0)
+        && producer_epoch@ >= current_producer_epoch@
+        && coordinator_epoch@ >= current_coordinator_epoch@
+        && !(!has_pending_transaction
+            && producer_epoch@ == current_producer_epoch@
+            && coordinator_epoch@ == current_coordinator_epoch@)
+        && !(has_pending_transaction && is_commit && is_offsets_partition)))]
+#[must_use]
+pub fn transaction_marker_materialization_decision(
+    producer_id: i64,
+    producer_epoch: i16,
+    coordinator_epoch: i32,
+    current_producer_epoch: i16,
+    current_coordinator_epoch: i32,
+    has_pending_transaction: bool,
+    is_commit: bool,
+    is_offsets_partition: bool,
+) -> TransactionMarkerMaterializationDecision {
+    if producer_id < 0
+        || producer_epoch < 0
+        || coordinator_epoch < 0
+        || current_producer_epoch < -1
+        || current_coordinator_epoch < -1
+        || (has_pending_transaction && current_producer_epoch == -1)
+    {
+        TransactionMarkerMaterializationDecision::RejectMalformed
+    } else if producer_epoch < current_producer_epoch {
+        TransactionMarkerMaterializationDecision::RejectProducerEpoch
+    } else if coordinator_epoch < current_coordinator_epoch {
+        TransactionMarkerMaterializationDecision::RejectCoordinatorEpoch
+    } else if !has_pending_transaction
+        && producer_epoch == current_producer_epoch
+        && coordinator_epoch == current_coordinator_epoch
+    {
+        TransactionMarkerMaterializationDecision::Retry
+    } else if has_pending_transaction && is_commit && is_offsets_partition {
+        TransactionMarkerMaterializationDecision::AppendAndPublishOffsets
+    } else {
+        TransactionMarkerMaterializationDecision::AppendWithoutOffsetPublication
+    }
+}
+
 /// Admit only a well-formed, uniquely owned producer-ID pair from the
 /// transaction log partition selected by its transactional ID.
 #[allow(
@@ -558,6 +673,46 @@ mod tests {
                 ) == expected
             );
         }
+    }
+
+    #[test]
+    fn marker_materialization_fences_retries_and_offset_publication() {
+        use TransactionMarkerMaterializationDecision::{
+            AppendAndPublishOffsets, AppendWithoutOffsetPublication, RejectCoordinatorEpoch,
+            RejectMalformed, RejectProducerEpoch, Retry,
+        };
+
+        assert!(
+            transaction_marker_materialization_decision(-1, 0, 0, -1, -1, true, true, true)
+                == RejectMalformed
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 0, 0, -2, -1, true, true, true)
+                == RejectMalformed
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 2, 9, 3, 8, true, true, true)
+                == RejectProducerEpoch
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 3, 7, 3, 8, true, true, true)
+                == RejectCoordinatorEpoch
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 3, 8, 3, 8, false, true, true) == Retry
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 3, 8, 3, 7, true, true, true)
+                == AppendAndPublishOffsets
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 3, 8, 3, 7, true, false, true)
+                == AppendWithoutOffsetPublication
+        );
+        assert!(
+            transaction_marker_materialization_decision(1, 4, 9, 3, 8, false, true, true)
+                == AppendWithoutOffsetPublication
+        );
     }
 
     #[test]
