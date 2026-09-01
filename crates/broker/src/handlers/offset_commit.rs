@@ -359,16 +359,19 @@ async fn validate(handle: &Arc<GroupActorHandle>, req: &OffsetCommitRequest) -> 
     .await
 }
 
-/// The `__consumer_offsets` records for every `(topic, partition)` in `req`,
-/// and the in-memory entries that mirror them.
+/// One commit's two halves: the `__consumer_offsets` records for every
+/// `(topic, partition)` in the request, and the in-memory entries that mirror
+/// them.
 ///
-/// Both halves of one commit are built together and travel to the group's
-/// actor together, because the actor is what orders them against the KIP-211
-/// retention sweep.
-fn commit_records(
-    req: &OffsetCommitRequest,
-    commit: Commit,
-) -> (RecordBatch, Vec<((String, i32), OffsetEntry)>) {
+/// They are built together and travel to the group's actor together, because
+/// the actor is what orders them against the KIP-211 retention sweep.
+struct CommitRecords {
+    batch: RecordBatch,
+    entries: Vec<((String, i32), OffsetEntry)>,
+}
+
+/// Build both halves of one commit.
+fn commit_records(req: &OffsetCommitRequest, commit: Commit) -> CommitRecords {
     let mut batch = RecordBatch {
         max_timestamp: commit.now_ms,
         ..RecordBatch::default()
@@ -409,7 +412,7 @@ fn commit_records(
         }
     }
     batch.last_offset_delta = (delta - 1).max(0);
-    (batch, entries)
+    CommitRecords { batch, entries }
 }
 
 /// Append the commit and apply it to the group, both inside the group's actor.
@@ -429,7 +432,7 @@ async fn commit_through_actor(
     req: &OffsetCommitRequest,
     commit: Commit,
 ) -> Result<(), i16> {
-    let (batch, entries) = commit_records(req, commit);
+    let CommitRecords { batch, entries } = commit_records(req, commit);
     let (reply, result) = oneshot::channel();
     if handle
         .tx

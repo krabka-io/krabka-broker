@@ -482,10 +482,12 @@ async fn an_empty_group_that_holds_no_offsets_is_reaped() {
         "a group that has only just been created is left alone"
     );
 
+    // Read the clock again: the actor stamps its own empty-since moment on its
+    // first turn, which is after `now_ms` above.
     let swept = sweep(
         &broker.group_coordinator,
         |_| true,
-        now_ms + CHECK_INTERVAL_MS,
+        crate::time_util::now_ms() + CHECK_INTERVAL_MS,
         RETENTION_MS,
         CHECK_INTERVAL_MS,
     )

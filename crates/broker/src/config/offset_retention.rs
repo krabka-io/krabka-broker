@@ -53,10 +53,14 @@ mod tests {
 
     #[test]
     fn an_operator_value_wins_even_when_it_equals_the_default() {
-        let mut config = BrokerConfig::default();
-        config.offsets_retention_override = Some(DEFAULT_OFFSETS_RETENTION);
-        config.offsets_retention_check_interval_override = Some(minutes(1));
+        let config = BrokerConfig {
+            offsets_retention_override: Some(DEFAULT_OFFSETS_RETENTION),
+            offsets_retention_check_interval_override: Some(minutes(1)),
+            ..BrokerConfig::default()
+        };
 
+        // The override survives even where it matches the default, because
+        // `DescribeConfigs` reports it as `STATIC_BROKER_CONFIG` on that basis.
         check!(config.offsets_retention_override == Some(DEFAULT_OFFSETS_RETENTION));
         check!(config.offsets_retention() == DEFAULT_OFFSETS_RETENTION);
         check!(config.offsets_retention_check_interval() == minutes(1));
