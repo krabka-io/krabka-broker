@@ -135,15 +135,10 @@ pub(super) fn apply_epoch_checks(
     partition: &Partition,
     output: &mut PartitionData,
 ) -> bool {
-    let current_epoch = partition
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
-    if request.current_leader_epoch >= 0 && request.current_leader_epoch != current_epoch {
-        output.error_code = if request.current_leader_epoch < current_epoch {
-            codes::FENCED_LEADER_EPOCH
-        } else {
-            codes::UNKNOWN_LEADER_EPOCH
-        };
+    if let Some((error_code, current_epoch)) =
+        partition.fetch_leader_epoch_fence(request.current_leader_epoch)
+    {
+        output.error_code = error_code;
         output.current_leader = LeaderIdAndEpoch {
             leader_id: image
                 .partition(topic, partition_index)

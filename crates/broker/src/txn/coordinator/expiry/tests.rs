@@ -8,14 +8,19 @@ use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset, ProducerId};
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_protocol::{
+    UnknownTaggedFields, owned::describe_transactions_response::TransactionState,
+};
 use krabka_units::mebibytes;
 use tempfile::{TempDir, tempdir};
 use uuid::Uuid;
 
 use super::*;
 use crate::{
-    partition::Partition, partition_registry::PartitionRegistry, txn::bootstrap,
-    txn::two_pc::NO_TIMEOUT_MS, txn::version::TxnVersion,
+    handlers::describe_transactions::{TRANSACTIONAL_ID_NOT_FOUND, transaction_state_row},
+    partition::Partition,
+    partition_registry::PartitionRegistry,
+    txn::{bootstrap, state::TxnEntry, two_pc::NO_TIMEOUT_MS, version::TxnVersion},
 };
 
 const TID: &str = "tid-expiry";
@@ -91,25 +96,6 @@ fn a_backwards_clock_expires_nothing() {
         i64::MIN,
         EXPIRY_MS
     ));
-}
-
-// ── The revival guard ─────────────────────────────────────────────────
-
-#[test]
-fn still_matches_accepts_the_snapshot_it_came_from_and_rejects_a_revival() {
-    let decided = complete_commit_entry(0);
-    check!(still_matches(&decided, &decided));
-
-    for mutate in [
-        (|e: &mut TxnEntry| e.producer_id = ProducerId(7)) as fn(&mut TxnEntry),
-        |e: &mut TxnEntry| e.producer_epoch += 1,
-        |e: &mut TxnEntry| e.state = TxnState::Ongoing,
-        |e: &mut TxnEntry| e.last_update_ms += 1,
-    ] {
-        let mut revived = decided.clone();
-        mutate(&mut revived);
-        check!(!still_matches(&revived, &decided));
-    }
 }
 
 // ── The live sweep ────────────────────────────────────────────────────
@@ -224,21 +210,51 @@ fn transaction_state_records(coordinator: &TxnCoordinator) -> Vec<(String, Optio
     }
 }
 
+/// The row `DescribeTransactions` answers for `TID` right now, built from the
+/// coordinator's live entry exactly as the handler builds it.
+async fn describe_transactions_row(coordinator: &TxnCoordinator) -> TransactionState {
+    match coordinator.get(TID) {
+        None => transaction_state_row(TID, None),
+        Some(handle) => transaction_state_row(TID, Some(&*handle.lock().await)),
+    }
+}
+
 #[tokio::test]
 async fn an_expired_completed_transaction_is_tombstoned_and_dropped() {
     let (coordinator, _dir) = seeded_coordinator(complete_commit_entry(0), NodeId(1)).await;
     let before = transaction_state_records(&coordinator);
     assert!(before.len() == 1, "{before:?}");
-    assert!(coordinator.get(TID).is_some());
+    // Before the sweep, `DescribeTransactions` answers with the full entry.
+    check!(
+        describe_transactions_row(&coordinator).await
+            == TransactionState {
+                error_code: crate::codes::NONE,
+                transactional_id: TID.to_owned(),
+                transaction_state: "CompleteCommit".to_owned(),
+                transaction_timeout_ms: 60_000,
+                transaction_start_time_ms: 0,
+                producer_id: 1000,
+                producer_epoch: 3,
+                topics: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
 
     let expired = coordinator
         .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
         .await;
 
     check!(expired == vec![TID.to_string()]);
-    // What `DescribeTransactions` reads: the tid is no longer known, so the
-    // handler answers TRANSACTIONAL_ID_NOT_FOUND.
-    check!(coordinator.get(TID).is_none());
+    // `DescribeTransactions` no longer returns the id: the coordinator holds
+    // no entry, so the handler answers TRANSACTIONAL_ID_NOT_FOUND.
+    check!(
+        describe_transactions_row(&coordinator).await
+            == TransactionState {
+                error_code: TRANSACTIONAL_ID_NOT_FOUND,
+                transactional_id: TID.to_owned(),
+                ..Default::default()
+            }
+    );
     check!(coordinator.snapshot().await.is_empty());
     check!(coordinator.tid_for_pid(ProducerId(1000)).is_none());
     // The seeded value record, then the tombstone: a null value under the same
@@ -268,14 +284,68 @@ async fn a_prepared_two_pc_transaction_survives_indefinitely() {
     let (coordinator, _dir) = seeded_coordinator(prepared_two_pc_entry(0), NodeId(1)).await;
 
     for now_ms in [EXPIRY_MS + 1, EXPIRY_MS * 1_000, i64::MAX] {
-        let expired = coordinator.expire_transactional_ids(now_ms, EXPIRY_MS).await;
+        let expired = coordinator
+            .expire_transactional_ids(now_ms, EXPIRY_MS)
+            .await;
         check!(expired.is_empty(), "{now_ms}");
-        check!(coordinator.get(TID).is_some(), "{now_ms}");
+        // `DescribeTransactions` still reports the prepared transaction, with
+        // the 2PC `NO_TIMEOUT_MS` sentinel it was prepared under.
+        check!(
+            describe_transactions_row(&coordinator).await
+                == TransactionState {
+                    error_code: crate::codes::NONE,
+                    transactional_id: TID.to_owned(),
+                    transaction_state: "PrepareCommit".to_owned(),
+                    transaction_timeout_ms: NO_TIMEOUT_MS,
+                    transaction_start_time_ms: 0,
+                    producer_id: 2000,
+                    producer_epoch: 1,
+                    topics: Vec::new(),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            "{now_ms}"
+        );
     }
     // No tombstone was ever appended: only the seeded value record is there.
     let records = transaction_state_records(&coordinator);
     check!(records.len() == 1, "{records:?}");
     check!(records[0].1.is_some());
+}
+
+/// The sweep takes its decision against the *live* entry under the tid's own
+/// lock, and holds that lock across the append. A producer that opens a
+/// transaction while the sweep is parked on the lock therefore keeps its
+/// transaction: the sweep wakes, re-reads `Ongoing`, and refuses.
+///
+/// The lock is held before the sweep is spawned, so the sweep is parked
+/// whatever the scheduler does, and the outcome is the same every run.
+#[tokio::test]
+async fn a_transaction_that_begins_while_the_sweep_waits_is_not_expired() {
+    let (coordinator, _dir) = seeded_coordinator(complete_commit_entry(0), NodeId(1)).await;
+    let coordinator = Arc::new(coordinator);
+    let handle = coordinator.get(TID).expect("the seeded entry");
+    let mut entry = handle.lock().await;
+
+    let sweep = {
+        let coordinator = Arc::clone(&coordinator);
+        tokio::spawn(async move {
+            coordinator
+                .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
+                .await
+        })
+    };
+    // The producer begins a transaction while the sweep waits on the lock.
+    entry.state = TxnState::Ongoing;
+    entry.last_update_ms = EXPIRY_MS + 1;
+    drop(entry);
+
+    let expired = sweep.await.expect("sweep task");
+
+    check!(expired.is_empty());
+    check!(coordinator.get(TID).is_some());
+    // No tombstone was appended: only the seeded value record is there.
+    let records = transaction_state_records(&coordinator);
+    check!(records.len() == 1, "{records:?}");
 }
 
 /// A `__transaction_state` partition that moved to another broker belongs to

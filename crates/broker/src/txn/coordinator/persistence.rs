@@ -90,11 +90,11 @@ impl TxnCoordinator {
     /// expires a transactional id: compaction reclaims the tid's history, and
     /// [`Self::recover`] already reads a null value as a delete.
     ///
-    /// `entry` is the snapshot the caller decided on. The in-memory drop
-    /// happens only if the live entry still matches that snapshot, so an
-    /// `InitProducerId` that revived the tid between the decision and the
-    /// append keeps its fresh state. The append is a no-op on replay in that
-    /// case: the reviving record sits after the tombstone in the log.
+    /// `entry` is the live entry, and the caller **holds its lock**. That is
+    /// what makes the append and the in-memory drop one step: every path that
+    /// revives a known tid mutates the entry under that same lock, so no
+    /// revival can land between them and no reviving record can end up before
+    /// this tombstone in the log.
     ///
     /// A failed append leaves the coordinator exactly as it was, and the next
     /// sweep retries.
@@ -131,15 +131,6 @@ impl TxnCoordinator {
 
         part.produce_batch(batch).await?;
 
-        // Take the handle out of the map before locking it: holding a DashMap
-        // shard lock across an await would block every other tid in the shard.
-        let live = self.state.get(tid).map(|e| e.value().clone());
-        let Some(live) = live else {
-            return Ok(());
-        };
-        if !super::expiry::still_matches(&*live.lock().await, entry) {
-            return Ok(());
-        }
         self.state.remove(tid);
         for pid in [
             entry.producer_id,

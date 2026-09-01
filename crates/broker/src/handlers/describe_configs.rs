@@ -1,14 +1,27 @@
-//! `DescribeConfigs` (`api_key=32`). It returns the dynamic override configs
-//! that the metadata image holds plus the broker's static node id.
+//! `DescribeConfigs` (`api_key=32`). It answers with a resource's effective
+//! configuration and the provenance of every value in it.
 //!
-//! - `resource_type=2` (TOPIC): the handler reads the per-topic override map
-//!   and emits entries with `config_source = DYNAMIC_TOPIC_CONFIG (1)`.
+//! - `resource_type=2` (TOPIC): the handler reports every key in
+//!   [`crate::config_keys::registry`], not only the ones the topic overrides.
+//!   An override reports `DYNAMIC_TOPIC_CONFIG (1)`; a key the cluster-default
+//!   broker config supplies reports `DYNAMIC_DEFAULT_BROKER_CONFIG (3)`; the
+//!   rest report `DEFAULT_CONFIG (5)`.
 //! - `resource_type=4` (BROKER): a numeric name returns the effective dynamic
 //!   per-broker and cluster-default overrides. An empty name returns the
 //!   cluster-wide defaults. Sources distinguish `DYNAMIC_BROKER_CONFIG (2)`
 //!   from `DYNAMIC_DEFAULT_BROKER_CONFIG (3)` and `STATIC_BROKER_CONFIG (4)`.
+//! - `resource_type=16` (`CLIENT_METRICS`) and `resource_type=32` (GROUP) report
+//!   their own effective values the same way.
 //! - Every other resource type receives an empty configs list and no error.
 //!   The JVM `AdminClient` accepts that.
+//!
+//! Each entry carries the typed metadata `ConfigEntry` exposes: the
+//! `ConfigDef` type byte the client parses the value with, the documentation
+//! when the request set `include_documentation`, the synonym chain when it set
+//! `include_synonyms`, and `is_sensitive` with the value withheld when the key
+//! is one the broker must not disclose. All of it comes from the registry, so
+//! `kafka-configs --describe --all` reads the same facts the validator
+//! enforces. [`entry`] holds the shaping and the chain order.
 //!
 //! A broker config that only the controller writes comes back with
 //! `read_only` set, next to the static `node.id` entry. See
@@ -51,11 +64,13 @@ use krabka_protocol::{
 use krabka_units::convert::TimeExt as _;
 
 mod authz;
+mod entry;
 mod resources;
 mod wire;
 
 use self::{
     authz::{denied_result, resource_authz_failure},
+    entry::EntryOptions,
     resources::{StaticBrokerConfigs, describe_one},
 };
 use crate::{broker::Broker, error::BrokerError};
@@ -81,14 +96,17 @@ pub(crate) fn handle(
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
         let image = controller.current_image();
+        let options = EntryOptions::from_request(&req);
         // This node's own static settings, which a named broker resource
-        // reports beside its dynamic overrides.
+        // reports beside its dynamic overrides. Both are `ConfigDef.Type::INT`
+        // in Kafka, and the broker's config validation already refused a value
+        // wider than that.
         let static_broker = StaticBrokerConfigs {
-            txn_id_expiration_ms: broker.config.txn_id_expiration.millis_i64(),
+            txn_id_expiration_ms: broker.config.txn_id_expiration.millis_i32(),
             txn_id_expiration_cleanup_interval_ms: broker
                 .config
                 .txn_id_expiration_cleanup_interval
-                .millis_i64(),
+                .millis_i32(),
         };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
@@ -115,6 +133,7 @@ pub(crate) fn handle(
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
                         static_broker,
+                        options,
                     )
                 }
             })

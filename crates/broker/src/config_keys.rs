@@ -53,6 +53,14 @@
 //! it by name. See [`topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS`].
 //!
 //! The broker rejects unknown keys with `INVALID_CONFIG`.
+//!
+//! [`registry`] is the one table all of that reads from. A row states a key's
+//! name, the `ConfigDef` type byte the JVM `AdminClient` parses its value
+//! with, its default, its documentation, whether the broker may disclose the
+//! value, and the value check [`validate_topic_config`] applies. The generated
+//! reference page in [`docs`] and the typed metadata `DescribeConfigs` reports
+//! are both projections of it, so an operator cannot be told one thing by
+//! `kafka-configs --describe` and another by an alter refusal.
 
 mod broker_scope;
 mod delivery;
@@ -61,6 +69,7 @@ mod docs;
 mod log_config;
 mod qos;
 mod recovery;
+pub(crate) mod registry;
 mod schema;
 mod topic_scope;
 mod validation;
@@ -77,11 +86,12 @@ pub(crate) use self::{
 };
 pub(crate) use self::{
     broker_scope::{
-        BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
-        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
-        WITNESS_TRUE, is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
-        resolve_broker_witness, resolve_preferred_leader_site, resolve_remote_list_offsets_timeout,
-        witness_node_ids,
+        BROKER_FENCED, BROKER_WITNESS, FENCED_TRUE, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        TRANSACTIONAL_ID_EXPIRATION_MS, WITNESS_TRUE, fenced_node_ids,
+        is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
+        resolve_broker_fenced, resolve_broker_witness, resolve_preferred_leader_site,
+        resolve_remote_list_offsets_timeout, witness_node_ids,
     },
     delivery::{
         DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay,

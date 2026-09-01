@@ -8,8 +8,9 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        metadata_snapshot_fetch_max, nonnegative_time, positive_time, positive_u64,
-        unit_interval_ratio, whole_bytes_u64, whole_millis_i64_time,
+        disableable_millis_i32_time, metadata_snapshot_fetch_max, nonnegative_time, positive_time,
+        positive_u64, unit_interval_ratio, whole_bytes_u64, whole_millis_i32_time,
+        whole_millis_i64_time,
     },
 };
 
@@ -85,11 +86,16 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.txn_abort_cleanup_interval {
             cfg.txn_abort_cleanup_interval = nonnegative_time("txn_abort_cleanup_interval", value)?;
         }
-        set_runtime_time_secs!(runtime, txn_id_expiration, cfg.txn_id_expiration);
-        // Zero disables the expiry sweep, so it bypasses the positive-only macro.
+        // Both KIP-98 expiry knobs are `ConfigDef.Type::INT` in Kafka and
+        // `DescribeConfigs` reports them as such, so neither may hold a value
+        // wider than an `i32` of milliseconds. The expiry itself must run, as
+        // Kafka's `atLeast(1)` says; zero on the sweep cadence disables it.
+        if let Some(value) = runtime.txn_id_expiration {
+            cfg.txn_id_expiration = whole_millis_i32_time("txn_id_expiration", value)?;
+        }
         if let Some(value) = runtime.txn_id_expiration_cleanup_interval {
             cfg.txn_id_expiration_cleanup_interval =
-                nonnegative_time("txn_id_expiration_cleanup_interval", value)?;
+                disableable_millis_i32_time("txn_id_expiration_cleanup_interval", value)?;
         }
         set_runtime_time_secs!(
             runtime,

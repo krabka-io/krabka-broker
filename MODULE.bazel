@@ -32,7 +32,7 @@ git_override(
     module_name = "rules_rs_mutants",
     # Resolved to the integration-test-capable revision so the checkout is
     # reproducible and mutation sweeps exercise both unit and integration tests.
-    commit = "976539f5edcf74eb266061c8429afacd9326f127",
+    commit = "e08d0fea86472d4897e3c61c0bb07266d3d9eadf",
     remote = "https://github.com/robot-head/rules_rs_mutants",
 )
 

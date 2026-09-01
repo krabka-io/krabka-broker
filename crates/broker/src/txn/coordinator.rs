@@ -20,7 +20,9 @@ use crate::{
     txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
 };
 
-mod expiry;
+/// KIP-98 transactional-id expiry: the decision core and the sweep over the
+/// tids this broker coordinates. [`crate::txn::id_expiration`] ticks it.
+pub(crate) mod expiry;
 mod markers;
 mod persistence;
 mod pid_index;

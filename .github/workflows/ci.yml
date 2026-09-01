@@ -125,7 +125,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-docs
           repository-cache: true
       - run: bazel build $(bazel query 'kind("rust_doc rule", //crates/...)')
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
@@ -169,7 +169,7 @@ jobs:
       # The opam switch builds why3 from source, which is the slow part of a
       # cold run. Key the cache on the Creusot pin and the prover profile, so a
       # bump of either rebuilds and nothing else does.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.opam

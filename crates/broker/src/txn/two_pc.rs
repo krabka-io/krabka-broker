@@ -69,8 +69,11 @@ pub(crate) fn is_two_phase_commit(txn_timeout_ms: i32) -> bool {
 ///  - the transaction is [`TxnState::Ongoing`]. Only an *open* transaction can
 ///    time out. The reaper never reaps `Empty` / `Prepare*` / `Complete*` /
 ///    `Dead`. Prepare\* is a transient commit/abort that the coordinator is
-///    already driving, and a separate, much longer transactional-id expiry
-///    reclaims the terminal and idle states, not this reaper.
+///    already driving, and a separate, much longer transactional-id expiry,
+///    [`crate::txn::coordinator::expiry`], reclaims the terminal and idle
+///    states, not this reaper. That sweep refuses every `Prepare*` state in
+///    turn, so neither reaper takes a prepared 2PC decision away from the
+///    transaction manager that owns it.
 ///  - it is NOT a 2PC transaction (`!is_two_phase_commit`). This is **the
 ///    KIP-939 guarantee**: the reaper never unilaterally aborts a prepared 2PC
 ///    transaction.

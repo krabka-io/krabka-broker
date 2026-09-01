@@ -24,7 +24,7 @@
 use tracing::{info, warn};
 
 use super::TxnCoordinator;
-use crate::txn::state::{TxnEntry, TxnState};
+use crate::txn::state::TxnState;
 
 /// Reports whether `state` is one the coordinator may expire at all.
 ///
@@ -75,22 +75,6 @@ pub(crate) fn should_expire_transactional_id(
     now_ms.saturating_sub(last_update_ms) >= expiration_ms
 }
 
-/// Reports whether the live `entry` is still the one `decided` was taken from,
-/// so the tombstone the caller just appended may drop it from the in-memory
-/// map.
-///
-/// A concurrent `InitProducerId` revives an expiring tid by writing a fresh
-/// `Empty` entry. It moves the identity, the state, or the update stamp, and
-/// any of the three failing to match says the map now holds an entry this
-/// sweep never decided on.
-#[must_use]
-pub(super) fn still_matches(entry: &TxnEntry, decided: &TxnEntry) -> bool {
-    entry.producer_id == decided.producer_id
-        && entry.producer_epoch == decided.producer_epoch
-        && entry.state == decided.state
-        && entry.last_update_ms == decided.last_update_ms
-}
-
 impl TxnCoordinator {
     /// KIP-98 transactional-id expiry: tombstones every locally-coordinated
     /// transactional id that [`should_expire_transactional_id`] accepts at
@@ -101,12 +85,15 @@ impl TxnCoordinator {
     /// instant without waiting. [`crate::txn::id_expiration`] passes the wall
     /// clock.
     ///
-    /// The decision is re-taken under each tid's own lock, against the live
-    /// entry rather than the snapshot the scan started from, so a transaction
-    /// that began while the sweep was running is not expired underneath its
-    /// producer. A tid whose `__transaction_state` partition moved away is
-    /// skipped: the broker that leads it now owns the decision. An append
-    /// failure leaves the entry in place for the next tick.
+    /// The decision is taken against the live entry under that tid's own
+    /// lock, not against the snapshot the scan started from, and the lock is
+    /// **held across the tombstone append**. Every path that revives a known
+    /// tid -- `InitProducerId` above all -- mutates the entry under the same
+    /// lock, so no revival can slip between the decision and the append and
+    /// leave a tombstone sitting after the reviving record in the log. A tid
+    /// whose `__transaction_state` partition moved away is skipped: the broker
+    /// that leads it now owns the decision. An append failure leaves the entry
+    /// in place for the next tick.
     // cargo-mutants: I/O orchestration over live DashMap / partition state
     #[cfg_attr(test, mutants::skip)]
     #[tracing::instrument(
@@ -125,25 +112,26 @@ impl TxnCoordinator {
         let candidates: Vec<String> = self.state.iter().map(|e| e.key().clone()).collect();
         let mut expired = Vec::new();
         for tid in candidates {
+            // The same ownership check every other coordinator path makes:
+            // only the broker that leads a tid's `__transaction_state`
+            // partition decides its fate.
             if !self.is_coordinator_for(&tid).await {
                 continue;
             }
             let Some(handle) = self.get(&tid) else {
                 continue;
             };
-            let decided = {
-                let entry = handle.lock().await;
-                if !should_expire_transactional_id(
-                    entry.state,
-                    entry.last_update_ms,
-                    now_ms,
-                    expiration_ms,
-                ) {
-                    continue;
-                }
-                entry.clone()
-            };
-            match self.tombstone(&decided).await {
+            // The lock stays held across the append: see the method doc.
+            let entry = handle.lock().await;
+            if !should_expire_transactional_id(
+                entry.state,
+                entry.last_update_ms,
+                now_ms,
+                expiration_ms,
+            ) {
+                continue;
+            }
+            match self.tombstone(&entry).await {
                 Ok(()) => {
                     info!(tid, "txn id expiry: tombstoned expired transactional id");
                     expired.push(tid);

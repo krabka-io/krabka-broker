@@ -30,8 +30,7 @@ use crate::{
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
         DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_TXN_ID_EXPIRATION, FreezeConfig, NodeRole,
-        ReplicationRuntimeConfig, RlmmKind,
-        feature_flags::test_feature_flags, shared_epoch_ms,
+        ReplicationRuntimeConfig, RlmmKind, feature_flags::test_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
 };
