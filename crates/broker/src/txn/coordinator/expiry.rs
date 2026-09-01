@@ -28,11 +28,24 @@ use crate::txn::state::TxnState;
 
 /// Reports whether `state` is one the coordinator may expire at all.
 ///
-/// The four expirable states are Kafka's: `Empty` (a tid that initialized and
-/// never began a transaction, or one reset after a completed one), `Dead`, and
-/// the two `Complete*` terminals. `Ongoing` is an open transaction, and each
-/// `Prepare*` is a commit or abort that someone is still driving, the external
-/// transaction manager of a 2PC transaction included.
+/// `Empty` -- a tid that initialized and never began a transaction, or one
+/// reset after a completed one -- and the two `Complete*` terminals are
+/// Kafka's expirable set exactly. Reflecting over `TransactionState` in the
+/// pinned `apache/kafka:4.3.1` image's `kafka-transaction-coordinator-4.3.1`
+/// jar reports `isExpirationAllowed()` as `true` for `EMPTY`,
+/// `COMPLETE_COMMIT` and `COMPLETE_ABORT`, and `false` for every other state.
+///
+/// `Dead` is krabka's one deliberate addition to that set. Kafka can leave
+/// `DEAD` out because it only ever holds that state transiently, inside the
+/// expiry path itself between the tombstone append and the cache removal.
+/// krabka has no such transient use, so a `Dead` entry that ever reached the
+/// map would sit there for ever: exactly the unbounded growth this sweep
+/// exists to stop. Expiring it is idempotent with the tombstone Kafka would
+/// already have written, so no Kafka client can tell the two apart.
+///
+/// `Ongoing` is an open transaction, and each `Prepare*` is a commit or abort
+/// that someone is still driving, the external transaction manager of a 2PC
+/// transaction included.
 ///
 /// The match is exhaustive on purpose: a new `TxnState` variant must state
 /// which side it falls on rather than inherit a wildcard.

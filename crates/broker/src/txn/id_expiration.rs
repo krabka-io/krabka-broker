@@ -58,7 +58,14 @@ pub(crate) async fn run(
 }
 
 /// Runs one sweep: refresh the leader-partition view, then expire.
-async fn sweep_once(coord: &TxnCoordinator, controller: &dyn MetadataSource, expiration: Time) {
+///
+/// This is the tick [`run`] drives, and the seam the expiry tests in
+/// [`crate::txn::coordinator::expiry`] drive instead of waiting on a timer.
+pub(in crate::txn) async fn sweep_once(
+    coord: &TxnCoordinator,
+    controller: &dyn MetadataSource,
+    expiration: Time,
+) {
     let image = controller.current_image();
     coord.refresh_leader_partitions(&image).await;
     let now_ms = crate::txn::util::now_millis();
