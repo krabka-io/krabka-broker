@@ -50,8 +50,10 @@
 //!   write-freeze feature. The operator cannot separate those two states.
 //!
 //! The handler honors the `configuration_keys` filter on the request. When the
-//! client supplies an explicit key list, the response holds only those keys.
-//! The synthesised key obeys that filter like every stored key.
+//! client supplies a non-empty key list, the response holds only those keys. A
+//! null list and an empty list both ask for every key, which is what Kafka's
+//! `ConfigHelperUtils.toDescribeConfigsResult` does. The synthesised key obeys
+//! that filter like every stored key.
 
 use bytes::Bytes;
 use krabka_protocol::{

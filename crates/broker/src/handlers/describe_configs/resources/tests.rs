@@ -535,6 +535,60 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
 }
 
 #[test]
+fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
+    // Kafka filters with `keys == null || keys.isEmpty() || keys.contains(name)`
+    // in `ConfigHelperUtils.toDescribeConfigsResult`, so an empty list asks for
+    // every key rather than for none. One closure carries the filter into every
+    // resource type, so every type it reaches is checked here.
+    let mut image = image_with_broker_config(
+        krabka_metadata::NodeId(2),
+        &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")],
+    );
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "orders".into(),
+        overrides: maplit::btreemap! {
+        config_keys::RETENTION_MS.to_string() => "60000".to_string()},
+    }));
+    image.apply(&MetadataRecord::V1ClientMetricsConfig(
+        krabka_metadata::ClientMetricsConfigRecord {
+            name: "sub-1".to_owned(),
+            configs: maplit::btreemap! {
+            crate::client_metrics::config::KEY_METRICS.to_string() => "org.apache.kafka".to_string()},
+        },
+    ));
+    image.apply(&MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "streams-1".to_owned(),
+            configs: maplit::btreemap! {
+            crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS.to_string()
+                => "2".to_string()},
+        },
+    ));
+
+    for (resource_type, resource_name) in [
+        (RESOURCE_TYPE_TOPIC, "orders"),
+        (RESOURCE_TYPE_BROKER, "2"),
+        (RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
+        (RESOURCE_TYPE_GROUP, "streams-1"),
+    ] {
+        let unfiltered = describe(&image, resource_type, resource_name, None, EVERYTHING);
+        let empty_filter = describe(
+            &image,
+            resource_type,
+            resource_name,
+            Some(Vec::new()),
+            EVERYTHING,
+        );
+
+        check!(
+            !unfiltered.configs.is_empty(),
+            "resource type {resource_type}"
+        );
+        check!(empty_filter == unfiltered, "resource type {resource_type}");
+    }
+}
+
+#[test]
 fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
     // The registry's own hazard: a stored key with no row is a key the
     // entry builder must not disclose, so it would come back null. Every
