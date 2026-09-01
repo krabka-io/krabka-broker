@@ -52,13 +52,17 @@ pub(super) async fn broker_registration(
         return broker_registration_response(version, UNSUPPORTED_VERSION, -1);
     }
     let incarnation_id = uuid::Uuid::from_bytes(request.incarnation_id.0);
-    if let Some(existing) = image.broker(node_id) {
-        let result = if existing.incarnation_id == incarnation_id {
-            (SUCCESS, existing.broker_epoch)
-        } else {
-            (DUPLICATE_BROKER_REGISTRATION, -1)
-        };
-        return broker_registration_response(version, result.0, result.1);
+    match incarnation_decision(&image, node_id, incarnation_id) {
+        krabka_verified::BrokerRegistrationDecision::RejectCompatibility => {
+            return broker_registration_response(version, INVALID_REGISTRATION, -1);
+        }
+        krabka_verified::BrokerRegistrationDecision::Idempotent(epoch) => {
+            return broker_registration_response(version, SUCCESS, epoch);
+        }
+        krabka_verified::BrokerRegistrationDecision::DuplicateIncarnation => {
+            return broker_registration_response(version, DUPLICATE_BROKER_REGISTRATION, -1);
+        }
+        krabka_verified::BrokerRegistrationDecision::Register => {}
     }
 
     let first = &endpoints[0];
@@ -101,6 +105,23 @@ pub(super) async fn broker_registration(
         SUCCESS
     };
     broker_registration_response(version, error, epoch)
+}
+
+fn incarnation_decision(
+    image: &krabka_metadata::MetadataImage,
+    node_id: NodeId,
+    incarnation_id: uuid::Uuid,
+) -> krabka_verified::BrokerRegistrationDecision {
+    let existing = image.broker(node_id);
+    krabka_verified::broker_registration_decision(
+        true,
+        true,
+        true,
+        true,
+        true,
+        existing.map(|registration| registration.broker_epoch),
+        existing.is_some_and(|registration| registration.incarnation_id == incarnation_id),
+    )
 }
 
 fn cluster_id_matches(request: &str, cluster_id: uuid::Uuid) -> bool {
@@ -214,5 +235,38 @@ mod tests {
             &URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()),
             cluster_id
         ));
+    }
+
+    #[test]
+    fn incarnation_adapter_is_idempotent_and_fences_replacements() {
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord};
+        use krabka_verified::BrokerRegistrationDecision::{
+            DuplicateIncarnation, Idempotent, Register,
+        };
+
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        let incarnation = uuid::Uuid::from_u128(0xA7);
+        check!(incarnation_decision(&image, NodeId(7), incarnation) == Register);
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            BrokerRegistrationRecord {
+                node_id: NodeId(7),
+                broker_epoch: 42,
+                incarnation_id: incarnation,
+                host: "broker-7".into(),
+                port: 9092,
+                rack: None,
+                endpoints: vec![],
+                log_dirs: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        ));
+
+        for _ in 0..2 {
+            check!(incarnation_decision(&image, NodeId(7), incarnation) == Idempotent(42));
+        }
+        check!(
+            incarnation_decision(&image, NodeId(7), uuid::Uuid::from_u128(0xB7))
+                == DuplicateIncarnation
+        );
     }
 }

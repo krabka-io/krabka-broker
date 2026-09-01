@@ -31,6 +31,7 @@ pub mod raft;
 pub mod reassignment;
 pub mod reconfiguration;
 pub mod recovery;
+pub mod registration;
 pub mod remote_metadata;
 pub mod remote_read;
 pub mod remote_txn;
@@ -107,6 +108,10 @@ pub use reconfiguration::{
 pub use recovery::{
     ReplayCursorDecision, ReplayRecordDecision, replay_batch_cursor_decision,
     replay_cursor_decision, replay_record_decision, should_capture_first_downgrade,
+};
+pub use registration::{
+    BrokerHeartbeatDecision, BrokerRegistrationDecision, broker_heartbeat_decision,
+    broker_registration_decision,
 };
 pub use remote_metadata::remote_metadata_partition;
 pub use remote_read::{
