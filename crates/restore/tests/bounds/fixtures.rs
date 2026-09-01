@@ -99,6 +99,7 @@ fn control_value(coordinator_epoch: i32) -> Bytes {
 /// shape `crates/log/src/log.rs`'s own `commit_marker` test helper builds.
 pub(crate) fn commit_marker(producer_id: i64) -> RecordBatch {
     RecordBatch {
+        producer_epoch: 0,
         attributes: Attributes::default()
             .with_transactional(true)
             .with_control(true),

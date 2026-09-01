@@ -38,6 +38,7 @@ pub mod remote_metadata;
 pub mod remote_read;
 pub mod remote_txn;
 pub mod restore;
+pub mod restore_sidecar;
 pub mod retention;
 pub mod schema;
 pub mod share;
@@ -136,6 +137,10 @@ pub use restore::{
     RESTORE_SNAPSHOT_MISSING, RestoreFilterDecision, restore_archive_reconcile,
     restore_batch_filter_decision, restore_batch_past_offset_bound, restore_batch_step,
     restore_record_coordinates, restore_record_selected,
+};
+pub use restore_sidecar::{
+    restore_index_frontier, restore_leader_epoch_entry_valid, restore_offset_index_entry_valid,
+    restore_producer_ids_strict, restore_time_index_entry_valid, restore_txn_index_entry_valid,
 };
 pub use retention::{
     RetentionPrefix, barrier_cut_expired, local_retention_prefix, retention_delete_target,
