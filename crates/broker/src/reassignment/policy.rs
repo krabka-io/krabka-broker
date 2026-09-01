@@ -104,7 +104,14 @@ pub(crate) fn reassign_one(
 
 /// Pure logic. It scans every in-flight reassignment, and produces a
 /// completion record or a leader-handoff record for each one that is ready to
-/// advance.
+/// advance, followed by the KIP-966 eligible-leader state those records imply.
+///
+/// A completion narrows the ISR to the target replicas and drops the rest of
+/// the replica set, so it is an ISR shrink and a replica-set change at once.
+/// [`ElrPublisher`](crate::elr::ElrPublisher) rides the same batch, the way it
+/// does on every other path that moves an ISR: without it a replica the
+/// partition no longer has could stay in the ELR that
+/// `DescribeTopicPartitions` reports.
 pub(crate) async fn compute_reassignment_progress(
     image: &MetadataImage,
     liveness: &ControllerLivenessState,
@@ -123,6 +130,7 @@ pub(crate) async fn compute_reassignment_progress(
             updates.push(MetadataRecord::V1Partition(next));
         }
     }
+    crate::elr::ElrPublisher::new(image).extend(&mut updates);
     updates
 }
 
@@ -194,6 +202,74 @@ mod tests {
         check!(pr.leader == 1);
         check!(pr.leader_epoch == krabka_metadata::LeaderEpoch(5));
         check!(pr.partition_epoch == 1);
+    }
+
+    /// KIP-966: a completion is an ISR shrink and a replica-set change at
+    /// once, so the eligible-leader state moves with it in the same batch.
+    /// Without the publisher on this path a replica the partition no longer
+    /// has would stay in the ELR `DescribeTopicPartitions` reports.
+    #[tokio::test]
+    async fn a_completion_republishes_the_eligible_leader_state() {
+        for (label, isr, published, want) in [
+            (
+                "a completion that reaches min ISR tombstones the key",
+                &[1u64, 2u64][..],
+                "0:3:",
+                None,
+            ),
+            (
+                "a dropped replica leaves the ELR for the last-known set",
+                &[1u64][..],
+                "0:3:",
+                Some("0::3"),
+            ),
+        ] {
+            // replicas=[1,2,3], removing=[3]: the completion drops broker 3
+            // from the replica set, and the published ELR still names it.
+            let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, &[], &[3], 1))
+                .expect("the fixture holds the only reference");
+            image.apply(&MetadataRecord::V1TopicConfig(
+                krabka_metadata::TopicConfigRecord {
+                    topic: "foo".into(),
+                    overrides: [
+                        (
+                            crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                            "3".to_string(),
+                        ),
+                        (
+                            crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                            published.to_string(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ));
+            let l = liveness(&[1, 2, 3]).await;
+
+            let updates = compute_reassignment_progress(&image, &l).await;
+
+            let mut overrides = std::collections::BTreeMap::from([(
+                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                "3".to_string(),
+            )]);
+            if let Some(value) = want {
+                overrides.insert(
+                    crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                    value.to_string(),
+                );
+            }
+            check!(
+                updates[1..]
+                    == [MetadataRecord::V1TopicConfig(
+                        krabka_metadata::TopicConfigRecord {
+                            topic: "foo".into(),
+                            overrides,
+                        }
+                    )],
+                "{label}"
+            );
+        }
     }
 
     #[tokio::test]

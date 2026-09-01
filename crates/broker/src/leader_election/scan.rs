@@ -14,6 +14,7 @@ use crate::{
         RecoveryStrategy, resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
         witness_node_ids,
     },
+    elr::ElrPublisher,
     heartbeat::controller_state::ControllerLivenessState,
 };
 
@@ -123,6 +124,10 @@ pub(crate) async fn compute_failover_changes(
             FailoverDecision::NoChange => {}
         }
     }
+    // KIP-966: a failover that shrinks the ISR below min ISR leaves the
+    // replicas it dropped eligible to lead, and one that reaches min ISR
+    // again clears them.
+    ElrPublisher::new(image).extend(&mut changes);
     FailoverPlan {
         changes,
         recoveries,
@@ -224,6 +229,10 @@ pub(crate) async fn compute_offline_dir_failover_changes(
             FailoverDecision::NoChange => {}
         }
     }
+    // KIP-966: a failover that shrinks the ISR below min ISR leaves the
+    // replicas it dropped eligible to lead, and one that reaches min ISR
+    // again clears them.
+    ElrPublisher::new(image).extend(&mut changes);
     FailoverPlan {
         changes,
         recoveries,

@@ -380,7 +380,9 @@ async fn audit_only_elects_and_records_the_bypass() {
         .partition("t", 0)
         .expect("the partition is in the image");
 
-    let outcome = mgr.commit_elected_leader(&job(), pr, NodeId(2)).await;
+    let outcome = mgr
+        .commit_elected_leader(&job(), &image, pr, NodeId(2))
+        .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
     let batches = submitted
@@ -426,7 +428,7 @@ async fn a_recovery_that_nobody_bypassed_writes_no_bypass_event() {
             .partition("t", 0)
             .expect("the partition is in the image");
 
-        let outcome = mgr.commit_elected_leader(&job, pr, NodeId(2)).await;
+        let outcome = mgr.commit_elected_leader(&job, &image, pr, NodeId(2)).await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),

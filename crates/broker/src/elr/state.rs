@@ -1,38 +1,5 @@
-//! The KIP-966 eligible-leader-replica projection that
-//! `DescribeTopicPartitions` reads.
-//!
-//! ELR is the set of replicas that left the ISR while the partition still had
-//! `min.insync.replicas` members, so their logs are known to be complete and
-//! the controller may elect one of them without accepting data loss. Last-known
-//! ELR is the ELR the partition carried when it lost its last eligible leader,
-//! and it is what an operator falls back to during unclean recovery. Kafka
-//! keeps both on `PartitionRegistration` and reports them on
-//! `DescribeTopicPartitionsResponsePartition`; `kafka-topics --describe` prints
-//! them as the `Elr:` and `LastKnownElr:` columns.
-//!
-//! Only `DescribeTopicPartitions` carries them. `MetadataResponsePartition`
-//! has no ELR field in any version of Kafka's schema, so the Metadata API
-//! answers with `error_code`, `leader`, `replicas`, `isr` and
-//! `offline_replicas` and nothing more; there is no encoding on that API for a
-//! broker to get wrong.
-//!
-//! ## Where the state lives
-//!
-//! [`krabka_metadata::PartitionRecord`] lives in the protocol crate and
-//! carries no ELR field, so krabka publishes the state as a controller-managed
-//! topic config, exactly as it publishes broker fencing as
-//! [`BROKER_FENCED`](crate::config_keys::BROKER_FENCED). The key is
-//! [`ELIGIBLE_LEADER_REPLICAS`](crate::config_keys::ELIGIBLE_LEADER_REPLICAS)
-//! and it holds every partition of the topic that has ELR state, in the
-//! grammar [`TopicElr::parse`] documents. Publishing it through the metadata
-//! log is what lets a request served by *any* node answer with the same
-//! columns as one served by the controller, and it survives snapshot and
-//! restore because it is an ordinary `V1TopicConfig` record.
-//!
-//! Nothing in krabka writes the key yet: the controller-side ISR transitions
-//! that move a replica into ELR are a separate change. Until they land every
-//! partition projects as "no ELR", which is what a Kafka cluster running below
-//! `eligible.leader.replicas.version=1` also reports.
+//! The published ELR value: its grammar, the projection
+//! `DescribeTopicPartitions` reads, and the edit the controller applies to it.
 //!
 //! ## Nullable versus empty
 //!
@@ -50,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use krabka_metadata::MetadataImage;
+use krabka_metadata::{MetadataImage, NodeId};
 
 use crate::config_keys::ELIGIBLE_LEADER_REPLICAS;
 
@@ -61,6 +28,14 @@ pub(crate) struct PartitionElr {
     pub(crate) eligible_leader_replicas: Vec<i32>,
     /// `DescribeTopicPartitionsResponsePartition.last_known_elr`.
     pub(crate) last_known_elr: Vec<i32>,
+}
+
+impl PartitionElr {
+    /// `true` when the partition carries no ELR state at all. Such a
+    /// partition is left out of the published value entirely.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.eligible_leader_replicas.is_empty() && self.last_known_elr.is_empty()
+    }
 }
 
 /// Every partition of one topic that carries ELR state.
@@ -114,11 +89,65 @@ impl TopicElr {
         )
     }
 
+    /// Render the value back into the grammar [`Self::parse`] documents.
+    ///
+    /// The empty string is the value of a topic with no ELR state anywhere,
+    /// and [`ElrPublisher`](super::ElrPublisher) tombstones the key rather
+    /// than storing it. Entries come out in partition order because the map is
+    /// ordered, so one state renders to one string and a re-publication of
+    /// unchanged state compares equal to what the image already holds.
+    pub(crate) fn render(&self) -> String {
+        self.0
+            .iter()
+            .map(|(partition, elr)| {
+                format!(
+                    "{partition}:{}:{}",
+                    render_ids(&elr.eligible_leader_replicas),
+                    render_ids(&elr.last_known_elr),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
     /// The ELR state of one partition. Absent partitions project as two empty
     /// lists, which is the "no ELR" answer Kafka gives.
     pub(crate) fn partition(&self, partition: i32) -> PartitionElr {
         self.0.get(&partition).cloned().unwrap_or_default()
     }
+
+    /// Replace one partition's state. A partition with neither set leaves the
+    /// value, so a topic that recovers renders back to the empty string and
+    /// the key is tombstoned rather than left holding `0::`.
+    pub(crate) fn set_partition(&mut self, partition: i32, elr: PartitionElr) {
+        if elr.is_empty() {
+            self.0.remove(&partition);
+        } else {
+            self.0.insert(partition, elr);
+        }
+    }
+}
+
+/// Render one node-id list.
+fn render_ids(ids: &[i32]) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Narrow metadata node ids to the wire type, dropping any that do not fit.
+///
+/// A node id wider than `i32` cannot be named in a
+/// `DescribeTopicPartitionsResponsePartition`, so it could never be reported
+/// even if it were published. Dropping it here keeps the published value
+/// readable rather than storing an id the projection would have to invent an
+/// answer for.
+pub(crate) fn wire_node_ids(nodes: impl IntoIterator<Item = NodeId>) -> Vec<i32> {
+    nodes
+        .into_iter()
+        .filter_map(|node| i32::try_from(node.0).ok())
+        .collect()
 }
 
 /// Parse one `partition:ids:ids` entry. `None` drops the entry.
