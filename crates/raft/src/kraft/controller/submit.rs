@@ -4,7 +4,8 @@
 
 use krabka_ids::Offset;
 use krabka_metadata::{
-    BreakGlassProposalRecord, MetadataRecord, TopicFreezeRecord, to_kraft_values,
+    BreakGlassProposalRecord, DelegationToken, DelegationTokenRecord, DeleteDelegationTokenRecord,
+    MetadataImage, MetadataRecord, TopicFreezeRecord, to_kraft_values,
 };
 use tokio::sync::oneshot;
 
@@ -17,9 +18,162 @@ use super::{
     records::metadata_record_batch,
 };
 use crate::kraft::role::Role;
-use crate::{OffsetReservation, SubmitChangeResult, error::RaftError};
+use crate::{DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError};
 
 impl Engine {
+    fn delegation_token_record(token: &DelegationToken) -> DelegationTokenRecord {
+        DelegationTokenRecord {
+            token_id: token.token_id.clone(),
+            owner: token.owner.clone(),
+            hmac: token.hmac.clone(),
+            issue_timestamp_ms: token.issue_timestamp_ms,
+            expiry_timestamp_ms: token.expiry_timestamp_ms,
+            max_timestamp_ms: token.max_timestamp_ms,
+            renewers: token.renewers.clone(),
+        }
+    }
+
+    fn wall_clock_ms() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+            })
+    }
+
+    fn token_generation_matches(
+        expected: &DelegationTokenRecord,
+        replacement: &DelegationTokenRecord,
+    ) -> bool {
+        expected.token_id == replacement.token_id
+            && expected.owner == replacement.owner
+            && expected.hmac == replacement.hmac
+            && expected.issue_timestamp_ms == replacement.issue_timestamp_ms
+            && expected.max_timestamp_ms == replacement.max_timestamp_ms
+            && expected.renewers == replacement.renewers
+    }
+
+    fn token_mutation_decision(
+        image: &MetadataImage,
+        mutation: &DelegationTokenMutation,
+        now_ms: i64,
+        uncommitted_tail: bool,
+    ) -> krabka_verified::TokenMutationDecision {
+        let (kind, expected, replacement) = match mutation {
+            DelegationTokenMutation::Renew {
+                expected,
+                replacement,
+            } => (
+                krabka_verified::TokenMutationKind::Renew,
+                expected,
+                Some(replacement),
+            ),
+            DelegationTokenMutation::Expire {
+                expected,
+                replacement,
+            } => (
+                krabka_verified::TokenMutationKind::Expire,
+                expected,
+                Some(replacement),
+            ),
+            DelegationTokenMutation::Delete { expected } => {
+                (krabka_verified::TokenMutationKind::Delete, expected, None)
+            }
+        };
+        let stored = image
+            .delegation_token_by_id(&expected.token_id)
+            .map(Self::delegation_token_record);
+        let generation_matches = replacement
+            .is_none_or(|replacement| Self::token_generation_matches(expected, replacement));
+        let state = match (&stored, replacement, generation_matches) {
+            (None, _, true) => krabka_verified::TokenMutationState::Missing,
+            (Some(stored), Some(replacement), true) if stored == replacement => {
+                krabka_verified::TokenMutationState::Applied
+            }
+            (Some(stored), _, true) if stored == expected => {
+                krabka_verified::TokenMutationState::Expected
+            }
+            (_, _, false) | (Some(_), _, true) => krabka_verified::TokenMutationState::Stale,
+        };
+        krabka_verified::token_mutation_decision(krabka_verified::TokenMutationFacts {
+            kind,
+            state,
+            now_ms,
+            expected_expiry_ms: expected.expiry_timestamp_ms,
+            incoming_expiry_ms: replacement.map_or(expected.expiry_timestamp_ms, |record| {
+                record.expiry_timestamp_ms
+            }),
+            max_timestamp_ms: expected.max_timestamp_ms,
+            uncommitted_tail,
+        })
+    }
+
+    fn token_mutation_record(mutation: &DelegationTokenMutation) -> MetadataRecord {
+        match mutation {
+            DelegationTokenMutation::Renew { replacement, .. }
+            | DelegationTokenMutation::Expire { replacement, .. } => {
+                MetadataRecord::V1DelegationToken(replacement.clone())
+            }
+            DelegationTokenMutation::Delete { expected } => {
+                MetadataRecord::V1DeleteDelegationToken(DeleteDelegationTokenRecord {
+                    token_id: expected.token_id.clone(),
+                })
+            }
+        }
+    }
+
+    fn token_mutation_id(mutation: &DelegationTokenMutation) -> &str {
+        match mutation {
+            DelegationTokenMutation::Renew { expected, .. }
+            | DelegationTokenMutation::Expire { expected, .. }
+            | DelegationTokenMutation::Delete { expected } => &expected.token_id,
+        }
+    }
+
+    pub fn on_submit_delegation_token_mutations(
+        &mut self,
+        mutations: &[DelegationTokenMutation],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    ) {
+        if !self.core.role().is_leader() {
+            let _ = reply.send(Err(RaftError::NotLeader {
+                current_leader: self.core.quorum_state().leader_id,
+            }));
+            return;
+        }
+
+        let uncommitted_tail = self.log.hwm() < self.log.log_end_offset();
+        let now_ms = Self::wall_clock_ms();
+        let mut scratch = self.image.clone();
+        let mut records = Vec::with_capacity(mutations.len());
+        for mutation in mutations {
+            let decision =
+                Self::token_mutation_decision(&scratch, mutation, now_ms, uncommitted_tail);
+            match decision {
+                krabka_verified::TokenMutationDecision::Append => {
+                    let record = Self::token_mutation_record(mutation);
+                    scratch.apply(&record);
+                    records.push(record);
+                }
+                krabka_verified::TokenMutationDecision::Retry => {}
+                krabka_verified::TokenMutationDecision::Reject => {
+                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                        "delegation-token mutation {} rejected",
+                        Self::token_mutation_id(mutation)
+                    ))));
+                    return;
+                }
+            }
+        }
+        if records.is_empty() {
+            let _ = reply.send(Ok(SubmitChangeResult::default()));
+            return;
+        }
+        self.on_submit_change_guarded(&records, reply, true);
+    }
+
     fn consumption_matches_stored(
         stored: &BreakGlassProposalRecord,
         consumed: &BreakGlassProposalRecord,
@@ -103,6 +257,15 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
+        self.on_submit_change_guarded(records, reply, false);
+    }
+
+    fn on_submit_change_guarded(
+        &mut self,
+        records: &[krabka_metadata::MetadataRecord],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+        delegation_token_guarded: bool,
+    ) {
         if !self.core.role().is_leader() {
             let _ = reply.send(Err(RaftError::NotLeader {
                 current_leader: self.core.quorum_state().leader_id,
@@ -130,6 +293,7 @@ impl Engine {
         }
 
         let mut freeze_in_batch = false;
+        let mut token_create_in_batch = std::collections::HashSet::new();
         for record in records {
             match record {
                 MetadataRecord::V1BreakGlassProposal(consumed) if consumed.consumed_at_ms != 0 => {
@@ -152,6 +316,25 @@ impl Engine {
                         return;
                     }
                     freeze_in_batch = true;
+                }
+                MetadataRecord::V1DelegationToken(token) if !delegation_token_guarded => {
+                    let create_is_unique =
+                        self.image.delegation_token_by_id(&token.token_id).is_none()
+                            && token_create_in_batch.insert(token.token_id.clone());
+                    if !create_is_unique || self.log.hwm() < self.log.log_end_offset() {
+                        let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                            "delegation-token create {} rejected: replacement requires a guarded mutation",
+                            token.token_id
+                        ))));
+                        return;
+                    }
+                }
+                MetadataRecord::V1DeleteDelegationToken(token) if !delegation_token_guarded => {
+                    let _ = reply.send(Err(RaftError::ChangeRejected(format!(
+                        "delegation-token delete {} rejected: mutation is not generation-bound",
+                        token.token_id
+                    ))));
+                    return;
                 }
                 _ => {}
             }

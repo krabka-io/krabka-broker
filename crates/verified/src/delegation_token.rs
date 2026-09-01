@@ -152,6 +152,136 @@ pub enum TokenExpireDecision {
     Update(i64),
 }
 
+/// Delegation-token mutation whose committed-state precondition is checked.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TokenMutationKind {
+    Renew,
+    Expire,
+    Delete,
+}
+
+/// Relationship between the committed token and a guarded mutation.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TokenMutationState {
+    Missing,
+    Expected,
+    Applied,
+    Stale,
+}
+
+/// Controller action for a generation-bound delegation-token mutation.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TokenMutationDecision {
+    Append,
+    Retry,
+    Reject,
+}
+
+/// Scalar facts projected by the controller before it mutates token state.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TokenMutationFacts {
+    pub kind: TokenMutationKind,
+    pub state: TokenMutationState,
+    pub now_ms: i64,
+    pub expected_expiry_ms: i64,
+    pub incoming_expiry_ms: i64,
+    pub max_timestamp_ms: i64,
+    pub uncommitted_tail: bool,
+}
+
+/// Fence a token mutation against its exact committed generation.
+///
+/// A retained log tail wins over retry classification. Exact already-applied
+/// updates and already-missing deletes are idempotent. A renewal must preserve
+/// or extend the expiry, and no update may revive an expired token or cross its
+/// immutable maximum timestamp.
+#[ensures(result == TokenMutationDecision::Append ==>
+    !facts.uncommitted_tail
+        && facts.state == TokenMutationState::Expected
+        && match facts.kind {
+            TokenMutationKind::Delete => true,
+            TokenMutationKind::Renew =>
+                facts.now_ms@ >= 0
+                    && facts.expected_expiry_ms@ > facts.now_ms@
+                    && facts.max_timestamp_ms@ > facts.now_ms@
+                    && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
+                    && facts.incoming_expiry_ms@ > facts.expected_expiry_ms@
+                    && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
+            TokenMutationKind::Expire =>
+                facts.now_ms@ >= 0
+                    && facts.expected_expiry_ms@ > facts.now_ms@
+                    && facts.max_timestamp_ms@ > facts.now_ms@
+                    && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
+                    && facts.incoming_expiry_ms@ >= 0
+                    && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
+        })]
+#[ensures(result == TokenMutationDecision::Retry ==>
+    !facts.uncommitted_tail
+        && (facts.state == TokenMutationState::Applied
+            || (facts.kind == TokenMutationKind::Delete
+                && facts.state == TokenMutationState::Missing)
+            || (facts.kind == TokenMutationKind::Renew
+                && facts.state == TokenMutationState::Expected
+                && facts.incoming_expiry_ms@ == facts.expected_expiry_ms@)))]
+#[must_use]
+pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecision {
+    if facts.uncommitted_tail {
+        return TokenMutationDecision::Reject;
+    }
+    match facts.state {
+        TokenMutationState::Applied => return TokenMutationDecision::Retry,
+        TokenMutationState::Missing => {
+            return match facts.kind {
+                TokenMutationKind::Delete => TokenMutationDecision::Retry,
+                TokenMutationKind::Renew | TokenMutationKind::Expire => {
+                    TokenMutationDecision::Reject
+                }
+            };
+        }
+        TokenMutationState::Stale => return TokenMutationDecision::Reject,
+        TokenMutationState::Expected => {}
+    }
+
+    match facts.kind {
+        TokenMutationKind::Delete => TokenMutationDecision::Append,
+        TokenMutationKind::Renew => {
+            if facts.now_ms < 0
+                || facts.expected_expiry_ms <= facts.now_ms
+                || facts.max_timestamp_ms <= facts.now_ms
+                || facts.expected_expiry_ms > facts.max_timestamp_ms
+            {
+                return TokenMutationDecision::Reject;
+            }
+            if facts.incoming_expiry_ms == facts.expected_expiry_ms {
+                TokenMutationDecision::Retry
+            } else if facts.incoming_expiry_ms > facts.expected_expiry_ms
+                && facts.incoming_expiry_ms <= facts.max_timestamp_ms
+            {
+                TokenMutationDecision::Append
+            } else {
+                TokenMutationDecision::Reject
+            }
+        }
+        TokenMutationKind::Expire => {
+            if facts.now_ms >= 0
+                && facts.expected_expiry_ms > facts.now_ms
+                && facts.max_timestamp_ms > facts.now_ms
+                && facts.expected_expiry_ms <= facts.max_timestamp_ms
+                && facts.incoming_expiry_ms >= 0
+                && facts.incoming_expiry_ms <= facts.max_timestamp_ms
+            {
+                TokenMutationDecision::Append
+            } else {
+                TokenMutationDecision::Reject
+            }
+        }
+    }
+}
+
 #[cfg(creusot)]
 #[logic]
 fn chosen_lifetime_model(requested_ms: i64, ceiling_ms: i64) -> Int {
@@ -252,11 +382,21 @@ pub fn create_token_deadlines(
     TokenRenewDecision::Renew(expiry) =>
         expiry@ > now_ms@
             && expiry@ <= max_timestamp_ms@
-            && expiry@ == if now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
-                    < max_timestamp_ms@ {
-                now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
+            && expiry@ == if current_expiry_ms@ >
+                    (if now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
+                            < max_timestamp_ms@ {
+                        now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
+                    } else {
+                        max_timestamp_ms@
+                    }) {
+                current_expiry_ms@
             } else {
-                max_timestamp_ms@
+                if now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
+                        < max_timestamp_ms@ {
+                    now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
+                } else {
+                    max_timestamp_ms@
+                }
             },
     _ => true,
 })]
@@ -286,7 +426,11 @@ pub fn renew_token_expiry(
         return TokenRenewDecision::Invalid;
     }
 
-    TokenRenewDecision::Renew((now_ms + period).min(max_timestamp_ms))
+    TokenRenewDecision::Renew(
+        (now_ms + period)
+            .min(max_timestamp_ms)
+            .max(current_expiry_ms),
+    )
 }
 
 /// Whether a stored delegation token may authenticate at `now_ms`.
@@ -445,13 +589,72 @@ mod tests {
 
     #[test]
     fn renew_never_resurrects_or_wraps() {
-        check!(renew_token_expiry(100, 50, 10, 150, 200) == TokenRenewDecision::Renew(150));
+        check!(renew_token_expiry(100, 25, 10, 150, 200) == TokenRenewDecision::Renew(150));
+        check!(renew_token_expiry(100, 75, 10, 150, 200) == TokenRenewDecision::Renew(175));
         check!(renew_token_expiry(100, 500, 10, 150, 200) == TokenRenewDecision::Renew(200));
-        check!(renew_token_expiry(100, -1, 25, 150, 200) == TokenRenewDecision::Renew(125));
+        check!(renew_token_expiry(100, -1, 25, 150, 200) == TokenRenewDecision::Renew(150));
         check!(renew_token_expiry(100, 1, 10, 100, 200) == TokenRenewDecision::Expired);
         check!(renew_token_expiry(100, 1, 10, 150, 100) == TokenRenewDecision::Expired);
         check!(renew_token_expiry(100, -2, 10, 150, 200) == TokenRenewDecision::Invalid);
         check!(renew_token_expiry(100, i64::MAX, 10, 150, 200) == TokenRenewDecision::Invalid);
+    }
+
+    #[test]
+    fn token_mutations_are_generation_bound_monotonic_and_idempotent() {
+        let expected = TokenMutationFacts {
+            kind: TokenMutationKind::Renew,
+            state: TokenMutationState::Expected,
+            now_ms: 100,
+            expected_expiry_ms: 150,
+            incoming_expiry_ms: 175,
+            max_timestamp_ms: 200,
+            uncommitted_tail: false,
+        };
+        check!(token_mutation_decision(expected) == TokenMutationDecision::Append);
+        check!(
+            token_mutation_decision(TokenMutationFacts {
+                incoming_expiry_ms: 150,
+                ..expected
+            }) == TokenMutationDecision::Retry
+        );
+        for facts in [
+            TokenMutationFacts {
+                state: TokenMutationState::Stale,
+                ..expected
+            },
+            TokenMutationFacts {
+                incoming_expiry_ms: 149,
+                ..expected
+            },
+            TokenMutationFacts {
+                incoming_expiry_ms: i64::MAX,
+                ..expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                ..expected
+            },
+            TokenMutationFacts {
+                uncommitted_tail: true,
+                ..expected
+            },
+        ] {
+            check!(token_mutation_decision(facts) == TokenMutationDecision::Reject);
+        }
+        check!(
+            token_mutation_decision(TokenMutationFacts {
+                kind: TokenMutationKind::Delete,
+                state: TokenMutationState::Missing,
+                ..expected
+            }) == TokenMutationDecision::Retry
+        );
+        check!(
+            token_mutation_decision(TokenMutationFacts {
+                kind: TokenMutationKind::Delete,
+                expected_expiry_ms: 100,
+                ..expected
+            }) == TokenMutationDecision::Append
+        );
     }
 
     #[test]

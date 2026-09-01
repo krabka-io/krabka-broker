@@ -374,6 +374,160 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
 }
 
 #[tokio::test]
+async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
+    use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+    use krabka_security::KafkaPrincipal;
+
+    fn principal(name: &str) -> KafkaPrincipal {
+        KafkaPrincipal {
+            principal_type: "User".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    async fn commit_pending(ctrl: &crate::kraft::KraftController) {
+        let quorum = ctrl.quorum_state().await.unwrap();
+        ctrl.inject_event(Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: quorum.leader_epoch,
+            fetch_offset: quorum.log_end_offset,
+        })
+        .await
+        .unwrap();
+    }
+
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let original = DelegationTokenRecord {
+        token_id: "token-273".to_string(),
+        owner: principal("alice"),
+        hmac: vec![0x27; 32],
+        issue_timestamp_ms: now - 1_000,
+        expiry_timestamp_ms: now + 60_000,
+        max_timestamp_ms: now + 600_000,
+        renewers: vec![principal("bob")],
+    };
+    let renewed = DelegationTokenRecord {
+        expiry_timestamp_ms: now + 120_000,
+        ..original.clone()
+    };
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    commit_pending(&ctrl).await;
+
+    let create_ctrl = ctrl.clone();
+    let create_record = original.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1DelegationToken(create_record)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_pending(&ctrl).await;
+    create.await.unwrap().unwrap();
+
+    let renew_ctrl = ctrl.clone();
+    let renew = {
+        let expected = original.clone();
+        let replacement = renewed.clone();
+        tokio::spawn(async move {
+            renew_ctrl
+                .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+                    expected,
+                    replacement,
+                }])
+                .await
+        })
+    };
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent_delete = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: original.clone(),
+        }]),
+    )
+    .await
+    .expect("concurrent delete must return before the first mutation commits");
+    assert2::assert!(matches!(
+        concurrent_delete,
+        Err(RaftError::ChangeRejected(_))
+    ));
+
+    commit_pending(&ctrl).await;
+    renew.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .delegation_token_by_id(&original.token_id)
+            .is_some_and(|token| token.expiry_timestamp_ms == renewed.expiry_timestamp_ms)
+    );
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let retry = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+            expected: original.clone(),
+            replacement: renewed.clone(),
+        }])
+        .await;
+    assert2::assert!(retry.is_ok());
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let stale = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: original,
+        }])
+        .await;
+    assert2::assert!(matches!(stale, Err(RaftError::ChangeRejected(_))));
+
+    let malformed = DelegationTokenRecord {
+        owner: principal("mallory"),
+        expiry_timestamp_ms: i64::MAX,
+        ..renewed.clone()
+    };
+    let rejected = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+            expected: renewed.clone(),
+            replacement: malformed,
+        }])
+        .await;
+    assert2::assert!(matches!(rejected, Err(RaftError::ChangeRejected(_))));
+
+    let delete_ctrl = ctrl.clone();
+    let delete_expected = renewed.clone();
+    let delete = tokio::spawn(async move {
+        delete_ctrl
+            .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+                expected: delete_expected,
+            }])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_pending(&ctrl).await;
+    delete.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .delegation_token_by_id(&renewed.token_id)
+            .is_none()
+    );
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let delete_retry = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: renewed,
+        }])
+        .await;
+    assert2::assert!(delete_retry.is_ok());
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
 async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
     use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
 

@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use super::api_versions::table;
 use crate::{
     error::RaftError,
-    wire::{API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
+    wire::{API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE},
 };
 
 /// Kafka request-header `correlation_id`, echoed back in the response header.
@@ -52,7 +52,9 @@ fn request_is_flexible(
 ) -> bool {
     let flexible_min = match api_key {
         // Krabka-private RPCs are always framed flexible, at every version.
-        API_KEY_SUBMIT_CHANGE | API_KEY_METADATA_FETCH => Some(i16::MIN),
+        API_KEY_SUBMIT_CHANGE | API_KEY_METADATA_FETCH | API_KEY_DELEGATION_TOKEN_MUTATION => {
+            Some(i16::MIN)
+        }
         _ => table::flexible_min(api_key).or_else(|| {
             admin_router.and_then(|router| {
                 router

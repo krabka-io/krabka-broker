@@ -1,24 +1,31 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 152 0 158 23 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 404 0 410 23 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 162 16 162 17
-let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 162 88 162 89
-let%span sdelegation_token'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 166 36 166 38
-let%span sdelegation_token'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 168 29 168 30
-let%span sdelegation_token'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 173 16 173 24
-let%span sdelegation_token'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 173 16 173 33
-let%span sdelegation_token'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 177 30 177 47
-let%span sdelegation_token'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 177 30 177 69
-let%span sdelegation_token'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 128 10 129 67
-let%span sdelegation_token'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 130 10 138 1
-let%span sdelegation_token'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 139 10 150 1
-let%span sdelegation_token'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 61 8 61 82
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 414 16 414 17
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 414 88 414 89
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 418 36 418 38
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 420 29 420 30
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 425 16 425 24
+let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 425 16 425 33
+let%span sdelegation_token'5 = "/workspace/crates/verified/src/delegation_token.rs" 430 8 430 25
+let%span sdelegation_token'6 = "/workspace/crates/verified/src/delegation_token.rs" 430 8 431 34
+let%span sdelegation_token'7 = "/workspace/crates/verified/src/delegation_token.rs" 430 8 432 35
+let%span sdelegation_token'8 = "/workspace/crates/verified/src/delegation_token.rs" 370 10 371 67
+let%span sdelegation_token'9 = "/workspace/crates/verified/src/delegation_token.rs" 372 10 380 1
+let%span sdelegation_token'10 = "/workspace/crates/verified/src/delegation_token.rs" 381 10 402 1
+let%span sdelegation_token'11 = "/workspace/crates/verified/src/delegation_token.rs" 303 8 303 82
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -42,12 +49,25 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let max_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:max_i64 ensures] ([@stop_split] [@expl:max ensures #0] [%#scmp'4] ge_log_Int (deep_model_i64 result) (deep_model_i64 self_))
+    /\ ([@stop_split] [@expl:max ensures #1] [%#scmp'5] ge_log_Int (deep_model_i64 result) (deep_model_i64 o))
+    /\ ([@stop_split] [@expl:max ensures #2] [%#scmp'6] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:max ensures #3] [%#scmp'7] deep_model_i64 self_ <= deep_model_i64 o -> result = o)
+    /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'8] deep_model_i64 o < deep_model_i64 self_ -> result = self_)}
+    (! return {result}) ]
+
 predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
-function renew_period_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 59 0 59 77] (requested_ms: Int64.t) (default_renew_period_ms: Int64.t) : int
- = [%#sdelegation_token'10] if Int64.to_int requested_ms = - 1 then
+function renew_period_model [#"/workspace/crates/verified/src/delegation_token.rs" 301 0 301 77] (requested_ms: Int64.t) (default_renew_period_ms: Int64.t) : int
+ = [%#sdelegation_token'11] if Int64.to_int requested_ms = - 1 then
     Int64.to_int default_renew_period_ms
   else
     Int64.to_int requested_ms
@@ -57,45 +77,46 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let renew_token_expiry [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 152 0 158 23]
-  (now_ms: Int64.t) (requested_ms: Int64.t) (default_renew_period_ms: Int64.t) (current_expiry_ms: Int64.t)
-  (max_timestamp_ms: Int64.t) (return (x: t_TokenRenewDecision)) = (! bb0
+let renew_token_expiry [#"/workspace/crates/verified/src/delegation_token.rs" 404 0 410 23] (now_ms: Int64.t)
+  (requested_ms: Int64.t) (default_renew_period_ms: Int64.t) (current_expiry_ms: Int64.t) (max_timestamp_ms: Int64.t)
+  (return (x: t_TokenRenewDecision)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_22 <- Int64.le current_expiry_ms now_ms ] s1
-    | s1 = any [ br0 -> {_22 = false} (! bb2) | br1 -> {_22} (! bb4) ] ]
+    [ s0 = [ &_23 <- Int64.le current_expiry_ms now_ms ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb4) ] ]
   | bb2 = s0
-    [ s0 = [ &_25 <- Int64.le max_timestamp_ms now_ms ] s1
-    | s1 = any [ br0 -> {_25 = false} (! bb5) | br1 -> {_25} (! bb4) ] ]
+    [ s0 = [ &_26 <- Int64.le max_timestamp_ms now_ms ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb5) | br1 -> {_26} (! bb4) ] ]
   | bb4 = s0 [ s0 = [ &_ret <- Expired ] s1 | s1 = return {_ret} ]
   | bb5 = s0
-    [ s0 = [ &_30 <- Int64.lt now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_30 = false} (! bb7) | br1 -> {_30} (! bb12) ] ]
+    [ s0 = [ &_31 <- Int64.lt now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb7) | br1 -> {_31} (! bb12) ] ]
   | bb7 = s0
-    [ s0 = [ &_32 <- Int64.gt current_expiry_ms max_timestamp_ms ] s1
-    | s1 = any [ br0 -> {_32 = false} (! bb9) | br1 -> {_32} (! bb12) ] ]
+    [ s0 = [ &_33 <- Int64.gt current_expiry_ms max_timestamp_ms ] s1
+    | s1 = any [ br0 -> {_33 = false} (! bb9) | br1 -> {_33} (! bb12) ] ]
   | bb9 = s0
-    [ s0 = [ &_35 <- Int64.le default_renew_period_ms ([%#sdelegation_token'0] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_35 = false} (! bb11) | br1 -> {_35} (! bb12) ] ]
+    [ s0 = [ &_36 <- Int64.le default_renew_period_ms ([%#sdelegation_token'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_36 = false} (! bb11) | br1 -> {_36} (! bb12) ] ]
   | bb12 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb11 = s0
-    [ s0 = [ &_39 <- requested_ms = ([%#sdelegation_token'1] (-1: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_39 = false} (! bb14) | br1 -> {_39} (! bb13) ] ]
+    [ s0 = [ &_40 <- requested_ms = ([%#sdelegation_token'1] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_40 = false} (! bb14) | br1 -> {_40} (! bb13) ] ]
   | bb13 = s0 [ s0 = [ &period <- default_renew_period_ms ] s1 | s1 = bb17 ]
   | bb14 = s0
-    [ s0 = [ &_41 <- Int64.gt requested_ms ([%#sdelegation_token'2] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_41 = false} (! bb16) | br1 -> {_41} (! bb15) ] ]
+    [ s0 = [ &_42 <- Int64.gt requested_ms ([%#sdelegation_token'2] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_42 = false} (! bb16) | br1 -> {_42} (! bb15) ] ]
   | bb15 = s0 [ s0 = [ &period <- requested_ms ] s1 | s1 = bb17 ]
   | bb17 = s0
     [ s0 = Int64.sub [%#sdelegation_token'4] {[%#sdelegation_token'3] const_MAX} {now_ms}
-        (fun (_x: Int64.t) -> [ &_47 <- _x ] s1)
-    | s1 = [ &_45 <- Int64.gt period _47 ] s2
-    | s2 = any [ br0 -> {_45 = false} (! bb19) | br1 -> {_45} (! bb18) ] ]
+        (fun (_x: Int64.t) -> [ &_48 <- _x ] s1)
+    | s1 = [ &_46 <- Int64.gt period _48 ] s2
+    | s2 = any [ br0 -> {_46 = false} (! bb19) | br1 -> {_46} (! bb18) ] ]
   | bb18 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb19 = s0
-    [ s0 = Int64.add [%#sdelegation_token'5] {now_ms} {period} (fun (_x: Int64.t) -> [ &_51 <- _x ] s1)
-    | s1 = min_i64 [%#sdelegation_token'6] {_51} {max_timestamp_ms} (fun (_x: Int64.t) -> [ &_50 <- _x ] s2)
-    | s2 = [ &_ret <- Renew _50 ] s3
-    | s3 = return {_ret} ]
+    [ s0 = Int64.add [%#sdelegation_token'5] {now_ms} {period} (fun (_x: Int64.t) -> [ &_53 <- _x ] s1)
+    | s1 = min_i64 [%#sdelegation_token'6] {_53} {max_timestamp_ms} (fun (_x: Int64.t) -> [ &_52 <- _x ] s2)
+    | s2 = max_i64 [%#sdelegation_token'7] {_52} {current_expiry_ms} (fun (_x: Int64.t) -> [ &_51 <- _x ] s3)
+    | s3 = [ &_ret <- Renew _51 ] s4
+    | s4 = return {_ret} ]
   | bb16 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TokenRenewDecision = Any.any_l ()
   | & now_ms: Int64.t = now_ms
@@ -103,23 +124,24 @@ let renew_token_expiry [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/
   | & default_renew_period_ms: Int64.t = default_renew_period_ms
   | & current_expiry_ms: Int64.t = current_expiry_ms
   | & max_timestamp_ms: Int64.t = max_timestamp_ms
-  | & _22: bool = Any.any_l ()
-  | & _25: bool = Any.any_l ()
-  | & _30: bool = Any.any_l ()
-  | & _32: bool = Any.any_l ()
-  | & _35: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & _36: bool = Any.any_l ()
   | & period: Int64.t = Any.any_l ()
-  | & _39: bool = Any.any_l ()
-  | & _41: bool = Any.any_l ()
-  | & _45: bool = Any.any_l ()
-  | & _47: Int64.t = Any.any_l ()
-  | & _50: Int64.t = Any.any_l ()
-  | & _51: Int64.t = Any.any_l () ])
+  | & _40: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _48: Int64.t = Any.any_l ()
+  | & _51: Int64.t = Any.any_l ()
+  | & _52: Int64.t = Any.any_l ()
+  | & _53: Int64.t = Any.any_l () ])
   [ return (result: t_TokenRenewDecision) ->
-  {[@stop_split] [@expl:renew_token_expiry ensures] ([@stop_split] [@expl:renew_token_expiry ensures #0] [%#sdelegation_token'7] (result
+  {[@stop_split] [@expl:renew_token_expiry ensures] ([@stop_split] [@expl:renew_token_expiry ensures #0] [%#sdelegation_token'8] (result
         = Expired)
       = (Int64.to_int current_expiry_ms <= Int64.to_int now_ms \/ Int64.to_int max_timestamp_ms <= Int64.to_int now_ms))
-    /\ ([@stop_split] [@expl:renew_token_expiry ensures #1] [%#sdelegation_token'8] (result = Invalid)
+    /\ ([@stop_split] [@expl:renew_token_expiry ensures #1] [%#sdelegation_token'9] (result = Invalid)
       = (gt_log_Int (Int64.to_int current_expiry_ms) (Int64.to_int now_ms)
       /\ gt_log_Int (Int64.to_int max_timestamp_ms) (Int64.to_int now_ms)
       /\ (Int64.to_int now_ms < 0
@@ -128,15 +150,25 @@ let renew_token_expiry [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/
       \/ Int64.to_int requested_ms <> - 1 /\ Int64.to_int requested_ms <= 0
       \/ gt_log_Int (renew_period_model requested_ms default_renew_period_ms) (Int64.to_int const_MAX
       - Int64.to_int now_ms))))
-    /\ ([@stop_split] [@expl:renew_token_expiry ensures #2] [%#sdelegation_token'9] match result with
+    /\ ([@stop_split] [@expl:renew_token_expiry ensures #2] [%#sdelegation_token'10] match result with
       | Renew expiry -> gt_log_Int (Int64.to_int expiry) (Int64.to_int now_ms)
       /\ Int64.to_int expiry <= Int64.to_int max_timestamp_ms
       /\ Int64.to_int expiry
-      = (if Int64.to_int now_ms + renew_period_model requested_ms default_renew_period_ms
+      = (if gt_log_Int (Int64.to_int current_expiry_ms) (if Int64.to_int now_ms
+        + renew_period_model requested_ms default_renew_period_ms
       < Int64.to_int max_timestamp_ms then
         Int64.to_int now_ms + renew_period_model requested_ms default_renew_period_ms
       else
         Int64.to_int max_timestamp_ms
+      ) then
+        Int64.to_int current_expiry_ms
+      else
+        if Int64.to_int now_ms + renew_period_model requested_ms default_renew_period_ms
+        < Int64.to_int max_timestamp_ms then
+          Int64.to_int now_ms + renew_period_model requested_ms default_renew_period_ms
+        else
+          Int64.to_int max_timestamp_ms
+
       )
       | _ -> true
       end)}

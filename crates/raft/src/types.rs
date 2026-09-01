@@ -4,7 +4,7 @@
 //! coordinator use.
 
 pub use krabka_ids::NodeId;
-use krabka_metadata::{MetadataRecord, VoterEndpoint};
+use krabka_metadata::{DelegationTokenRecord, MetadataRecord, VoterEndpoint};
 use serde::{Deserialize, Serialize};
 
 /// KIP-853 voter node identity used by controller membership.
@@ -71,6 +71,24 @@ pub struct AppDataResponse {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmitChangeResult {
     pub offset_reservations: Vec<OffsetReservation>,
+}
+
+/// A token mutation bound to the exact committed record observed by its
+/// caller. The controller compares `expected` and applies the change in one
+/// engine turn, so a snapshot/write race cannot replace a newer generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DelegationTokenMutation {
+    Renew {
+        expected: DelegationTokenRecord,
+        replacement: DelegationTokenRecord,
+    },
+    Expire {
+        expected: DelegationTokenRecord,
+        replacement: DelegationTokenRecord,
+    },
+    Delete {
+        expected: DelegationTokenRecord,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
