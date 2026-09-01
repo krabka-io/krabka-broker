@@ -18,6 +18,7 @@
 use krabka_protocol::owned::describe_configs_response::{
     DescribeConfigsResourceResult, DescribeConfigsResult,
 };
+use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
     entry::{DefaultLayer, EntryOptions, Layer, config_entry},
@@ -43,6 +44,47 @@ mod tests;
 
 use self::write_freeze::write_freeze_override;
 
+/// The broker-scoped values that live in the process's static configuration
+/// rather than in the metadata image, as the operator named them.
+///
+/// `None` is the operator naming nothing: the broker runs the built-in default
+/// and the key reports `DEFAULT_CONFIG`. `Some` is a value that reached the
+/// process through its file, CLI, or environment overlay, which Kafka reports
+/// at `STATIC_BROKER_CONFIG` whatever the value is — `ConfigHelper` asks
+/// whether the key appears in `KafkaConfig.originals`, never whether it
+/// differs from the default. Verified against `apache/kafka:4.3.1`, where a
+/// broker whose properties carry `offsets.retention.minutes=10080` — Kafka's
+/// own default — answers `synonyms={STATIC_BROKER_CONFIG:...=10080,
+/// DEFAULT_CONFIG:...=10080}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct StaticBrokerConfigs {
+    /// `offsets.retention.minutes`. The configuration refuses a retention that
+    /// is not a whole number of minutes, so the reported value is exact.
+    pub(super) offsets_retention: Option<Time>,
+    /// `offsets.retention.check.interval.ms`.
+    pub(super) offsets_retention_check_interval: Option<Time>,
+}
+
+impl StaticBrokerConfigs {
+    /// The `(key, operator value)` pairs, in the order `DescribeConfigs`
+    /// builds them before the final sort. A `None` value is a key the operator
+    /// never named.
+    fn entries(self) -> [(&'static str, Option<String>); 2] {
+        [
+            (
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                self.offsets_retention
+                    .map(|retention| (retention.millis_i64() / 60_000).to_string()),
+            ),
+            (
+                config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
+                self.offsets_retention_check_interval
+                    .map(|interval| interval.millis_i64().to_string()),
+            ),
+        ]
+    }
+}
+
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
@@ -50,6 +92,7 @@ pub(super) fn describe_one(
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
     options: EntryOptions,
+    static_broker: StaticBrokerConfigs,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -59,7 +102,13 @@ pub(super) fn describe_one(
         configs,
         ..Default::default()
     };
-    let key_filter: Option<&[String]> = r.configuration_keys.as_deref();
+    // An empty key list asks for every key, not for none: Kafka's
+    // `ConfigHelperUtils.toDescribeConfigsResult` filters with
+    // `keys == null || keys.isEmpty() || keys.contains(name)`.
+    let key_filter: Option<&[String]> = r
+        .configuration_keys
+        .as_deref()
+        .filter(|keys| !keys.is_empty());
     let wanted = |key: &str| key_filter.is_none_or(|keys| keys.iter().any(|f| f == key));
 
     if r.resource_type == RESOURCE_TYPE_TOPIC {
@@ -85,7 +134,13 @@ pub(super) fn describe_one(
             };
             Some(krabka_metadata::NodeId(node_id))
         };
-        return ok(broker_configs(image, node_id, &wanted, options));
+        return ok(broker_configs(
+            image,
+            node_id,
+            &wanted,
+            options,
+            static_broker,
+        ));
     }
 
     if r.resource_type == RESOURCE_TYPE_CLIENT_METRICS {
@@ -183,6 +238,7 @@ fn broker_configs(
     node_id: Option<krabka_metadata::NodeId>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
+    static_broker: StaticBrokerConfigs,
 ) -> Vec<DescribeConfigsResourceResult> {
     let defaults = image.default_broker_config();
     let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
@@ -237,24 +293,66 @@ fn broker_configs(
         })
         .collect();
 
-    if let Some(node_id) = node_id
-        && wanted(NODE_ID)
-    {
-        let value = node_id.to_string();
-        configs.push(config_entry(
-            registry::lookup(ConfigScope::Broker, NODE_ID),
-            NODE_ID,
-            &[Layer {
-                source: CONFIG_SOURCE_STATIC_BROKER,
-                name: NODE_ID,
-                value: &value,
-            }],
-            DefaultLayer::default(),
-            options,
-        ));
+    if let Some(node_id) = node_id {
+        if wanted(NODE_ID) {
+            let value = node_id.to_string();
+            configs.push(config_entry(
+                registry::lookup(ConfigScope::Broker, NODE_ID),
+                NODE_ID,
+                &[Layer {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: NODE_ID,
+                    value: &value,
+                }],
+                DefaultLayer::default(),
+                options,
+            ));
+        }
+        configs.extend(static_broker_configs(static_broker, wanted, options));
         configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     }
     configs
+}
+
+/// The keys the process reads once at startup and no alter path can change.
+///
+/// A key the operator named reports its value at `STATIC_BROKER_CONFIG` above
+/// the default it displaced; one the operator left alone reports the registry
+/// default at `DEFAULT_CONFIG`. Both are read-only because Kafka refuses to
+/// reconfigure them: `kafka-configs --alter --add-config
+/// offsets.retention.minutes=100` answers `InvalidRequestException: Cannot
+/// update these configs dynamically` on `apache/kafka:4.3.1`.
+fn static_broker_configs(
+    static_broker: StaticBrokerConfigs,
+    wanted: &impl Fn(&str) -> bool,
+    options: EntryOptions,
+) -> Vec<DescribeConfigsResourceResult> {
+    static_broker
+        .entries()
+        .into_iter()
+        .filter(|(key, _)| wanted(key))
+        .map(|(key, set_by_operator)| {
+            let row = registry::lookup(ConfigScope::Broker, key);
+            let layers: Vec<Layer<'_>> = set_by_operator
+                .iter()
+                .map(|value| Layer {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: key,
+                    value: value.as_str(),
+                })
+                .collect();
+            config_entry(
+                row,
+                key,
+                &layers,
+                DefaultLayer {
+                    value: row.and_then(|row| row.default),
+                    name: Some(key),
+                },
+                options,
+            )
+        })
+        .collect()
 }
 
 /// A KIP-714 client-metrics subscription: all three keys, with the ones the

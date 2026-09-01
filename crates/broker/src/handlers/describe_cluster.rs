@@ -94,6 +94,11 @@ pub(crate) async fn handle(
     // unavailable rows as fenced. Unknown liveness entries remain eligible
     // while a newly elected controller seeds its heartbeat registry.
     let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // `Metadata` answers from the same helper. See `handlers::controller_id`.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
     let inter_broker_name = broker.config.inter_broker_listener_name.as_str();
     let brokers: Vec<DescribeClusterBroker> = image
         .brokers()

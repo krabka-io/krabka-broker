@@ -8,6 +8,7 @@ use krabka_metadata::TopicFreezeRecord;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
 use super::{
+    INVALID_OFFSET,
     append::{AppendContext, dispatch_prepared},
     delivery::DeliveryGate,
     framing::FramedPartition,
@@ -107,8 +108,17 @@ pub(super) async fn process_partition(
         schema_validator,
     } = services;
     let idx = part_data.index;
+    // Every gate below returns this row, and every one of them refuses before
+    // any append happened. Kafka fills such a row from
+    // `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO`, whose `firstOffset` is -1, so
+    // the sentinel is stamped once here rather than at each `return`. The
+    // `Default` for the other two offset-ish fields is already -1; only
+    // `base_offset` defaults to 0, which would claim the batch landed at the
+    // start of the log. The success and dedup paths build their own row and
+    // never see this one.
     let mut out = PartitionProduceResponse {
         index: idx,
+        base_offset: INVALID_OFFSET,
         ..Default::default()
     };
 

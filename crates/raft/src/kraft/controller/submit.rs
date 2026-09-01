@@ -121,7 +121,13 @@ impl Engine {
         }
 
         let leader_epoch = self.core.quorum_state().leader_epoch;
-        let mut batch = metadata_record_batch(leader_epoch, &value_blobs);
+        let mut batch = match metadata_record_batch(leader_epoch, &value_blobs) {
+            Ok(batch) => batch,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
         let base = match self.log.append(&mut batch) {
             Ok(off) => off,
             Err(e) => {
@@ -170,7 +176,13 @@ impl Engine {
             }
             scratch.apply(r);
         }
-        let mut batch = metadata_record_batch(leader_epoch, &blobs);
+        let mut batch = match metadata_record_batch(leader_epoch, &blobs) {
+            Ok(batch) => batch,
+            Err(e) => {
+                tracing::error!(?e, "kraft: test batch construction failed");
+                return -1;
+            }
+        };
         let expected_base = self.log.log_end_offset();
         let base = match self.log.append(&mut batch) {
             Ok(off) => off,

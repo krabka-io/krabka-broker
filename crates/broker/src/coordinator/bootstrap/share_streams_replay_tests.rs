@@ -96,7 +96,7 @@ async fn share_group_records_replay_into_seed() {
             member_id: "m1".into(),
         }))
         .unwrap();
-    apply_tombstone(&coord, tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord.cached_share_seed("sg").expect("seed still present");
     assert!(!seed.members.contains_key("m1"), "tombstone removed member");
 }
@@ -198,7 +198,7 @@ async fn streams_group_records_replay_into_seed() {
         },
     ))
     .unwrap();
-    apply_tombstone(&coord, tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
     let seed = coord
         .cached_streams_seed("stg")
         .expect("seed still present");

@@ -14,3 +14,47 @@ segment and index discovery, and record key/value recovery in both directions.
 The Bazel Docker lane supplies the image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
 or checked-in output drift.
+
+## KIP-219 throttle-echo divergences
+
+The broker reports a request-quota delay by patching the leading
+`ThrottleTimeMs` int32 of an already-encoded response, so it can only echo the
+delay on responses whose schema puts that field first. Every advertised API is
+audited by
+[`throttle_audit`](../crates/broker/src/network/dispatch/throttle_audit.rs),
+which encodes each response at each advertised version and compares where
+`ThrottleTimeMs` lands against the broker's table.
+
+The APIs below carry `ThrottleTimeMs` behind another field, so the patch
+cannot reach it. That is a statement about the schema, not about what a client
+observes: whether a request-quota delay is ever applied to one of these APIs is
+decided separately, by its dispatch entry's `RequestQuotaPolicy`. The two
+columns are kept apart for that reason.
+
+* `SelfAccounted` entries charge the quota in the handler and set
+  `ThrottleTimeMs` on the typed response before encoding, so the buried field
+  costs nothing and the client does see the delay.
+* `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
+  delays, so a buried field there really does mean latency without a back-off
+  signal.
+* `InlineExempt` entries -- most of the admin, ACL and delegation-token
+  surface -- are exempt from the request quota on the ordinary path, so they
+  are never delayed by it. The unsupported-version reply path charges every
+  `api_key` regardless of policy, so a request outside the advertised version
+  range is the one case where such an API is held without an echo.
+
+`recorded_reach_matches_the_dispatch_registry` in the audit pins the last
+column against the assembled dispatch registry, so a policy change on any of
+these APIs fails the build until this page is regenerated. Echoing the field on
+any of them needs it set on the typed response before encoding rather than a
+byte patch.
+
+| API | api_key | Versions | Why the field cannot be patched | Runtime effect |
+| :--- | :--- | :--- | :--- | :--- |
+| Produce | 0 | 1-13 | Sits behind the `Responses` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
+| ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix | An ordinary request can be held by the request quota, and the response it waits behind reports `throttle_time_ms = 0` |
+| CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| DescribeDelegationToken | 41 | 1-3 | Last field, behind `ErrorCode` and the variable-length token list | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |

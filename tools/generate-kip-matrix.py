@@ -11,6 +11,7 @@ TESTS = ROOT / "crates/log/tests/integration.rs"
 LOG_BUILD = ROOT / "crates/log/BUILD.bazel"
 IMAGES = ROOT / "bazel/images/BUILD.bazel"
 MODULE = ROOT / "MODULE.bazel"
+THROTTLE_AUDIT = ROOT / "crates/broker/src/network/dispatch/throttle_audit.rs"
 ROWS = (
     (
         "JVM -> krabka",
@@ -23,6 +24,96 @@ ROWS = (
         "jvm_consumes_rust_written_log_dir",
     ),
 )
+
+
+# KIP-219 (throttle-then-respond) responses whose `ThrottleTimeMs` is not the
+# leading field of the response body, so the dispatch loop -- which reports a
+# request-quota delay by patching a leading int32 -- cannot reach it.
+#
+# The rows below carry only the schema-layout half. The `(api_key, versions)`
+# set and the per-API runtime reach are both parsed out of
+# `THROTTLE_ECHO_DIVERGENCES` in the audit module, and rendering fails unless
+# the parsed set is exactly the set below, so a divergence added to the Rust
+# constant cannot be dropped from this page.
+THROTTLE_ECHO_ROWS = {
+    (0, "1-13"): (
+        "Produce",
+        "Sits behind the `Responses` array, at an offset the response header "
+        "does not fix",
+    ),
+    (18, "1-5"): (
+        "ApiVersions",
+        "Sits behind the `ApiKeys` array, at an offset the response header "
+        "does not fix",
+    ),
+    (38, "1-3"): (
+        "CreateDelegationToken",
+        "Last field, behind the principal strings, the token timestamps and "
+        "the HMAC",
+    ),
+    (39, "1-2"): (
+        "RenewDelegationToken",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (40, "1-2"): (
+        "ExpireDelegationToken",
+        "Last field, behind `ErrorCode` and the new expiry timestamp",
+    ),
+    (41, "1-3"): (
+        "DescribeDelegationToken",
+        "Last field, behind `ErrorCode` and the variable-length token list",
+    ),
+    (47, "0"): (
+        "OffsetDelete",
+        "Leads with `ErrorCode`; the field is at a fixed offset of 2, but the "
+        "dispatch loop patches leading fields only",
+    ),
+}
+
+# What each `QuotaReach` variant of the audit constant means on the wire. The
+# variant is the audit's own claim about the dispatch entry's
+# `RequestQuotaPolicy`, pinned there by
+# `recorded_reach_matches_the_dispatch_registry`.
+QUOTA_REACH_EFFECT = {
+    "SelfAccounted": (
+        "None. The handler charges its own quota and sets `ThrottleTimeMs` on "
+        "the typed response before encoding, so the client does see the delay"
+    ),
+    "FallbackAccounted": (
+        "An ordinary request can be held by the request quota, and the "
+        "response it waits behind reports `throttle_time_ms = 0`"
+    ),
+    "UnsupportedVersionOnly": (
+        "The ordinary path is `InlineExempt`, so it is never held. Only a "
+        "request outside the advertised version range is, and that reply "
+        "reports `throttle_time_ms = 0`"
+    ),
+}
+DIVERGENCE_RE = re.compile(
+    r"\(\s*(\d+),\s*(\d+),\s*(\d+),\s*QuotaReach::(\w+)\s*,?\s*\)"
+)
+THROTTLE_AUDIT_TEST = "throttle_echo_divergences_are_the_recorded_ones"
+THROTTLE_REACH_TEST = "recorded_reach_matches_the_dispatch_registry"
+
+
+def parse_divergences(audit: str) -> list[tuple[int, str, str]]:
+    """Read `THROTTLE_ECHO_DIVERGENCES` out of the audit module.
+
+    Returns one `(api_key, version range, QuotaReach variant)` triple per
+    entry, with the range rendered the way the table shows it.
+    """
+    start = audit.find("const THROTTLE_ECHO_DIVERGENCES")
+    if start < 0:
+        raise SystemExit(f"missing THROTTLE_ECHO_DIVERGENCES in {THROTTLE_AUDIT}")
+    end = audit.index("\n];", start)
+    rows = []
+    for key, low, high, reach in DIVERGENCE_RE.findall(audit[start:end]):
+        if reach not in QUOTA_REACH_EFFECT:
+            raise SystemExit(f"unknown QuotaReach variant {reach} in {THROTTLE_AUDIT}")
+        rows.append((int(key), low if low == high else f"{low}-{high}", reach))
+    if not rows:
+        raise SystemExit(f"THROTTLE_ECHO_DIVERGENCES parsed empty in {THROTTLE_AUDIT}")
+    return rows
 
 
 def match(pattern: str, text: str, source: Path) -> str:
@@ -59,6 +150,25 @@ def render() -> str:
         MODULE,
     )
 
+    audit = THROTTLE_AUDIT.read_text()
+    match(rf"^fn ({re.escape(THROTTLE_AUDIT_TEST)})\(\)", audit, THROTTLE_AUDIT)
+    match(rf"^fn ({re.escape(THROTTLE_REACH_TEST)})\(\)", audit, THROTTLE_AUDIT)
+    divergences = parse_divergences(audit)
+    parsed_keys = {(key, versions) for key, versions, _ in divergences}
+    if parsed_keys != set(THROTTLE_ECHO_ROWS):
+        missing = sorted(parsed_keys - set(THROTTLE_ECHO_ROWS))
+        extra = sorted(set(THROTTLE_ECHO_ROWS) - parsed_keys)
+        raise SystemExit(
+            "THROTTLE_ECHO_DIVERGENCES and THROTTLE_ECHO_ROWS disagree: "
+            f"recorded but unrendered {missing}, rendered but unrecorded {extra}"
+        )
+
+    throttle_rows = "\n".join(
+        f"| {THROTTLE_ECHO_ROWS[(key, versions)][0]} | {key} | {versions} | "
+        f"{THROTTLE_ECHO_ROWS[(key, versions)][1]} | {QUOTA_REACH_EFFECT[reach]} |"
+        for key, versions, reach in divergences
+    )
+
     rows = "\n".join(
         f"| {direction} | Implemented | {contract} | "
         f"[`crates/log`](../crates/log) | "
@@ -80,6 +190,44 @@ segment and index discovery, and record key/value recovery in both directions.
 The Bazel Docker lane supplies the image from a digest-pinned OCI repository.
 CI regenerates this page and fails when the test names, lane, image tag, digest,
 or checked-in output drift.
+
+## KIP-219 throttle-echo divergences
+
+The broker reports a request-quota delay by patching the leading
+`ThrottleTimeMs` int32 of an already-encoded response, so it can only echo the
+delay on responses whose schema puts that field first. Every advertised API is
+audited by
+[`throttle_audit`](../crates/broker/src/network/dispatch/throttle_audit.rs),
+which encodes each response at each advertised version and compares where
+`ThrottleTimeMs` lands against the broker's table.
+
+The APIs below carry `ThrottleTimeMs` behind another field, so the patch
+cannot reach it. That is a statement about the schema, not about what a client
+observes: whether a request-quota delay is ever applied to one of these APIs is
+decided separately, by its dispatch entry's `RequestQuotaPolicy`. The two
+columns are kept apart for that reason.
+
+* `SelfAccounted` entries charge the quota in the handler and set
+  `ThrottleTimeMs` on the typed response before encoding, so the buried field
+  costs nothing and the client does see the delay.
+* `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
+  delays, so a buried field there really does mean latency without a back-off
+  signal.
+* `InlineExempt` entries -- most of the admin, ACL and delegation-token
+  surface -- are exempt from the request quota on the ordinary path, so they
+  are never delayed by it. The unsupported-version reply path charges every
+  `api_key` regardless of policy, so a request outside the advertised version
+  range is the one case where such an API is held without an echo.
+
+`recorded_reach_matches_the_dispatch_registry` in the audit pins the last
+column against the assembled dispatch registry, so a policy change on any of
+these APIs fails the build until this page is regenerated. Echoing the field on
+any of them needs it set on the typed response before encoding rather than a
+byte patch.
+
+| API | api_key | Versions | Why the field cannot be patched | Runtime effect |
+| :--- | :--- | :--- | :--- | :--- |
+{throttle_rows}
 """
 
 

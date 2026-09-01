@@ -50,6 +50,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
         connection_id: "connection-a",
         sendfile_capable: false,
         connection_listener_name: "PLAINTEXT",
+        listener_authorized_cluster_action: false,
     };
     assert!(crate::handlers::acl_denied(
         &authorizer,
