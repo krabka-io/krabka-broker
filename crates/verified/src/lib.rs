@@ -16,6 +16,7 @@ pub mod compaction;
 pub mod consensus;
 pub mod delegation_token;
 pub mod delivery;
+pub mod directory;
 pub mod diskless;
 pub mod epoch;
 pub mod features;
@@ -72,6 +73,10 @@ pub use delegation_token::{
 };
 pub use delivery::{
     coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,
+};
+pub use directory::{
+    DirectoryAssignmentDecision, DirectoryResponseDecision, directory_assignment_decision,
+    directory_response_decision,
 };
 pub use diskless::{
     DisklessBatchStep, DisklessTrimDecision, diskless_batch_step, diskless_logical_range,

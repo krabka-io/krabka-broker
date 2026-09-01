@@ -139,16 +139,28 @@ pub(crate) async fn send_assignments(
         .await
         .map_err(|e| format!("send: {e}"))?;
     connection.close();
-    validate_assign_response(resp.error_code)
+    let current_leader = *controller.watch_leader().borrow();
+    validate_assign_response(resp.error_code, leader_id, current_leader)
 }
 
-fn validate_assign_response(error_code: i16) -> Result<(), String> {
-    if error_code != 0 {
-        return Err(format!(
+fn validate_assign_response(
+    error_code: i16,
+    sent_controller: krabka_raft::NodeId,
+    current_controller: Option<krabka_raft::NodeId>,
+) -> Result<(), String> {
+    match krabka_verified::directory_response_decision(
+        error_code == 0,
+        sent_controller.0,
+        current_controller.map(|node| node.0),
+    ) {
+        krabka_verified::DirectoryResponseDecision::ControllerError => Err(format!(
             "AssignReplicasToDirs rejected by controller: error_code={error_code}"
-        ));
+        )),
+        krabka_verified::DirectoryResponseDecision::StaleController => {
+            Err("controller leader changed while assignment report was in flight".into())
+        }
+        krabka_verified::DirectoryResponseDecision::Accept => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -464,8 +476,20 @@ mod tests {
 
     #[test]
     fn validate_assign_response_rejects_controller_error() {
-        assert!(validate_assign_response(0).is_ok());
-        let err = validate_assign_response(42).expect_err("non-zero error_code must fail");
+        assert!(validate_assign_response(0, NodeId(7), Some(NodeId(7))).is_ok());
+        let err = validate_assign_response(42, NodeId(7), Some(NodeId(7)))
+            .expect_err("non-zero error_code must fail");
         assert!(err.contains("error_code=42"));
+    }
+
+    #[test]
+    fn validate_assign_response_rejects_stale_controller_and_is_retryable() {
+        for current in [None, Some(NodeId(8))] {
+            for _ in 0..2 {
+                let err = validate_assign_response(0, NodeId(7), current)
+                    .expect_err("stale controller success must be retried");
+                assert!(err.contains("leader changed"));
+            }
+        }
     }
 }
