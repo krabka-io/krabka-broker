@@ -46,6 +46,7 @@ pub mod restore;
 pub mod restore_sidecar;
 pub mod retention;
 pub mod schema;
+pub mod scram;
 pub mod share;
 pub mod snapshot;
 pub mod stamp;
@@ -188,6 +189,10 @@ pub use retention::{
     retention_prefix,
 };
 pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
+pub use scram::{
+    ScramAlterationDecision, ScramAlterationFacts, ScramAlterationKind, ScramPriorState,
+    scram_alteration_decision,
+};
 pub use share::{
     ShareOffsetMutationDecision, ShareOffsetMutationGate, share_offset_mutation_decision,
     share_prune_frontier,
