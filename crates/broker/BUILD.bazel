@@ -24,9 +24,15 @@ crate_tests(
     # the test run and fail under coverage instrumentation, which is a statement
     # about the instrumentation rather than about the code. `diskless_e2e` boots
     # three such clusters at once, one per case, and every case gates on a
-    # quorum-committed watermark inside a bounded deadline.
+    # quorum-committed watermark inside a bounded deadline. `durability`
+    # belongs here for the same reason by a different route: it asserts on
+    # wall-clock elapsed time directly -- `acks=1 should return promptly` holds
+    # it under one second -- and instrumentation stretches that budget past the
+    # bound. It failed the coverage lane on #310 while the disk instrumentation
+    # showed 27 GB free, so the cause was the clock, not the runner.
     cpu_heavy = [
         "diskless_e2e",
+        "durability",
         "sharegroup_backlog",
     ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
