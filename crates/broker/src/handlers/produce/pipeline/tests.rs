@@ -91,7 +91,7 @@ async fn process_partition_non_leader_preserves_current_leader_hint() {
     let expected = PartitionProduceResponse {
         index: 0,
         error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-        base_offset: 0,
+        base_offset: -1,
         log_append_time_ms: -1,
         log_start_offset: -1,
         record_errors: vec![],
@@ -187,7 +187,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     let expected = PartitionProduceResponse {
         index: 0,
         error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-        base_offset: 0,
+        base_offset: -1,
         log_append_time_ms: -1,
         log_start_offset: -1,
         record_errors: vec![],
