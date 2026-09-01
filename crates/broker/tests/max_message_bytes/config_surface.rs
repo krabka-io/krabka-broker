@@ -28,6 +28,11 @@ const CONFIG_OP_SET: i8 = 0;
 /// override reports.
 const CONFIG_SOURCE_DYNAMIC_TOPIC: i8 = 1;
 
+/// `DescribeConfigsResponse.ConfigType::INT`, the byte the JVM `AdminClient`
+/// reads out of `ConfigEntry.type()`. Kafka declares `max.message.bytes` as
+/// `INT`, so the entry carries `3` rather than the untyped `UNKNOWN`.
+const CONFIG_TYPE_INT: i8 = 3;
+
 const CAP: usize = 2048;
 
 /// `CreateTopics` accepts the key, and `DescribeConfigs` echoes it.
@@ -56,7 +61,7 @@ async fn create_topics_accepts_the_key_and_describe_configs_echoes_it() {
                 config_source: CONFIG_SOURCE_DYNAMIC_TOPIC,
                 is_sensitive: false,
                 synonyms: vec![],
-                config_type: 0,
+                config_type: CONFIG_TYPE_INT,
                 documentation: None,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
