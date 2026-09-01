@@ -5,6 +5,7 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{BrokerHandle, codes};
 use krabka_client_core::Client;
+use krabka_compression::CompressionType;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
@@ -18,6 +19,10 @@ use krabka_protocol::{
 /// Kafka's `max.message.bytes`, and its broker-wide default
 /// `message.max.bytes`, which a topic that sets neither inherits.
 pub(super) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
+
+/// Kafka's `compression.type`, whose non-`producer` values make the broker
+/// re-encode a batch whose codec differs before it stores it.
+pub(super) const COMPRESSION_TYPE: &str = "compression.type";
 
 /// Kafka's default for both keys: 1 MiB of records plus the 12-byte
 /// `Records.LOG_OVERHEAD`. Read out of `apache/kafka:4.1.0` as the
@@ -104,6 +109,24 @@ fn one_record(value_len: usize) -> RecordBatch {
     }
 }
 
+/// A single-record gzip batch carrying `value_len` repeated bytes.
+///
+/// Repeated bytes are the point: gzip shrinks them by three orders of
+/// magnitude, so the batch that arrives on the wire is tiny and the batch a
+/// topic with `compression.type=uncompressed` stores is not.
+pub(super) fn gzip_batch(value_len: usize) -> RecordBatch {
+    let mut batch = one_record(value_len);
+    batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
+    batch
+}
+
+/// Bytes `batch` occupies on the wire, with its own compression applied.
+pub(super) fn wire_len(batch: &RecordBatch) -> usize {
+    let mut buf = bytes::BytesMut::new();
+    batch.encode(&mut buf).expect("encode batch");
+    buf.len()
+}
+
 /// Produce one batch of exactly `wire_len` bytes and hand back the whole
 /// partition row.
 pub(super) async fn produce_batch_of_wire_len(
@@ -111,6 +134,16 @@ pub(super) async fn produce_batch_of_wire_len(
     topic: &str,
     topic_id: WireUuid,
     wire_len: usize,
+) -> PartitionProduceResponse {
+    produce_batch(client, topic, topic_id, batch_of_wire_len(wire_len)).await
+}
+
+/// Produce `batch` and hand back the whole partition row.
+pub(super) async fn produce_batch(
+    client: &Client,
+    topic: &str,
+    topic_id: WireUuid,
+    batch: RecordBatch,
 ) -> PartitionProduceResponse {
     let response = client
         .send(ProduceRequest {
@@ -121,7 +154,7 @@ pub(super) async fn produce_batch_of_wire_len(
                 topic_id,
                 partition_data: vec![PartitionProduceData {
                     index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch_of_wire_len(wire_len)])),
+                    records: Some(RecordsPayload::V2(vec![batch])),
                     ..Default::default()
                 }],
                 ..Default::default()

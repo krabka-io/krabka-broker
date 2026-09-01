@@ -6,8 +6,8 @@ use assert2::check;
 use crate::{
     support,
     wire::{
-        KAFKA_DEFAULT, MAX_MESSAGE_BYTES, accepted, create_topic, produce_batch_of_wire_len,
-        too_large,
+        COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES, accepted, create_topic, gzip_batch,
+        produce_batch, produce_batch_of_wire_len, too_large, wire_len,
     },
 };
 
@@ -98,6 +98,61 @@ async fn a_topic_override_binds_below_and_above_the_broker_default() {
         produce_batch_of_wire_len(&p.client, "loose", loose, KAFKA_DEFAULT + 1).await
             == accepted(0)
     );
+
+    p.broker.shutdown().await;
+}
+
+/// A topic that forces `compression.type=uncompressed` measures the batch it
+/// stores, not the batch that arrived.
+///
+/// This is the hole a wire-length-only gate leaves open. The producer sends a
+/// gzip batch of a few hundred bytes, comfortably under a 2048-byte cap, and
+/// the broker has to expand it before it can store it because the topic
+/// forbids the producer's codec. What lands in the log is a six-figure batch,
+/// which is precisely the batch the cap exists to keep out: every consumer of
+/// that partition has to fetch it whole.
+///
+/// Kafka refuses it. `message.max.bytes` is documented as "the largest record
+/// batch size allowed by Kafka (after compression if compression is enabled)",
+/// and `UnifiedLog.append` in `apache/kafka:4.3.1` re-runs its per-batch size
+/// check over the re-encoded batches whenever `LogValidator` reports
+/// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException` its
+/// pre-append check throws.
+///
+/// The compressed wire length is asserted to sit under the cap, so the case
+/// cannot pass because the pre-append gate caught the batch on its way in. The
+/// small gzip batch afterwards is what separates "the broker measures the
+/// stored form" from "the broker refuses every recompressed batch".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_the_topic_expands_is_measured_after_the_broker_re_encodes_it() {
+    /// Repeated bytes, so gzip returns a batch hundreds of times smaller than
+    /// the one the broker will store.
+    const EXPANDS_PAST_THE_CAP: usize = 100_000;
+    /// Small enough to sit under the cap in both forms.
+    const FITS_EITHER_WAY: usize = 100;
+
+    let p = support::start().await;
+    let topic = create_topic(
+        &p.broker,
+        &p.client,
+        "orders",
+        &[
+            (MAX_MESSAGE_BYTES, &CAP.to_string()),
+            (COMPRESSION_TYPE, "uncompressed"),
+        ],
+    )
+    .await;
+
+    let oversized = gzip_batch(EXPANDS_PAST_THE_CAP);
+    check!(wire_len(&oversized) < CAP);
+    check!(oversized.encoded_len() > CAP);
+
+    check!(produce_batch(&p.client, "orders", topic, oversized).await == too_large());
+    check!(p.broker.local_log_end_offset("orders", 0) == Some(0));
+    check!(
+        produce_batch(&p.client, "orders", topic, gzip_batch(FITS_EITHER_WAY)).await == accepted(0)
+    );
+    check!(p.broker.local_log_end_offset("orders", 0) == Some(1));
 
     p.broker.shutdown().await;
 }

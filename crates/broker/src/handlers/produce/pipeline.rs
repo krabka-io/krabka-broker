@@ -191,6 +191,31 @@ pub(super) async fn process_partition(
         }
     };
 
+    // ── max.message.bytes, again, on the re-encoded batch ────────────
+    // The check above measured the bytes the producer sent. Those are the
+    // bytes that land only on the verbatim path. The owned path re-encodes,
+    // and a topic whose `compression.type` forces a codec the producer did not
+    // use decides the stored size itself: `compression.type=uncompressed`
+    // expands a batch that arrived well under the cap into one the cap exists
+    // to keep out, and a legacy `MessageSet` changes size in the v2
+    // up-conversion. `stored_len` is `None` on the verbatim path, so this
+    // second measurement costs the hot path nothing.
+    //
+    // Kafka runs the same second check for the same reason:
+    // `UnifiedLog.append` re-walks the validated batches and throws
+    // `RecordTooLargeException` whenever `LogValidator` reports
+    // `messageSizeMaybeChanged`. It sits here, before the producer-state
+    // gates, because Kafka's sits before `analyzeAndValidateProducerState`
+    // too, and because a refused batch must leave the idempotent sequence and
+    // the log end offset exactly where it found them.
+    if let Some(stored) = prepared.stored_len(topic_compression)
+        && stored > max_message_bytes.bytes_usize()
+    {
+        out.error_code = codes::MESSAGE_TOO_LARGE;
+        out.base_offset = INVALID_OFFSET;
+        return Ok(out);
+    }
+
     // ── KFC-7 schema validation ──────────────────────────────────────
     // Before the leadership gate, so that record-shape rejections keep coming
     // ahead of leadership ones, which is the order every gate above this line

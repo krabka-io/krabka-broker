@@ -9,8 +9,8 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        positive_i64, positive_ratio, positive_time, positive_u32, positive_usize, whole_bytes_u32,
-        whole_bytes_u64, whole_bytes_usize,
+        kafka_int_bytes, positive_i64, positive_ratio, positive_time, positive_u32, positive_usize,
+        whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
     },
 };
 
@@ -155,7 +155,7 @@ impl RuntimeFileConfig {
             runtime,
             message_max_bytes,
             cfg.log_config.max_message_size,
-            whole_bytes_u64
+            kafka_int_bytes
         );
         set_runtime_time_millis!(
             runtime,
@@ -294,6 +294,41 @@ mod tests {
         file.apply_to(&mut cfg).expect("apply runtime config");
 
         assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
+    }
+
+    /// The TOML surface takes exactly the values Kafka's `INT` with
+    /// `atLeast(0)` takes.
+    ///
+    /// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
+    /// "Value must be at least 0", and refuses `2147483648` with "Not a number
+    /// of type INT". The zero and the 2 GiB cases are the ones that separate
+    /// this domain from a plain positive-whole-bytes one: a broker that took
+    /// 2 GiB here would hand a topic an effective cap `kafka-configs` could
+    /// not represent, and one that refused 0 would refuse a value Kafka boots
+    /// on.
+    #[test]
+    fn message_max_bytes_takes_kafkas_int_at_least_zero() {
+        for (value, expected) in [
+            ("0B", Some(0)),
+            ("2KiB", Some(2048)),
+            ("2147483647B", Some(2_147_483_647)),
+            ("-1B", None),
+            ("2147483648B", None),
+            ("2GiB", None),
+            ("1.5B", None),
+        ] {
+            let applied = toml::from_str::<FileConfig>(&format!(
+                "[runtime]\nmessage_max_bytes = \"{value}\"\n"
+            ))
+            .ok()
+            .and_then(|file| {
+                let mut cfg = crate::config::BrokerConfig::default();
+                file.apply_to(&mut cfg)
+                    .ok()
+                    .map(|()| cfg.log_config.max_message_size.bytes_u64())
+            });
+            assert!(applied == expected, "message_max_bytes={value}");
+        }
     }
 
     #[test]

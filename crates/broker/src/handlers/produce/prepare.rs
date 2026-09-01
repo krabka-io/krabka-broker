@@ -70,6 +70,56 @@ impl PreparedBatch {
             source: PreparedSource::Owned(batch),
         }
     }
+
+    /// Wire length of this batch as the writer will store it, when storing it
+    /// means encoding it afresh.
+    ///
+    /// `None` is the verbatim path. Those bytes are the producer's own, byte
+    /// for byte, so the length that arrived is the length that lands and the
+    /// `max.message.bytes` gate already measured it before `prepare_batch`
+    /// ran.
+    ///
+    /// The owned path re-encodes, and re-encoding moves the number. A batch
+    /// the producer compressed that the topic stores under a different
+    /// `compression.type` changes by the whole ratio between the two codecs,
+    /// and `uncompressed` is the direction that grows: a 2 KiB gzip batch of
+    /// repeated bytes is hundreds of kilobytes once the writer expands it. A
+    /// legacy `MessageSet` moves too, by the v2 up-conversion.
+    ///
+    /// Kafka measures exactly this, in the same place. `message.max.bytes` is
+    /// documented in `ServerConfigs` as "The largest record batch size allowed
+    /// by Kafka (after compression if compression is enabled)", and
+    /// `UnifiedLog.append` re-runs its per-batch size check over the
+    /// *validated* records whenever `LogValidator` reports
+    /// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException`
+    /// its pre-append check throws.
+    ///
+    /// `None` also answers an encode this measurement cannot perform, because
+    /// that is an encode the writer cannot perform either: the append fails on
+    /// its own and reports its own error rather than borrowing this gate's.
+    pub(super) fn stored_len(
+        &self,
+        topic_compression: Option<krabka_compression::CompressionType>,
+    ) -> Option<usize> {
+        let PreparedSource::Owned(batch) = &self.source else {
+            return None;
+        };
+        match topic_compression {
+            Some(target) if target != batch.attributes.compression() => {
+                let mut stored = batch.clone();
+                stored.attributes = stored.attributes.with_compression(target);
+                encoded_len(&stored)
+            }
+            _ => encoded_len(batch),
+        }
+    }
+}
+
+/// Bytes that [`RecordBatch::encode`] writes, which for a compressed batch
+/// only an encode can answer.
+fn encoded_len(batch: &RecordBatch) -> Option<usize> {
+    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
+    batch.encode(&mut buf).ok().map(|()| buf.len())
 }
 
 /// Decide the append shape for one partition's records and extract the header
