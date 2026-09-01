@@ -62,18 +62,6 @@ fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabk
         .map(krabka_log::Offset)
 }
 
-#[cfg(test)]
-mod durability_tests {
-    use super::*;
-
-    #[test]
-    fn adapter_rejects_malformed_and_overflowing_frontiers() {
-        assert2::assert!(durability_frontier(10, 2) == Some(krabka_log::Offset(13)));
-        assert2::assert!(durability_frontier(10, -1).is_none());
-        assert2::assert!(durability_frontier(i64::MAX, 0).is_none());
-    }
-}
-
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
@@ -363,4 +351,16 @@ pub(crate) fn response_required(
     version: i16,
 ) -> Result<bool, BrokerError> {
     Ok(decode_produce_request(request_bytes, body_bytes, version)?.acks != 0)
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::durability_frontier;
+
+    #[test]
+    fn adapter_rejects_malformed_and_overflowing_frontiers() {
+        assert2::assert!(durability_frontier(10, 2) == Some(krabka_log::Offset(13)));
+        assert2::assert!(durability_frontier(10, -1).is_none());
+        assert2::assert!(durability_frontier(i64::MAX, 0).is_none());
+    }
 }

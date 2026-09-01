@@ -228,6 +228,8 @@ fn current_leader_epoch(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::reset_offsets;
     use crate::{
         codes,
@@ -256,7 +258,7 @@ mod tests {
         let mut state = ShareGroupState::new("g");
         state.members.insert(
             "m".into(),
-            ShareMemberState::joining("m", "client", "host", Default::default()),
+            ShareMemberState::joining("m", "client", "host", HashSet::default()),
         );
 
         assert2::check!(
