@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::Bytes;
+use krabka_verified::{diskless_logical_range, diskless_span_extension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -230,30 +231,35 @@ impl WalIndexCache {
         max_bytes: usize,
     ) -> Option<(String, u64, u64)> {
         let entries = self.by_topic_partition.get(&(topic_id, partition))?;
-        let preceding = entries.range(..=offset).next_back()?;
-        let (&first_offset, (object_key, first)) = match preceding {
-            entry if offset <= entry.1.1.last_offset => entry,
-            (&first_offset, _) => entries
-                .range((
-                    std::ops::Bound::Excluded(first_offset),
-                    std::ops::Bound::Unbounded,
-                ))
-                .next()?,
-        };
+        let indexed: Vec<_> = entries.values().collect();
+        let logical: Vec<_> = indexed
+            .iter()
+            .map(|(_, entry)| (entry.first_offset, entry.last_offset))
+            .collect();
+        // Replay supplies this invariant. Fail closed if a truncated or
+        // otherwise malformed index violates the proof kernel's preconditions.
+        if logical.iter().any(|(first, last)| first > last)
+            || logical.windows(2).any(|pair| pair[0].1 >= pair[1].0)
+        {
+            return None;
+        }
+        let first_index = diskless_logical_range(&logical, offset)?;
+        let (object_key, first) = indexed[first_index];
 
         let mut byte_len = u64::from(first.byte_len);
         let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
-        for (_, (next_key, next)) in entries.range((
-            std::ops::Bound::Excluded(first_offset),
-            std::ops::Bound::Unbounded,
-        )) {
-            if next_key != object_key
-                || first.byte_start.checked_add(byte_len) != Some(next.byte_start)
-                || byte_len.saturating_add(u64::from(next.byte_len)) > max_bytes
-            {
+        for (next_key, next) in indexed.into_iter().skip(first_index).skip(1) {
+            let Some(total) = diskless_span_extension(
+                first.byte_start,
+                byte_len,
+                next.byte_start,
+                u64::from(next.byte_len),
+                next_key == object_key,
+                max_bytes,
+            ) else {
                 break;
-            }
-            byte_len += u64::from(next.byte_len);
+            };
+            byte_len = total;
         }
         Some((object_key.clone(), first.byte_start, byte_len))
     }
@@ -362,6 +368,49 @@ mod tests {
             entries: vec![entry(0, 5, 5)],
         });
 
+        assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
+    }
+
+    #[test]
+    fn fetch_range_stops_at_object_boundaries() {
+        let mut c = WalIndexCache::default();
+        let mut first = entry(0, 0, 0);
+        first.byte_len = 10;
+        c.apply(&WalFlushRecord {
+            object_key: "first".into(),
+            format_version: 1,
+            entries: vec![first],
+        });
+        let mut next = entry(0, 1, 1);
+        next.byte_start = 10;
+        next.byte_len = 10;
+        c.apply(&WalFlushRecord {
+            object_key: "next".into(),
+            format_version: 1,
+            entries: vec![next],
+        });
+
+        assert!(
+            c.lookup_fetch_range(Uuid::from_u128(1), 0, 0, 20) == Some(("first".into(), 0, 10))
+        );
+    }
+
+    #[test]
+    fn fetch_range_rejects_malformed_logical_indexes() {
+        let mut c = WalIndexCache::default();
+        c.apply(&WalFlushRecord {
+            object_key: "o".into(),
+            format_version: 1,
+            entries: vec![entry(0, 4, 3)],
+        });
+        assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
+
+        let mut c = WalIndexCache::default();
+        c.apply(&WalFlushRecord {
+            object_key: "o".into(),
+            format_version: 1,
+            entries: vec![entry(0, 0, 5), entry(0, 4, 6)],
+        });
         assert!(c.lookup_fetch_range(Uuid::from_u128(1), 0, 4, 10).is_none());
     }
 

@@ -62,7 +62,10 @@ pub use delegation_token::{
 pub use delivery::{
     coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,
 };
-pub use diskless::{DisklessTrimDecision, diskless_trim_decision};
+pub use diskless::{
+    DisklessBatchStep, DisklessTrimDecision, diskless_batch_step, diskless_logical_range,
+    diskless_span_extension, diskless_trim_decision,
+};
 pub use epoch::exact_epoch_successor;
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
