@@ -51,6 +51,7 @@ pub mod stretch;
 pub mod throttle;
 pub mod timestamp;
 pub mod transaction;
+pub mod uniform_assignor;
 pub mod vote;
 pub mod voter_set;
 pub mod wal;
@@ -194,6 +195,7 @@ pub use transaction::{
     should_abort_idle_transaction, transaction_completion_decision, transaction_marker_closes,
     transaction_marker_materialization_decision, transaction_reaper_completion_decision,
 };
+pub use uniform_assignor::select_uniform_member;
 pub use vote::{
     VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,
     vote_encode_decision, vote_wire_decision,
