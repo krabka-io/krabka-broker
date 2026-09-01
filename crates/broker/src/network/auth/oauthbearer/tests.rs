@@ -2,7 +2,7 @@
 
 use assert2::{assert, check};
 use krabka_security::{Principal, SaslMechanism};
-use krabka_units::secs;
+use krabka_units::{millis, secs};
 
 use super::*;
 use crate::network::auth::{
@@ -33,6 +33,30 @@ fn signed_validator(cache_expiry: Option<Time>) -> krabka_security::OAuthBearerV
         krabka_security::SignedJwsValidator::new(krabka_security::JwksHandle::default());
     validator.cache_expiry = cache_expiry;
     krabka_security::OAuthBearerValidator::Signed(validator)
+}
+
+#[test]
+fn oauth_session_adapter_rejects_invalid_or_unrepresentable_lifetimes() {
+    for decision in [
+        oauth_session_decision(None, 100, None, false, true),
+        oauth_session_decision(Some(100), 100, None, false, true),
+        oauth_session_decision(Some(i64::MAX), -1, None, false, true),
+        oauth_session_decision(Some(200), 100, Some(secs(0)), false, true),
+        oauth_session_decision(Some(200), 100, None, true, false),
+    ] {
+        assert!(decision == krabka_verified::OAuthSessionDecision::Reject);
+    }
+}
+
+#[test]
+fn oauth_session_adapter_returns_the_exact_effective_expiry() {
+    assert!(
+        oauth_session_decision(Some(200), 100, Some(millis(40)), false, true)
+            == krabka_verified::OAuthSessionDecision::Admit {
+                session_lifetime_ms: 40,
+                effective_expires_at_ms: 140,
+            }
+    );
 }
 
 #[tokio::test]
@@ -364,4 +388,36 @@ async fn handle_authenticate_oauthbearer_applies_max_session_lifetime_cap() {
             _ => panic!("cap {cap:?}: expected Authenticated"),
         }
     }
+}
+
+#[tokio::test]
+async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_i64;
+    let token = unsecured_token("alice", 2_000);
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+
+    let response = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        Some(secs(0)),
+    )
+    .await;
+
+    assert!(response.error_code == 0);
+    assert!(response.session_lifetime_ms == 0);
+    assert!(response.auth_bytes == bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#));
+    assert!(matches!(
+        auth,
+        ConnectionAuth::Negotiating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        }
+    ));
 }

@@ -29,6 +29,7 @@ pub mod jwks;
 pub mod leader_epoch;
 pub mod local_recovery;
 pub mod log_index;
+pub mod oauth;
 pub mod offset_allocator;
 pub mod produce;
 pub mod producer;
@@ -133,6 +134,10 @@ pub use local_recovery::{
     local_recovery_swap_action,
 };
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
+pub use oauth::{
+    OAuthAuthenticationKind, OAuthExpiryPresence, OAuthPrincipalMatch, OAuthSessionCap,
+    OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
+};
 pub use offset_allocator::{
     reserve_offsets, wal_reservation_epoch_ready, wal_reservation_frontier,
     wal_reservation_response,
