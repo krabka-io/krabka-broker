@@ -130,10 +130,10 @@ pub(in crate::server) fn flexible_min(api_key: i16) -> Option<i16> {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
     use krabka_ids::ApiKey;
     use krabka_protocol::{
-        Decode,
+        Decode, Encode,
         owned::{
             api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
             begin_quorum_epoch_request::BeginQuorumEpochRequest,
@@ -147,7 +147,10 @@ mod tests {
     use super::*;
     use crate::{
         kraft::{
-            transport::{api_key, wire::PeerRequest},
+            transport::{
+                api_key,
+                wire::{PeerRequest, decode_vote},
+            },
             types::NodeId,
         },
         network::addressing::api_version_for,
@@ -351,5 +354,128 @@ mod tests {
             flexible_min(krabka_protocol::owned::create_topics_request::API_KEY) == None,
             "CreateTopics is an Admin-router API, not a listener-owned one"
         );
+    }
+
+    /// Every KIP-595 peer API has a genuinely wider generated range than the
+    /// version the engine's codec speaks, and [`pinned`] is what closes that
+    /// gap: it collapses the range to the one version on both ends. Forwarding
+    /// the generated range whole would advertise versions the codec refuses.
+    #[test]
+    fn pinned_narrows_the_generated_range_to_the_codec_version() {
+        let cases = [
+            (
+                "fetch",
+                fetch_request::API_KEY,
+                FETCH_VERSION,
+                fetch_request::MIN_VERSION,
+                fetch_request::MAX_VERSION,
+                fetch_request::FLEXIBLE_MIN,
+            ),
+            (
+                "vote",
+                vote_request::API_KEY,
+                VOTE_VERSION,
+                vote_request::MIN_VERSION,
+                vote_request::MAX_VERSION,
+                vote_request::FLEXIBLE_MIN,
+            ),
+            (
+                "begin quorum epoch",
+                begin_quorum_epoch_request::API_KEY,
+                QUORUM_EPOCH_VERSION,
+                begin_quorum_epoch_request::MIN_VERSION,
+                begin_quorum_epoch_request::MAX_VERSION,
+                begin_quorum_epoch_request::FLEXIBLE_MIN,
+            ),
+            (
+                "end quorum epoch",
+                end_quorum_epoch_request::API_KEY,
+                QUORUM_EPOCH_VERSION,
+                end_quorum_epoch_request::MIN_VERSION,
+                end_quorum_epoch_request::MAX_VERSION,
+                end_quorum_epoch_request::FLEXIBLE_MIN,
+            ),
+            (
+                "fetch snapshot",
+                fetch_snapshot_request::API_KEY,
+                FETCH_SNAPSHOT_VERSION,
+                fetch_snapshot_request::MIN_VERSION,
+                fetch_snapshot_request::MAX_VERSION,
+                fetch_snapshot_request::FLEXIBLE_MIN,
+            ),
+        ];
+
+        for (case, api_key, version, min, max, flexible_min) in cases {
+            check!(
+                (min, max) != (version, version),
+                "{case}: the generated range is wider than the pin, so there is a narrowing to make"
+            );
+            check!(
+                pinned(api_key, version, min, max, flexible_min)
+                    == ControllerApiVersion {
+                        api_key,
+                        min_version: version,
+                        max_version: version,
+                        flexible_min,
+                    },
+                "{case}"
+            );
+        }
+    }
+
+    /// A sibling `krabka-protocol` bump that renumbers or drops a pinned
+    /// version has to stop the build rather than advertise a version the codec
+    /// cannot read. [`CONTROLLER_LISTENER_APIS`] is a `const`, so the guard
+    /// runs during const evaluation and the compiler rejects the entry; reached
+    /// at run time, the same guard panics with the message that names the fix.
+    #[test]
+    #[should_panic(expected = "the wire codec pins this API to a version the generated schema")]
+    fn pinned_rejects_a_version_the_generated_schema_no_longer_covers() {
+        let dropped = vote_request::MAX_VERSION + 1;
+        let _ = pinned(
+            vote_request::API_KEY,
+            dropped,
+            vote_request::MIN_VERSION,
+            vote_request::MAX_VERSION,
+            vote_request::FLEXIBLE_MIN,
+        );
+    }
+
+    /// What the narrowing buys. `Vote` is generated as `0-2`, but the engine's
+    /// codec reads at the pinned version and nothing else, so an advertised
+    /// range wider than the pin would invite a JVM peer to send `Vote v0` or
+    /// `v1` and then refuse the body it asked for. Re-encoding the engine's own
+    /// `Vote` at every generated version walks the whole range: the decoder
+    /// accepts exactly the versions the table advertises.
+    #[test]
+    fn only_the_advertised_vote_versions_survive_the_decoder() {
+        let advertised = CONTROLLER_LISTENER_APIS
+            .iter()
+            .find(|api| api.api_key == vote_request::API_KEY)
+            .expect("Vote is advertised");
+        let pinned_body: Bytes = PeerRequest::Vote {
+            voter_id: NodeId(1),
+            candidate_epoch: 3,
+            candidate: NodeId(2),
+            last_epoch: 2,
+            last_offset: 9,
+            pre_vote: true,
+        }
+        .encode();
+        let request =
+            VoteRequest::decode(&mut &pinned_body[..], VOTE_VERSION).expect("decode at the pin");
+
+        for version in vote_request::MIN_VERSION..=vote_request::MAX_VERSION {
+            let mut body = BytesMut::new();
+            request
+                .encode(&mut body, version)
+                .expect("re-encode the same Vote at every generated version");
+            let is_advertised =
+                version >= advertised.min_version && version <= advertised.max_version;
+            check!(
+                decode_vote(&body.freeze()).is_some() == is_advertised,
+                "Vote v{version}: advertised is {is_advertised}, the decoder disagrees"
+            );
+        }
     }
 }
