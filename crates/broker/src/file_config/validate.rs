@@ -73,6 +73,33 @@ pub(super) fn metadata_snapshot_fetch_max(
         .map_err(|error| invalid_runtime_value(name, error))
 }
 
+/// A byte count in the domain Kafka gives an `INT` config with `atLeast(0)`.
+///
+/// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
+/// "Invalid value -1 for configuration message.max.bytes: Value must be at
+/// least 0", and refuses `2147483648` with "Not a number of type INT". The
+/// topic-level `max.message.bytes` is the same `INT` and the broker-wide key
+/// is the default behind it, so one domain covers the TOML file, the command
+/// line, and `kafka-configs --alter` alike.
+///
+/// This is [`whole_bytes_i32`] with zero allowed, which is why it does not go
+/// through `whole_bytes_u64`: that helper rejects zero.
+pub(super) fn kafka_int_bytes(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
+    let bytes = value.bytes_u64();
+    if value.bytes_f64().is_finite()
+        && value >= ByteSize::from_bytes(0)
+        && ByteSize::from_bytes(bytes) == value
+        && bytes <= u64::try_from(i32::MAX).expect("i32::MAX fits u64")
+    {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            "must be a whole number of bytes from 0 to 2147483647",
+        ))
+    }
+}
+
 pub(super) fn whole_bytes_i32(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
     let value = whole_bytes_u64(name, value)?;
     if value.bytes_u64() <= u64::try_from(i32::MAX).expect("i32::MAX fits u64") {
@@ -376,6 +403,11 @@ mod tests {
             "telemetry_decompressed_output_ceiling",
             "record_decompression_output_floor",
             "record_decompression_output_ceiling",
+            // `message_max_bytes` is deliberately absent: Kafka declares it an
+            // `INT` with `atLeast(0)` and `apache/kafka:4.3.1` boots on
+            // `message.max.bytes=0`, so zero is a value and not an error.
+            // `message_max_bytes_takes_kafkas_int_at_least_zero` in
+            // `runtime_storage` covers its whole domain.
             "future_log_move_read_chunk",
             "metadata_max_between_snapshots",
             "metadata_snapshot_fetch_max",
@@ -417,6 +449,8 @@ mod tests {
             ("metadata_max_between_snapshots", "18446744073709551616B"),
             ("metadata_snapshot_fetch_max", "1.5B"),
             ("metadata_snapshot_fetch_max", "1073741825B"),
+            ("message_max_bytes", "1.5B"),
+            ("message_max_bytes", "2147483648B"),
         ] {
             let source = format!("[runtime]\n{field} = \"{value}\"\n");
             let file: FileConfig = toml::from_str(&source).expect("parse runtime config");

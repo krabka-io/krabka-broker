@@ -68,7 +68,34 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             config.offsets_topic_num_partitions = 3;
             config.share_coordinator.state_topic_num_partitions = 1;
             config.share_group.backlog_poll_interval = Duration::from_millis(50);
+            // Everything below the poll interval exists to keep the stopped
+            // follower inside the ISR for the whole probe. That is what holds
+            // the data leader's high watermark at 0 while its log end offset
+            // runs on to 5, and the gap between those two numbers is the only
+            // thing that tells a committed-HWM sample apart from a LEO sample.
+            // Once the follower leaves the ISR the watermark catches up and
+            // the distinction is gone -- so an ISR shrink does not merely
+            // upset an assertion, it dissolves the fixture.
+            //
+            // Two independent clocks propose that shrink, and both used to be
+            // shorter than the work between the shutdown and the sample:
+            //
+            // * `isr_maintenance` scans every `isr_scan_interval` (1s by test
+            //   default) and drops any follower whose last fetch is older than
+            //   `replica_lag_time_max`. `tokio::time::interval` fires its
+            //   first tick immediately, so an hour-long interval means each
+            //   broker scans exactly once, at startup, with an empty partition
+            //   registry -- and never again while the test runs.
+            // * The controller fails a broker over once its heartbeat session
+            //   expires after `heartbeat_timeout` (2s by test default), which
+            //   rewrites the partition with the dead node removed from the
+            //   ISR. Ten minutes puts that expiry far beyond every bounded
+            //   wait the test performs after the shutdown -- the longest is a
+            //   single 30s `wait_for_metrics` -- so the test cannot reach an
+            //   assertion on the far side of it.
             config.replica_lag_time_max = krabka_units::secs(30);
+            config.isr_scan_interval = krabka_units::hours(1);
+            config.heartbeat_timeout = krabka_units::minutes(10);
         })
         .await
         {

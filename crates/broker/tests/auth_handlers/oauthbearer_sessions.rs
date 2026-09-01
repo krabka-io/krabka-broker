@@ -321,10 +321,17 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
 /// The test uses the `current_thread` flavor, because `tokio::time::pause()`
 /// needs a single-threaded runtime. See the comment on test #2 for why we
 /// pause after the handshake and do not set `start_paused = true`.
+///
+/// The fixture switches `connections.max.idle.ms` off. That deadline is the
+/// other reason this connection could be closed an hour on, and it is not the
+/// one under test here -- `crates/broker/tests/connections_max_idle.rs` covers
+/// it. Leaving it at Kafka's ten minutes would close the connection for being
+/// idle and say nothing about the KIP-368 timer.
 #[tokio::test(flavor = "current_thread")]
 async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    cfg.connections_max_idle = Some(krabka_units::millis(0));
     cfg.listeners = vec![ListenerSpec {
         name: "SASL_PLAINTEXT".to_string(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),

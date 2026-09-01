@@ -220,6 +220,78 @@ pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
 }
 
+/// Why the broker stopped serving a client connection.
+///
+/// The four reasons are every way a connection ends on its own — as a peer
+/// that stopped talking, or as bytes that are not a request — plus the TLS
+/// handshake the peer never drove, so a closed enum bounds the
+/// `connection_closes` label set at four series however many connections the
+/// broker serves.
+///
+/// A connection the broker drops because of a request it did read is *not* a
+/// fifth reason: each such exit is already one count in another family, and
+/// counting it twice would make the two disagree. A request at an
+/// unregistered `api_key` is an `api_requests{api_key="Unknown"}`; one whose
+/// version is out of range is an `unsupported_api_requests`; one whose
+/// handler failed, or whose response would not encode or send, was counted by
+/// `api_requests` when it was dispatched; and a rejected `SaslAuthenticate` —
+/// including the pre-auth gate's `ILLEGAL_SASL_STATE`, under the mechanism a
+/// `SaslHandshake` named or the `Unknown` sentinel when none did — is a
+/// `failed_authentication`. What is left over is the broker
+/// failing to encode or to send its own answer to a SASL frame, which is a
+/// broker fault rather than anything the connection did, and is logged.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum ConnectionCloseReason {
+    /// The connection went `connections.max.idle.ms` without a complete frame
+    /// — counting a TLS handshake it opened the socket for and never drove,
+    /// which Kafka's idle expiry covers for the same reason.
+    Idle,
+    /// KIP-368: the SASL session passed the token's expiry without an in-band
+    /// re-authentication.
+    SaslSessionExpired,
+    /// The client sent bytes the broker could not read as a request: either
+    /// the length-delimited codec refused the frame, or the frame was too
+    /// short or too malformed to parse a request header out of.
+    DecodeError,
+    /// The client closed its end of the connection.
+    PeerClosed,
+}
+
+impl ConnectionCloseReason {
+    /// Every reason, in the order the module documents them.
+    pub const ALL: [Self; 4] = [
+        Self::Idle,
+        Self::SaslSessionExpired,
+        Self::DecodeError,
+        Self::PeerClosed,
+    ];
+
+    /// The `reason` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SaslSessionExpired => "sasl_session_expired",
+            Self::DecodeError => "decode_error",
+            Self::PeerClosed => "peer_closed",
+        }
+    }
+}
+
+impl EncodeLabelValue for ConnectionCloseReason {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Connection-close label set, paired with the `connection_closes` counter
+/// family. Cardinality is bounded at four, because the field is the closed
+/// [`ConnectionCloseReason`] enum and no caller can name a fifth reason.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConnectionCloseReasonLabel {
+    pub reason: ConnectionCloseReason,
+}
+
 /// The client quota that caused a throttle the broker applied.
 ///
 /// Kafka splits its quotas the same way, and names them the same way in

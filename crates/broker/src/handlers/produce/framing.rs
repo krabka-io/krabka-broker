@@ -48,6 +48,32 @@ impl PartitionPayload {
         }
     }
 
+    /// Wire length of the largest single record batch in the field.
+    ///
+    /// This is what `max.message.bytes` bounds. Kafka measures each batch on
+    /// its own -- `RecordBatch.sizeInBytes()`, header included -- so a field
+    /// carrying several small batches is not the sum of them.
+    ///
+    /// A verbatim slice is walked one v2 batch header at a time, reading only
+    /// each header's `batch_length`. Nothing is decompressed and no CRC is
+    /// verified, which is the point: an oversized batch is refused before the
+    /// broker spends anything on it. A slice that is not v2, or whose walk
+    /// hits a malformed header, contributes the bytes that are left, so a
+    /// junk payload is still measured and `prepare_batch` still gets to
+    /// reject it as malformed when it is small enough to reach that far.
+    ///
+    /// The owned form is one batch by construction --
+    /// `owned_decode::decode_owned_batch` up-converts a whole v0/v1
+    /// `MessageSet` into a single v2 batch and refuses a v2 sequence that is
+    /// not exactly one batch -- so its whole payload length is that batch.
+    pub(super) fn largest_batch_len(&self) -> usize {
+        match self {
+            Self::Slice(b) => largest_v2_batch_len(b),
+            Self::Owned(p) => p.payload_len(),
+            Self::Null => 0,
+        }
+    }
+
     /// Number of records across the field's batches, for `messages_in_total`.
     ///
     /// Verbatim slices read each v2 batch header's `records_count` WITHOUT
@@ -62,6 +88,45 @@ impl PartitionPayload {
             Self::Null => 0,
         }
     }
+}
+
+/// Offset of the magic byte in a v2 batch header. Only magic 2 carries the
+/// `batch_length` layout this walk reads.
+const MAGIC_OFFSET: usize = 16;
+/// Bytes of `base_offset` and `batch_length` that precede what `batch_length`
+/// itself counts. Kafka calls the pair `Records.LOG_OVERHEAD`.
+const LOG_OVERHEAD: usize = 12;
+/// Bytes in a complete v2 batch header.
+const V2_HEADER_LEN: usize = 61;
+
+/// Length of the largest v2 batch in `buf`, header included.
+///
+/// Returns `buf.len()` for a slice that is not v2 at all, which is a legacy
+/// `MessageSet` the owned path up-converts into one batch.
+fn largest_v2_batch_len(buf: &[u8]) -> usize {
+    if buf.len() <= MAGIC_OFFSET || buf[MAGIC_OFFSET] != 2 {
+        return buf.len();
+    }
+    let mut largest = 0usize;
+    let mut remaining = buf;
+    while remaining.len() >= V2_HEADER_LEN && remaining[MAGIC_OFFSET] == 2 {
+        let batch_length =
+            i32::from_be_bytes([remaining[8], remaining[9], remaining[10], remaining[11]]);
+        let Ok(batch_length) = usize::try_from(batch_length) else {
+            break;
+        };
+        let Some(total_len) = batch_length.checked_add(LOG_OVERHEAD) else {
+            break;
+        };
+        if total_len < V2_HEADER_LEN || total_len > remaining.len() {
+            break;
+        }
+        largest = largest.max(total_len);
+        remaining = &remaining[total_len..];
+    }
+    // A malformed or truncated tail is still bytes the producer sent, and the
+    // gate must not shrink away from it.
+    largest.max(remaining.len())
 }
 
 /// Header-only framing of a `ProduceRequest`.
@@ -165,4 +230,81 @@ pub(super) fn decode_produce_request(
         )?
         .into();
     Ok(ProduceFramed::from_owned(owned))
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+    use crate::handlers::produce::test_support::encode_batch;
+
+    fn batch_with_value(len: usize) -> krabka_protocol::records::RecordBatch {
+        krabka_protocol::records::RecordBatch {
+            last_offset_delta: 0,
+            max_timestamp: 1,
+            producer_id: -1,
+            records: vec![krabka_protocol::records::Record {
+                offset_delta: 0,
+                value: Some(Bytes::from(vec![b'x'; len])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn largest_batch_len_measures_one_v2_batch_whole() {
+        let batch = batch_with_value(100);
+        let encoded = encode_batch(&batch);
+        let payload = PartitionPayload::Slice(encoded.clone());
+        assert!(payload.largest_batch_len() == encoded.len());
+        assert!(payload.largest_batch_len() == batch.encoded_len());
+    }
+
+    #[test]
+    fn largest_batch_len_takes_the_largest_of_several_batches_not_their_sum() {
+        // Kafka bounds each batch on its own, so a field carrying a small
+        // batch and a large one is measured as the large one.
+        let small = encode_batch(&batch_with_value(10));
+        let large = encode_batch(&batch_with_value(1_000));
+        let mut joined = Vec::with_capacity(small.len() + large.len());
+        joined.extend_from_slice(&small);
+        joined.extend_from_slice(&large);
+        let payload = PartitionPayload::Slice(Bytes::from(joined));
+        assert!(payload.largest_batch_len() == large.len());
+    }
+
+    #[test]
+    fn largest_batch_len_counts_a_truncated_tail_it_cannot_walk() {
+        // The walk stops at a batch header that claims more bytes than are
+        // there. Those bytes were still sent, and a gate that shrank away
+        // from them would let a malformed giant through.
+        let batch = encode_batch(&batch_with_value(1_000));
+        let truncated = batch.slice(..batch.len() - 1);
+        let payload = PartitionPayload::Slice(truncated.clone());
+        assert!(payload.largest_batch_len() == truncated.len());
+    }
+
+    #[test]
+    fn largest_batch_len_measures_a_non_v2_slice_whole() {
+        // A legacy `MessageSet` has no v2 magic byte, and the owned path
+        // up-converts the whole set into one batch.
+        let legacy = Bytes::from(vec![7u8; 200]);
+        let payload = PartitionPayload::Slice(legacy.clone());
+        assert!(payload.largest_batch_len() == legacy.len());
+    }
+
+    #[test]
+    fn largest_batch_len_is_zero_for_a_wire_null_field() {
+        assert!(PartitionPayload::Null.largest_batch_len() == 0);
+    }
+
+    #[test]
+    fn largest_batch_len_of_an_owned_payload_is_its_one_batch() {
+        let batch = batch_with_value(100);
+        let want = batch.encoded_len();
+        let payload = PartitionPayload::Owned(RecordsPayload::V2(vec![batch]));
+        assert!(payload.largest_batch_len() == want);
+    }
 }

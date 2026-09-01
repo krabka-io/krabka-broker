@@ -279,6 +279,43 @@ impl BrokerHandle {
         self.wait_for_image(|img| img.brokers().count() >= n).await;
     }
 
+    /// Test-only: whether this node's controller liveness registry currently
+    /// reports `node` as alive — a heartbeat inside the session window from an
+    /// unfenced broker. Only the raft leader receives broker heartbeats, so
+    /// this answers meaningfully on the controller leader alone.
+    ///
+    /// This is the predicate the operator `ElectLeaders` path consults, and it
+    /// is *not* implied by the metadata image: a broker's registration and its
+    /// ISR re-admission are replicated records, while its liveness is local
+    /// heartbeat state that lands afterwards. Tests that drive an election
+    /// must settle on this, not on the image.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn broker_alive_for_test(&self, node: u64) -> bool {
+        self.broker.liveness.is_alive(node).await
+    }
+
+    /// Test-only: await until this node's controller liveness registry reports
+    /// `node` as alive. See [`Self::broker_alive_for_test`] for why the
+    /// metadata image is not a substitute.
+    ///
+    /// The registry has no change-notification channel, so this polls on the
+    /// same ~25ms cadence as [`Self::wait_for_metrics`].
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn wait_until_broker_alive(&self, node: u64) {
+        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+            while !self.broker.liveness.is_alive(node).await {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        assert2::assert!(
+            res.is_ok(),
+            "wait_until_broker_alive({node}) timed out after {TEST_AWAITER_TIMEOUT:?}"
+        );
+    }
+
     /// Test-only: await until `topic-partition` is present in the metadata image.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]

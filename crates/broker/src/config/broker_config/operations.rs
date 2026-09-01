@@ -72,6 +72,32 @@ macro_rules! operations_fields {
             /// `usize::MAX`, which is unlimited.
             pub max_connections_per_ip: usize,
 
+            /// How long a connection may go without a complete request frame
+            /// before the broker closes it. Matches Apache Kafka's
+            /// `connections.max.idle.ms`, whose default is 600000, ten
+            /// minutes. The deadline is armed the moment the per-connection
+            /// serve loop starts waiting for a frame and re-armed after every
+            /// frame it reads, so it reclaims a peer that completed the TCP
+            /// (and TLS) handshake and then sent nothing, and a peer that
+            /// vanished without a FIN. A non-positive value disables idle
+            /// expiry, the way Kafka arms no `IdleExpiryManager` for one.
+            ///
+            /// `None` is the operator having set nothing, and runs Kafka's
+            /// 600000. It is not the same state as `Some` of that same value:
+            /// Kafka's `DescribeConfigs` reports a key's source from where the
+            /// value came rather than from what it is, so an explicit
+            /// `connections.max.idle.ms=600000` reports `STATIC_BROKER_CONFIG`
+            /// while an unset one reports `DEFAULT_CONFIG`.
+            /// [`BrokerConfig::effective_connections_max_idle`] resolves the
+            /// two for every caller that only wants the window.
+            pub connections_max_idle: Option<Time>,
+
+            /// Per-listener overrides of `connections_max_idle`, keyed by
+            /// listener name. Kafka spells the same override
+            /// `listener.name.<name>.connections.max.idle.ms` and reports it
+            /// from `DescribeConfigs`.
+            pub connections_max_idle_overrides: BTreeMap<String, Time>,
+
             /// Partition disk-usage scan cadence. A zero interval disables the
             /// scanner entirely and spawns no background task. Production default:
             /// 60s. On each tick the scanner walks every known (topic, partition)

@@ -240,6 +240,11 @@ impl Default for BrokerConfig {
             // max.connections / max.connections.per.ip (Integer.MAX_VALUE).
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
+            // Unset: the broker runs Kafka's connections.max.idle.ms default
+            // and reports the key at DEFAULT_CONFIG. No per-listener override
+            // until an operator writes one.
+            connections_max_idle: None,
+            connections_max_idle_overrides: std::collections::BTreeMap::new(),
             // Master key off by default. Operators flip this on
             // via `KRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
             // `[delegation_token] secret_key` TOML stanza.

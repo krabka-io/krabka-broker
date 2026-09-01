@@ -93,8 +93,12 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerSetting {
 
 /// The static broker configs this node reports. The handler fills it from
 /// [`crate::config::BrokerConfig`].
+///
+/// The idle-window pair borrows from that configuration rather than copying
+/// it, because the per-listener overrides are a map whose size is the number
+/// of listeners. [`super::super::static_configs`] turns the pair into entries.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs {
+pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     /// `transactional.id.expiration.ms`.
     pub(in crate::handlers::describe_configs) txn_id_expiration: StaticBrokerSetting,
     /// `transaction.remove.expired.transaction.cleanup.interval.ms`.
@@ -106,6 +110,13 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs {
     pub(in crate::handlers::describe_configs) offsets_retention: Option<Time>,
     /// `offsets.retention.check.interval.ms`, as the operator named it.
     pub(in crate::handlers::describe_configs) offsets_retention_check_interval: Option<Time>,
+    /// `connections.max.idle.ms`, as the operator named it. `None` is a key
+    /// the process never saw, which reports the registry default alone.
+    pub(in crate::handlers::describe_configs) connections_max_idle: Option<Time>,
+    /// The `listener.name.<name>.connections.max.idle.ms` overrides, keyed by
+    /// listener name. Each is a key per listener rather than a registry row.
+    pub(in crate::handlers::describe_configs) connections_max_idle_overrides:
+        &'a std::collections::BTreeMap<String, Time>,
 }
 
 /// One static broker entry.
@@ -183,7 +194,7 @@ fn named_entry(
 /// Every static broker entry for one node, filtered by the request's
 /// `configuration_keys`.
 pub(super) fn static_broker_entries(
-    configs: StaticBrokerConfigs,
+    configs: StaticBrokerConfigs<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
@@ -227,7 +238,8 @@ pub(super) fn static_broker_entries(
 /// `describe_one` tests pass it so their expectations read as Kafka's
 /// out-of-the-box `--describe --all` output.
 #[cfg(test)]
-pub(in crate::handlers::describe_configs) fn kafka_default_static_broker() -> StaticBrokerConfigs {
+pub(in crate::handlers::describe_configs) fn kafka_default_static_broker()
+-> StaticBrokerConfigs<'static> {
     StaticBrokerConfigs {
         txn_id_expiration: StaticBrokerSetting {
             value_ms: 604_800_000,
@@ -239,8 +251,16 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker() -> St
         },
         offsets_retention: None,
         offsets_retention_check_interval: None,
+        connections_max_idle: None,
+        connections_max_idle_overrides: NO_IDLE_OVERRIDES.get_or_init(Default::default),
     }
 }
+
+/// The empty override map [`kafka_default_static_broker`] borrows, so the
+/// helper can hand back a `'static` view without each caller owning a map.
+#[cfg(test)]
+static NO_IDLE_OVERRIDES: std::sync::OnceLock<std::collections::BTreeMap<String, Time>> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests;
