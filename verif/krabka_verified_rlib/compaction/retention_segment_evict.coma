@@ -1,0 +1,35 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 72 0 76 9 *)
+
+let%span scompaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 77 4 77 48
+let%span scompaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 77 15 77 48
+let%span scompaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 67 10 67 66
+let%span scompaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 68 10 68 28
+let%span scompaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 69 10 69 50
+let%span scompaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 70 10 70 64
+
+use creusot.prelude.Any
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let retention_segment_evict [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/compaction.rs" 72 0 76 9]
+  (timestamp_known: bool) (time_expired: bool) (by_size: bool) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {by_size = false} (! bb2) | br1 -> {by_size} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#scompaction] true ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {timestamp_known = false} (! bb4) | br1 -> {timestamp_known} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &_ret <- time_expired ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#scompaction'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & timestamp_known: bool = timestamp_known
+  | & time_expired: bool = time_expired
+  | & by_size: bool = by_size ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:retention_segment_evict ensures] ([@stop_split] [@expl:retention_segment_evict ensures #0] [%#scompaction'1] result
+      = (by_size \/ timestamp_known /\ time_expired))
+    /\ ([@stop_split] [@expl:retention_segment_evict ensures #1] [%#scompaction'2] by_size -> result)
+    /\ ([@stop_split] [@expl:retention_segment_evict ensures #2] [%#scompaction'3] not timestamp_known /\ not by_size
+      -> not result)
+    /\ ([@stop_split] [@expl:retention_segment_evict ensures #3] [%#scompaction'4] not by_size /\ result
+    -> timestamp_known /\ time_expired)}
+    (! return {result}) ]

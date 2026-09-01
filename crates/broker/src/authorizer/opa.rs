@@ -16,8 +16,8 @@
 //! outage. Entries expire on TTL, so an OPA recovery is observable.
 //!
 //! The JSON envelope this module sends, and the mapping from Kafka's ACL
-//! vocabulary onto the OPA wire strings, live in [`self::wire`]. The decision
-//! cache's key and entry types live in [`self::cache`].
+//! vocabulary onto the OPA wire strings, live in the private `wire` module. The
+//! decision cache's key and entry types live in the private `cache` module.
 
 use std::{
     collections::HashSet,

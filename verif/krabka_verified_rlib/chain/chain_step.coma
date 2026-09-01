@@ -1,0 +1,60 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 34 0 34 86 *)
+
+let%span schain = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 39 30 39 38
+let%span schain'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 42 43 42 44
+let%span schain'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 42 28 42 44
+let%span schain'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 23 10 23 80
+let%span schain'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 24 10 25 41
+let%span schain'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 26 10 27 38
+let%span schain'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 28 10 30 37
+let%span schain'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 31 10 32 82
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_ChainStep = SequenceMismatch | HeadMismatch | Exhausted | Continue UInt64.t
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let chain_step [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 34 0 34 86]
+  (expected_seq: UInt64.t) (actual_seq: UInt64.t) (head_matches: bool) (return (x: t_ChainStep)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_23 <- actual_seq <> expected_seq ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- SequenceMismatch ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {head_matches = false} (! bb3) | br1 -> {head_matches} (! bb4) ]
+  | bb4 = s0
+    [ s0 = [ &_27 <- expected_seq = ([%#schain] const_MAX) ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb6) | br1 -> {_27} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- Exhausted ] s1 | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = UInt64.add [%#schain'1] {expected_seq} {[%#schain'0] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s1)
+    | s1 = [ &_ret <- Continue _29 ] s2
+    | s2 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- HeadMismatch ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ChainStep = Any.any_l ()
+  | & expected_seq: UInt64.t = expected_seq
+  | & actual_seq: UInt64.t = actual_seq
+  | & head_matches: bool = head_matches
+  | & _23: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: UInt64.t = Any.any_l () ])
+  [ return (result: t_ChainStep) ->
+  {[@stop_split] [@expl:chain_step ensures] ([@stop_split] [@expl:chain_step ensures #0] [%#schain'2] UInt64.t'int actual_seq
+        <> UInt64.t'int expected_seq -> result = SequenceMismatch)
+    /\ ([@stop_split] [@expl:chain_step ensures #1] [%#schain'3] UInt64.t'int actual_seq = UInt64.t'int expected_seq
+        /\ not head_matches -> result = HeadMismatch)
+    /\ ([@stop_split] [@expl:chain_step ensures #2] [%#schain'4] UInt64.t'int actual_seq = UInt64.t'int expected_seq
+        /\ head_matches /\ UInt64.t'int expected_seq = UInt64.t'int const_MAX -> result = Exhausted)
+    /\ ([@stop_split] [@expl:chain_step ensures #3] [%#schain'5] UInt64.t'int actual_seq = UInt64.t'int expected_seq
+        /\ head_matches /\ UInt64.t'int expected_seq < UInt64.t'int const_MAX
+      -> (exists next: UInt64.t. result = Continue next /\ UInt64.t'int next = UInt64.t'int expected_seq + 1))
+    /\ ([@stop_split] [@expl:chain_step ensures #4] [%#schain'6] forall next: UInt64.t. result = Continue next
+      -> UInt64.t'int actual_seq = UInt64.t'int expected_seq
+      /\ head_matches /\ UInt64.t'int next = UInt64.t'int expected_seq + 1)}
+    (! return {result}) ]

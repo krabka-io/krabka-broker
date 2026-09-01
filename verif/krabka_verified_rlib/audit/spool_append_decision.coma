@@ -1,0 +1,105 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 35 0 41 24 *)
+
+let%span saudit = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 42 50 42 75
+let%span saudit'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 44 22 44 27
+let%span saudit'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 46 18 46 23
+let%span saudit'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 51 35 51 36
+let%span saudit'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 51 24 51 36
+let%span saudit'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 55 19 55 46
+let%span saudit'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 57 33 57 34
+let%span saudit'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 54 18 54 22
+let%span saudit'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 19 11 19 26
+let%span saudit'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 20 11 20 34
+let%span saudit'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 21 10 22 84
+let%span saudit'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 23 10 23 80
+let%span saudit'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 24 10 24 61
+let%span saudit'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 25 10 25 66
+let%span saudit'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 26 10 27 56
+let%span saudit'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 28 10 28 45
+let%span saudit'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 29 10 33 1
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_SpoolAppendDecision = { accepted: bool; new_bytes: UInt64.t; sync: bool; next_unsynced: UInt64.t }
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let spool_append_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 35 0 41 24]
+  (current_bytes: UInt64.t) (frame_bytes: UInt64.t) (max_bytes: UInt64.t) (unsynced: UInt64.t) (sync_every: UInt64.t)
+  (return (x: t_SpoolAppendDecision)) =
+{[@stop_split] [@expl:spool_append_decision requires] ([@stop_split] [@expl:spool_append_decision requires #0] [%#saudit'7] gt_log_Int (UInt64.t'int sync_every) 0)
+  /\ ([@stop_split] [@expl:spool_append_decision requires #1] [%#saudit'8] UInt64.t'int unsynced
+  < UInt64.t'int sync_every)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_31 <- UInt64.gt current_bytes max_bytes ] s1
+    | s1 = any [ br0 -> {_31 = false} (! bb2) | br1 -> {_31} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = UInt64.sub [%#saudit] {max_bytes} {current_bytes} (fun (_x: UInt64.t) -> [ &_36 <- _x ] s1)
+    | s1 = [ &_34 <- UInt64.gt frame_bytes _36 ] s2
+    | s2 = any [ br0 -> {_34 = false} (! bb5) | br1 -> {_34} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = [ &_ret <- { accepted = ([%#saudit'0] false);
+                        new_bytes = current_bytes;
+                        sync = ([%#saudit'1] false);
+                        next_unsynced = unsynced } ] s1
+    | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = UInt64.add [%#saudit'3] {unsynced} {[%#saudit'2] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &next_unsynced'0 <- _x ] s1)
+    | s1 = [ &sync'0 <- UInt64.ge next_unsynced'0 sync_every ] s2
+    | s2 = UInt64.add [%#saudit'4] {current_bytes} {frame_bytes} (fun (_x: UInt64.t) -> [ &_47 <- _x ] s3)
+    | s3 = any [ br0 -> {sync'0 = false} (! bb7) | br1 -> {sync'0} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_51 <- [%#saudit'5] (0: UInt64.t) ] s1 | s1 = bb8 ]
+  | bb7 = s0 [ s0 = [ &_51 <- next_unsynced'0 ] s1 | s1 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &_ret <- { accepted = ([%#saudit'6] true); new_bytes = _47; sync = sync'0; next_unsynced = _51 } ] s1
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_SpoolAppendDecision = Any.any_l ()
+  | & current_bytes: UInt64.t = current_bytes
+  | & frame_bytes: UInt64.t = frame_bytes
+  | & max_bytes: UInt64.t = max_bytes
+  | & unsynced: UInt64.t = unsynced
+  | & sync_every: UInt64.t = sync_every
+  | & _31: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & next_unsynced'0: UInt64.t = Any.any_l ()
+  | & sync'0: bool = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l () ])
+  [ return (result: t_SpoolAppendDecision) ->
+  {[@stop_split] [@expl:spool_append_decision ensures] ([@stop_split] [@expl:spool_append_decision ensures #0] [%#saudit'9] result.accepted
+      = (UInt64.t'int current_bytes <= UInt64.t'int max_bytes
+      /\ UInt64.t'int frame_bytes <= UInt64.t'int max_bytes - UInt64.t'int current_bytes))
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #1] [%#saudit'10] result.accepted
+      -> UInt64.t'int result.new_bytes = UInt64.t'int current_bytes + UInt64.t'int frame_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #2] [%#saudit'11] result.accepted
+      -> UInt64.t'int result.new_bytes <= UInt64.t'int max_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #3] [%#saudit'12] not result.accepted
+      -> UInt64.t'int result.new_bytes = UInt64.t'int current_bytes)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #4] [%#saudit'13] result.sync
+      = (result.accepted /\ ge_log_Int (UInt64.t'int unsynced + 1) (UInt64.t'int sync_every)))
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #5] [%#saudit'14] UInt64.t'int result.next_unsynced
+      < UInt64.t'int sync_every)
+    /\ ([@stop_split] [@expl:spool_append_decision ensures #6] [%#saudit'15] UInt64.t'int result.next_unsynced
+    = (if result.accepted then
+      if ge_log_Int (UInt64.t'int unsynced + 1) (UInt64.t'int sync_every) then 0 else UInt64.t'int unsynced + 1
+    else
+      UInt64.t'int unsynced
+    ))}
+    (! return {result}) ]

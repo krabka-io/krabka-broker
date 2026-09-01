@@ -1,0 +1,108 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 68 0 73 9 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span stransaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 76 39 76 44
+let%span stransaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 75 41 75 45
+let%span stransaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 78 37 78 62
+let%span stransaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 81 4 81 35
+let%span stransaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 81 39 81 64
+let%span stransaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 79 15 79 20
+let%span stransaction'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 58 11 58 30
+let%span stransaction'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 59 10 59 60
+let%span stransaction'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 60 10 60 50
+let%span stransaction'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 61 10 63 45
+let%span stransaction'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 64 10 66 56
+let%span stransaction'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 19 43 19 51
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_IdleTransactionState = Ongoing | Other
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+constant const_NO_TRANSACTION_TIMEOUT_MS: Int32.t = [%#stransaction'10] const_MAX
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+constant const_MAX'0: Int64.t = (9223372036854775807: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_sub (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_sub ensures] ([@stop_split] [@expl:saturating_sub ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
+          - Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ - Int64.to_int rhs <= Int64.to_int const_MAX'0
+      -> Int64.to_int result = Int64.to_int self_ - Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #1] [%#snum'0] Int64.to_int self_ - Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
+      - Int64.to_int rhs) (Int64.to_int const_MAX'0) -> Int64.to_int result = Int64.to_int const_MAX'0)}
+    (! return {result}) ]
+
+let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (Int32.to_int small)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let should_abort_idle_transaction [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 68 0 73 9]
+  (state: t_IdleTransactionState) (txn_timeout_ms: Int32.t) (start_ms: Int64.t) (now_ms: Int64.t) (return (x: bool)) =
+{[@stop_split] [@expl:should_abort_idle_transaction requires] [%#stransaction'5] 0 < Int32.to_int txn_timeout_ms}
+  (! bb0
+  [ bb0 = any [ br0 -> {state = Ongoing} (! bb4) | br1 -> {state = Other} (! bb3) ]
+  | bb3 = s0 [ s0 = [ &ongoing <- [%#stransaction] false ] s1 | s1 = bb5 ]
+  | bb4 = s0 [ s0 = [ &ongoing <- [%#stransaction'0] true ] s1 | s1 = bb5 ]
+  | bb5 = any [ br0 -> {ongoing = false} (! bb10) | br1 -> {ongoing} (! bb6) ]
+  | bb6 = s0
+    [ s0 = [ &_25 <- txn_timeout_ms = ([%#stransaction'1] const_NO_TRANSACTION_TIMEOUT_MS) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb8) | br1 -> {_25} (! bb10) ] ]
+  | bb8 = s0
+    [ s0 = [ &_27 <- Int64.lt now_ms start_ms ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb11) | br1 -> {_27} (! bb10) ] ]
+  | bb11 = s0
+    [ s0 = saturating_sub [%#stransaction'2] {now_ms} {start_ms} (fun (_x: Int64.t) -> [ &_31 <- _x ] s1)
+    | s1 = from_i64 [%#stransaction'3] {txn_timeout_ms} (fun (_x: Int64.t) -> [ &_34 <- _x ] s2)
+    | s2 = [ &_ret <- Int64.ge _31 _34 ] s3
+    | s3 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- [%#stransaction'4] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & state: t_IdleTransactionState = state
+  | & txn_timeout_ms: Int32.t = txn_timeout_ms
+  | & start_ms: Int64.t = start_ms
+  | & now_ms: Int64.t = now_ms
+  | & ongoing: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _31: Int64.t = Any.any_l ()
+  | & _34: Int64.t = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:should_abort_idle_transaction ensures] ([@stop_split] [@expl:should_abort_idle_transaction ensures #0] [%#stransaction'6] state
+        <> Ongoing -> not result)
+    /\ ([@stop_split] [@expl:should_abort_idle_transaction ensures #1] [%#stransaction'7] Int32.to_int txn_timeout_ms
+        = Int32.to_int const_MAX -> not result)
+    /\ ([@stop_split] [@expl:should_abort_idle_transaction ensures #2] [%#stransaction'8] result
+      -> state = Ongoing
+      /\ Int32.to_int txn_timeout_ms <> Int32.to_int const_MAX
+      /\ ge_log_Int (Int64.to_int now_ms - Int64.to_int start_ms) (Int32.to_int txn_timeout_ms))
+    /\ ([@stop_split] [@expl:should_abort_idle_transaction ensures #3] [%#stransaction'9] state = Ongoing
+      /\ Int32.to_int txn_timeout_ms <> Int32.to_int const_MAX
+      /\ ge_log_Int (Int64.to_int now_ms - Int64.to_int start_ms) (Int32.to_int txn_timeout_ms) -> result)}
+    (! return {result}) ]

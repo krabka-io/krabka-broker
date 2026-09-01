@@ -294,6 +294,57 @@ async fn a_log_truncated_mid_batch_is_a_truncated_segment() {
 }
 
 #[tokio::test]
+async fn a_gap_between_crc_valid_batches_is_accepted() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let partition = test_partition();
+    let mut fixture = valid_segment_bytes();
+
+    // The first batch ends at 102, but the second starts at 104. Both batches
+    // are independently well-framed and carry valid CRCs.
+    fixture.log = encode_all(&[batch(100, 1000, 1020, 3), batch(104, 1040, 1040, 1)]);
+
+    let segment = write_segment(dir.path(), &fixture, &[]);
+    let verified = verify_segment(&store, &partition, &segment)
+        .await
+        .expect("compacted offset gap");
+    check!(verified.facts.end_offset == Offset(104));
+}
+
+#[tokio::test]
+async fn first_batch_must_match_the_segment_base_offset() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let partition = test_partition();
+    let mut fixture = valid_segment_bytes();
+
+    fixture.log = encode_all(&[batch(101, 1000, 1000, 1)]);
+
+    let segment = write_segment(dir.path(), &fixture, &[]);
+    let error = verify_segment(&store, &partition, &segment)
+        .await
+        .expect_err("mis-keyed segment");
+    check!(matches!(error, RestoreError::TruncatedSegment { .. }));
+}
+
+#[tokio::test]
+async fn a_batch_whose_exclusive_end_overflows_is_rejected() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = archive_at(dir.path());
+    let partition = test_partition();
+    let mut fixture = valid_segment_bytes();
+
+    fixture.base_offset = Offset(i64::MAX);
+    fixture.log = encode_all(&[batch(i64::MAX, 1000, 1000, 1)]);
+
+    let segment = write_segment(dir.path(), &fixture, &[]);
+    let error = verify_segment(&store, &partition, &segment)
+        .await
+        .expect_err("exclusive offset overflow");
+    check!(matches!(error, RestoreError::TruncatedSegment { .. }));
+}
+
+#[tokio::test]
 async fn an_offset_index_entry_past_the_log_end_is_rejected() {
     let dir = TempDir::new().expect("tempdir");
     let store = archive_at(dir.path());

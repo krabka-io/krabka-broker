@@ -116,6 +116,9 @@ impl Log {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
+    use bytes::BytesMut;
     use krabka_units::prelude::{bytes, mebibytes};
     use tempfile::tempdir;
 
@@ -123,7 +126,71 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{compaction_ctx, keyed_batch},
+        name,
     };
+
+    fn assert_corrupt_suffix_preserves_originals(suffix: &[u8]) {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        for i in 0..3 {
+            let value = format!("v{i}");
+            let mut batch = keyed_batch(0, &[(0, b"key", value.as_bytes())]);
+            log.append(&mut batch).unwrap();
+        }
+        assert2::assert!(!log.segments.is_empty());
+
+        let corrupt_path = name::log_path(dir.path(), log.segments[0].base_offset().0);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&corrupt_path)
+            .unwrap()
+            .write_all(suffix)
+            .unwrap();
+
+        let originals: Vec<_> = log
+            .segments
+            .iter()
+            .map(|segment| {
+                let path = name::log_path(dir.path(), segment.base_offset().0);
+                (path.clone(), std::fs::read(path).unwrap())
+            })
+            .collect();
+        let bases_before: Vec<_> = log.segments.iter().map(Segment::base_offset).collect();
+
+        let error = log.compact(&compaction_ctx()).unwrap_err();
+        assert2::assert!(matches!(error, LogError::Records(_) | LogError::Corrupt(_)));
+        assert2::assert!(
+            log.segments
+                .iter()
+                .map(Segment::base_offset)
+                .collect::<Vec<_>>()
+                == bases_before
+        );
+        for (path, bytes) in originals {
+            assert2::assert!(std::fs::read(path).unwrap() == bytes);
+        }
+    }
+
+    #[test]
+    fn compact_rejects_truncated_suffix_without_replacing_originals() {
+        assert_corrupt_suffix_preserves_originals(&[0; 16]);
+    }
+
+    #[test]
+    fn compact_rejects_crc_corrupt_suffix_without_replacing_originals() {
+        let batch = keyed_batch(0, &[(0, b"corrupt", b"suffix")]);
+        let mut encoded = BytesMut::with_capacity(batch.encoded_len());
+        batch.encode(&mut encoded).unwrap();
+        // The stored CRC occupies bytes 17..21. Changing it preserves framing
+        // while making the complete suffix fail integrity validation.
+        encoded[17] ^= 1;
+        assert_corrupt_suffix_preserves_originals(&encoded);
+    }
 
     #[test]
     fn compact_no_op_when_only_one_segment() {

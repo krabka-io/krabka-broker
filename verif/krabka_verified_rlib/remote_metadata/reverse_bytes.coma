@@ -1,0 +1,57 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 70 0 70 35 *)
+
+let%span sremote_metadata = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 14 71 16
+let%span sremote_metadata'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 4 71 17
+let%span sremote_metadata'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 31 71 32
+let%span sremote_metadata'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 21 71 33
+let%span sremote_metadata'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 36 71 47
+let%span sremote_metadata'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 62 71 63
+let%span sremote_metadata'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 52 71 64
+let%span sremote_metadata'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 67 71 78
+let%span sremote_metadata'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 92 71 94
+let%span sremote_metadata'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 71 82 71 95
+let%span sremote_metadata'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 69 28 69 64
+let%span sremote_metadata'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 62 8 65 30
+
+use creusot.int.Int32
+use creusot.int.UInt32
+use creusot.prelude.Any
+
+function reverse_bytes_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 60 0 60 41] (value: UInt32.t) : UInt32.t
+ =
+  [%#sremote_metadata'10] UInt32.bw_or (UInt32.bw_or (UInt32.bw_or (UInt32.shr value (24: UInt32.t)) (UInt32.bw_and (UInt32.shr value (8: UInt32.t)) (65280: UInt32.t))) (UInt32.bw_and (UInt32.shl value (8: UInt32.t)) (16711680: UInt32.t))) (UInt32.shl value (24: UInt32.t))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let reverse_bytes [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 70 0 70 35]
+  (value: UInt32.t) (return (x: UInt32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = UInt32.shr [%#sremote_metadata'0] {value} {Int32.to_int ([%#sremote_metadata] (24: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_6 <- _x ] s1)
+    | s1 = UInt32.shr [%#sremote_metadata'2] {value} {Int32.to_int ([%#sremote_metadata'1] (8: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_9 <- _x ] s2)
+    | s2 = [ &_8 <- UInt32.bw_and _9 ([%#sremote_metadata'3] (65280: UInt32.t)) ] s3
+    | s3 = [ &_5 <- UInt32.bw_or _6 _8 ] s4
+    | s4 = UInt32.shl [%#sremote_metadata'5] {value} {Int32.to_int ([%#sremote_metadata'4] (8: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_12 <- _x ] s5)
+    | s5 = [ &_11 <- UInt32.bw_and _12 ([%#sremote_metadata'6] (16711680: UInt32.t)) ] s6
+    | s6 = [ &_4 <- UInt32.bw_or _5 _11 ] s7
+    | s7 = UInt32.shl [%#sremote_metadata'8] {value} {Int32.to_int ([%#sremote_metadata'7] (24: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_14 <- _x ] s8)
+    | s8 = [ &_ret <- UInt32.bw_or _4 _14 ] s9
+    | s9 = return {_ret} ] ]
+  [ & _ret: UInt32.t = Any.any_l ()
+  | & value: UInt32.t = value
+  | & _4: UInt32.t = Any.any_l ()
+  | & _5: UInt32.t = Any.any_l ()
+  | & _6: UInt32.t = Any.any_l ()
+  | & _8: UInt32.t = Any.any_l ()
+  | & _9: UInt32.t = Any.any_l ()
+  | & _11: UInt32.t = Any.any_l ()
+  | & _12: UInt32.t = Any.any_l ()
+  | & _14: UInt32.t = Any.any_l () ])
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:reverse_bytes ensures] [%#sremote_metadata'9] result
+    = reverse_bytes_model value}
+    (! return {result}) ]
