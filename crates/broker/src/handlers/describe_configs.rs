@@ -17,6 +17,9 @@
 //!   the node it names.
 //! - `resource_type=16` (`CLIENT_METRICS`) and `resource_type=32` (GROUP) report
 //!   their own effective values the same way.
+//! - `resource_type=8` (`BROKER_LOGGER`) reports this node's live `tracing`
+//!   targets and their effective levels at `DYNAMIC_BROKER_LOGGER_CONFIG (6)`.
+//!   The resource is node-local, so its name must be this broker's id.
 //! - Every other resource type receives an empty configs list and no error.
 //!   The JVM `AdminClient` accepts that.
 //!
@@ -101,7 +104,9 @@ mod wire;
 use self::{
     authz::{denied_result, resource_authz_failure},
     entry::EntryOptions,
-    resources::{StaticBrokerConfigs, StaticBrokerSetting, describe_one},
+    resources::{
+        BrokerLoggers, ServingBroker, StaticBrokerConfigs, StaticBrokerSetting, describe_one,
+    },
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -184,10 +189,16 @@ pub(crate) fn handle(
                     describe_one(
                         &image,
                         r,
-                        serving_node,
+                        ServingBroker {
+                            node: serving_node,
+                            static_broker,
+                            loggers: BrokerLoggers {
+                                node_id: broker.config.broker_id,
+                                levels: &broker.config.log_levels,
+                            },
+                        },
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
-                        static_broker,
                         options,
                     )
                 }

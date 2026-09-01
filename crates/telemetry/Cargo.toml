@@ -36,6 +36,7 @@ opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "grpc-toni
 tracing-opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 tracing = { workspace = true }
+tracing-core = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror = { workspace = true }
 axum = { workspace = true, features = ["query", "tokio", "http1"] }

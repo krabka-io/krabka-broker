@@ -147,6 +147,24 @@ pub const DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR: i32 = 3;
 /// Default internal topic name for `FedRAMP` MLA audit records.
 pub const DEFAULT_AUDIT_TOPIC: &str = "__krabka_audit";
 
+/// The `EnvFilter` spec the stdout log layer starts from when `RUST_LOG` is
+/// unset, and the spec [`BrokerConfig::log_levels`] is seeded with.
+///
+/// The crate-root entries (`krabka_broker`, `krabka_log`) are redundant as
+/// *filters* — both sit at the root level — but each one names a logger, and
+/// naming is what makes it reachable. Kafka's `BROKER_LOGGER` resource refuses
+/// a level for a logger the node does not have, and a `tracing` callsite
+/// registers under its module path (`krabka_broker::handlers::produce`), never
+/// under the bare crate root. Drop these and `kafka-configs --entity-type
+/// broker-loggers --alter --add-config krabka_broker=DEBUG` answers `Logger
+/// krabka_broker does not exist!`. A JVM broker gets the same names from the
+/// loggers its `log4j2.yaml` declares.
+///
+/// The binary, the [`Default`] config and the wire test all read it here, so a
+/// change to the shipped default cannot silently desync from the spec the
+/// tests prove the feature against.
+pub const DEFAULT_LOG_FILTER: &str = "krabka_broker=info,krabka_log=info,info";
+
 /// Default number of audit records between signed checkpoints.
 pub const DEFAULT_AUDIT_CHECKPOINT_EVERY_N: u64 = 1000;
 

@@ -63,7 +63,8 @@ fn serving_node_for(resource_type: i8, resource_name: &str) -> krabka_metadata::
     }
 }
 
-/// Describe one resource, served by `serving_node`.
+/// Describe one resource, served by `serving_node`, against a process that
+/// named none of its static broker keys and runs every logger at `info`.
 fn describe_at(
     serving_node: krabka_metadata::NodeId,
     image: &MetadataImage,
@@ -72,6 +73,7 @@ fn describe_at(
     configuration_keys: Option<Vec<String>>,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
         image,
         krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
@@ -80,10 +82,16 @@ fn describe_at(
             configuration_keys,
             ..Default::default()
         },
-        serving_node,
+        ServingBroker {
+            node: serving_node,
+            static_broker: untuned(),
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+        },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        untuned(),
         options,
     )
 }
@@ -109,6 +117,35 @@ fn describe(
     )
 }
 
+/// The same, with the node id and live filter a `BROKER_LOGGER` resource is
+/// resolved against.
+fn describe_with_loggers(
+    image: &MetadataImage,
+    resource_type: i8,
+    resource_name: &str,
+    configuration_keys: Option<Vec<String>>,
+    options: EntryOptions,
+    loggers: BrokerLoggers<'_>,
+) -> DescribeConfigsResult {
+    describe_one(
+        image,
+        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type,
+            resource_name: resource_name.to_owned(),
+            configuration_keys,
+            ..Default::default()
+        },
+        ServingBroker {
+            node: serving_node_for(resource_type, resource_name),
+            static_broker: untuned(),
+            loggers,
+        },
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        options,
+    )
+}
+
 /// Describe one resource against a process that named some of its static
 /// broker keys.
 fn describe_with_static(
@@ -119,6 +156,7 @@ fn describe_with_static(
     options: EntryOptions,
     static_broker: StaticBrokerConfigs<'_>,
 ) -> DescribeConfigsResult {
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
         image,
         krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
@@ -127,12 +165,61 @@ fn describe_with_static(
             configuration_keys,
             ..Default::default()
         },
-        serving_node_for(resource_type, resource_name),
+        ServingBroker {
+            node: serving_node_for(resource_type, resource_name),
+            static_broker,
+            loggers: BrokerLoggers {
+                node_id: 1,
+                levels: &levels,
+            },
+        },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        static_broker,
         options,
     )
+}
+
+/// A `BROKER_LOGGER` describe against a node whose id is 7.
+#[test]
+fn broker_logger_resource_names_this_node_or_is_refused() {
+    let image = MetadataImage::new(Uuid::nil());
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info,krabka_broker=debug");
+
+    let result = describe_with_loggers(
+        &image,
+        RESOURCE_TYPE_BROKER_LOGGER,
+        "7",
+        None,
+        VALUES_ONLY,
+        BrokerLoggers {
+            node_id: 7,
+            levels: &levels,
+        },
+    );
+    check!(result.error_code == crate::codes::NONE);
+    check!(
+        result
+            .configs
+            .iter()
+            .any(|c| c.name == "krabka_broker" && c.value.as_deref() == Some("DEBUG"))
+    );
+
+    let refused = describe_with_loggers(
+        &image,
+        RESOURCE_TYPE_BROKER_LOGGER,
+        "8",
+        None,
+        VALUES_ONLY,
+        BrokerLoggers {
+            node_id: 7,
+            levels: &levels,
+        },
+    );
+    check!(refused.error_code == crate::codes::INVALID_REQUEST);
+    check!(
+        refused.error_message.as_deref() == Some("Unexpected broker id, expected 7 but received 8")
+    );
+    check!(refused.configs.is_empty());
 }
 
 /// Describe one topic the way `kafka-configs --describe --all` does.
