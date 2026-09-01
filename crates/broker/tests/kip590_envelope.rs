@@ -598,3 +598,91 @@ async fn a_forwarded_allocate_producer_ids_is_served_a_block() {
             }
     );
 }
+
+/// Only a peer that holds `ClusterAction` may speak for another identity.
+///
+/// `ApiKeys.ENVELOPE.clusterAction` is true, so `EnvelopeUtils` runs that gate
+/// on the *forwarding connection's* principal before it looks at the payload
+/// at all. Without it, anything that can reach the controller listener can
+/// mint an envelope naming any principal it likes and have the controller run
+/// the request as that identity -- the forwarding wrapper becomes an
+/// impersonation primitive.
+///
+/// The broker here runs a real ACL authorizer with no super-users, so the
+/// plaintext connection's `ANONYMOUS` holds nothing. The refusal has to arrive
+/// as an `EnvelopeResponse` carrying the code and a null `response_data`, and
+/// the embedded `CreateTopics` must never have run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
+    const TOPIC: &str = "envelope-no-cluster-action";
+
+    let (broker, _dir) = start_broker_with(|config| {
+        config.super_users = std::collections::HashSet::new();
+        config.authorizer =
+            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+    })
+    .await;
+
+    let response = send_envelope(
+        broker.controller_addr(),
+        &envelope_for(embedded_create_topics(TOPIC), Some(JVM_USER_ALICE)),
+    )
+    .await;
+
+    check!((response.error_code, response.response_data) == (31, None));
+    check!(
+        broker.controller_image_for_test().topic(TOPIC).is_none(),
+        "the embedded request must not have run"
+    );
+}
+
+/// An embedded request at a version this broker does not serve is an
+/// `UNSUPPORTED_VERSION`, and the handler never sees it.
+///
+/// The embedded header carries its own `api_version`, and nothing on the
+/// controller connection has negotiated it: the forwarding hop negotiated
+/// `Envelope`, and the *client* negotiated the inner api against the hop.
+/// So the version has to be re-checked against this broker's own registry
+/// before dispatch, or a handler is handed a version it never advertised.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
+    const TOPIC: &str = "envelope-unsupported-version";
+
+    let (broker, _dir) = start_broker().await;
+
+    let beyond = krabka_protocol::owned::create_topics_request::MAX_VERSION + 1;
+    let request_data = request_frame(
+        krabka_protocol::owned::create_topics_request::API_KEY,
+        beyond,
+        EMBEDDED_CORRELATION_ID,
+        Some("adminclient-1"),
+        true,
+        &encode(
+            &CreateTopicsRequest {
+                topics: vec![CreatableTopic {
+                    name: TOPIC.to_owned(),
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    ..CreatableTopic::default()
+                }],
+                timeout_ms: 5_000,
+                validate_only: false,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            krabka_protocol::owned::create_topics_request::MAX_VERSION,
+        ),
+    )
+    .slice(4..);
+
+    let response = send_envelope(
+        broker.controller_addr(),
+        &envelope_for(request_data, Some(JVM_USER_ALICE)),
+    )
+    .await;
+
+    check!((response.error_code, response.response_data) == (35, None));
+    check!(
+        broker.controller_image_for_test().topic(TOPIC).is_none(),
+        "the embedded request must not have run"
+    );
+}
