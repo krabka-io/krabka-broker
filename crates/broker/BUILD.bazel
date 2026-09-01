@@ -19,14 +19,34 @@ crate_tests(
     # material is `include_str!`ed by the suites that serve it and the keytabs
     # are opened at run time, so both lists are needed.
     compile_data = glob(["tests/fixtures/**"]),
-    # Assert on a committed high-watermark across three brokers, so they are
+    # Measure elapsed wall-clock time and assert a bound on it, so they are
     # timing-sensitive the way //crates/raft's engine simulation is: they pass in
     # the test run and fail under coverage instrumentation, which is a statement
-    # about the instrumentation rather than about the code. `diskless_e2e` boots
-    # three such clusters at once, one per case, and every case gates on a
-    # quorum-committed watermark inside a bounded deadline.
+    # about the instrumentation rather than about the code. `diskless_e2e` and
+    # `sharegroup_backlog` assert on a committed high-watermark across three
+    # brokers; `diskless_e2e` boots three such clusters at once, one per case,
+    # and every case gates on a quorum-committed watermark inside a bounded
+    # deadline.
+    #
+    # `durability` and `leader_election` each kill a broker and time the acks=-1
+    # produce that the resulting ISR shrink unblocks. The wait cannot finish
+    # before `replica_lag_time_max` elapses and must complete a few seconds
+    # after it, and instrumentation stretches only the second half: `durability`
+    # allows five seconds for a ~2s shrink, which leaves three for a detection
+    # loop the profiler has slowed down. `ip_quotas` asserts the opposite
+    # baseline -- five unthrottled connections inside 500ms -- which is bounded
+    # by scheduling rather than by a timer, and so is the shape instrumentation
+    # stretches most.
+    #
+    # `deliver_at_time` measures elapsed time too and is deliberately absent:
+    # its bound only separates a long poll woken by the delivery advance (~2s)
+    # from one that waited out its 20s `max.wait.ms`. That wake is timer-driven,
+    # so instrumentation does not move it.
     cpu_heavy = [
         "diskless_e2e",
+        "durability",
+        "ip_quotas",
+        "leader_election",
         "sharegroup_backlog",
     ],
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
