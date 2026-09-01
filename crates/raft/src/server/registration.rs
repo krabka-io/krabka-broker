@@ -35,23 +35,17 @@ const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
 
-pub(super) const SUPPORTED_APIS: [(i16, i16); 3] = [
-    (
-        broker_registration_request::API_KEY,
-        broker_registration_request::MAX_VERSION,
-    ),
-    (
-        broker_heartbeat_request::API_KEY,
-        broker_heartbeat_request::MAX_VERSION,
-    ),
-    (
-        controller_registration_request::API_KEY,
-        controller_registration_request::MAX_VERSION,
-    ),
+/// The lifecycle API keys this module answers. The versions they are served at
+/// are declared once, with the rest of the listener's surface, in
+/// [`super::api_versions::table`].
+pub(super) const SUPPORTED_APIS: [i16; 3] = [
+    broker_registration_request::API_KEY,
+    broker_heartbeat_request::API_KEY,
+    controller_registration_request::API_KEY,
 ];
 
 pub(super) fn is_controller_api(api_key: i16) -> bool {
-    SUPPORTED_APIS.iter().any(|&(key, _)| key == api_key)
+    SUPPORTED_APIS.contains(&api_key)
 }
 
 pub(super) async fn dispatch(
@@ -96,7 +90,7 @@ mod tests {
     /// The controller answers the lifecycle APIs it declares and nothing else.
     #[test]
     fn only_the_declared_apis_are_controller_apis() {
-        for &(key, _) in &SUPPORTED_APIS {
+        for key in SUPPORTED_APIS {
             check!(is_controller_api(key), "declared api {key}");
         }
         // A key nothing declares: Produce is a broker API, never a controller one.
@@ -115,8 +109,11 @@ mod tests {
         check!(raft_error_code(&RaftError::Shutdown) == UNKNOWN_SERVER_ERROR);
     }
 
+    /// The declared keys are the generated ones. The versions these are served
+    /// at are asserted with the rest of the advertised table, in
+    /// [`super::super::api_versions::table`].
     #[test]
-    fn lifecycle_api_table_matches_generated_schemas() {
-        assert2::assert!(SUPPORTED_APIS == [(62, 4), (63, 2), (70, 0)]);
+    fn lifecycle_api_keys_match_generated_schemas() {
+        assert2::assert!(SUPPORTED_APIS == [62, 63, 70]);
     }
 }
