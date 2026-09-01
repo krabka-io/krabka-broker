@@ -1,7 +1,85 @@
 //! Pure `KRaft` offset-frontier and half-open-window kernels.
 
 #[cfg(creusot)]
+use std::clone::Clone;
+
+#[cfg(creusot)]
 use creusot_std::prelude::*;
+
+/// The only response-derived mutation an admitted KRaft Fetch may perform.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum FetchResponseMutation {
+    Reject,
+    Snapshot,
+    Truncate,
+    Append,
+    HighWatermark,
+}
+
+/// Fence a Fetch response against the live role, leader, and epoch, then
+/// select exactly one mutation path.
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject) ==
+    (role_leader != Some(from)
+        || current_leader != Some(from)
+        || response_leader != from
+        || response_epoch != current_epoch)))]
+#[cfg_attr(creusot, ensures(match result {
+    FetchResponseMutation::Snapshot => role_leader == Some(from)
+        && current_leader == Some(from)
+        && response_leader == from
+        && response_epoch == current_epoch
+        && has_snapshot,
+    FetchResponseMutation::Truncate => role_leader == Some(from)
+        && current_leader == Some(from)
+        && response_leader == from
+        && response_epoch == current_epoch
+        && !has_snapshot
+        && has_divergence,
+    FetchResponseMutation::Append => role_leader == Some(from)
+        && current_leader == Some(from)
+        && response_leader == from
+        && response_epoch == current_epoch
+        && !has_snapshot
+        && !has_divergence
+        && has_records,
+    FetchResponseMutation::HighWatermark => role_leader == Some(from)
+        && current_leader == Some(from)
+        && response_leader == from
+        && response_epoch == current_epoch
+        && !has_snapshot
+        && !has_divergence
+        && !has_records,
+    FetchResponseMutation::Reject => true,
+}))]
+#[must_use]
+pub fn fetch_response_mutation(
+    role_leader: Option<u64>,
+    current_leader: Option<u64>,
+    current_epoch: u32,
+    from: u64,
+    response_leader: u64,
+    response_epoch: u32,
+    has_snapshot: bool,
+    has_divergence: bool,
+    has_records: bool,
+) -> FetchResponseMutation {
+    if role_leader != Some(from)
+        || current_leader != Some(from)
+        || response_leader != from
+        || response_epoch != current_epoch
+    {
+        FetchResponseMutation::Reject
+    } else if has_snapshot {
+        FetchResponseMutation::Snapshot
+    } else if has_divergence {
+        FetchResponseMutation::Truncate
+    } else if has_records {
+        FetchResponseMutation::Append
+    } else {
+        FetchResponseMutation::HighWatermark
+    }
+}
 
 /// Advance a high watermark monotonically without passing the log end.
 #[must_use]
@@ -102,5 +180,33 @@ mod tests {
         assert!(metadata_record_coordinates(0, 0) == None);
         assert!(metadata_record_coordinates(3, 3) == None);
         assert!(metadata_record_coordinates(i32::MAX as usize + 2, 0) == None);
+    }
+
+    #[test]
+    fn fetch_response_is_fenced_before_one_exclusive_mutation() {
+        use FetchResponseMutation::{Append, HighWatermark, Reject, Snapshot, Truncate};
+
+        let decide = |role_leader, current_leader, current_epoch, from, leader, epoch, s, d, r| {
+            fetch_response_mutation(
+                role_leader,
+                current_leader,
+                current_epoch,
+                from,
+                leader,
+                epoch,
+                s,
+                d,
+                r,
+            )
+        };
+        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);
+        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, true, true) == Truncate);
+        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, false, true) == Append);
+        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, false, false) == HighWatermark);
+        assert!(decide(None, Some(2), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(Some(2), Some(3), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(Some(2), Some(2), 3, 3, 2, 3, false, false, true) == Reject);
+        assert!(decide(Some(2), Some(2), 3, 2, 3, 3, false, false, true) == Reject);
+        assert!(decide(Some(2), Some(2), 3, 2, 2, 4, false, false, true) == Reject);
     }
 }

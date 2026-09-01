@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
+use krabka_verified::raft::{FetchResponseMutation, fetch_response_mutation};
 
 use super::{
-    Engine, KraftControlState,
+    Engine, KraftControlState, Role,
     checkpoint::{retain_latest_checkpoint, write_checkpoint},
     checkpoint_dir,
     offsets::fetch_offset_has_records,
@@ -125,90 +126,100 @@ impl Engine {
         else {
             return;
         };
-        self.peers.remember_peer(from, leader_id);
 
-        // The leader signalled our fetch offset is below its pruned log-start:
-        // we must fetch the snapshot instead of replicating from the log. Start
-        // (or continue) a snapshot transfer, feed the core for liveness/epoch
-        // bookkeeping, then stop — no append/apply on this response.
-        if let Some(id) = snapshot_id {
-            let active_id = self.snapshot_fetch.as_ref().map(|s| s.snapshot_id);
-            if should_start_snapshot_fetch(id, self.log.log_end_offset(), active_id) {
-                self.snapshot_fetch = Some(SnapshotFetchState::with_max(
-                    id,
-                    leader_id,
-                    self.metadata_snapshot_fetch_max,
-                ));
-                self.send_fetch_snapshot(leader_id, id, 0);
-            }
-            self.on_event(Event::ReceiveFetchResponse {
-                leader_id,
-                leader_epoch,
-                diverging,
-            });
+        // Decode is side-effect free. Fence the response against both the
+        // live role and durable leader view before remembering its peer or
+        // performing any response-derived mutation.
+        let role_leader = match self.core.role() {
+            Role::Follower { leader_id, .. } => Some(leader_id.0),
+            Role::Observer {
+                leader_id: Some(leader_id),
+                ..
+            } => Some(leader_id.0),
+            _ => None,
+        };
+        let state = self.core.quorum_state();
+        let mutation = fetch_response_mutation(
+            role_leader,
+            state.leader_id.map(|id| id.0),
+            state.leader_epoch,
+            from.0,
+            leader_id.0,
+            leader_epoch,
+            snapshot_id.is_some(),
+            diverging.is_some(),
+            !records.is_empty(),
+        );
+        if mutation == FetchResponseMutation::Reject {
             return;
         }
+        self.peers.remember_peer(from, leader_id);
 
-        // `hwm` arrives raw on the KIP-595 Fetch response wire; wrap into the
-        // log offset domain.
-        let hwm = Offset(hwm);
-        if let Some(point) = diverging {
-            // Diverged: truncate to the leader's hint. The follower will
-            // re-fetch from the truncation point on the next cycle. We still
-            // feed the core event below so it processes the divergence too.
-            // `point.offset` is the core's raw i64 divergence point.
-            if let Err(e) = self.log.truncate_to(Offset(point.offset)) {
-                tracing::error!(?e, "kraft: follower truncate failed");
-            } else {
-                self.restore_control_state_after_truncation(point.offset);
+        match mutation {
+            FetchResponseMutation::Reject => return,
+            FetchResponseMutation::Snapshot => {
+                // The leader signalled our fetch offset is below its pruned
+                // log-start. Start or continue a snapshot transfer and do not
+                // perform another mutation from this response.
+                let Some(id) = snapshot_id else { return };
+                let active_id = self.snapshot_fetch.as_ref().map(|s| s.snapshot_id);
+                if should_start_snapshot_fetch(id, self.log.log_end_offset(), active_id) {
+                    self.snapshot_fetch = Some(SnapshotFetchState::with_max(
+                        id,
+                        leader_id,
+                        self.metadata_snapshot_fetch_max,
+                    ));
+                    self.send_fetch_snapshot(leader_id, id, 0);
+                }
             }
-        } else if !records.is_empty() {
-            // Append the carried batches at their leader-assigned offsets. A
-            // batch already present (base_offset < our log end) is skipped:
-            // `append_at` requires the offset to equal our current log end.
-            match decode_batches(&records) {
-                Ok(batches) => {
-                    for mut batch in batches {
-                        // `base_offset` is a raw record-format field; wrap into
-                        // the log offset domain for the append.
-                        let at = Offset(batch.base_offset);
-                        let log_end = self.log.log_end_offset();
-                        match classify_fetch_batch(at, log_end) {
-                            FetchBatchDisposition::AlreadyPresent => {
-                                continue; // already have it
+            FetchResponseMutation::Truncate => {
+                // Diverged: truncate to the leader's hint. The next fetch
+                // starts at the truncation point.
+                let Some(point) = diverging else { return };
+                if let Err(e) = self.log.truncate_to(Offset(point.offset)) {
+                    tracing::error!(?e, "kraft: follower truncate failed");
+                } else {
+                    self.restore_control_state_after_truncation(point.offset);
+                }
+            }
+            FetchResponseMutation::Append => {
+                // Append the carried batches at their leader-assigned offsets.
+                match decode_batches(&records) {
+                    Ok(batches) => {
+                        for mut batch in batches {
+                            let at = Offset(batch.base_offset);
+                            let log_end = self.log.log_end_offset();
+                            match classify_fetch_batch(at, log_end) {
+                                FetchBatchDisposition::AlreadyPresent => continue,
+                                FetchBatchDisposition::Append => {}
+                                FetchBatchDisposition::Gap => break,
                             }
-                            FetchBatchDisposition::Append => {}
-                            FetchBatchDisposition::Gap => {
-                                // Gap: we are missing earlier records. Stop; the next
-                                // fetch (from our true log end) will refill in order.
+                            if let Err(e) = self.log.append_at(&mut batch, at) {
+                                tracing::error!(?e, at = at.0, "kraft: follower append_at failed");
                                 break;
                             }
+                            if let Err(e) = self.apply_control_batch(&batch) {
+                                tracing::error!(
+                                    ?e,
+                                    at = at.0,
+                                    "kraft: invalid fetched control batch"
+                                );
+                                break;
+                            }
+                            self.installed_snapshot_epoch = None;
                         }
-                        if let Err(e) = self.log.append_at(&mut batch, at) {
-                            tracing::error!(?e, at = at.0, "kraft: follower append_at failed");
-                            break;
-                        }
-                        if let Err(e) = self.apply_control_batch(&batch) {
-                            tracing::error!(?e, at = at.0, "kraft: invalid fetched control batch");
-                            break;
-                        }
-                        // Appended past the snapshot boundary: the log now has a
-                        // real epoch of its own, so drop the post-install epoch
-                        // override (see `send_fetch`).
-                        self.installed_snapshot_epoch = None;
                     }
+                    Err(e) => tracing::error!(?e, "kraft: follower decode batches failed"),
                 }
-                Err(e) => tracing::error!(?e, "kraft: follower decode batches failed"),
+                let target = Offset(hwm).min(self.log.log_end_offset());
+                self.advance_and_apply(target);
             }
-            // Advance the HWM to the leader's, clamped to our log end, and apply
-            // newly-committed records to the image.
-            let target = hwm.min(self.log.log_end_offset());
-            self.advance_and_apply(target);
-        } else {
-            // No records but the leader's HWM may have moved past what we already
-            // have (e.g. the leader committed entries we already replicated).
-            let target = hwm.min(self.log.log_end_offset());
-            self.advance_and_apply(target);
+            FetchResponseMutation::HighWatermark => {
+                // The leader may have committed records that were already
+                // replicated locally.
+                let target = Offset(hwm).min(self.log.log_end_offset());
+                self.advance_and_apply(target);
+            }
         }
 
         // Feed the core so it re-arms its fetch timer / issues the next fetch.

@@ -64,7 +64,7 @@ pub use produce::{ProduceBatchAdmission, produce_batch_admission};
 pub use producer::{
     ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
 };
-pub use raft::metadata_record_coordinates;
+pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
 pub use reassignment::{ReassignmentAction, reassignment_action};
 pub use recovery::{
     ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
