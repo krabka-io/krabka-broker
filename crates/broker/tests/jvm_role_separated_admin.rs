@@ -20,16 +20,18 @@
 //! follow-up `--describe` reads it back. Without a forwarding path of any
 //! kind, both tools would fail with `NOT_CONTROLLER`.
 //!
-//! Gated `#[ignore]` (requires Docker); run with `--ignored`.
+//! Gated `#[ignore]` (requires Docker); run with `--ignored`. CI runs it as
+//! `//crates/broker:jvm_role_separated_admin_docker_test`.
 //!
-//! This suite is a manual Bazel target rather than a `container ·` CI suite,
-//! and it does not pass today. A broker-only node resolves the controller
-//! leader's address out of that leader's `BrokerRegistration`, a
-//! controller-only node writes none, so it never heartbeats, the controller
-//! fences it within one liveness tick, and every tool here fails with
-//! `Timed out waiting for a node assignment` before it can say anything about
-//! forwarding. `tests/KNOWN_ISSUES.md` has the full trace and the fix that is
-//! needed. Nothing below is wrong; it is waiting on that fix.
+//! Keeping a broker-only node alive here took two fixes. `324ab7d` moved
+//! `BrokerHeartbeat` onto the controller listener, which is the only endpoint
+//! a controller-only node publishes for itself, and `4a8e6cb` resolved that
+//! leader through its KIP-853 voter endpoint rather than a
+//! `BrokerRegistration` a controller-only node never writes. Before them no
+//! heartbeat ever left a broker-only node, the controller fenced the whole
+//! cluster within one liveness tick, and every tool below failed with
+//! `Timed out waiting for a node assignment` before it could say anything
+//! about forwarding.
 
 mod support;
 

@@ -100,6 +100,17 @@ _FEATURE_RULES = [
         "crates/broker/src/wal/quorum",
     ], ["jvm_static_quorum_spike"]),
     ([
+        "crates/broker/src/handlers/describe_configs/resources/broker_logger",
+        "crates/broker/src/handlers/incremental_alter_configs/broker_logger_scope",
+        "crates/broker/src/handlers/describe_cluster",
+    ], ["jvm_broker_loggers"]),
+    ([
+        "crates/broker/src/heartbeat",
+        "crates/broker/src/broker/registration",
+        "crates/broker/src/broker/liveness",
+        "crates/broker/src/controller_admin",
+    ], ["jvm_role_separated_admin"]),
+    ([
         "crates/broker/src/txn",
         "crates/broker/src/producer_state",
         "crates/broker/src/partition_writer",
@@ -215,6 +226,14 @@ def _self_test():
     _check(
         _select(["crates/broker/tests/jvm_acceptance_sasl/plain.rs"], available) == [_target("jvm_acceptance_sasl")],
         "suite test source must select its suite",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/describe_cluster.rs"], available) == [_target("jvm_broker_loggers")],
+        "describe-cluster source must select the broker-logger suite, whose non---all describe reads it",
+    )
+    _check(
+        _select(["crates/broker/src/heartbeat/client.rs"], available) == [_target("jvm_role_separated_admin")],
+        "heartbeat source must select the role-separated suite",
     )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
     _check(
