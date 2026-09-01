@@ -26,7 +26,8 @@
 //! # Running
 //!
 //! ```bash
-//! docker compose -f crates/broker/tests/fixtures/security/kdc/docker-compose.yml up --build -d
+//! bazel run //crates/broker/tests/fixtures/security/kdc:image_load
+//! docker compose -f crates/broker/tests/fixtures/security/kdc/docker-compose.yml up -d
 //! # wait for KDC_READY in the logs
 //! KRB5_CONFIG=crates/broker/tests/fixtures/security/kdc/krb5.conf \
 //!   SSPI_KDC_URL=tcp://localhost:88 \

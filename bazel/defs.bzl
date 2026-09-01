@@ -94,6 +94,7 @@ def crate_library(name, srcs = None, **kwargs):
     rust_doc(
         name = name + "_doc",
         crate = ":" + name,
+        rustdoc_flags = ["-Dwarnings"],
     )
 
 def crate_binary(name, crate_root, lib, tests = True, **kwargs):
