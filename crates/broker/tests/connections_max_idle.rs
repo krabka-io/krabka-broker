@@ -2,7 +2,7 @@
 //!
 //! Kafka reclaims a connection that goes `connections.max.idle.ms` without a
 //! complete request frame, on every listener and whatever the connection's
-//! auth state. The three scenarios here cover what that buys:
+//! auth state. The four scenarios here cover what that buys:
 //!
 //! 1. A PLAINTEXT connection that completes the TCP handshake and then sends
 //!    nothing at all is closed once the window passes, and the close is
@@ -14,18 +14,28 @@
 //!    connection's total lifetime.
 //! 3. A per-listener override wins over the broker-wide value for the
 //!    listener it names.
+//! 4. On a TLS listener the window covers the handshake too, so a peer that
+//!    opens the socket and never sends a `ClientHello` -- the cheapest version
+//!    of scenario 1, because it costs the peer no crypto at all -- is
+//!    reclaimed rather than parked forever in `TlsAcceptor::accept`.
 //!
-//! `tokio::time::pause()` and `advance()` drive the deadline. Each test pauses
-//! *after* the broker has started, not with `start_paused = true`, because the
-//! broker's own start-up timers -- raft heartbeats, disk scans -- need real
-//! wall-clock progress or `Broker::start` hangs. The dispatch loop arms its
-//! idle deadline against the real tokio clock as it enters the frame read, so
-//! a later `advance` jumps past that `Instant` -- but only once the loop has
-//! got that far, which is why every test waits on the `active_connections`
-//! gauge before it advances. The gauge is incremented in the same poll that
-//! arms the deadline, so seeing it move is proof the timer is running.
+//! Scenarios 1 to 3 drive the deadline with `tokio::time::pause()` and
+//! `advance()`. Each pauses *after* the broker has started, not with
+//! `start_paused = true`, because the broker's own start-up timers -- raft
+//! heartbeats, disk scans -- need real wall-clock progress or `Broker::start`
+//! hangs. The dispatch loop arms its idle deadline against the real tokio
+//! clock as it enters the frame read, so a later `advance` jumps past that
+//! `Instant` -- but only once the loop has got that far, which is why each
+//! waits on the `active_connections` gauge before it advances. The gauge is
+//! incremented in the same poll that arms the deadline, so seeing it move is
+//! proof the timer is running.
+//!
+//! Scenario 4 cannot use that gauge, because the connection it describes never
+//! reaches the serve loop that increments it. It runs on a real, short window
+//! instead, and the bounded read it blocks on gives that window twenty times
+//! its length to fire.
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, path::Path, time::Duration};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
@@ -38,7 +48,7 @@ use krabka_protocol::{
     Decode, Encode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
-use krabka_security::ListenerProtocol;
+use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use krabka_units::Time;
 use tempfile::TempDir;
 use tokio::{
@@ -46,13 +56,26 @@ use tokio::{
     net::TcpStream,
 };
 
-/// One PLAINTEXT listener bound on an OS-assigned loopback port.
-fn plaintext_listener(name: &str) -> ListenerSpec {
+/// The dev server certificate scenario 4's TLS listener presents. Nothing
+/// verifies it -- the peer under test never sends a `ClientHello` -- but the
+/// listener will not bind without one.
+const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
+const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
+
+/// Writes one PEM fixture into `dir` and returns its path.
+fn write_pem(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).expect("write PEM fixture");
+    path
+}
+
+/// One listener of `protocol`, bound on an OS-assigned loopback port.
+fn loopback_listener(name: &str, protocol: ListenerProtocol) -> ListenerSpec {
     ListenerSpec {
         name: name.to_string(),
         bind_addr: "127.0.0.1:0".parse().expect("loopback bind address"),
         advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::Plaintext,
+        protocol,
         tls_config: None,
         sasl_mechanisms: None,
     }
@@ -69,7 +92,7 @@ struct Fixture {
 impl Fixture {
     /// Boots a broker over `cfg`, whose listener list this function fills in.
     async fn start(mut cfg: BrokerConfig, log_dir: TempDir, listener: &str) -> Self {
-        cfg.listeners = vec![plaintext_listener(listener)];
+        cfg.listeners = vec![loopback_listener(listener, ListenerProtocol::Plaintext)];
         cfg.inter_broker_listener_name = listener.to_string();
         let handle = Broker::start(cfg).await.expect("broker must start");
         let addr = handle.listen_addr();
@@ -218,4 +241,54 @@ async fn a_per_listener_override_expires_its_listener_before_the_broker_wide_win
     assert!(fixture.idle_closes() == 1);
 
     fixture.handle.shutdown().await;
+}
+
+/// Scenario 4: a TLS listener holds the handshake to the same window.
+///
+/// `apache/kafka:4.3.1` run with `connections.max.idle.ms=20000` and an SSL
+/// listener closes a socket that sends no `ClientHello` after 20 seconds:
+/// Kafka registers the channel with its `Selector` at accept time, so idle
+/// expiry covers a connection that has not finished, or even begun,
+/// negotiating. Without the same bound the broker would park a task and an fd
+/// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let log_dir = tempfile::tempdir().expect("tempdir");
+    let pem_dir = tempfile::tempdir().expect("tempdir");
+    let cert_path = write_pem(pem_dir.path(), "cert.pem", DEV_CERT);
+    let key_path = write_pem(pem_dir.path(), "key.pem", DEV_KEY);
+
+    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    cfg.connections_max_idle = krabka_units::millis(250);
+    cfg.listeners = vec![loopback_listener("SSL", ListenerProtocol::Ssl)];
+    cfg.inter_broker_listener_name = "SSL".to_string();
+    cfg.tls_config = Some(TlsConfig {
+        cert_chain_path: cert_path,
+        private_key_path: key_path,
+        trust_roots_path: None,
+        client_ca_path: None,
+        client_auth: ClientAuthMode::Disabled,
+    });
+
+    let handle = Broker::start(cfg).await.expect("broker must start");
+    let mut stream = TcpStream::connect(handle.listen_addr())
+        .await
+        .expect("connect");
+
+    // No `ClientHello`, ever. `is_closed` waits five seconds, twenty windows.
+    assert!(is_closed(&mut stream).await);
+    assert!(
+        handle
+            .metrics()
+            .connection_closes
+            .get_or_create(&ConnectionCloseReasonLabel {
+                reason: ConnectionCloseReason::Idle,
+            })
+            .get()
+            == 1
+    );
+
+    handle.shutdown().await;
 }

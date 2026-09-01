@@ -10,6 +10,11 @@
 //! [`next_connection_frame`] is entered — that is, after every frame read.
 //! Whichever deadline is nearer closes the connection, because both are arms
 //! of the same `select!`.
+//!
+//! The idle window covers a connection only from the moment it reaches this
+//! loop. On a TLS listener the handshake that runs before it is held to the
+//! same window by `accept::handshake_within_idle_window`, so a peer that opens
+//! the socket and never negotiates is reclaimed too.
 
 use bytes::Bytes;
 use futures_util::StreamExt;

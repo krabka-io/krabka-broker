@@ -226,9 +226,10 @@ pub struct BrokerMetrics {
     /// (EOF, error, or SASL-session expiry). Mirrors Kafka's
     /// `kafka.network:type=Acceptor` connection-count intent.
     pub active_connections: Gauge,
-    /// Cumulative count of closed client connections, labelled by the reason
-    /// the per-connection serve loop stopped reading frames. Kafka has no one
-    /// counterpart; the closest are
+    /// Cumulative count of client connections the broker closed for one of the
+    /// bounded [`ConnectionCloseReason`]s, which are the ways a connection ends
+    /// on its own rather than as the tail of a request the request counters
+    /// already saw. Kafka has no one counterpart; the closest are
     /// `kafka.network:type=Selector,name=connection-close-total` and the
     /// `expired-connections-killed-count` that only counts the idle arm.
     /// `rate(connection_closes_total{reason="idle"}[5m])` is the signal that a

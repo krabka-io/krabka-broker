@@ -220,14 +220,19 @@ pub struct BreakGlassActionLabel {
     pub action: BreakGlassAction,
 }
 
-/// Why a per-connection serve loop stopped reading frames.
+/// Why the broker stopped serving a client connection.
 ///
-/// The four reasons are every way the frame read can end, so a closed enum
-/// bounds the `connection_closes` label set at four series however many
-/// connections the broker serves.
+/// The four reasons are every way the frame read can end, plus the TLS
+/// handshake the peer never drove, so a closed enum bounds the
+/// `connection_closes` label set at four series however many connections the
+/// broker serves. Loop exits that are a consequence of a request the broker
+/// already accounted for — a blocked pre-auth `api_key`, a response that would
+/// not encode, a `framed.send` error — are not counted here.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum ConnectionCloseReason {
-    /// The connection sent no complete frame within `connections.max.idle.ms`.
+    /// The connection went `connections.max.idle.ms` without a complete frame
+    /// — counting a TLS handshake it opened the socket for and never drove,
+    /// which Kafka's idle expiry covers for the same reason.
     Idle,
     /// KIP-368: the SASL session passed the token's expiry without an in-band
     /// re-authentication.
