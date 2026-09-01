@@ -453,8 +453,10 @@ impl SharePersister {
     /// The leader reports whether it accepted the call in the per-partition
     /// `error_code`, and a rejection there has to reach the caller: the
     /// lifecycle hook records a partition as initialized on `Ok(())` and never
-    /// looks at it again, so an unread `COORDINATOR_NOT_AVAILABLE` leaves the
-    /// group permanently believing in share state that was never written.
+    /// looks at it again, so an unread `NOT_COORDINATOR` -- which is what a
+    /// state-partition leader answers while its view of its own leadership is
+    /// still catching up -- leaves the group permanently believing in share
+    /// state that was never written.
     async fn send_to_leader<R>(
         &self,
         state_partition: PartitionIndex,
