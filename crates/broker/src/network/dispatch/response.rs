@@ -13,10 +13,39 @@ use crate::{
     network::codec,
 };
 
+/// The schema version and header flexibility of the response that was
+/// actually encoded.
+///
+/// It is not always the request's. `send_unsupported_version` replies at the
+/// nearest supported version, which for a request below an API's minimum is
+/// higher than the one the client asked for and can be flexible where the
+/// request header was not. `patch_leading_throttle` derives the body offset
+/// from the flexibility, and `throttle_is_leading_field` from the version, so
+/// both must read the response's values: patching a flexible v0 body from the
+/// request's non-flexible header offset overwrites the tagged-fields byte and
+/// three quarters of `ThrottleTimeMs`.
+#[derive(Clone, Copy)]
+pub(super) struct ResponseShape {
+    pub(super) version: ApiVersion,
+    pub(super) body_flexible: bool,
+}
+
+impl ResponseShape {
+    /// The ordinary case: the handler answered at the version the client
+    /// asked for, with the header flexibility the request header used.
+    pub(super) fn mirroring_request(parsed: &crate::network::request::ParsedRequest<'_>) -> Self {
+        Self {
+            version: parsed.api_version,
+            body_flexible: parsed.body_flexible,
+        }
+    }
+}
+
 pub(super) async fn maybe_apply_request_quota(
     broker: &Broker,
     mut response_bytes: Bytes,
     parsed: &crate::network::request::ParsedRequest<'_>,
+    shape: ResponseShape,
     auth: &crate::network::auth::ConnectionAuth,
     started: std::time::Instant,
 ) -> Bytes {
@@ -52,12 +81,12 @@ pub(super) async fn maybe_apply_request_quota(
             &[(crate::metrics::QuotaType::Request, charged)],
         );
         if delay > <Time as TimeExt>::ZERO {
-            if throttle_is_leading_field(parsed.api_key, parsed.api_version) {
+            if throttle_is_leading_field(parsed.api_key, shape.version) {
                 let delay_ms = crate::quota::throttle_time_ms(delay);
                 response_bytes = patch_leading_throttle(
                     response_bytes,
                     parsed.api_key,
-                    parsed.body_flexible,
+                    shape.body_flexible,
                     delay_ms,
                 );
             }
@@ -146,12 +175,17 @@ pub(super) fn encode_response(
 ///   in the generated `docs/KIP_MATRIX.md`:
 ///   `Produce` (0) v1+ and `ApiVersions` (18) v1+ carry it after a
 ///   variable-length array, the four delegation-token APIs (38-41) carry it
-///   last, and `OffsetDelete` (47) leads with `ErrorCode`. Where
-///   `maybe_apply_request_quota` runs the delay is still applied -- it holds
-///   the response before the dispatch loop writes it -- but the response does
-///   not advertise it.
-///   Echoing it needs the field set on the typed response before encoding,
-///   which is how the Produce and Fetch handlers already do it.
+///   last, and `OffsetDelete` (47) leads with `ErrorCode`.
+///   What that costs on the wire differs per API, and the audit records it
+///   as a `QuotaReach` pinned against the dispatch registry: `Produce` is
+///   `SelfAccounted`, so it never reaches this predicate and its handler
+///   fills the field in; `ApiVersions` is `ApplyFallbackAccounting`, so an
+///   ordinary request can be held while the response reports zero; the other
+///   five are `InlineExempt`, so only the unsupported-version reply path --
+///   which charges every `api_key` -- can hold one.
+///   Echoing the field on any of them needs it set on the typed response
+///   before encoding, which is how the Produce and Fetch handlers already do
+///   it.
 pub(super) fn throttle_is_leading_field(api_key: ApiKeyCode, version: ApiVersion) -> bool {
     // The version bounds are the schema versions at which each API moved
     // `ThrottleTimeMs` to the front of its response. They are deliberately

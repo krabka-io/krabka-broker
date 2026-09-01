@@ -32,6 +32,13 @@
 //!    loop reports by patching the leading `ThrottleTimeMs` of the encoded
 //!    body rather than by having the handler fill it in. Asserts the throttled
 //!    response differs from the unthrottled one in that field alone.
+//! 8. `request_quota_patch_uses_the_reply_version_not_the_request_version` —
+//!    the same tiny `request_percentage`, but on an `AllocateProducerIds`
+//!    request at a version the broker does not support. The reply is encoded
+//!    at the nearest supported version, whose header flexibility is not the
+//!    request's, so a patch that takes its offset from the request writes one
+//!    byte early. Asserts the reported back-off stays within
+//!    `quota_throttle_max` and the rest of the reply is untouched.
 //!
 //! Test 4 exercises header `client_id` propagation through Produce and the
 //! tuple-over-user precedence rule end to end. Fetch uses the same request

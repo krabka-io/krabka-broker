@@ -25,25 +25,36 @@ audited by
 which encodes each response at each advertised version and compares where
 `ThrottleTimeMs` lands against the broker's table.
 
-The APIs below carry `ThrottleTimeMs` behind another field. Wherever the
-dispatch loop does charge the request quota, it applies the delay -- it holds
-the response before writing it -- and the response still goes out reporting
-`throttle_time_ms = 0`, so a client sees latency instead of a back-off signal.
-Echoing them needs the field set on the typed response before encoding rather
-than a byte patch.
+The APIs below carry `ThrottleTimeMs` behind another field, so the patch
+cannot reach it. That is a statement about the schema, not about what a client
+observes: whether a request-quota delay is ever applied to one of these APIs is
+decided separately, by its dispatch entry's `RequestQuotaPolicy`. The two
+columns are kept apart for that reason.
 
-The table is a precondition, not the whole story: the leading-int32 patch is
-only reached for dispatch entries whose request-quota policy is
-`ApplyFallbackAccounting`, plus the unsupported-version reply path. Entries
-marked `InlineExempt` -- most of the admin and ACL surface -- are exempt from
-the request quota altogether, so they are neither delayed nor stamped.
+* `SelfAccounted` entries charge the quota in the handler and set
+  `ThrottleTimeMs` on the typed response before encoding, so the buried field
+  costs nothing and the client does see the delay.
+* `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
+  delays, so a buried field there really does mean latency without a back-off
+  signal.
+* `InlineExempt` entries -- most of the admin, ACL and delegation-token
+  surface -- are exempt from the request quota on the ordinary path, so they
+  are never delayed by it. The unsupported-version reply path charges every
+  `api_key` regardless of policy, so a request outside the advertised version
+  range is the one case where such an API is held without an echo.
 
-| API | api_key | Versions | Why the field cannot be patched |
-| :--- | :--- | :--- | :--- |
-| Produce | 0 | 1-13 | Sits behind the `Responses` array; the handler charges the bandwidth quota itself and fills the field in before encoding |
-| ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix |
-| CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC |
-| RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp |
-| ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp |
-| DescribeDelegationToken | 41 | 1-3 | Last field, behind `ErrorCode` and the variable-length token list |
-| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only |
+`recorded_reach_matches_the_dispatch_registry` in the audit pins the last
+column against the assembled dispatch registry, so a policy change on any of
+these APIs fails the build until this page is regenerated. Echoing the field on
+any of them needs it set on the typed response before encoding rather than a
+byte patch.
+
+| API | api_key | Versions | Why the field cannot be patched | Runtime effect |
+| :--- | :--- | :--- | :--- | :--- |
+| Produce | 0 | 1-13 | Sits behind the `Responses` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
+| ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix | An ordinary request can be held by the request quota, and the response it waits behind reports `throttle_time_ms = 0` |
+| CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| DescribeDelegationToken | 41 | 1-3 | Last field, behind `ErrorCode` and the variable-length token list | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |

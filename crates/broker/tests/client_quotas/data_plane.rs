@@ -5,12 +5,15 @@
 
 use std::net::SocketAddr;
 
+use assert2::assert;
 use bytes::BytesMut;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
+        allocate_producer_ids_request::AllocateProducerIdsRequest,
+        allocate_producer_ids_response::AllocateProducerIdsResponse,
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
@@ -20,7 +23,7 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use super::wire::{round_trip, sasl_plain_authenticate};
+use super::wire::{round_trip, round_trip_split_header, sasl_plain_authenticate};
 
 /// The `AddOffsetsToTxn` version the driver below speaks: the newest the
 /// broker advertises, and flexible (v3+), so the response header carries the
@@ -60,6 +63,61 @@ pub async fn drive_add_offsets_to_txn(
     let mut cur: &[u8] = &resp_bytes;
     AddOffsetsToTxnResponse::decode(&mut cur, ADD_OFFSETS_TO_TXN_VERSION)
         .expect("decode AddOffsetsToTxnResponse")
+}
+
+/// `AllocateProducerIds` exists at v0 only, and is flexible from v0. A
+/// request below that minimum is answered by the dispatch loop's
+/// unsupported-version path rather than by the handler.
+const ALLOCATE_PRODUCER_IDS_ADVERTISED_VERSION: i16 = 0;
+
+/// Below `AllocateProducerIds`' minimum version, so the request header is
+/// parsed as non-flexible while the reply is encoded at v0 with a flexible
+/// response header. The two disagree, which is the point.
+const ALLOCATE_PRODUCER_IDS_UNSUPPORTED_VERSION: i16 = -1;
+
+/// Drives one `AllocateProducerIds` request at a version the broker does not
+/// support, on an already-authenticated `stream`, and returns the whole
+/// decoded `UNSUPPORTED_VERSION` reply.
+///
+/// The dispatch loop rejects the version before decoding the body, so the body
+/// bytes are a well-formed v0 request only so that the frame is a realistic
+/// one; the broker never looks at them.
+///
+/// This is the one path on which the request's version and the response's
+/// differ, and `AllocateProducerIds` is the API where that difference is
+/// visible on the wire: its response leads with `ThrottleTimeMs`, so the
+/// request-quota delay is reported by patching the leading int32, and the
+/// offset that patch writes at depends on which of the two headers is
+/// consulted.
+pub async fn drive_unsupported_allocate_producer_ids(
+    stream: &mut TcpStream,
+    corr_id: i32,
+) -> AllocateProducerIdsResponse {
+    let mut body = BytesMut::new();
+    AllocateProducerIdsRequest::default()
+        .encode(&mut body, ALLOCATE_PRODUCER_IDS_ADVERTISED_VERSION)
+        .expect("encode AllocateProducerIds");
+    let resp_bytes = round_trip_split_header(
+        stream,
+        67,
+        ALLOCATE_PRODUCER_IDS_UNSUPPORTED_VERSION,
+        corr_id,
+        false,
+        true,
+        &body,
+    )
+    .await
+    .expect("AllocateProducerIds round-trip");
+    let mut cur: &[u8] = &resp_bytes;
+    let response =
+        AllocateProducerIdsResponse::decode(&mut cur, ALLOCATE_PRODUCER_IDS_ADVERTISED_VERSION)
+            .expect("decode AllocateProducerIdsResponse");
+    assert!(
+        cur.is_empty(),
+        "{} trailing bytes after AllocateProducerIdsResponse",
+        cur.len()
+    );
+    response
 }
 
 /// Drives a `Produce` request over an already-authenticated SASL stream.

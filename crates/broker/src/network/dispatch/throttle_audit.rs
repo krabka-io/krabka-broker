@@ -45,13 +45,40 @@ enum ThrottlePosition {
     Absent,
 }
 
-/// `(api_key, first version, last version)` ranges the broker throttles
-/// without echoing, because `ThrottleTimeMs` is not the leading field.
+/// How far a schema-layout divergence gets at run time.
+///
+/// Where `ThrottleTimeMs` sits in the encoded body is a property of the
+/// schema; whether a client ever sees a request-quota delay go unreported on
+/// that API is a property of the dispatch entry's
+/// [`crate::handlers::RequestQuotaPolicy`]. The two are recorded separately
+/// because they answer different questions, and
+/// [`recorded_reach_matches_the_dispatch_registry`] pins this half against the
+/// registry rather than against prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaReach {
+    /// `RequestQuotaPolicy::SelfAccounted`. The handler charges the quota and
+    /// sets `ThrottleTimeMs` on the typed response before encoding, so
+    /// `maybe_apply_request_quota` returns before it reaches the patch and the
+    /// client does see the delay. The buried field costs nothing.
+    SelfAccounted,
+    /// `RequestQuotaPolicy::ApplyFallbackAccounting`. An ordinary request can
+    /// be delayed by the request quota, and the response it waits behind
+    /// reports `throttle_time_ms = 0`.
+    FallbackAccounted,
+    /// `RequestQuotaPolicy::InlineExempt`. The ordinary dispatch path never
+    /// charges the request quota for this API, so `send_registry_response`
+    /// never delays one. The unsupported-version reply path charges every
+    /// `api_key` regardless of policy, so a request outside the advertised
+    /// version range is the only one that can be delayed without an echo.
+    UnsupportedVersionOnly,
+}
+
+/// `(api_key, first version, last version, reach)` ranges whose responses
+/// carry `ThrottleTimeMs` somewhere other than first, so the dispatch loop's
+/// leading-int32 patch cannot reach the field.
 ///
 /// * `Produce` (0) and `ApiVersions` (18) carry it after a variable-length
-///   array, so its offset is not knowable from the header alone. Produce is
-///   moot in practice: its bandwidth quota is charged by the handler, which
-///   fills the field in before encoding.
+///   array, so its offset is not knowable from the header alone.
 /// * The delegation-token APIs (38-41) carry it as the last field, behind
 ///   principal strings, timestamps, the token list or the HMAC.
 /// * `OffsetDelete` (47) leads with `ErrorCode`, an int16 that a leading int32
@@ -61,18 +88,22 @@ enum ThrottlePosition {
 ///   covers all seven is to set the field on the typed response before
 ///   encoding, the way the Produce and Fetch handlers already do.
 ///
+/// The `reach` column says what that costs on the wire, which is not the same
+/// for all seven -- see [`QuotaReach`].
+///
 /// Mirrored as rows in the generated `docs/KIP_MATRIX.md`.
-/// `tools/generate-kip-matrix.py` renders those rows and refuses to run unless
-/// every one of them is matched by an entry of this constant, so the page and
-/// the audit cannot drift apart; CI regenerates the page and fails on a diff.
-const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion)] = &[
-    (0, 1, 13), // Produce
-    (18, 1, 5), // ApiVersions
-    (38, 1, 3), // CreateDelegationToken
-    (39, 1, 2), // RenewDelegationToken
-    (40, 1, 2), // ExpireDelegationToken
-    (41, 1, 3), // DescribeDelegationToken
-    (47, 0, 0), // OffsetDelete
+/// `tools/generate-kip-matrix.py` parses this constant, renders one row per
+/// entry, and fails unless the set it parses is exactly the set of rows it
+/// renders, so the page cannot omit a divergence added here; CI regenerates
+/// the page and fails on a diff.
+const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion, QuotaReach)] = &[
+    (0, 1, 13, QuotaReach::SelfAccounted),          // Produce
+    (18, 1, 5, QuotaReach::FallbackAccounted),      // ApiVersions
+    (38, 1, 3, QuotaReach::UnsupportedVersionOnly), // CreateDelegationToken
+    (39, 1, 2, QuotaReach::UnsupportedVersionOnly), // RenewDelegationToken
+    (40, 1, 2, QuotaReach::UnsupportedVersionOnly), // ExpireDelegationToken
+    (41, 1, 3, QuotaReach::UnsupportedVersionOnly), // DescribeDelegationToken
+    (47, 0, 0, QuotaReach::UnsupportedVersionOnly), // OffsetDelete
 ];
 
 /// Encodes `response` at `version` and reports where `ThrottleTimeMs` landed.
@@ -416,11 +447,44 @@ fn throttle_echo_divergences_are_the_recorded_ones() {
 
     let mut recorded: Vec<(ApiKeyCode, ApiVersion)> = THROTTLE_ECHO_DIVERGENCES
         .iter()
-        .flat_map(|&(api_key, min, max)| (min..=max).map(move |version| (api_key, version)))
+        .flat_map(|&(api_key, min, max, _)| (min..=max).map(move |version| (api_key, version)))
         .collect();
     recorded.sort_unstable();
 
     assert!(buried == recorded);
+}
+
+/// The `reach` column of [`THROTTLE_ECHO_DIVERGENCES`] is a claim about the
+/// dispatch table, not about the schemas, so it is pinned against the
+/// assembled registry. Flipping an API between `InlineExempt` and
+/// `ApplyFallbackAccounting` changes what a client observes on a divergent
+/// API and must be re-recorded here and in `docs/KIP_MATRIX.md`.
+#[test]
+fn recorded_reach_matches_the_dispatch_registry() {
+    use crate::handlers::RequestQuotaPolicy;
+
+    let registry = crate::handlers::registry::build_registry();
+    let observed: Vec<(ApiKeyCode, QuotaReach)> = THROTTLE_ECHO_DIVERGENCES
+        .iter()
+        .map(|&(api_key, ..)| {
+            let policy = registry
+                .get(api_key)
+                .unwrap_or_else(|| panic!("divergent api_key {api_key} is not registered"))
+                .quota_policy();
+            let reach = match policy {
+                RequestQuotaPolicy::SelfAccounted => QuotaReach::SelfAccounted,
+                RequestQuotaPolicy::ApplyFallbackAccounting => QuotaReach::FallbackAccounted,
+                RequestQuotaPolicy::InlineExempt => QuotaReach::UnsupportedVersionOnly,
+            };
+            (api_key, reach)
+        })
+        .collect();
+    let recorded: Vec<(ApiKeyCode, QuotaReach)> = THROTTLE_ECHO_DIVERGENCES
+        .iter()
+        .map(|&(api_key, _, _, reach)| (api_key, reach))
+        .collect();
+
+    assert!(observed == recorded);
 }
 
 #[test]
