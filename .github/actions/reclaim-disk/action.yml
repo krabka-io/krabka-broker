@@ -1,0 +1,41 @@
+name: reclaim runner disk
+description: Delete the preinstalled toolchains and images a hermetic Bazel build never reads.
+
+runs:
+  using: composite
+  steps:
+    # The Bazel build brings its own everything: the LLVM toolchain, the Rust
+    # toolchain and `remotejdk_21` all come from `MODULE.bazel`, and
+    # `--incompatible_strict_action_env` keeps an action from reaching the
+    # machine's PATH for the rest. None of what this deletes is an input, and
+    # the actions that run alongside it -- checkout, setup-aspect,
+    # upload-artifact, codecov -- run on the runner's own bundled Node under
+    # `/home/runner/runners`, not on anything below.
+    #
+    # `/opt/hostedtoolcache` in full, rather than the CodeQL directory alone:
+    # its Python, Node, Go, Ruby and PyPy trees are about 9 GB between them and
+    # no step in these jobs resolves a tool through it.
+    - shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::free space before"
+        df -h /
+        echo "::endgroup::"
+        sudo rm -rf \
+          /opt/az \
+          /opt/ghc \
+          /opt/hostedtoolcache \
+          /usr/lib/google-cloud-sdk \
+          /usr/local/.ghcup \
+          /usr/local/lib/android \
+          /usr/local/lib/node_modules \
+          /usr/local/share/powershell \
+          /usr/local/share/vcpkg \
+          /usr/share/az_* \
+          /usr/share/dotnet \
+          /usr/share/miniconda \
+          /usr/share/swift
+        sudo docker system prune --all --force --volumes
+        echo "::group::free space after"
+        df -h /
+        echo "::endgroup::"
