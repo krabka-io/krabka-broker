@@ -58,7 +58,7 @@ enum ThrottlePosition {
 enum QuotaReach {
     /// `RequestQuotaPolicy::SelfAccounted`. The handler charges the quota and
     /// sets `ThrottleTimeMs` on the typed response before encoding, so
-    /// `maybe_apply_request_quota` returns before it reaches the patch and the
+    /// `apply_request_quota` returns before it reaches the patch and the
     /// client does see the delay. The buried field costs nothing.
     SelfAccounted,
     /// `RequestQuotaPolicy::ApplyFallbackAccounting`. An ordinary request can

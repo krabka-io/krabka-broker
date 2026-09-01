@@ -328,5 +328,5 @@ pub(crate) async fn handle(
         results.push(result);
     }
 
-    finish_response(broker, ctx, results, quota.delay(), version).await
+    finish_response(broker, ctx, results, quota.delay(), version)
 }
