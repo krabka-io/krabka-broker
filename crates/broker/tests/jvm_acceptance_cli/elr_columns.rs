@@ -192,7 +192,12 @@ async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
     );
     let jvm_lines = partition_lines(&String::from_utf8_lossy(&jvm_describe.stdout));
 
-    kafka_topics_against_krabka(&create_args());
+    let krabka_create = kafka_topics_against_krabka(&create_args());
+    assert!(
+        krabka_create.status.success(),
+        "create on krabka: {}",
+        String::from_utf8_lossy(&krabka_create.stderr)
+    );
     let krabka_lines = describe_krabka_once_led().await;
 
     let _ = Command::new("docker")

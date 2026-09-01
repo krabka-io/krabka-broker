@@ -4,6 +4,11 @@
 //!
 //! The metadata comes from `controller.current_image()`, the
 //! quorum-replicated snapshot, and not from a local in-memory struct.
+//!
+//! `MetadataResponsePartition` carries no KIP-966 eligible-leader-replica
+//! field in any version of Kafka's schema, `0-13` included, so a partition row
+//! here stops at `offline_replicas`. `DescribeTopicPartitions` is the only API
+//! that reports ELR; see [`crate::handlers::elr`].
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
