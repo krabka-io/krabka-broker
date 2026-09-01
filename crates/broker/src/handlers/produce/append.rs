@@ -15,7 +15,7 @@ use super::{
 use crate::{
     codes,
     error::BrokerError,
-    partition::{Partition, ProduceData, ProduceJob, WriterMessage},
+    partition::{ProduceData, ProduceJob, WriterMessage},
 };
 
 #[derive(Clone, Copy)]
@@ -27,6 +27,10 @@ pub(super) struct AppendContext<'a> {
     pub(super) acks: i16,
     pub(super) timeout: Duration,
     pub(super) leader_epoch: i32,
+    /// The request's phase accumulator. This partition's writer round-trip is
+    /// charged to the local phase and its `acks=-1` high-watermark wait to the
+    /// remote one.
+    pub(super) phases: &'a crate::metrics::RequestPhases,
 }
 
 pub(super) async fn dispatch_prepared(
@@ -49,22 +53,20 @@ pub(super) async fn dispatch_prepared(
     let data = build_produce_data(prepared, context.leader_epoch);
     let (ack_tx, ack_rx) = oneshot::channel();
     let job = WriterMessage::Produce(ProduceJob { data, ack: ack_tx });
+    // The local phase opens here and closes when the writer answers: the
+    // enqueue plus the append is the work this broker's own log does for this
+    // partition. A send failure is charged too, so the phase covers every exit.
+    let local_started = std::time::Instant::now();
     if context.partition.writer_tx.send(job).await.is_err() {
+        context.phases.add_local(local_started.elapsed());
         response.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         return Ok(response);
     }
-    match tokio::time::timeout(context.timeout, ack_rx).await {
+    let acked = tokio::time::timeout(context.timeout, ack_rx).await;
+    context.phases.add_local(local_started.elapsed());
+    match acked {
         Ok(Ok(Ok(base_offset))) => {
-            finalize_ack(
-                &mut response,
-                context.partition,
-                context.acks,
-                context.timeout,
-                base_offset,
-                context.producer_state,
-                &commit,
-            )
-            .await;
+            finalize_ack(&mut response, context, base_offset, &commit).await;
         }
         Ok(Ok(Err(error))) => response.error_code = codes::from_broker_error(&error),
         Ok(Err(_)) => response.error_code = codes::NOT_LEADER_OR_FOLLOWER,
@@ -105,19 +107,29 @@ struct CommitKey<'a> {
 /// Note that the commit happens on *both* the success and the timeout
 /// `acks=-1` sub-paths. The function therefore always commits once it has
 /// decided the `error_code` and the `base_offset`.
+///
+/// The high-watermark gate is the remote phase of the request: the append is
+/// already durable on this broker, and everything the gate waits for is a
+/// follower taking it. `context.phases` collects that wait, whether the gate
+/// is satisfied or times out.
+///
+/// The function takes the whole [`AppendContext`] rather than the five fields
+/// it reads out of it, because the caller has one and the fields travel
+/// together everywhere on this path.
 async fn finalize_ack(
     out: &mut PartitionProduceResponse,
-    part: &Arc<Partition>,
-    acks: i16,
-    timeout: Duration,
+    context: AppendContext<'_>,
     base_offset: Offset,
-    producer_state: &Arc<crate::producer_state::ProducerState>,
     key: &CommitKey<'_>,
 ) {
+    let part = context.partition;
     let target = base_offset + i64::from(key.last_offset_delta) + 1;
-    if acks == ACKS_ALL {
-        let deadline = std::time::Instant::now() + timeout;
-        out.error_code = match part.await_hw_at_least(target, deadline).await {
+    if context.acks == ACKS_ALL {
+        let started = std::time::Instant::now();
+        let deadline = started + context.timeout;
+        let gate = part.await_hw_at_least(target, deadline).await;
+        context.phases.add_remote(started.elapsed());
+        out.error_code = match gate {
             Ok(()) => codes::NONE,
             Err(_timeout) => codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
         };
@@ -154,7 +166,8 @@ async fn finalize_ack(
         );
     }
     if key.pid >= 0 && part.log_end_offset() >= target {
-        producer_state
+        context
+            .producer_state
             .commit(
                 key.topic,
                 krabka_ids::PartitionIndex(key.partition),

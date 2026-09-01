@@ -52,9 +52,10 @@ use crate::{
     internal_topics::is_internal_topic,
 };
 
-// Read-only handler — never suspends. The `async fn` shape matches the
-// other inline-intercept handlers (DescribeCluster, DescribeGroups) so
-// dispatch.rs can call it through one `await`.
+// The `async fn` shape matches the other inline-intercept handlers
+// (DescribeCluster, DescribeGroups) so dispatch.rs can call it through one
+// `await`. The single suspension point is the fenced-broker snapshot the
+// `offline_replicas` projection needs.
 // ACL preamble + pagination + cursor logic
 #[tracing::instrument(
     name = "handle_describe_topic_partitions",
@@ -63,7 +64,7 @@ use crate::{
     fields(api = "DescribeTopicPartitions", version, req_bytes = req_bytes.len()),
     err,
 )]
-pub(crate) fn handle(
+pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
@@ -74,6 +75,9 @@ pub(crate) fn handle(
     let req = DescribeTopicPartitionsRequest::decode(&mut cur, version)?;
 
     let image = broker.controller.current_image();
+    // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
+    // as the image; see `handlers::offline_replicas`.
+    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
 
     // ── 1. Resolve the topic-name iteration order ──────────────────────
     // Named request: return every requested name, in request order, even
@@ -150,7 +154,7 @@ pub(crate) fn handle(
                 next_partition_index = p.partition;
                 break;
             }
-            row_partitions.push(partition_response(p));
+            row_partitions.push(partition_response(&image, p, &unavailable));
             emitted_partitions += 1;
         }
 
@@ -195,7 +199,9 @@ pub(crate) fn handle(
 }
 
 fn partition_response(
+    image: &krabka_metadata::MetadataImage,
     partition: &krabka_metadata::PartitionRecord,
+    unavailable: &std::collections::HashSet<u64>,
 ) -> DescribeTopicPartitionsResponsePartition {
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
@@ -215,7 +221,11 @@ fn partition_response(
         // Kafka clients assume these nullable lists are present.
         eligible_leader_replicas: Some(Vec::new()),
         last_known_elr: Some(Vec::new()),
-        offline_replicas: Vec::new(),
+        offline_replicas: crate::handlers::offline_replicas::offline_replicas(
+            image,
+            partition,
+            unavailable,
+        ),
         ..Default::default()
     }
 }
@@ -326,7 +336,9 @@ mod tests {
             ..Default::default()
         });
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
         let resp = decode_response(&bytes);
 
         let topic = resp

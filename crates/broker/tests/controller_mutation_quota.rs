@@ -38,6 +38,28 @@ use crate::{
 // Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Renders the broker's registry as the exposition text an operator scrapes,
+/// and reads one series' value out of it.
+///
+/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
+/// `test-util` feature, which this workspace does not enable, so a test reads a
+/// histogram the way Prometheus does. A missing series reads as `0.0`: a
+/// `Family` emits nothing until it has an entry.
+async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
+    let mut rendered = String::new();
+    {
+        let registry = handle.metrics().registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut rendered, &registry)
+            .expect("encode registry");
+    }
+    rendered
+        .lines()
+        .find(|line| line.starts_with(series))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0)
+}
+
 /// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
 /// may cross the limit, but the following mutation is rejected while debt
 /// remains.
@@ -220,5 +242,31 @@ async fn controller_mutation_rate_throttles_delete_topics() {
     assert!(
         throttle_ms > 0,
         "expected throttle_time_ms > 0, got {throttle_ms}"
+    );
+
+    // The broker sleeps on the KIP-599 delay, so it is an applied throttle and
+    // has to be visible as one: an operator watching DeleteTopics latency rise
+    // must be able to tell "alice is over her mutation quota" from "the
+    // controller is wedged".
+    let applied_seconds = f64::from(throttle_ms) / 1000.0;
+    let by_quota = metric_value(
+        &handle,
+        "krabka_broker_quota_throttle_duration_seconds_sum{quota_type=\"ControllerMutation\"}",
+    )
+    .await;
+    check!(
+        by_quota >= applied_seconds,
+        "controller_mutation_rate must be credited with the applied throttle \
+         ({applied_seconds}s); got {by_quota}"
+    );
+    let phase = metric_value(
+        &handle,
+        "krabka_broker_request_throttle_duration_seconds_sum{api_key=\"DeleteTopics\"}",
+    )
+    .await;
+    check!(
+        phase >= applied_seconds,
+        "the throttle phase must cover the delay the response reported \
+         ({applied_seconds}s); got {phase}"
     );
 }

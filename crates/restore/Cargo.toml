@@ -44,6 +44,7 @@ krabka-remote-storage = { version = "0.5.2", path = "../remote-storage" }
 # `--rlmm-snapshot`, the authoritative-metadata cross-check against the
 # bucket scan.
 krabka-remote-storage-topic = { version = "0.5.2", path = "../remote-storage-topic" }
+krabka-verified = { version = "0.5.2", path = "../verified" }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 # The `.snapshot` sidecar's CRC32C header. `krabka-log` keeps its own decoder

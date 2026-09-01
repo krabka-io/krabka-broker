@@ -1,0 +1,33 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 12 0 12 55 *)
+
+let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 18 13 19
+let%span sconsensus'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 4 13 19
+let%span sconsensus'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 22 13 23
+let%span sconsensus'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 4 13 23
+let%span sconsensus'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 10 10 10 41
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.ComputerDivision
+use int.Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let majority_size [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 12 0 12 55]
+  (voter_count: UInt64.t) (return (x: UInt64.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- ([%#sconsensus] (2: UInt64.t)) = ([%#sconsensus'0] (0: UInt64.t)) ] s1
+    | s1 = {[@expl:division by zero] [%#sconsensus'0] not _6} s2
+    | s2 = UInt64.div [%#sconsensus'0] {voter_count} {[%#sconsensus] (2: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_4 <- _x ] s3)
+    | s3 = UInt64.add [%#sconsensus'2] {_4} {[%#sconsensus'1] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &_ret <- _x ] s4)
+    | s4 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & voter_count: UInt64.t = voter_count
+  | & _4: UInt64.t = Any.any_l ()
+  | & _6: bool = Any.any_l () ])
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:majority_size ensures] [%#sconsensus'3] UInt64.t'int result
+    = ComputerDivision.div (UInt64.t'int voter_count) 2 + 1}
+    (! return {result}) ]

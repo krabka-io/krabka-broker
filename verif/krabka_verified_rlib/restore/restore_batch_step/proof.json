@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_restore_batch_step": { "prover": "alt-ergo", "time": 0.012 }
+    }
+  }
+}

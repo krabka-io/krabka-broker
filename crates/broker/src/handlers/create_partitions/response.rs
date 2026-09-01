@@ -5,6 +5,7 @@
 use bytes::Bytes;
 use krabka_protocol::{
     Encode,
+    api_key::ApiKey,
     owned::create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
 };
 use krabka_units::{Time, convert::TimeExt};
@@ -27,10 +28,19 @@ pub(super) fn encode_response<R: Encode>(resp: &R, version: i16) -> Result<Bytes
 }
 
 pub(super) async fn finish_response(
+    broker: &crate::broker::Broker,
     delay: Time,
     results: Vec<CreatePartitionsTopicResult>,
     version: i16,
 ) -> Result<Bytes, BrokerError> {
+    // The KIP-599 delay is the only throttle this api applies — the dispatch
+    // loop marks it quota-exempt and never charges it the request quota — so
+    // resolving it through the metric records the throttle phase and the quota
+    // that caused it exactly once per request.
+    let delay = broker.metrics.record_applied_throttle(
+        ApiKey::CreatePartitions as i16,
+        &[(crate::metrics::QuotaType::ControllerMutation, delay)],
+    );
     let resp = create_partitions_response(results, crate::quota::throttle_time_ms(delay));
     if delay > <Time as TimeExt>::ZERO {
         tokio::time::sleep(delay.to_std()).await;

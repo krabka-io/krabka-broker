@@ -23,6 +23,14 @@ use crate::{
     witness_cluster::{client_at, shutdown, start_stretch_cluster},
 };
 
+/// `DescribeConfigsResponse.ConfigType::BOOLEAN`, the byte the JVM
+/// `AdminClient` parses `broker.witness` with.
+const CONFIG_TYPE_BOOLEAN: i8 = 1;
+
+/// `DescribeConfigsResponse.ConfigType::STRING`, for the rack name in
+/// `stretch.preferred.leader.site`.
+const CONFIG_TYPE_STRING: i8 = 2;
+
 /// `broker.witness` is controller-managed: it is published for the witness
 /// node, `DescribeConfigs` reports it read-only next to the cluster-default
 /// `stretch.preferred.leader.site`, and `IncrementalAlterConfigs` refuses to
@@ -64,9 +72,10 @@ async fn witness_role_is_a_read_only_broker_config() {
                 value: Some("true".into()),
                 read_only: true,
                 config_source: CONFIG_SOURCE_DYNAMIC_BROKER,
+                config_type: CONFIG_TYPE_BOOLEAN,
                 ..Default::default()
             }),
-        "broker.witness is reported, and reported read-only"
+        "broker.witness is reported, read-only, and typed"
     );
     let site_entry = result
         .configs
@@ -80,6 +89,7 @@ async fn witness_role_is_a_read_only_broker_config() {
                 value: Some(SITE_A.into()),
                 read_only: true,
                 config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                config_type: CONFIG_TYPE_STRING,
                 ..Default::default()
             }),
         "the preferred leader site is a read-only cluster default"

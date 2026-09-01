@@ -7,35 +7,9 @@
 //! function of the records alone, so two brokers reading one image spend the
 //! same proposal.
 
-use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord};
+use krabka_metadata::BreakGlassAction;
 
 use crate::break_glass::action_targets_partition;
-
-/// The proposal to spend when more than one covers the request.
-///
-/// The one that expires first goes first, so the approval that would be lost
-/// soonest is the one that gets used. The proposal id breaks a tie, because
-/// [`MetadataImage::break_glass_proposals`] does not define an order and two
-/// brokers must reach the same answer from one image.
-///
-/// [`MetadataImage::break_glass_proposals`]: krabka_metadata::MetadataImage::break_glass_proposals
-pub(super) fn better_candidate<'a>(
-    current: Option<&'a BreakGlassProposalRecord>,
-    candidate: &'a BreakGlassProposalRecord,
-) -> &'a BreakGlassProposalRecord {
-    match current {
-        None => candidate,
-        Some(current) => {
-            let current_key = (current.expires_at_ms, current.proposal_id);
-            let candidate_key = (candidate.expires_at_ms, candidate.proposal_id);
-            if candidate_key < current_key {
-                candidate
-            } else {
-                current
-            }
-        }
-    }
-}
 
 /// Whether a proposal on `proposal_target` covers a request for
 /// `request_target`.
