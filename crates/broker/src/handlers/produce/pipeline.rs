@@ -335,7 +335,7 @@ pub(super) async fn process_partition(
         return Ok(out);
     }
     if let Some(code) =
-        validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await?
+        validate_transactional_produce(&prepared, txn_coordinator, image, topic_name, idx).await
     {
         out.error_code = code;
         return Ok(out);

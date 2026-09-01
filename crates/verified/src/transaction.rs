@@ -5,6 +5,97 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Whether one transaction generation may persist a partition registration.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TransactionRegistrationDecision {
+    RejectNotCoordinator,
+    RejectUnknownProducer,
+    RejectStagedIdentity,
+    RejectStaleIdentity,
+    RejectState,
+    PersistRetry,
+    PersistRegistration,
+}
+
+/// Fence a partition registration against coordinator ownership and one exact
+/// transactional-id, producer-id, and producer-epoch generation.
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies independent transaction-registration facts"
+)]
+#[ensures((result == TransactionRegistrationDecision::RejectNotCoordinator)
+    == !is_coordinator)]
+#[ensures((result == TransactionRegistrationDecision::RejectUnknownProducer)
+    == (is_coordinator
+        && (!producer_id_valid || !entry_exists || !transactional_id_matches)))]
+#[ensures((result == TransactionRegistrationDecision::RejectStagedIdentity)
+    == (is_coordinator
+        && producer_id_valid
+        && entry_exists
+        && transactional_id_matches
+        && staged_identity))]
+#[ensures((result == TransactionRegistrationDecision::RejectStaleIdentity)
+    == (is_coordinator
+        && producer_id_valid
+        && entry_exists
+        && transactional_id_matches
+        && !staged_identity
+        && !producer_identity_matches))]
+#[ensures((result == TransactionRegistrationDecision::RejectState)
+    == (is_coordinator
+        && producer_id_valid
+        && entry_exists
+        && transactional_id_matches
+        && !staged_identity
+        && producer_identity_matches
+        && !state_allows_registration))]
+#[ensures((result == TransactionRegistrationDecision::PersistRetry)
+    == (is_coordinator
+        && producer_id_valid
+        && entry_exists
+        && transactional_id_matches
+        && !staged_identity
+        && producer_identity_matches
+        && state_allows_registration
+        && exact_partitions_registered))]
+#[ensures((result == TransactionRegistrationDecision::PersistRegistration)
+    == (is_coordinator
+        && producer_id_valid
+        && entry_exists
+        && transactional_id_matches
+        && !staged_identity
+        && producer_identity_matches
+        && state_allows_registration
+        && !exact_partitions_registered))]
+#[must_use]
+pub fn transaction_partition_registration(
+    is_coordinator: bool,
+    producer_id_valid: bool,
+    entry_exists: bool,
+    transactional_id_matches: bool,
+    staged_identity: bool,
+    producer_identity_matches: bool,
+    state_allows_registration: bool,
+    exact_partitions_registered: bool,
+) -> TransactionRegistrationDecision {
+    if !is_coordinator {
+        TransactionRegistrationDecision::RejectNotCoordinator
+    } else if !producer_id_valid || !entry_exists || !transactional_id_matches {
+        TransactionRegistrationDecision::RejectUnknownProducer
+    } else if staged_identity {
+        TransactionRegistrationDecision::RejectStagedIdentity
+    } else if !producer_identity_matches {
+        TransactionRegistrationDecision::RejectStaleIdentity
+    } else if !state_allows_registration {
+        TransactionRegistrationDecision::RejectState
+    } else if exact_partitions_registered {
+        TransactionRegistrationDecision::PersistRetry
+    } else {
+        TransactionRegistrationDecision::PersistRegistration
+    }
+}
+
 /// Whether an `EndTxn` caller may finalize the entry it prepared.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -367,6 +458,57 @@ mod tests {
 
     const PREPARE_COMMIT: i8 = 2;
     const COMPLETE_COMMIT: i8 = 4;
+
+    #[test]
+    fn partition_registration_fences_generation_and_retries_exactly() {
+        use TransactionRegistrationDecision::{
+            PersistRegistration, PersistRetry, RejectNotCoordinator, RejectStagedIdentity,
+            RejectStaleIdentity, RejectState, RejectUnknownProducer,
+        };
+
+        assert!(
+            transaction_partition_registration(false, true, true, true, false, true, true, false)
+                == RejectNotCoordinator
+        );
+        for malformed in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert!(
+                transaction_partition_registration(
+                    true,
+                    malformed.0,
+                    malformed.1,
+                    malformed.2,
+                    false,
+                    true,
+                    true,
+                    false,
+                ) == RejectUnknownProducer
+            );
+        }
+        assert!(
+            transaction_partition_registration(true, true, true, true, true, true, true, false)
+                == RejectStagedIdentity
+        );
+        assert!(
+            transaction_partition_registration(true, true, true, true, false, false, true, false)
+                == RejectStaleIdentity
+        );
+        assert!(
+            transaction_partition_registration(true, true, true, true, false, true, false, false)
+                == RejectState
+        );
+        assert!(
+            transaction_partition_registration(true, true, true, true, false, true, true, true)
+                == PersistRetry
+        );
+        assert!(
+            transaction_partition_registration(true, true, true, true, false, true, true, false)
+                == PersistRegistration
+        );
+    }
 
     #[test]
     fn local_lso_marker_and_aborted_interval_decisions_fail_closed() {
