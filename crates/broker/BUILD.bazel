@@ -32,6 +32,7 @@ crate_tests(
     data = glob(["tests/fixtures/**"]) + [":krabka-broker"],
     docker = {
         "jvm_acceptance_cli": [
+            "apache_kafka_4_3_1",
             "cp_kafka_6_1_1",
             "cp_kafka_7_5_0",
         ],

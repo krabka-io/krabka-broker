@@ -53,10 +53,12 @@ pub(super) fn describe_one(
             .filter(|(key, _)| wanted(key.as_str()))
             .map(|(key, value)| {
                 let mut entry = make_entry(key, value, CONFIG_SOURCE_DYNAMIC_TOPIC);
-                // The data path is fixed when the topic is created, so
-                // `kafka-configs` must show the key the way it shows every
-                // other config no alter can change.
-                entry.read_only = key == config_keys::DISKLESS;
+                // The data path is fixed when the topic is created, and a
+                // controller-managed key such as the KIP-966 ELR state has no
+                // client writer at all, so `kafka-configs` must show both the
+                // way it shows every other config no alter can change.
+                entry.read_only = key == config_keys::DISKLESS
+                    || config_keys::is_controller_managed_topic_config(key);
                 entry
             })
             .collect();

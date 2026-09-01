@@ -28,6 +28,13 @@
 //! Every Allow row carries `topic_authorized_operations`. The v0 schema always
 //! encodes this field. Metadata has an opt-in flag for it, but this API does
 //! not.
+//!
+//! ## KIP-966 integration
+//!
+//! Every partition row carries `eligible_leader_replicas` and `last_known_elr`
+//! from what the metadata image holds for the topic, always as a list and
+//! never as null. This is the only API that reports ELR; Kafka's Metadata
+//! schema has no field for it in any version. See [`crate::handlers::elr`].
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -48,7 +55,9 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{authorized_operations::authorized_operations_bits, is_internal_topic},
+    handlers::{
+        authorized_operations::authorized_operations_bits, elr::TopicElr, is_internal_topic,
+    },
 };
 
 // The `async fn` shape matches the other inline-intercept handlers
@@ -143,6 +152,10 @@ pub(crate) async fn handle(
         // from partition 0.
         first_topic_partition_offset = 0;
 
+        // KIP-966: one read of the topic's published ELR state feeds every
+        // partition row below; see `handlers::elr`.
+        let topic_elr = TopicElr::of_topic(&image, name);
+
         let mut row_partitions: Vec<DescribeTopicPartitionsResponsePartition> =
             Vec::with_capacity(sorted_parts.len());
         let mut truncated = false;
@@ -153,7 +166,7 @@ pub(crate) async fn handle(
                 next_partition_index = p.partition;
                 break;
             }
-            row_partitions.push(partition_response(&image, p, &unavailable));
+            row_partitions.push(partition_response(&image, p, &unavailable, &topic_elr));
             emitted_partitions += 1;
         }
 
@@ -201,7 +214,9 @@ fn partition_response(
     image: &krabka_metadata::MetadataImage,
     partition: &krabka_metadata::PartitionRecord,
     unavailable: &std::collections::HashSet<u64>,
+    topic_elr: &TopicElr,
 ) -> DescribeTopicPartitionsResponsePartition {
+    let elr = topic_elr.partition(partition.partition);
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
         partition_index: partition.partition,
@@ -217,9 +232,13 @@ fn partition_response(
             .iter()
             .map(|&replica| i32::try_from(replica.0).unwrap_or(i32::MAX))
             .collect(),
-        // Kafka clients assume these nullable lists are present.
-        eligible_leader_replicas: Some(Vec::new()),
-        last_known_elr: Some(Vec::new()),
+        // KIP-966. Both fields are nullable in the schema, but a real broker
+        // never sends null: `Replicas.toList` gives an empty list for a
+        // partition with no ELR, and `kafka-topics --describe` renders a null
+        // as `N/A` -- "this broker does not know" -- rather than as "none".
+        // See `handlers::elr`.
+        eligible_leader_replicas: Some(elr.eligible_leader_replicas),
+        last_known_elr: Some(elr.last_known_elr),
         offline_replicas: crate::handlers::offline_replicas::offline_replicas(
             image,
             partition,
@@ -310,6 +329,108 @@ mod tests {
             ])
             .await
             .expect("seed topic + partition");
+    }
+
+    /// Seed a two-partition RF=3 topic whose partition 0 carries the KIP-966
+    /// ELR state `elr_config` and whose partition 1 carries none.
+    ///
+    /// Only node 1 is registered, so nodes 2 and 3 are offline replicas: this
+    /// is the shape a partition has when it *has* an ELR, because a replica
+    /// only becomes eligible-but-not-in-ISR when its broker stops keeping up.
+    async fn seed_topic_with_elr(handle: &BrokerHandle, elr_config: &str) {
+        let partition = |index: i32| {
+            MetadataRecord::V1Partition(PartitionRecord {
+                topic: "orders".into(),
+                partition: index,
+                leader: NodeId(1),
+                replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+                isr: vec![NodeId(1)],
+                leader_epoch: krabka_metadata::LeaderEpoch(7),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![uuid::Uuid::nil(); 3],
+                partition_epoch: 4,
+            })
+        };
+        handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(vec![
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: "orders".into(),
+                    topic_id: uuid::Uuid::from_u128(1),
+                    partitions: 2,
+                    replication_factor: 3,
+                }),
+                partition(0),
+                partition(1),
+                MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                    topic: "orders".into(),
+                    overrides: [(
+                        crate::config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+                        elr_config.to_string(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+            ])
+            .await
+            .expect("seed topic + partitions + ELR state");
+    }
+
+    /// The whole partition row, for a partition with a populated ELR set and
+    /// for a sibling partition with none.
+    ///
+    /// Comparing the entire struct is what pins the nullable-vs-empty
+    /// encoding: a partition with no ELR must answer with two empty lists and
+    /// not with null, because `kafka-topics --describe` renders a null as
+    /// `Elr: N/A` -- "this broker does not know" -- while a real Kafka broker
+    /// renders `Elr: `.
+    #[tokio::test]
+    async fn response_partition_carries_the_elr_the_image_holds() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic_with_elr(&broker_handle, "0:2:3").await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&DescribeTopicPartitionsRequest {
+            topics: vec![
+                krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
+                    name: "orders".into(),
+                    ..Default::default()
+                },
+            ],
+            response_partition_limit: 2000,
+            ..Default::default()
+        });
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        let topic = resp
+            .topics
+            .iter()
+            .find(|t| t.name.as_deref() == Some("orders"))
+            .expect("orders topic row");
+        let row = |index: i32| DescribeTopicPartitionsResponsePartition {
+            error_code: codes::NONE,
+            partition_index: index,
+            leader_id: 1,
+            leader_epoch: 7,
+            replica_nodes: vec![1, 2, 3],
+            isr_nodes: vec![1],
+            eligible_leader_replicas: Some(if index == 0 { vec![2] } else { vec![] }),
+            last_known_elr: Some(if index == 0 { vec![3] } else { vec![] }),
+            offline_replicas: vec![2, 3],
+            ..Default::default()
+        };
+        assert!(topic.partitions == vec![row(0), row(1)]);
+
+        broker_handle.shutdown().await;
     }
 
     /// The response partition echoes the `leader_epoch` of the metadata image

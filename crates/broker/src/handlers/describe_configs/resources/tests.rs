@@ -90,6 +90,58 @@ fn topic_describe_one_preserves_result_and_filtered_config_fields() {
     assert!(result == expected);
 }
 
+/// A controller-managed topic key is stored like any other override, so only
+/// the `read_only` flag tells an operator that no alter path will take it. The
+/// KIP-966 ELR state is the stored one; `write.freeze` is synthesised and has
+/// its own entry.
+#[test]
+fn topic_describe_reports_a_controller_managed_key_as_read_only() {
+    use krabka_metadata::TopicConfigRecord;
+
+    let mut img = MetadataImage::new(Uuid::nil());
+    img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "events".into(),
+        overrides: [(
+            config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+            "0:2:3".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    }));
+
+    let result = super::describe_one(
+        &img,
+        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+            resource_type: super::RESOURCE_TYPE_TOPIC,
+            resource_name: "events".into(),
+            configuration_keys: Some(vec![config_keys::ELIGIBLE_LEADER_REPLICAS.to_string()]),
+            ..Default::default()
+        },
+        300_000,
+        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    );
+
+    let expected = DescribeConfigsResult {
+        error_code: crate::codes::NONE,
+        error_message: None,
+        resource_type: super::RESOURCE_TYPE_TOPIC,
+        resource_name: "events".to_string(),
+        configs: vec![DescribeConfigsResourceResult {
+            name: config_keys::ELIGIBLE_LEADER_REPLICAS.to_string(),
+            value: Some("0:2:3".to_string()),
+            read_only: true,
+            config_source: super::CONFIG_SOURCE_DYNAMIC_TOPIC,
+            is_sensitive: false,
+            synonyms: Vec::new(),
+            config_type: 0,
+            documentation: None,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(result == expected);
+}
+
 #[test]
 fn topic_describe_reports_the_fixed_data_path_key_as_read_only() {
     use krabka_metadata::TopicConfigRecord;
