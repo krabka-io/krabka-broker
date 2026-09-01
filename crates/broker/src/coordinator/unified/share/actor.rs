@@ -34,6 +34,10 @@ mod share_state;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+#[path = "actor/share_group_model.rs"]
+mod share_group_model;
+
 pub use self::describe::{ShareDescribeMember, ShareDescribeView};
 use self::{
     describe::build_describe,

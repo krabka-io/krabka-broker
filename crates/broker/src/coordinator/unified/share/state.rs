@@ -48,14 +48,14 @@ impl ShareMemberState {
 }
 
 /// The target assignment computed by the most recent reconcile.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShareTargetAssignment {
     pub epoch: i32,
     pub per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
 }
 
 /// Full membership state of a single share group.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShareGroupState {
     pub group_id: String,
     pub group_epoch: i32,

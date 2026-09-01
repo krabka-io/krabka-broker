@@ -191,7 +191,7 @@ pub(super) fn build_member(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, atomic::Ordering};
 
     use assert2::{assert, check};
 
@@ -408,5 +408,28 @@ mod tests {
         .await;
 
         assert!(resp.error_code == codes::STALE_MEMBER_EPOCH);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn persistence_failure_returns_loading_and_writes_no_partial_batch() {
+        let (metadata, _id) = metadata_with_topic("t", 1);
+        let (coord, log) = make_coordinator(metadata);
+        let handle = coord.get_or_create_share("g");
+        log.fail_next.store(true, Ordering::SeqCst);
+
+        let response = heartbeat(
+            &handle,
+            ShareGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                subscribed_topic_names: Some(vec!["t".into()]),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
+        assert!(log.batches().await.is_empty());
     }
 }
