@@ -173,7 +173,7 @@ pub(super) fn encode_response(
 /// that test.
 ///
 /// Classifying an API correctly is necessary but not sufficient for it to echo
-/// a delay. This predicate is only consulted where `maybe_apply_request_quota`
+/// a delay. This predicate is only consulted where `apply_request_quota`
 /// runs: the dispatch entries whose policy is
 /// `RequestQuotaPolicy::ApplyFallbackAccounting` (the `DispatchEntry::plain`
 /// ones) and the unsupported-version reply path, which takes it for every
@@ -186,7 +186,7 @@ pub(super) fn encode_response(
 /// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
 /// bandwidth quota and their share of the request quota are charged by the
 /// handler, which sets `ThrottleTimeMs` on the typed response before encoding,
-/// so `maybe_apply_request_quota` returns for both before consulting the
+/// so `apply_request_quota` returns for both before consulting the
 /// table. They are still classified below, and the audit still probes them, so
 /// a schema move cannot pass unnoticed.
 ///

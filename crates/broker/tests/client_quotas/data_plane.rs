@@ -35,7 +35,7 @@ const ADD_OFFSETS_TO_TXN_VERSION: i16 = 4;
 /// whole decoded response.
 ///
 /// `AddOffsetsToTxn` is picked because it is one of the few APIs that both
-/// reaches `maybe_apply_request_quota` -- its dispatch entry carries
+/// reaches `apply_request_quota` -- its dispatch entry carries
 /// `RequestQuotaPolicy::ApplyFallbackAccounting` -- and puts `ThrottleTimeMs`
 /// first in its response, so the request-quota delay is reported by patching
 /// that leading int32 into the already-encoded body rather than by a handler
