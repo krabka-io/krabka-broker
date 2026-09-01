@@ -13,12 +13,21 @@ module(
 bazel_dep(name = "rules_rs", version = "0.0.107")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
-# rules_rs 0.0.107 treats unknown cfg keys as false, so a dependency guarded by
-# `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
+# Two fixes this repository carries on top of 0.0.107, both with the reasoning
+# in the patch headers:
+#
+#   * unknown cfg keys are treated as false, so a dependency guarded by
+#     `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets;
+#   * the rustc toolchain's bundled zlib is fetched from the live Ubuntu pool,
+#     which keeps only a package's current build -- the pinned URL 404s the
+#     moment Ubuntu respins zlib, which it did.
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
-    patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
+    patches = [
+        "//bazel/patches:rules-rs-target-has-atomic.patch",
+        "//bazel/patches:rules-rs-zlib-immutable-mirror.patch",
+    ],
     version = "0.0.107",
 )
 
