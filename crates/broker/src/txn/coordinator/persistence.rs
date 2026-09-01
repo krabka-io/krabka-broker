@@ -2,8 +2,10 @@
 //!
 //! One path appends a `TxnEntry` to its `__transaction_state` partition as a
 //! byte-exact Kafka `TransactionLogKey` / `TransactionLogValue` record pair and
-//! then publishes it to the in-memory map. The other replays every locally-led
-//! `__transaction_state` partition on broker start to rebuild that map.
+//! then publishes it to the in-memory map. A second appends a null-valued
+//! record under that same key, which is how KIP-98 expires a transactional id.
+//! The third replays every locally-led `__transaction_state` partition on
+//! broker start to rebuild that map, tombstones included.
 
 use std::sync::Arc;
 
@@ -76,6 +78,78 @@ impl TxnCoordinator {
                 .insert(entry.next_producer_id, entry.transactional_id.clone());
         }
         self.state.insert(tid, Arc::new(Mutex::new(entry)));
+        Ok(())
+    }
+
+    /// Appends a `TransactionLogKey` tombstone for `entry`'s transactional id,
+    /// then drops that id from the in-memory map and from the producer-id
+    /// reverse index.
+    ///
+    /// The record is a null-valued record under the same byte-exact
+    /// `TransactionLogKey(v0)` that [`Self::put`] writes, which is how Kafka
+    /// expires a transactional id: compaction reclaims the tid's history, and
+    /// [`Self::recover`] already reads a null value as a delete.
+    ///
+    /// `entry` is the snapshot the caller decided on. The in-memory drop
+    /// happens only if the live entry still matches that snapshot, so an
+    /// `InitProducerId` that revived the tid between the decision and the
+    /// append keeps its fresh state. The append is a no-op on replay in that
+    /// case: the reviving record sits after the tombstone in the log.
+    ///
+    /// A failed append leaves the coordinator exactly as it was, and the next
+    /// sweep retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Txn`] if the partition is not locally held, or
+    /// the append error if the append fails.
+    // cargo-mutants: append to a live partition log + live DashMap state
+    #[cfg_attr(test, mutants::skip)]
+    #[tracing::instrument(
+        name = "txn_coordinator_tombstone",
+        level = "debug",
+        skip_all,
+        fields(tid = %entry.transactional_id),
+        err,
+    )]
+    pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
+        let tid = entry.transactional_id.as_str();
+        let p = self.partition_for(tid);
+        let part = self
+            .partitions
+            .get(bootstrap::TOPIC, p)
+            .ok_or_else(|| BrokerError::Txn(format!("__transaction_state-{p} not local")))?;
+
+        let mut batch = RecordBatch::default();
+        batch.records.push(Record {
+            offset_delta: 0,
+            key: Some(Bytes::from(crate::txn::log_record::encode_key(tid))),
+            value: None,
+            ..Default::default()
+        });
+        batch.last_offset_delta = 0;
+
+        part.produce_batch(batch).await?;
+
+        // Take the handle out of the map before locking it: holding a DashMap
+        // shard lock across an await would block every other tid in the shard.
+        let live = self.state.get(tid).map(|e| e.value().clone());
+        let Some(live) = live else {
+            return Ok(());
+        };
+        if !super::expiry::still_matches(&*live.lock().await, entry) {
+            return Ok(());
+        }
+        self.state.remove(tid);
+        for pid in [
+            entry.producer_id,
+            entry.prev_producer_id,
+            entry.next_producer_id,
+        ] {
+            if !pid.is_none() {
+                self.pid_to_tid.remove(&pid);
+            }
+        }
         Ok(())
     }
 

@@ -237,6 +237,8 @@ impl Args {
             metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max,
             txn_abort_cleanup_interval,
+            txn_id_expiration,
+            txn_id_expiration_cleanup_interval,
             leader_imbalance_check_interval,
             leader_imbalance_per_broker,
             tls_reload_interval,

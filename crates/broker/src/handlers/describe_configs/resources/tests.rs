@@ -67,6 +67,7 @@ fn topic_describe_one_preserves_result_and_filtered_config_fields() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     let expected = DescribeConfigsResult {
@@ -116,6 +117,7 @@ fn topic_describe_reports_the_fixed_data_path_key_as_read_only() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     let expected = DescribeConfigsResult {
@@ -165,6 +167,7 @@ fn broker_describe_one_rejects_non_numeric_resource_name_with_fields() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     let expected = DescribeConfigsResult {
@@ -251,6 +254,7 @@ fn broker_describe_inherits_default_and_prefers_per_broker_override() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     assert!(
@@ -301,6 +305,7 @@ fn broker_describe_reports_controller_managed_configs_as_read_only() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     assert!(
@@ -343,6 +348,7 @@ fn broker_describe_without_overrides_includes_static_node_id() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     assert!(
@@ -376,6 +382,7 @@ fn empty_broker_name_describes_cluster_defaults() {
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
 
     assert!(
@@ -411,6 +418,7 @@ fn client_metrics_describe_emits_defaults() {
         r,
         12_345,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
     assert2::assert!((res.error_code) == (crate::codes::NONE));
     let by_name: std::collections::HashMap<_, _> =
@@ -454,6 +462,7 @@ fn group_describe_merges_dynamic_overrides_with_defaults() {
         },
         300_000,
         &StreamsGroupConfig::default(),
+        super::static_broker::kafka_default_static_broker(),
     );
     let by_name: std::collections::HashMap<_, _> = result
         .configs

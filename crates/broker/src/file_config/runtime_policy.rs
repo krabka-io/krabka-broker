@@ -85,6 +85,12 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.txn_abort_cleanup_interval {
             cfg.txn_abort_cleanup_interval = nonnegative_time("txn_abort_cleanup_interval", value)?;
         }
+        set_runtime_time_secs!(runtime, txn_id_expiration, cfg.txn_id_expiration);
+        // Zero disables the expiry sweep, so it bypasses the positive-only macro.
+        if let Some(value) = runtime.txn_id_expiration_cleanup_interval {
+            cfg.txn_id_expiration_cleanup_interval =
+                nonnegative_time("txn_id_expiration_cleanup_interval", value)?;
+        }
         set_runtime_time_secs!(
             runtime,
             leader_imbalance_check_interval,

@@ -22,6 +22,25 @@ macro_rules! coordinators_fields {
             /// set this value low explicitly.
             pub txn_abort_cleanup_interval: Time,
 
+            /// KIP-98: how long a transactional id may sit in a terminal or idle
+            /// state before the coordinator tombstones it out of
+            /// `__transaction_state`. Mirrors Kafka's
+            /// `transactional.id.expiration.ms` (7 days). Only `Empty`, `Dead`,
+            /// `CompleteCommit` and `CompleteAbort` ids expire; an `Ongoing` or
+            /// `Prepare*` transaction, a prepared KIP-939 2PC one above all,
+            /// never does.
+            pub txn_id_expiration: Time,
+
+            /// KIP-98: how often the transactional-id expiry sweep scans the
+            /// `__transaction_state` partitions this broker leads. Mirrors Kafka's
+            /// `transaction.remove.expired.transaction.cleanup.interval.ms` (1
+            /// hour). A zero interval disables the sweep entirely and spawns no
+            /// background task. Zero is the default in `for_tests`, so a background
+            /// tombstone does not disturb unit and integration tests. Tests that
+            /// exercise the sweep set this value low explicitly, or drive
+            /// `TxnCoordinator::expire_transactional_ids` against an injected clock.
+            pub txn_id_expiration_cleanup_interval: Time,
+
             /// KIP-848 next-gen consumer group protocol configuration. It controls
             /// which rebalance protocols the broker advertises, the session and
             /// heartbeat timeout bounds, and the set of enabled server-side

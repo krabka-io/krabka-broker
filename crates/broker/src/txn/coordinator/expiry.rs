@@ -1,0 +1,161 @@
+//! KIP-98 transactional-id expiry: the sweep that bounds `__transaction_state`.
+//!
+//! Kafka's `TransactionCoordinator` expires a transactional id whose state is
+//! terminal or idle once `transactional.id.expiration.ms` has passed since its
+//! last transition, and writes a tombstone so compaction reclaims it. Without
+//! that sweep the coordinator keeps one live entry per transactional id ever
+//! used: a Streams application with a per-task `transactional.id`, an
+//! autoscaled EOS producer fleet or a CI run grows the in-memory map, and the
+//! replay at broker start, without bound.
+//!
+//! The module holds the pure decision core, [`should_expire_transactional_id`],
+//! and the orchestration that runs it over the tids this broker coordinates.
+//! [`crate::txn::id_expiration`] is the background task that ticks it.
+//!
+//! **KIP-939 invariant:** the sweep never expires a prepared two-phase-commit
+//! transaction. A 2PC transaction that an external transaction manager has
+//! prepared sits in `PrepareCommit` or `PrepareAbort`, and
+//! [`should_expire_transactional_id`] refuses every `Prepare*` state outright,
+//! however long ago the prepare happened. That matches
+//! [`crate::txn::two_pc::should_abort_idle_txn`], which refuses to abort the
+//! same transaction on a timeout: neither reaper may take the commit-or-abort
+//! decision away from the transaction manager that owns it.
+
+use tracing::{info, warn};
+
+use super::TxnCoordinator;
+use crate::txn::state::{TxnEntry, TxnState};
+
+/// Reports whether `state` is one the coordinator may expire at all.
+///
+/// The four expirable states are Kafka's: `Empty` (a tid that initialized and
+/// never began a transaction, or one reset after a completed one), `Dead`, and
+/// the two `Complete*` terminals. `Ongoing` is an open transaction, and each
+/// `Prepare*` is a commit or abort that someone is still driving, the external
+/// transaction manager of a 2PC transaction included.
+///
+/// The match is exhaustive on purpose: a new `TxnState` variant must state
+/// which side it falls on rather than inherit a wildcard.
+#[must_use]
+fn state_allows_expiration(state: TxnState) -> bool {
+    match state {
+        TxnState::Empty | TxnState::Dead | TxnState::CompleteCommit | TxnState::CompleteAbort => {
+            true
+        }
+        TxnState::Ongoing | TxnState::PrepareCommit | TxnState::PrepareAbort => false,
+    }
+}
+
+/// THE decision: may the coordinator expire a transactional id that is in
+/// `state`, last transitioned at `last_update_ms`, as of `now_ms`, under an
+/// expiry of `expiration_ms`?
+///
+/// Returns `true` iff both of the following hold:
+///  - [`state_allows_expiration`] accepts the state. This is the KIP-939
+///    guarantee: a prepared 2PC transaction sits in `PrepareCommit` or
+///    `PrepareAbort` and is refused here, before any arithmetic, so no clock
+///    can expire it.
+///  - at least `expiration_ms` has elapsed since the last transition
+///    (`now_ms - last_update_ms >= expiration_ms`), which is Kafka's
+///    `txnLastUpdateTimestamp <= now - transactionalIdExpirationMs`.
+///
+/// Pure and total: a backwards clock (`now_ms < last_update_ms`) gives a
+/// negative elapsed time through a saturating subtraction and so yields
+/// `false`, never a spurious expiry.
+#[must_use]
+pub(crate) fn should_expire_transactional_id(
+    state: TxnState,
+    last_update_ms: i64,
+    now_ms: i64,
+    expiration_ms: i64,
+) -> bool {
+    if !state_allows_expiration(state) {
+        return false;
+    }
+    now_ms.saturating_sub(last_update_ms) >= expiration_ms
+}
+
+/// Reports whether the live `entry` is still the one `decided` was taken from,
+/// so the tombstone the caller just appended may drop it from the in-memory
+/// map.
+///
+/// A concurrent `InitProducerId` revives an expiring tid by writing a fresh
+/// `Empty` entry. It moves the identity, the state, or the update stamp, and
+/// any of the three failing to match says the map now holds an entry this
+/// sweep never decided on.
+#[must_use]
+pub(super) fn still_matches(entry: &TxnEntry, decided: &TxnEntry) -> bool {
+    entry.producer_id == decided.producer_id
+        && entry.producer_epoch == decided.producer_epoch
+        && entry.state == decided.state
+        && entry.last_update_ms == decided.last_update_ms
+}
+
+impl TxnCoordinator {
+    /// KIP-98 transactional-id expiry: tombstones every locally-coordinated
+    /// transactional id that [`should_expire_transactional_id`] accepts at
+    /// `now_ms`, and drops it from the in-memory map. Returns the ids it
+    /// expired, in iteration order.
+    ///
+    /// `now_ms` is the caller's clock, so a test drives the sweep at any
+    /// instant without waiting. [`crate::txn::id_expiration`] passes the wall
+    /// clock.
+    ///
+    /// The decision is re-taken under each tid's own lock, against the live
+    /// entry rather than the snapshot the scan started from, so a transaction
+    /// that began while the sweep was running is not expired underneath its
+    /// producer. A tid whose `__transaction_state` partition moved away is
+    /// skipped: the broker that leads it now owns the decision. An append
+    /// failure leaves the entry in place for the next tick.
+    // cargo-mutants: I/O orchestration over live DashMap / partition state
+    #[cfg_attr(test, mutants::skip)]
+    #[tracing::instrument(
+        name = "txn_coordinator_expire_transactional_ids",
+        level = "debug",
+        skip_all,
+        fields(now_ms, expiration_ms)
+    )]
+    pub(crate) async fn expire_transactional_ids(
+        &self,
+        now_ms: i64,
+        expiration_ms: i64,
+    ) -> Vec<String> {
+        // Snapshot the candidate tids first so no DashMap shard lock is held
+        // across the append; each tid's own lock is re-acquired below.
+        let candidates: Vec<String> = self.state.iter().map(|e| e.key().clone()).collect();
+        let mut expired = Vec::new();
+        for tid in candidates {
+            if !self.is_coordinator_for(&tid).await {
+                continue;
+            }
+            let Some(handle) = self.get(&tid) else {
+                continue;
+            };
+            let decided = {
+                let entry = handle.lock().await;
+                if !should_expire_transactional_id(
+                    entry.state,
+                    entry.last_update_ms,
+                    now_ms,
+                    expiration_ms,
+                ) {
+                    continue;
+                }
+                entry.clone()
+            };
+            match self.tombstone(&decided).await {
+                Ok(()) => {
+                    info!(tid, "txn id expiry: tombstoned expired transactional id");
+                    expired.push(tid);
+                }
+                Err(error) => {
+                    warn!(tid, %error, "txn id expiry: tombstone append failed; will retry");
+                }
+            }
+        }
+        expired
+    }
+}
+
+#[cfg(test)]
+mod tests;

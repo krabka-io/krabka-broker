@@ -20,12 +20,14 @@ use super::wire::{
 };
 use crate::{codes, config_keys};
 
+mod static_broker;
 mod write_freeze;
 
 #[cfg(test)]
 mod tests;
 
-use self::write_freeze::write_freeze_entry;
+pub(super) use self::static_broker::StaticBrokerConfigs;
+use self::{static_broker::static_broker_entries, write_freeze::write_freeze_entry};
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
@@ -33,6 +35,7 @@ pub(super) fn describe_one(
     r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
+    static_broker: StaticBrokerConfigs,
 ) -> DescribeConfigsResult {
     let ok = |configs| DescribeConfigsResult {
         error_code: codes::NONE,
@@ -125,13 +128,19 @@ pub(super) fn describe_one(
                 entry
             })
             .collect();
-        if let Some(node_id) = node_id
-            && key_filter.is_none_or(|keys| keys.iter().any(|key| key == "node.id"))
-        {
+        // A named broker resource also carries this node's static settings,
+        // the way Kafka answers `--describe --all` out of the node's own
+        // configuration. The cluster-default resource carries dynamic
+        // defaults alone, in Kafka and here.
+        if let Some(node_id) = node_id {
             let mut entry =
                 make_entry("node.id", &node_id.to_string(), CONFIG_SOURCE_STATIC_BROKER);
             entry.read_only = true;
             configs.push(entry);
+            configs.extend(static_broker_entries(static_broker));
+            configs.retain(|entry| {
+                key_filter.is_none_or(|keys| keys.iter().any(|key| *key == entry.name))
+            });
             configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
         }
         return ok(configs);

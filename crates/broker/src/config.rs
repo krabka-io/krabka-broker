@@ -93,6 +93,15 @@ pub const DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT: Time = secs(20);
 /// Default idle-transaction abort cleanup interval.
 pub const DEFAULT_TXN_ABORT_CLEANUP_INTERVAL: Time = secs(10);
 
+/// Default transactional-id expiry, matching Kafka's
+/// `transactional.id.expiration.ms` default of 604800000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION: Time = days(7);
+
+/// Default cadence of the transactional-id expiry sweep, matching Kafka's
+/// `transaction.remove.expired.transaction.cleanup.interval.ms` default of
+/// 3600000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL: Time = hours(1);
+
 /// Default TLS material reload polling interval.
 pub const DEFAULT_TLS_RELOAD_INTERVAL: Time = secs(30);
 

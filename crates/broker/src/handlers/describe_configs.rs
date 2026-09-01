@@ -56,7 +56,7 @@ mod wire;
 
 use self::{
     authz::{denied_result, resource_authz_failure},
-    resources::describe_one,
+    resources::{StaticBrokerConfigs, describe_one},
 };
 use crate::{broker::Broker, error::BrokerError};
 
@@ -81,6 +81,15 @@ pub(crate) fn handle(
         let req = DescribeConfigsRequest::decode(&mut cur, version)?;
 
         let image = controller.current_image();
+        // This node's own static settings, which a named broker resource
+        // reports beside its dynamic overrides.
+        let static_broker = StaticBrokerConfigs {
+            txn_id_expiration_ms: broker.config.txn_id_expiration.millis_i64(),
+            txn_id_expiration_cleanup_interval_ms: broker
+                .config
+                .txn_id_expiration_cleanup_interval
+                .millis_i64(),
+        };
         // ── ACL preamble ────────────────────────────────────────────
         // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
         // `Cluster("kafka-cluster")`. On Deny stamp the result entry with
@@ -105,6 +114,7 @@ pub(crate) fn handle(
                         r,
                         broker.config.client_metrics_default_interval.millis_i32(),
                         &broker.config.streams_group,
+                        static_broker,
                     )
                 }
             })

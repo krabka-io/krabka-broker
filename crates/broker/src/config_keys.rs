@@ -78,6 +78,7 @@ pub(crate) use self::{
 pub(crate) use self::{
     broker_scope::{
         BROKER_WITNESS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
         WITNESS_TRUE, is_controller_managed_broker_config, parse_remote_list_offsets_timeout,
         resolve_broker_witness, resolve_preferred_leader_site, resolve_remote_list_offsets_timeout,
         witness_node_ids,

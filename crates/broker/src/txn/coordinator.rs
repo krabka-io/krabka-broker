@@ -20,6 +20,7 @@ use crate::{
     txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
 };
 
+mod expiry;
 mod markers;
 mod persistence;
 mod pid_index;

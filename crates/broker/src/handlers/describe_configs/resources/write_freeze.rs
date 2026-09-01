@@ -97,6 +97,7 @@ mod tests {
             },
             300_000,
             &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+            super::super::static_broker::kafka_default_static_broker(),
         )
     }
 

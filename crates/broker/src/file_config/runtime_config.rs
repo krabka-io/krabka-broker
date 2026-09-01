@@ -335,6 +335,12 @@ pub struct RuntimeFileConfig {
     pub txn_abort_cleanup_interval: Option<Time>,
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<String>")]
+    pub txn_id_expiration: Option<Time>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub txn_id_expiration_cleanup_interval: Option<Time>,
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
     pub leader_imbalance_check_interval: Option<Time>,
     #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<String>")]

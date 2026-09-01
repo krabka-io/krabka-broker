@@ -82,6 +82,22 @@ pub(crate) fn resolve_preferred_leader_site(
         .map(String::as_str)
 }
 
+/// KIP-98: how long a transactional id may sit in a terminal or idle state
+/// before the transaction coordinator tombstones it out of
+/// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).
+///
+/// The key is static in Kafka: `kafka-configs --alter` refuses it with
+/// `Cannot update these configs dynamically`, and `DescribeConfigs` reports it
+/// read-only from the node's own configuration. krabka reports it the same
+/// way, out of [`crate::config::BrokerConfig::txn_id_expiration`].
+pub(crate) const TRANSACTIONAL_ID_EXPIRATION_MS: &str = "transactional.id.expiration.ms";
+
+/// KIP-98: how often the transactional-id expiry sweep runs. Kafka defaults it
+/// to 3600000 ms (1 hour). Static and read-only, like
+/// [`TRANSACTIONAL_ID_EXPIRATION_MS`].
+pub(crate) const TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS: &str =
+    "transaction.remove.expired.transaction.cleanup.interval.ms";
+
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker
 /// config and defaults it to 30 seconds.
