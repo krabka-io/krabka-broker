@@ -174,6 +174,38 @@ pub(crate) fn deserialize_principal(
     })
 }
 
+/// Read a `client_host_address` the way
+/// `kafka.server.EnvelopeUtils.parseForwardedClientAddress` does:
+/// `InetAddress.getByAddress(byte[])` over the raw address octets the
+/// forwarding hop copied out of its own client's connection.
+///
+/// `getByAddress` accepts a 4-byte IPv4 address or a 16-byte IPv6 one and
+/// nothing else, and it folds an IPv4-mapped `::ffff:a.b.c.d` back to the
+/// `Inet4Address` it names — which is what [`std::net::IpAddr::to_canonical`]
+/// does here, so a mapped address authorizes against the same host string
+/// Kafka would use.
+///
+/// This address, not the forwarding broker's, is the host the embedded
+/// request authorizes and audits against: `EnvelopeUtils` builds the inner
+/// `RequestContext` with it, so a host ACL sees the client that actually
+/// connected.
+///
+/// # Errors
+/// [`EnvelopeError::InvalidRequest`] for any other length. Kafka's
+/// `getByAddress` throws `UnknownHostException` there and `EnvelopeUtils`
+/// rewraps it as `InvalidRequestException`.
+pub(crate) fn deserialize_client_host_address(
+    bytes: &[u8],
+) -> Result<std::net::IpAddr, EnvelopeError> {
+    if let Ok(octets) = <[u8; 4]>::try_from(bytes) {
+        return Ok(std::net::IpAddr::from(octets));
+    }
+    if let Ok(octets) = <[u8; 16]>::try_from(bytes) {
+        return Ok(std::net::IpAddr::from(octets).to_canonical());
+    }
+    Err(EnvelopeError::InvalidRequest)
+}
+
 /// Decode an `EnvelopeRequest` at `version`.
 ///
 /// # Errors
@@ -386,6 +418,54 @@ mod tests {
 
         for (error, want) in cases {
             check!(error.code() == want, "{error:?}");
+        }
+    }
+
+    /// `client_host_address` is exactly what `InetAddress.getByAddress`
+    /// accepts: four octets or sixteen, with an IPv4-mapped sixteen folded
+    /// back to the IPv4 address it names. Every other length is the
+    /// `UnknownHostException` `EnvelopeUtils` reports as an invalid request.
+    #[test]
+    fn a_client_host_address_decodes_the_way_inet_address_get_by_address_does() {
+        let mapped_v4 = {
+            let mut octets = [0u8; 16];
+            octets[10] = 0xff;
+            octets[11] = 0xff;
+            octets[12..].copy_from_slice(&[10, 1, 2, 3]);
+            octets
+        };
+        let cases: [(&str, &[u8], Result<std::net::IpAddr, EnvelopeError>); 6] = [
+            ("four octets are an IPv4 address", &[10, 1, 2, 3], {
+                Ok(std::net::IpAddr::from([10, 1, 2, 3]))
+            }),
+            (
+                "sixteen octets are an IPv6 address",
+                &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                Ok("2001:db8::1".parse().expect("literal IPv6 address")),
+            ),
+            (
+                "an IPv4-mapped IPv6 address folds to its IPv4 form",
+                &mapped_v4,
+                Ok(std::net::IpAddr::from([10, 1, 2, 3])),
+            ),
+            ("an empty address", &[], Err(EnvelopeError::InvalidRequest)),
+            (
+                "three octets",
+                &[10, 1, 2],
+                Err(EnvelopeError::InvalidRequest),
+            ),
+            (
+                "five octets",
+                &[10, 1, 2, 3, 4],
+                Err(EnvelopeError::InvalidRequest),
+            ),
+        ];
+
+        for (case, bytes, want) in cases {
+            check!(
+                deserialize_client_host_address(bytes) == want,
+                "case: {case}"
+            );
         }
     }
 

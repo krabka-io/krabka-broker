@@ -21,6 +21,15 @@
 //! kind, both tools would fail with `NOT_CONTROLLER`.
 //!
 //! Gated `#[ignore]` (requires Docker); run with `--ignored`.
+//!
+//! This suite is a manual Bazel target rather than a `container ·` CI suite,
+//! and it does not pass today. A broker-only node resolves the controller
+//! leader's address out of that leader's `BrokerRegistration`, a
+//! controller-only node writes none, so it never heartbeats, the controller
+//! fences it within one liveness tick, and every tool here fails with
+//! `Timed out waiting for a node assignment` before it can say anything about
+//! forwarding. `tests/KNOWN_ISSUES.md` has the full trace and the fix that is
+//! needed. Nothing below is wrong; it is waiting on that fix.
 
 mod support;
 

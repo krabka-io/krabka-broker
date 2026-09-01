@@ -164,6 +164,9 @@ struct Invocation<'a> {
     correlation_id: CorrelationId,
     body: &'a [u8],
     client_id: &'a str,
+    /// The address the handler authorizes and audits against. For a forwarded
+    /// request this is the *client's* address, out of
+    /// `EnvelopeRequest.client_host_address`, not the forwarding hop's.
     peer: &'a std::net::SocketAddr,
     /// The identity the handler authorizes against. For a forwarded request
     /// this is the *client's* principal, not the forwarding hop's.
@@ -197,6 +200,13 @@ async fn invoke_registered_handler(
         }
     })?;
     match entry.kind() {
+        // A plain handler takes no session at all. `AllocateProducerIds` (67)
+        // is the one api key that is both `ApiKeys.forwardable` and registered
+        // this way, and a JVM broker forwards it to obtain a producer-id block
+        // before any producer of its own can initialise, so the `Envelope`
+        // path has to reach it. The envelope's `ClusterAction` gate has
+        // already run by the time this is called.
+        DispatchKind::Plain(handler) => handler(broker, api_version, correlation_id, body).await,
         DispatchKind::Context(handler) => {
             let context = RequestContext::new(
                 principal,
@@ -240,7 +250,12 @@ async fn serve_envelope(
 ) -> Result<Bytes, RaftError> {
     let version = request.api_version;
     let encoded = match unwrap_envelope(broker, request, outer) {
-        Ok((forwarded, principal, token_authenticated)) => {
+        Ok(Unwrapped {
+            forwarded,
+            principal,
+            client_host,
+            token_authenticated,
+        }) => {
             let body = invoke_registered_handler(
                 broker,
                 Invocation {
@@ -249,7 +264,14 @@ async fn serve_envelope(
                     correlation_id: forwarded.correlation_id,
                     body: &forwarded.body,
                     client_id: forwarded.client_id.as_deref().unwrap_or(""),
-                    peer: &request.peer,
+                    // The *client's* address, not this connection's: the peer
+                    // here is the forwarding broker, and authorizing or
+                    // auditing the embedded request against that address both
+                    // denies clients a host ACL allows and allows clients it
+                    // denies. `EnvelopeUtils` builds its inner
+                    // `RequestContext` from `client_host_address` for exactly
+                    // this reason.
+                    peer: &client_host,
                     principal: &principal,
                     // The *client's* flag, out of `request_principal`, not the
                     // forwarding hop's: KIP-48 forbids a token-authenticated
@@ -276,14 +298,34 @@ async fn serve_envelope(
     encoded.map_err(|error| RaftError::ControllerAdmin(error.to_string()))
 }
 
-/// Authorize, decode and validate one `Envelope`, yielding the embedded
-/// request, the client principal it must run as, and whether that client
-/// authenticated with a delegation token.
+/// One `Envelope` that passed the `ClusterAction` gate and decoded cleanly:
+/// the session the embedded request runs under, and the request itself.
+struct Unwrapped {
+    forwarded: ForwardedRequest,
+    /// The client identity out of `request_principal`, not the forwarding
+    /// hop's.
+    principal: krabka_security::Principal,
+    /// The client address out of `client_host_address`, not the forwarding
+    /// hop's. KIP-590 carries the bare address octets and no port — Kafka's
+    /// inner `RequestContext` holds an `InetAddress` — so the port is zero
+    /// and only [`std::net::SocketAddr::ip`] is meaningful, which is all any
+    /// host ACL or audit record reads.
+    client_host: std::net::SocketAddr,
+    /// Whether that client authenticated with a delegation token.
+    token_authenticated: bool,
+}
+
+/// Authorize, decode and validate one `Envelope`.
+///
+/// The order of the checks is `EnvelopeUtils.handleEnvelopeRequest`'s own:
+/// principal, then client address, then the embedded header, then the
+/// forwardable test. A malformed envelope that fails two of them reports the
+/// code Kafka's first failure would.
 fn unwrap_envelope(
     broker: &Broker,
     request: &ControllerAdminRequest,
     outer: &krabka_security::Principal,
-) -> Result<(ForwardedRequest, krabka_security::Principal, bool), EnvelopeError> {
+) -> Result<Unwrapped, EnvelopeError> {
     // `ApiKeys.ENVELOPE.clusterAction` is true: only a peer that holds
     // `ClusterAction` on the cluster resource may speak for another identity.
     let image = broker.controller.current_image();
@@ -305,6 +347,7 @@ fn unwrap_envelope(
     let envelope = envelope::decode_request(&request.body, request.api_version)?;
     let forwarded_principal =
         envelope::deserialize_principal(envelope.request_principal.as_deref())?;
+    let client_host = envelope::deserialize_client_host_address(&envelope.client_host_address)?;
     let forwarded = envelope::unwrap_request(&envelope.request_data, |api_key, api_version| {
         broker.handlers().body_flexible(api_key, api_version)
     })?;
@@ -318,9 +361,9 @@ fn unwrap_envelope(
         return Err(EnvelopeError::UnsupportedVersion);
     }
 
-    Ok((
+    Ok(Unwrapped {
         forwarded,
-        krabka_security::Principal {
+        principal: krabka_security::Principal {
             name: forwarded_principal.name,
             // `KafkaPrincipal` carries no mechanism and no groups, so the
             // reconstructed session keeps the forwarding hop's own auth method
@@ -329,8 +372,9 @@ fn unwrap_envelope(
             auth_method: outer.auth_method,
             groups: Vec::new(),
         },
-        forwarded_principal.token_authenticated,
-    ))
+        client_host: std::net::SocketAddr::new(client_host, 0),
+        token_authenticated: forwarded_principal.token_authenticated,
+    })
 }
 
 #[cfg(test)]

@@ -16,10 +16,15 @@
 
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer};
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+};
 use krabka_protocol::{
     Decode as _, Encode, UnknownTaggedFields,
     owned::{
+        allocate_producer_ids_request::{self, AllocateProducerIdsRequest},
+        allocate_producer_ids_response::AllocateProducerIdsResponse,
         api_versions_response::ApiVersionsResponse,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
@@ -41,12 +46,36 @@ const JVM_USER_ALICE: &[u8] = &[
     0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x06, b'a', b'l', b'i', b'c', b'e', 0x00, 0x00,
 ];
 
+/// The same serialization for `new KafkaPrincipal("User", "bob")`. It differs
+/// from [`JVM_USER_ALICE`] only in the compact string and its length prefix;
+/// the `token_authenticated` byte is `0x00` in both.
+const JVM_USER_BOB: &[u8] = &[
+    0x00, 0x00, 0x05, b'U', b's', b'e', b'r', 0x04, b'b', b'o', b'b', 0x00, 0x00,
+];
+
+/// The address a forwarding broker copies out of its own client's connection
+/// into `client_host_address`. `EnvelopeRequest.Builder` is handed
+/// `clientAddress.getAddress()`, so a v4 client is these four raw octets and
+/// no port.
+const LOOPBACK_CLIENT: &[u8] = &[127, 0, 0, 1];
+
+/// A client address that is deliberately *not* the loopback address every
+/// test connection to the controller listener comes from, so a host ACL
+/// keyed on it can only match if the embedded address is what was used.
+const REMOTE_CLIENT: &[u8] = &[10, 1, 2, 3];
+
 /// The correlation id the "client" put in the embedded request header. The
 /// controller must echo this one, not the envelope's own, or the forwarding
 /// hop cannot match the relayed bytes to the client that is waiting.
 const EMBEDDED_CORRELATION_ID: i32 = 0x5A5A_1234;
 
 async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
+    start_broker_with(|_| {}).await
+}
+
+async fn start_broker_with(
+    customize: impl FnOnce(&mut BrokerConfig),
+) -> (BrokerHandle, tempfile::TempDir) {
     support::init_tracing();
     let dir = tempfile::TempDir::new().expect("tempdir");
     let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -62,6 +91,7 @@ async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
     config.advertised_listener = data_addr.to_string();
     config.controller_listen_addr = controller_addr;
     config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
+    customize(&mut config);
     let broker =
         Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
             .await
@@ -197,10 +227,18 @@ fn embedded_create_topics(topic: &str) -> Bytes {
 }
 
 fn envelope_for(request_data: Bytes, principal: Option<&'static [u8]>) -> EnvelopeRequest {
+    envelope_from(request_data, principal, LOOPBACK_CLIENT)
+}
+
+fn envelope_from(
+    request_data: Bytes,
+    principal: Option<&'static [u8]>,
+    client_host: &'static [u8],
+) -> EnvelopeRequest {
     EnvelopeRequest {
         request_data,
         request_principal: principal.map(Bytes::from_static),
-        client_host_address: Bytes::from_static(&[127, 0, 0, 1]),
+        client_host_address: Bytes::from_static(client_host),
         unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }
@@ -351,4 +389,212 @@ async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
 
     check!(envelope(&controller) == Some((0, 0)), "controller listener");
     check!(envelope(&client).is_none(), "client listener");
+}
+
+/// Decode the embedded `CreateTopicsResponse` out of a served `Envelope`.
+///
+/// `CreateTopics` is flexible at its maximum version, so the embedded
+/// response header is v1: four bytes of the client's correlation id and one
+/// empty tagged-fields byte before the body.
+fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsResponse {
+    check!(response.error_code == 0, "the Envelope itself was served");
+    let data = response
+        .response_data
+        .as_ref()
+        .expect("a served Envelope carries response_data");
+    let mut body = data.get(5..).expect("embedded response header v1");
+    let decoded = CreateTopicsResponse::decode(
+        &mut body,
+        krabka_protocol::owned::create_topics_response::MAX_VERSION,
+    )
+    .expect("decode the embedded CreateTopicsResponse");
+    check!(
+        body.is_empty(),
+        "the embedded response consumed its own bytes"
+    );
+    decoded
+}
+
+/// A host ACL on a forwarded request must be evaluated against the client's
+/// own address, not the forwarding broker's.
+///
+/// Both envelopes below reach the controller listener over loopback, so the
+/// connection's peer is `127.0.0.1` for both, while `client_host_address`
+/// names `10.1.2.3`. The two seeded ACLs are the two ways the connection's
+/// address is the wrong answer:
+///
+/// - `User:alice` may create only from `10.1.2.3`, the address the envelope
+///   names. Reading the connection instead denies a client that the host ACL
+///   allows.
+/// - `User:bob` may create only from `127.0.0.1`, which is the address the
+///   *forwarding hop* happens to connect from. Reading the connection instead
+///   authorizes a client that the host ACL denies — the broker's own address
+///   launders the request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
+    let (broker, _dir) = start_broker_with(|config| {
+        // `ANONYMOUS` is the identity a plaintext controller connection
+        // carries, and `ApiKeys.ENVELOPE.clusterAction` gates the envelope on
+        // it. Making it a super-user holds that outer gate open so the inner
+        // host check is the only thing this test moves.
+        config.super_users = std::iter::once("ANONYMOUS".to_owned()).collect();
+        config.authorizer =
+            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+    })
+    .await;
+
+    for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
+        broker
+            .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
+                resource_type: ResourceType::Cluster,
+                resource_name: "kafka-cluster".into(),
+                pattern_type: PatternType::Literal,
+                principal: principal.into(),
+                host: host.into(),
+                operation: AclOperation::Create,
+                permission_type: PermissionType::Allow,
+            }))
+            .await
+            .expect("seed host ACL");
+    }
+
+    // Both directions are driven before anything is asserted, so one failing
+    // case cannot hide the other: reading the connection's address gets the
+    // first wrong *and* the second wrong, and a report of only one of them
+    // would read like a one-sided mistake.
+    let mut outcome: Vec<(&str, i16)> = Vec::new();
+    for (principal, topic) in [
+        (JVM_USER_ALICE, "envelope-host-acl-alice"),
+        (JVM_USER_BOB, "envelope-host-acl-bob"),
+    ] {
+        let response = send_envelope(
+            broker.controller_addr(),
+            &envelope_from(
+                embedded_create_topics(topic),
+                Some(principal),
+                REMOTE_CLIENT,
+            ),
+        )
+        .await;
+
+        let rows: Vec<(String, i16)> = embedded_create_topics_response(&response)
+            .topics
+            .into_iter()
+            .map(|row| (row.name, row.error_code))
+            .collect();
+        check!(
+            rows.len() == 1,
+            "one row per single-topic CreateTopics: {rows:?}"
+        );
+        outcome.push((topic, rows.first().map_or(i16::MIN, |row| row.1)));
+    }
+
+    check!(
+        outcome
+            == vec![
+                // Allowed from the address the envelope names.
+                ("envelope-host-acl-alice", 0),
+                // Allowed only from the forwarding hop's address, so refused.
+                ("envelope-host-acl-bob", 31),
+            ]
+    );
+}
+
+/// An `EnvelopeRequest.client_host_address` `InetAddress.getByAddress` would
+/// refuse is an invalid request, and the embedded handler never runs.
+///
+/// `EnvelopeUtils.parseForwardedClientAddress` catches `UnknownHostException`
+/// and rethrows it as `InvalidRequestException` (42), and it does so before
+/// the embedded request header is parsed at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unparseable_client_host_address_is_an_invalid_request() {
+    const TOPIC: &str = "envelope-bad-client-host";
+
+    let (broker, _dir) = start_broker().await;
+
+    let response = send_envelope(
+        broker.controller_addr(),
+        &envelope_from(
+            embedded_create_topics(TOPIC),
+            Some(JVM_USER_ALICE),
+            &[10, 1, 2],
+        ),
+    )
+    .await;
+
+    check!((response.error_code, response.response_data) == (42, None));
+    check!(
+        broker.controller_image_for_test().topic(TOPIC).is_none(),
+        "the embedded request must not have run"
+    );
+}
+
+/// A forwarded `AllocateProducerIds` (67) is served and returns a block.
+///
+/// 67 is in `ApiKeys.forwardable`, and a JVM broker forwards it to the
+/// controller to obtain the producer-ID block every producer on it needs
+/// before it can initialise. Its handler takes no session at all, so the
+/// shared invocation path has to dispatch a plain handler as well as the
+/// session-carrying kinds: answering `UnsupportedApi` fails the controller
+/// connection and the forwarding broker never gets a block.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_allocate_producer_ids_is_served_a_block() {
+    let (broker, _dir) = start_broker().await;
+    broker.wait_until_brokers_registered(1).await;
+
+    let image = broker.controller_image_for_test();
+    let registered = image
+        .brokers()
+        .next()
+        .expect("the broker self-registers before it serves");
+    let broker_id = i32::try_from(registered.node_id.0).expect("broker id");
+
+    let version = allocate_producer_ids_request::MAX_VERSION;
+    let request_data = request_frame(
+        allocate_producer_ids_request::API_KEY,
+        version,
+        EMBEDDED_CORRELATION_ID,
+        Some("forwarding-broker"),
+        true,
+        &encode(
+            &AllocateProducerIdsRequest {
+                broker_id,
+                broker_epoch: registered.broker_epoch,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            version,
+        ),
+    )
+    .slice(4..);
+
+    let response = send_envelope(
+        broker.controller_addr(),
+        &envelope_for(request_data, Some(JVM_USER_ALICE)),
+    )
+    .await;
+
+    check!(response.error_code == 0);
+    assert!(let Some(response_data) = response.response_data);
+    assert!(let Some((header, mut body)) = response_data.split_at_checked(5));
+    check!(header == [0x5A, 0x5A, 0x12, 0x34, 0x00]);
+
+    let allocated = AllocateProducerIdsResponse::decode(
+        &mut body,
+        krabka_protocol::owned::allocate_producer_ids_response::MAX_VERSION,
+    )
+    .expect("decode the embedded AllocateProducerIdsResponse");
+    check!(
+        body.is_empty(),
+        "the embedded response consumed its own bytes"
+    );
+    check!(
+        allocated
+            == AllocateProducerIdsResponse {
+                throttle_time_ms: 0,
+                error_code: 0,
+                producer_id_start: 0,
+                producer_id_len: 1_000,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }
+    );
 }
