@@ -303,17 +303,27 @@ impl UncleanRecoveryManager {
                 RecoveryOutcome::Stale
             };
         }
+        let Some((partition_epoch, leader_epoch)) =
+            crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
+        else {
+            warn!(
+                topic = %job.topic,
+                partition = job.partition,
+                "unclean recovery refused because a metadata epoch is exhausted"
+            );
+            return RecoveryOutcome::Stale;
+        };
         let new_pr = PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
             leader: winner,
             replicas: pr.replicas.clone(),
             isr: vec![winner],
-            leader_epoch: pr.leader_epoch.next(),
+            leader_epoch,
             adding_replicas: pr.adding_replicas.clone(),
             removing_replicas: pr.removing_replicas.clone(),
             directories: pr.directories.clone(),
-            partition_epoch: pr.partition_epoch + 1,
+            partition_epoch,
         };
         if let Err(error) = self
             .policy

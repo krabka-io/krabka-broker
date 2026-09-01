@@ -49,6 +49,30 @@ async fn failover_picks_alive_isr_member_when_available() {
 }
 
 #[tokio::test]
+async fn failover_marks_exhausted_metadata_epochs_unavailable() {
+    for (partition_epoch, leader_epoch) in [(i32::MAX, 5), (0, i32::MAX)] {
+        let mut image = img_with_partition("t", 0, 1, &[1, 2], &[1, 2]);
+        let mut record = image.partition("t", 0).expect("seeded partition").clone();
+        record.partition_epoch = partition_epoch;
+        record.leader_epoch = LeaderEpoch(leader_epoch);
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+        liveness.record_heartbeat(2).await;
+
+        let plan = compute_failover_changes(
+            &image,
+            NodeId(1),
+            &liveness,
+            &crate::metrics::BrokerMetrics::new(),
+        )
+        .await;
+
+        assert!(plan.changes.is_empty());
+        assert!(plan.unavailable == vec![("t".to_owned(), 0)]);
+    }
+}
+
+#[tokio::test]
 async fn failover_processes_dead_replica_even_when_not_in_isr() {
     // Synthetic but valid during ISR churn: dead broker is the current
     // leader/replica, while the ISR already contains only surviving peers.

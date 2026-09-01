@@ -128,7 +128,16 @@ pub(super) fn handle_partition(
     };
 
     // Success: submit the ISR change.
-    let new_partition_epoch = part_rec.partition_epoch + 1;
+    let Some(new_partition_epoch) = crate::metadata_epoch::next_i32(part_rec.partition_epoch)
+    else {
+        return error_part(
+            partition_index,
+            codes::INVALID_REQUEST,
+            leader_i32,
+            part_rec.leader_epoch.0,
+            &current_isr_i32,
+        );
+    };
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
         topic: topic_name.to_string(),
         partition: partition_index,
@@ -225,6 +234,27 @@ mod tests {
         };
         assert!(record.partition == 7);
         assert!(record.partition_epoch == 12);
+    }
+
+    #[test]
+    fn exhausted_partition_epoch_rejects_the_isr_change() {
+        let image = image_with_partition(
+            &PartitionFixture {
+                partition: 0,
+                leader: 1,
+                replicas: &[1, 2],
+                isr: &[1, 2],
+                leader_epoch: 5,
+                partition_epoch: i32::MAX,
+            },
+            &[(1, 10), (2, 20)],
+        );
+        let mut changes = Vec::new();
+
+        let response = handle_partition(&image, Some("t"), 0, 5, &[1, 2], &[], &mut changes);
+
+        assert!(response.error_code == codes::INVALID_REQUEST);
+        assert!(changes.is_empty());
     }
 
     #[test]

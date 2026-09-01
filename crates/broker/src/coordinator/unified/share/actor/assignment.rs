@@ -18,9 +18,9 @@ use crate::coordinator::unified::{
 /// Recompute the target assignment when the group is dirty. It builds the
 /// assignor inputs from the latest metadata snapshot, runs the share-group
 /// assignor, bumps the epoch, and installs the new target.
-pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProvider) {
+pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProvider) -> bool {
     if !state.dirty {
-        return;
+        return true;
     }
     let input = metadata.snapshot();
     let subscriptions: Vec<MemberSubscription> = state
@@ -37,9 +37,12 @@ pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProv
         partition_racks: input.partition_racks,
     };
     let assignment = ShareGroupAssignor.assign(&subscriptions, &topics);
-    state.bump_epoch();
+    if !state.bump_epoch() {
+        return false;
+    }
     state.install_target(assignment);
     state.dirty = false;
+    true
 }
 
 /// Resolve a share member's effective topic-id subscription. Share groups

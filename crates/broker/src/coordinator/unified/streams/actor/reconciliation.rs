@@ -170,7 +170,9 @@ fn compute_and_install_target(
         standby: assignment.standby,
         warmup: assignment.warmup,
     };
-    actor.state.bump_epoch();
+    if !actor.state.bump_epoch() {
+        return;
+    }
     actor.state.install_target(target);
 
     let pending_revocation = actor
@@ -190,7 +192,9 @@ fn compute_and_install_target(
 /// group to `phase`. Members still advance to the new, empty assignment epoch
 /// on their next `advance_member_epoch`. The function clears `dirty`.
 fn install_empty_target(state: &mut StreamsGroupState, phase: StreamsGroupStatePhase) {
-    state.bump_epoch();
+    if !state.bump_epoch() {
+        return;
+    }
     state.install_target(StreamsTargetAssignment::default());
     state.phase = phase;
     state.dirty = false;

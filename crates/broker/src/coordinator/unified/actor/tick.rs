@@ -58,7 +58,14 @@ pub(super) async fn handle_actor_tick(
         );
         if !dropped.is_empty() {
             if state.members.is_empty() {
-                state.generation_id += 1;
+                let Some(generation_id) = crate::metadata_epoch::next_i32(state.generation_id)
+                else {
+                    *state = previous;
+                    tracing::warn!(group = %group_id,
+                        "classic expiration stopped because the generation is exhausted");
+                    return false;
+                };
+                state.generation_id = generation_id;
                 if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
                     *state = previous;
                     tracing::warn!(group = %group_id, %error,

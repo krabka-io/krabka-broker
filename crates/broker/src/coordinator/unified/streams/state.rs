@@ -122,9 +122,13 @@ impl StreamsGroupState {
     /// Increments the group epoch. This mirrors the share and consumer state
     /// machines: a fresh epoch makes the assignment stale, so the method marks
     /// the group dirty.
-    pub fn bump_epoch(&mut self) {
-        self.group_epoch += 1;
+    pub fn bump_epoch(&mut self) -> bool {
+        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
+            return false;
+        };
+        self.group_epoch = group_epoch;
         self.dirty = true;
+        true
     }
 
     /// Inserts or replaces a member.
@@ -308,9 +312,18 @@ mod tests {
     fn bump_epoch_increments_and_dirties() {
         let mut g = StreamsGroupState::new("g");
         g.dirty = false;
-        g.bump_epoch();
+        assert!(g.bump_epoch());
         assert!(g.group_epoch == 1);
         assert!(g.dirty);
+    }
+
+    #[test]
+    fn bump_epoch_rejects_exhaustion() {
+        let mut group = StreamsGroupState::new("g");
+        group.group_epoch = i32::MAX;
+
+        assert!(!group.bump_epoch());
+        assert!(group.group_epoch == i32::MAX);
     }
 
     #[test]

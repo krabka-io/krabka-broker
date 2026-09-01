@@ -166,12 +166,13 @@ async fn reset_partition(
         .await
         .map_err(|_| ())?
         .map_or(0, |s| s.state_epoch);
+    let next_epoch = crate::metadata_epoch::next_i32(cur_epoch).ok_or(())?;
     persister
         .initialize(
             gid,
             topic_id,
             partition,
-            cur_epoch + 1,
+            next_epoch,
             krabka_log::Offset(start_offset),
         )
         .await

@@ -16,6 +16,7 @@ pub mod consensus;
 pub mod delegation_token;
 pub mod delivery;
 pub mod diskless;
+pub mod epoch;
 pub mod isr;
 pub mod leader_epoch;
 pub mod log_index;
@@ -62,6 +63,7 @@ pub use delivery::{
     coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,
 };
 pub use diskless::{DisklessTrimDecision, diskless_trim_decision};
+pub use epoch::exact_epoch_successor;
 pub use leader_epoch::{EpochEntry, epoch_and_offset_for_entries};
 pub use log_index::{offset_index_lookup, offset_index_position_at_or_after, time_index_lookup};
 pub use offset_allocator::reserve_offsets;

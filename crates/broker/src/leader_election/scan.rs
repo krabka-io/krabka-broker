@@ -62,6 +62,21 @@ pub(crate) async fn compute_failover_changes(
                 isr,
                 unclean,
             } => {
+                let Some((partition_epoch, new_leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        true,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "failover skipped because a metadata epoch is exhausted"
+                    );
+                    unavailable.push((pr.topic.clone(), pr.partition));
+                    continue;
+                };
                 if unclean {
                     warn!(
                         topic = %pr.topic, partition = pr.partition, leader = leader.0,
@@ -75,7 +90,6 @@ pub(crate) async fn compute_failover_changes(
                 // log line and the emitted record, so the failover tests that
                 // assert the incremented `leader_epoch` also pin the logged
                 // value (no un-killable log-only arithmetic).
-                let new_leader_epoch = pr.leader_epoch.next();
                 tracing::info!(
                     topic = %pr.topic,
                     partition = pr.partition,
@@ -88,10 +102,47 @@ pub(crate) async fn compute_failover_changes(
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                changes.push(elected(pr, leader, isr, new_leader_epoch));
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch: new_leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::ShrinkIsr { isr } => {
-                changes.push(shrunk(pr, isr));
+                let Some((partition_epoch, leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        false,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "ISR shrink skipped because the partition epoch is exhausted"
+                    );
+                    unavailable.push((pr.topic.clone(), pr.partition));
+                    continue;
+                };
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader: pr.leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::Recover(strategy) => {
                 // KIP-966: defer to the offset-aware Unclean Recovery Manager —
@@ -163,6 +214,20 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                 isr,
                 unclean,
             } => {
+                let Some((partition_epoch, leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        true,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "offline-dir failover skipped because a metadata epoch is exhausted"
+                    );
+                    continue;
+                };
                 if unclean {
                     warn!(
                         topic = %pr.topic, partition = pr.partition, leader = leader.0,
@@ -170,10 +235,46 @@ pub(crate) async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                changes.push(elected(pr, leader, isr, pr.leader_epoch.next()));
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::ShrinkIsr { isr } => {
-                changes.push(shrunk(pr, isr));
+                let Some((partition_epoch, leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        false,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "offline-dir ISR shrink skipped because the partition epoch is exhausted"
+                    );
+                    continue;
+                };
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader: pr.leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
@@ -254,6 +355,21 @@ pub(crate) async fn compute_unclean_restart_changes(
                 isr,
                 unclean,
             } => {
+                let Some((partition_epoch, new_leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        true,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "unclean-restart failover skipped because a metadata epoch is exhausted"
+                    );
+                    unavailable.push((pr.topic.clone(), pr.partition));
+                    continue;
+                };
                 if unclean {
                     warn!(
                         topic = %pr.topic, partition = pr.partition, leader = leader.0,
@@ -261,7 +377,6 @@ pub(crate) async fn compute_unclean_restart_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                let new_leader_epoch = pr.leader_epoch.next();
                 tracing::info!(
                     topic = %pr.topic,
                     partition = pr.partition,
@@ -274,9 +389,35 @@ pub(crate) async fn compute_unclean_restart_changes(
                     unclean,
                     "unclean restart: re-electing partition leader"
                 );
-                changes.push(elected(pr, leader, isr, new_leader_epoch));
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch: new_leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::ShrinkIsr { isr } => {
+                let Some((partition_epoch, leader_epoch)) =
+                    crate::metadata_epoch::next_partition_change(
+                        pr.partition_epoch,
+                        pr.leader_epoch,
+                        false,
+                    )
+                else {
+                    warn!(
+                        topic = %pr.topic,
+                        partition = pr.partition,
+                        "unclean-restart ISR shrink skipped because the partition epoch is exhausted"
+                    );
+                    unavailable.push((pr.topic.clone(), pr.partition));
+                    continue;
+                };
                 tracing::info!(
                     topic = %pr.topic,
                     partition = pr.partition,
@@ -285,7 +426,18 @@ pub(crate) async fn compute_unclean_restart_changes(
                     new_isr = ?isr,
                     "unclean restart: dropping returning broker from ISR"
                 );
-                changes.push(shrunk(pr, isr));
+                changes.push(MetadataRecord::V1Partition(PartitionRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    leader: pr.leader,
+                    replicas: pr.replicas.clone(),
+                    isr,
+                    leader_epoch,
+                    adding_replicas: pr.adding_replicas.clone(),
+                    removing_replicas: pr.removing_replicas.clone(),
+                    directories: pr.directories.clone(),
+                    partition_epoch,
+                }));
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
@@ -305,46 +457,4 @@ pub(crate) async fn compute_unclean_restart_changes(
         recoveries,
         unavailable,
     }
-}
-
-/// The `V1Partition` record that moves leadership of `pr` to `leader` with
-/// `isr`, at `leader_epoch`.
-fn elected(
-    pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    leader_epoch: krabka_metadata::LeaderEpoch,
-) -> MetadataRecord {
-    changed(pr, leader, isr, leader_epoch)
-}
-
-/// The `V1Partition` record that installs `isr` on `pr` and leaves its leader
-/// and leader epoch alone. Kafka advances the partition epoch and not the
-/// leader epoch for an ISR-only change, so a follower's fetch position
-/// survives it.
-fn shrunk(pr: &PartitionRecord, isr: Vec<NodeId>) -> MetadataRecord {
-    changed(pr, pr.leader, isr, pr.leader_epoch)
-}
-
-/// `pr` with `leader`, `isr` and `leader_epoch` installed, its partition
-/// epoch advanced, and every other field carried over. Every caller is
-/// changing the partition, so the partition epoch always moves.
-fn changed(
-    pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    leader_epoch: krabka_metadata::LeaderEpoch,
-) -> MetadataRecord {
-    MetadataRecord::V1Partition(PartitionRecord {
-        topic: pr.topic.clone(),
-        partition: pr.partition,
-        leader,
-        replicas: pr.replicas.clone(),
-        isr,
-        leader_epoch,
-        adding_replicas: pr.adding_replicas.clone(),
-        removing_replicas: pr.removing_replicas.clone(),
-        directories: pr.directories.clone(),
-        partition_epoch: pr.partition_epoch + 1,
-    })
 }

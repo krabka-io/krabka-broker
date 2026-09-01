@@ -64,17 +64,19 @@ pub(crate) fn reassign_one(
     if let ReassignmentAction::Handoff(index) = action {
         // The verified index maps to target ∩ ISR ∩ alive.
         let new_leader = target[index];
+        let leader_epoch = crate::metadata_epoch::next_leader(pr.leader_epoch)?;
+        let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
         return Some(PartitionRecord {
             topic: pr.topic.clone(),
             partition: pr.partition,
             leader: new_leader,
-            leader_epoch: pr.leader_epoch.next(),
+            leader_epoch,
             replicas: pr.replicas.clone(),
             isr: pr.isr.clone(),
             adding_replicas: pr.adding_replicas.clone(),
             removing_replicas: pr.removing_replicas.clone(),
             directories: pr.directories.clone(),
-            partition_epoch: pr.partition_epoch + 1,
+            partition_epoch,
         });
     }
     if action != ReassignmentAction::Complete {
@@ -88,6 +90,7 @@ pub(crate) fn reassign_one(
         .copied()
         .collect();
     let new_directories = remap_directories(&pr.replicas, &pr.directories, &target);
+    let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
     Some(PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
@@ -98,7 +101,7 @@ pub(crate) fn reassign_one(
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: new_directories,
-        partition_epoch: pr.partition_epoch + 1,
+        partition_epoch,
     })
 }
 
@@ -339,6 +342,20 @@ mod tests {
         check!(pr.partition_epoch == 1);
         check!(pr.adding_replicas == vec![NodeId(3)]);
         check!(pr.removing_replicas == vec![NodeId(2)]);
+    }
+
+    #[test]
+    fn exhausted_epochs_block_reassignment_transitions() {
+        let image = img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 2);
+        let mut record = image.partition("foo", 0).expect("seeded partition").clone();
+        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
+
+        record.partition_epoch = i32::MAX;
+        assert!(reassign_one(&record, &alive).is_none());
+
+        record.partition_epoch = 0;
+        record.leader_epoch = krabka_metadata::LeaderEpoch(i32::MAX);
+        assert!(reassign_one(&record, &alive).is_none());
     }
 
     #[tokio::test]

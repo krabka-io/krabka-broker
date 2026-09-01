@@ -10,8 +10,8 @@ use krabka_metadata::{MetadataImage, PartitionRecord};
 use krabka_raft::NodeId;
 
 use crate::codes::{
-    ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, NO_REASSIGNMENT_IN_PROGRESS,
-    POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION,
+    ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, INVALID_REQUEST,
+    NO_REASSIGNMENT_IN_PROGRESS, POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION,
 };
 
 /// Per-row rejection: a Kafka wire error code and a readable message.
@@ -47,7 +47,7 @@ pub(crate) fn process_one_partition(
         None => cancel_path(pr, cancel_approved),
         Some(target_slice) => {
             validate_target(target_slice, image, allow_rf_change, pr)?;
-            Ok(start_path(pr, target_slice))
+            start_path(pr, target_slice)
         }
     }
 }
@@ -129,10 +129,10 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
         .filter(|n| !pr.adding_replicas.contains(n))
         .copied()
         .collect();
-    let (leader, epoch_bump) = if pr.adding_replicas.contains(&pr.leader) {
+    let (leader, leader_changes) = if pr.adding_replicas.contains(&pr.leader) {
         // Leader was an adding replica; revert leadership.
         match reverted_replicas.iter().find(|n| reverted_isr.contains(n)) {
-            Some(&n) => (n, 1),
+            Some(&n) => (n, true),
             None => {
                 return Err((
                     ELIGIBLE_LEADERS_NOT_AVAILABLE,
@@ -141,8 +141,17 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
             }
         }
     } else {
-        (pr.leader, 0)
+        (pr.leader, false)
     };
+    let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
+        pr.partition_epoch,
+        pr.leader_epoch,
+        leader_changes,
+    )
+    .ok_or((
+        INVALID_REQUEST,
+        "partition metadata epoch is exhausted".into(),
+    ))?;
     let new_directories =
         crate::reassignment::remap_directories(&pr.replicas, &pr.directories, &reverted_replicas);
     Ok(Some(PartitionRecord {
@@ -151,15 +160,15 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
         leader,
         replicas: reverted_replicas,
         isr: reverted_isr,
-        leader_epoch: krabka_metadata::LeaderEpoch(pr.leader_epoch.0 + epoch_bump),
+        leader_epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: new_directories,
-        partition_epoch: pr.partition_epoch + 1,
+        partition_epoch,
     }))
 }
 
-fn start_path(pr: &PartitionRecord, target: &[i32]) -> Option<PartitionRecord> {
+fn start_path(pr: &PartitionRecord, target: &[i32]) -> Result<Option<PartitionRecord>, RowError> {
     let target_set: Vec<NodeId> = target
         .iter()
         .map(|&id| NodeId(u64::try_from(id).expect("target validated as non-negative")))
@@ -181,7 +190,7 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Option<PartitionRecord> {
         .copied()
         .collect();
     if old.is_empty() && new.is_empty() {
-        return None; // already at target — no-op
+        return Ok(None); // already at target — no-op
     }
     // replicas = current_target ∪ target (current_target first, then new).
     let mut new_replicas = current_target;
@@ -190,18 +199,24 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Option<PartitionRecord> {
     }
     let new_directories =
         crate::reassignment::remap_directories(&pr.replicas, &pr.directories, &new_replicas);
-    Some(PartitionRecord {
+    let (partition_epoch, leader_epoch) =
+        crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, false)
+            .ok_or((
+                INVALID_REQUEST,
+                "partition metadata epoch is exhausted".into(),
+            ))?;
+    Ok(Some(PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
         leader: pr.leader,
         replicas: new_replicas,
         isr: pr.isr.clone(),
-        leader_epoch: pr.leader_epoch,
+        leader_epoch,
         adding_replicas: new,
         removing_replicas: old,
         directories: new_directories,
-        partition_epoch: pr.partition_epoch + 1,
-    })
+        partition_epoch,
+    }))
 }
 
 #[cfg(test)]
@@ -248,6 +263,14 @@ mod tests {
             partition_epoch: 12,
         };
         assert!(res == expected);
+    }
+
+    #[test]
+    fn start_rejects_an_exhausted_partition_epoch() {
+        let image = img_with_epoch(&[1, 2, 3], &[1, 2, 3], &[], &[], 1, i32::MAX);
+        let error = process_one_partition(&image, "foo", 0, Some(&[1, 4]), true, true)
+            .expect_err("exhausted epoch must fail closed");
+        assert!(error.0 == INVALID_REQUEST);
     }
 
     #[test]
@@ -320,6 +343,19 @@ mod tests {
             partition_epoch: 12,
         };
         assert!(res == expected);
+    }
+
+    #[test]
+    fn leader_reverting_cancel_rejects_an_exhausted_leader_epoch() {
+        let mut image = img_with(&[1, 2, 3, 4], &[1, 4], &[4], &[2, 3], 4);
+        let mut record = image.partition("foo", 0).expect("seeded partition").clone();
+        record.leader_epoch = LeaderEpoch(i32::MAX);
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
+
+        let error = process_one_partition(&image, "foo", 0, None, true, true)
+            .expect_err("exhausted leader epoch must fail closed");
+
+        assert!(error.0 == INVALID_REQUEST);
     }
 
     #[test]

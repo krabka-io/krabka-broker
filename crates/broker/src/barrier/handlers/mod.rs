@@ -66,6 +66,7 @@ pub(crate) const NO_EPOCH: i64 = -1;
 /// | Variant | Code |
 /// | --- | --- |
 /// | `InjectionInProgress` | `BARRIER_INJECTION_IN_PROGRESS` (1000) |
+/// | `EpochExhausted` | `INVALID_REQUEST` (42) |
 /// | `NotCoordinator`, `CoordinatorEpochChanged` | `NOT_COORDINATOR` (16) |
 /// | `UnknownGroup` | `RESOURCE_NOT_FOUND` (91) |
 /// | `GroupExists` | `TOPIC_ALREADY_EXISTS` (36) |
@@ -78,6 +79,7 @@ pub(crate) const NO_EPOCH: i64 = -1;
 pub(crate) fn error_code(error: &BarrierError) -> i16 {
     match error {
         BarrierError::InjectionInProgress { .. } => codes::BARRIER_INJECTION_IN_PROGRESS,
+        BarrierError::EpochExhausted { .. } => codes::INVALID_REQUEST,
         BarrierError::NotCoordinator { .. } | BarrierError::CoordinatorEpochChanged { .. } => {
             codes::NOT_COORDINATOR
         }
@@ -210,6 +212,12 @@ mod tests {
                     group: "g".to_owned(),
                 },
                 codes::BARRIER_INJECTION_IN_PROGRESS,
+            ),
+            (
+                BarrierError::EpochExhausted {
+                    group: "g".to_owned(),
+                },
+                codes::INVALID_REQUEST,
             ),
             (
                 BarrierError::NotCoordinator {

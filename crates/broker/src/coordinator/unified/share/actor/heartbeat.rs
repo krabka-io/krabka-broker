@@ -60,7 +60,10 @@ pub(super) async fn handle_heartbeat(
         let new_member_id = first_join_member_id(&req.member_id);
         let m = build_member(&new_member_id, req, client, now);
         state.add_or_update_member(m);
-        reconcile(state, metadata);
+        if !reconcile(state, metadata) {
+            state.remove_member(&new_member_id);
+            return Ok(error_resp(codes::INVALID_REQUEST, config));
+        }
         state.advance_member_epoch(&new_member_id);
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&new_member_id));
         flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
@@ -78,7 +81,9 @@ pub(super) async fn handle_heartbeat(
     };
 
     // ─── Steady-state: update subscription / last_seen ───────────
-    let changed = update_member_state(state, metadata, req, client, now, cur_epoch);
+    let Some(changed) = update_member_state(state, metadata, req, client, now, cur_epoch) else {
+        return Ok(error_resp(codes::INVALID_REQUEST, config));
+    };
     if changed {
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&req.member_id));
         flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
@@ -98,7 +103,7 @@ fn update_member_state(
     client: ClientIdentity<'_>,
     now: Instant,
     cur_epoch: i32,
-) -> bool {
+) -> Option<bool> {
     let mut member_metadata_changed = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
@@ -120,12 +125,14 @@ fn update_member_state(
         }
     }
     let was_dirty = state.dirty;
-    reconcile(state, metadata);
+    if !reconcile(state, metadata) {
+        return None;
+    }
     let epoch_advanced = state.target.epoch > cur_epoch;
     if epoch_advanced {
         state.advance_member_epoch(&req.member_id);
     }
-    member_metadata_changed || was_dirty || epoch_advanced
+    Some(member_metadata_changed || was_dirty || epoch_advanced)
 }
 
 /// Handle a leave-group heartbeat (`member_epoch == -1`).
@@ -137,6 +144,9 @@ async fn handle_leave(
     req: &ShareGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<ShareGroupHeartbeatResponse, crate::error::BrokerError> {
+    if crate::metadata_epoch::next_i32(state.group_epoch).is_none() {
+        return Ok(error_resp(codes::INVALID_REQUEST, config));
+    }
     let mut pending = PendingShareRecords::default();
     if state.members.contains_key(&req.member_id) {
         pending.member_metadata.push((req.member_id.clone(), None));
@@ -148,7 +158,9 @@ async fn handle_leave(
             .push((req.member_id.clone(), None));
     }
     state.remove_member(&req.member_id);
-    state.bump_epoch();
+    if !state.bump_epoch() {
+        return Ok(error_resp(codes::INVALID_REQUEST, config));
+    }
     pending.group_metadata = Some(ShareGroupMetadataValue {
         epoch: state.group_epoch,
     });

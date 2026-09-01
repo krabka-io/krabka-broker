@@ -525,6 +525,48 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
 }
 
 #[tokio::test]
+async fn commit_rejects_exhausted_metadata_epochs() {
+    for (partition_epoch, leader_epoch) in [(i32::MAX, 5), (0, i32::MAX)] {
+        let mut image = image_with_partition(1, &[1, 2]);
+        let mut record = image.partition("t", 0).expect("seeded partition").clone();
+        record.partition_epoch = partition_epoch;
+        record.leader_epoch = krabka_metadata::LeaderEpoch(leader_epoch);
+        image.apply(&MetadataRecord::V1Partition(record));
+        let source = MockSource::new(Some(NODE), image);
+        let current = source.current_image();
+        let submitted = Arc::clone(&source.submitted);
+        let manager = manager_with(
+            source,
+            liveness_with_alive(&[2]).await,
+            &gated(BackgroundUncleanRecovery::AuditOnly),
+            AuditLog::disabled(),
+        );
+        let partition = current.partition("t", 0).expect("seeded partition");
+        let replicas: Vec<u64> = partition.replicas.iter().map(|node| node.0).collect();
+
+        let outcome = manager
+            .commit_elected_leader(
+                &job(),
+                &current,
+                partition,
+                fallback_to(2),
+                partition.partition_epoch,
+                &replicas,
+                false,
+            )
+            .await;
+
+        assert!(outcome == RecoveryOutcome::Stale);
+        assert!(
+            submitted
+                .lock()
+                .expect("submitted batches are not poisoned")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn commit_fences_every_change_since_replica_selection() {
     for (label, selected_epoch, selected_replicas, winner, leader_alive, expected) in [
         (
