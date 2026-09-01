@@ -6,6 +6,8 @@
 //! writes the union of the current and the target replica sets, and the cancel
 //! path reverts an in-flight reassignment to the replicas it started from.
 
+use std::collections::HashSet;
+
 use krabka_metadata::{MetadataImage, PartitionRecord};
 use krabka_raft::NodeId;
 
@@ -129,20 +131,13 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
         .filter(|n| !pr.adding_replicas.contains(n))
         .copied()
         .collect();
-    let (leader, leader_changes) = if pr.adding_replicas.contains(&pr.leader) {
-        // Leader was an adding replica; revert leadership.
-        match reverted_replicas.iter().find(|n| reverted_isr.contains(n)) {
-            Some(&n) => (n, true),
-            None => {
-                return Err((
-                    ELIGIBLE_LEADERS_NOT_AVAILABLE,
-                    "no eligible leader after cancel".into(),
-                ));
-            }
-        }
-    } else {
-        (pr.leader, false)
+    let Some(leader) = eligible_leader(pr.leader, &reverted_replicas, &reverted_isr) else {
+        return Err((
+            ELIGIBLE_LEADERS_NOT_AVAILABLE,
+            "no eligible leader after cancel".into(),
+        ));
     };
+    let leader_changes = leader != pr.leader;
     let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
         pr.partition_epoch,
         pr.leader_epoch,
@@ -152,6 +147,13 @@ fn cancel_path(pr: &PartitionRecord, approved: bool) -> Result<Option<PartitionR
         INVALID_REQUEST,
         "partition metadata epoch is exhausted".into(),
     ))?;
+    if !krabka_verified::reassignment_plan_admission(true, false, false, approved, true, true, true)
+    {
+        return Err((
+            INVALID_REQUEST,
+            "reassignment cancel admission failed".into(),
+        ));
+    }
     let new_directories =
         crate::reassignment::remap_directories(&pr.replicas, &pr.directories, &reverted_replicas);
     Ok(Some(PartitionRecord {
@@ -179,36 +181,59 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Result<Option<PartitionRe
         .filter(|n| !pr.removing_replicas.contains(n))
         .copied()
         .collect();
-    let old: Vec<NodeId> = current_target
-        .iter()
-        .filter(|n| !target_set.contains(n))
-        .copied()
-        .collect();
-    let new: Vec<NodeId> = target_set
-        .iter()
-        .filter(|n| !current_target.contains(n))
-        .copied()
-        .collect();
+    let mut new_replicas = Vec::new();
+    let mut new = Vec::new();
+    let mut old = Vec::new();
+    let mut classified = HashSet::new();
+    for &node in current_target.iter().chain(&target_set) {
+        if !classified.insert(node) {
+            continue;
+        }
+        let membership = krabka_verified::reassignment_set_membership(
+            current_target.contains(&node),
+            target_set.contains(&node),
+        );
+        if membership.in_union {
+            new_replicas.push(node);
+        }
+        if membership.adding {
+            new.push(node);
+        }
+        if membership.removing {
+            old.push(node);
+        }
+    }
     if old.is_empty() && new.is_empty() {
         return Ok(None); // already at target — no-op
     }
-    // replicas = current_target ∪ target (current_target first, then new).
-    let mut new_replicas = current_target;
-    for n in &new {
-        new_replicas.push(*n);
-    }
+    let Some(leader) = eligible_leader(pr.leader, &new_replicas, &pr.isr) else {
+        return Err((
+            ELIGIBLE_LEADERS_NOT_AVAILABLE,
+            "no eligible leader for reassignment start".into(),
+        ));
+    };
+    let leader_changes = leader != pr.leader;
     let new_directories =
         crate::reassignment::remap_directories(&pr.replicas, &pr.directories, &new_replicas);
-    let (partition_epoch, leader_epoch) =
-        crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, false)
-            .ok_or((
-                INVALID_REQUEST,
-                "partition metadata epoch is exhausted".into(),
-            ))?;
+    let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
+        pr.partition_epoch,
+        pr.leader_epoch,
+        leader_changes,
+    )
+    .ok_or((
+        INVALID_REQUEST,
+        "partition metadata epoch is exhausted".into(),
+    ))?;
+    if !krabka_verified::reassignment_plan_admission(false, true, true, false, false, true, true) {
+        return Err((
+            INVALID_REQUEST,
+            "reassignment start admission failed".into(),
+        ));
+    }
     Ok(Some(PartitionRecord {
         topic: pr.topic.clone(),
         partition: pr.partition,
-        leader: pr.leader,
+        leader,
         replicas: new_replicas,
         isr: pr.isr.clone(),
         leader_epoch,
@@ -217,6 +242,14 @@ fn start_path(pr: &PartitionRecord, target: &[i32]) -> Result<Option<PartitionRe
         directories: new_directories,
         partition_epoch,
     }))
+}
+
+fn eligible_leader(current: NodeId, replicas: &[NodeId], isr: &[NodeId]) -> Option<NodeId> {
+    if replicas.contains(&current) && isr.contains(&current) {
+        Some(current)
+    } else {
+        replicas.iter().find(|node| isr.contains(node)).copied()
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +268,20 @@ mod tests {
         let error = validate_target(&[-1], &image, true, partition).expect_err("negative broker");
         assert!(error.0 == INVALID_REPLICA_ASSIGNMENT);
         assert!(error.1.contains("negative broker"));
+    }
+
+    #[test]
+    fn validate_target_rejects_duplicate_and_unknown_brokers() {
+        let image = img_with(&[1], &[1], &[], &[], 1);
+        let partition = image.partition("foo", 0).expect("seeded partition");
+        for (target, message) in [
+            (vec![1, 1], "duplicate replica"),
+            (vec![99], "unknown broker"),
+        ] {
+            let error = validate_target(&target, &image, true, partition).expect_err(message);
+            assert!(error.0 == INVALID_REPLICA_ASSIGNMENT);
+            assert!(error.1.contains(message));
+        }
     }
 
     #[test]
@@ -298,6 +345,46 @@ mod tests {
     }
 
     #[test]
+    fn replacing_reassignment_never_keeps_a_leader_outside_the_union() {
+        let img = img_with_epoch(&[1, 2, 3, 4], &[1, 3, 4], &[4], &[1, 2], 1, 11);
+        let res = process_one_partition(&img, "foo", 0, Some(&[4, 5]), true, true)
+            .expect("replacement is valid")
+            .expect("replacement mutates");
+
+        assert!(res.replicas == vec![NodeId(3), NodeId(4), NodeId(5)]);
+        assert!(res.adding_replicas == vec![NodeId(5)]);
+        assert!(res.removing_replicas == vec![NodeId(3)]);
+        assert!(res.leader == NodeId(3));
+        assert!(res.isr.contains(&res.leader));
+        assert!(res.leader_epoch == LeaderEpoch(6));
+        assert!(res.partition_epoch == 12);
+    }
+
+    #[test]
+    fn start_rejects_when_the_planned_union_has_no_isr_leader() {
+        let img = img_with(&[1, 2, 3, 4], &[1, 2, 3], &[4], &[1, 2, 3], 1);
+        let error = process_one_partition(&img, "foo", 0, Some(&[5]), true, true)
+            .expect_err("union has no ISR member");
+
+        assert!(error.0 == ELIGIBLE_LEADERS_NOT_AVAILABLE);
+    }
+
+    #[test]
+    fn start_handoff_rejects_an_exhausted_leader_epoch_and_is_retryable() {
+        let mut image = img_with(&[1, 2, 3, 4], &[1, 3, 4], &[4], &[1, 2], 1);
+        let mut record = image.partition("foo", 0).expect("seeded partition").clone();
+        record.leader_epoch = LeaderEpoch(i32::MAX);
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
+
+        for _ in 0..2 {
+            let error = process_one_partition(&image, "foo", 0, Some(&[4, 5]), true, true)
+                .expect_err("exhausted leader epoch must fail without mutation");
+            assert!(error.0 == INVALID_REQUEST);
+            assert!(image.partition("foo", 0).unwrap().leader == NodeId(1));
+        }
+    }
+
+    #[test]
     fn rf_change_rejected_when_disabled() {
         let img = img_with(&[1, 2, 3], &[1, 2, 3], &[], &[], 1);
         let err = process_one_partition(&img, "foo", 0, Some(&[1, 2]), false, true).unwrap_err();
@@ -343,6 +430,19 @@ mod tests {
             partition_epoch: 12,
         };
         assert!(res == expected);
+    }
+
+    #[test]
+    fn cancel_repairs_a_preserved_leader_outside_the_reverted_isr() {
+        let img = img_with_epoch(&[1, 2, 3, 4], &[1, 4], &[4], &[3], 2, 11);
+        let res = process_one_partition(&img, "foo", 0, None, true, true)
+            .expect("cancel is valid")
+            .expect("cancel mutates");
+
+        assert!(res.replicas == vec![NodeId(1), NodeId(2), NodeId(3)]);
+        assert!(res.isr == vec![NodeId(1)]);
+        assert!(res.leader == NodeId(1));
+        assert!(res.leader_epoch == LeaderEpoch(6));
     }
 
     #[test]

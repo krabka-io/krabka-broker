@@ -15,6 +15,62 @@ pub enum ReassignmentAction {
     Complete,
 }
 
+/// Pointwise membership in a reassignment's union, additions, and removals.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct ReassignmentSetMembership {
+    pub in_union: bool,
+    pub adding: bool,
+    pub removing: bool,
+}
+
+/// Classify one unique replica against the current and requested assignments.
+#[ensures(result.in_union == (in_current || in_target))]
+#[ensures(result.adding == (in_target && !in_current))]
+#[ensures(result.removing == (in_current && !in_target))]
+#[ensures(!(result.adding && result.removing))]
+#[must_use]
+pub fn reassignment_set_membership(in_current: bool, in_target: bool) -> ReassignmentSetMembership {
+    ReassignmentSetMembership {
+        in_union: in_current || in_target,
+        adding: in_target && !in_current,
+        removing: in_current && !in_target,
+    }
+}
+
+/// Final mutation admission for either a reassignment start or cancel.
+#[ensures(result == (
+    leader_eligible
+        && epoch_available
+        && if is_cancel {
+            cancel_approved && cancel_in_progress
+        } else {
+            target_nonempty_unique_registered && rf_policy_satisfied
+        }
+))]
+#[must_use]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "each boolean is one independently established planner obligation"
+)]
+pub fn reassignment_plan_admission(
+    is_cancel: bool,
+    target_nonempty_unique_registered: bool,
+    rf_policy_satisfied: bool,
+    cancel_approved: bool,
+    cancel_in_progress: bool,
+    leader_eligible: bool,
+    epoch_available: bool,
+) -> bool {
+    leader_eligible
+        && epoch_available
+        && if is_cancel {
+            cancel_approved && cancel_in_progress
+        } else {
+            target_nonempty_unique_registered && rf_policy_satisfied
+        }
+}
+
 /// Wait for new replicas, hand leadership to the first eligible target, or
 /// complete while the existing leader remains in the target assignment.
 #[ensures(!additions_caught_up ==> result == ReassignmentAction::WaitForReplication)]
@@ -69,5 +125,37 @@ mod tests {
         assert2::assert!(reassignment_action(true, false, &[]) == Complete);
         assert2::assert!(reassignment_action(true, true, &[false, true, true]) == Handoff(1));
         assert2::assert!(reassignment_action(true, true, &[false]) == WaitForLeader);
+    }
+
+    #[test]
+    fn planning_kernels_cover_set_algebra_and_fences() {
+        assert2::assert!(
+            reassignment_set_membership(false, false)
+                == ReassignmentSetMembership {
+                    in_union: false,
+                    adding: false,
+                    removing: false,
+                }
+        );
+        assert2::assert!(reassignment_set_membership(true, false).removing);
+        assert2::assert!(reassignment_set_membership(false, true).adding);
+        assert2::assert!(reassignment_set_membership(true, true).in_union);
+
+        assert2::assert!(reassignment_plan_admission(
+            false, true, true, false, false, true, true
+        ));
+        assert2::assert!(reassignment_plan_admission(
+            true, false, false, true, true, true, true
+        ));
+        for denied in [
+            reassignment_plan_admission(false, false, true, false, false, true, true),
+            reassignment_plan_admission(false, true, false, false, false, true, true),
+            reassignment_plan_admission(true, false, false, false, true, true, true),
+            reassignment_plan_admission(true, false, false, true, false, true, true),
+            reassignment_plan_admission(false, true, true, false, false, false, true),
+            reassignment_plan_admission(false, true, true, false, false, true, false),
+        ] {
+            assert2::assert!(!denied);
+        }
     }
 }

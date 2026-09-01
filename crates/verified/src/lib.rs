@@ -89,7 +89,10 @@ pub use quorum_state::{
     quorum_state_write_decision,
 };
 pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
-pub use reassignment::{ReassignmentAction, reassignment_action};
+pub use reassignment::{
+    ReassignmentAction, ReassignmentSetMembership, reassignment_action,
+    reassignment_plan_admission, reassignment_set_membership,
+};
 pub use reconfiguration::{
     VoterChangeKind, VoterReconfigurationDecision, VoterReconfigurationPlan,
     voter_reconfiguration_decision,
