@@ -15,6 +15,111 @@ pub enum AclDecision {
     DenyDefault,
 }
 
+/// Resource-pattern class used by the verified ACL applicability adapter.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum AclPatternKind {
+    Literal,
+    Prefixed,
+}
+
+/// ACL operation class used by the verified implication table.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum AclOperationKind {
+    All,
+    Read,
+    Write,
+    Create,
+    Delete,
+    Alter,
+    Describe,
+    ClusterAction,
+    DescribeConfigs,
+    AlterConfigs,
+    IdempotentWrite,
+    TwoPhaseCommit,
+}
+
+/// Match a principal or host by exact equality or its axis-specific wildcard.
+#[ensures(result == (wildcard || exact))]
+#[must_use]
+pub fn acl_identity_match(wildcard: bool, exact: bool) -> bool {
+    wildcard || exact
+}
+
+/// Match an ACL resource type and literal or prefixed name pattern.
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the proof classifies four independent host matching facts"
+)]
+#[ensures(result == (same_type && match pattern {
+    AclPatternKind::Literal => exact || wildcard,
+    AclPatternKind::Prefixed => prefix,
+}))]
+#[must_use]
+pub fn acl_resource_match(
+    same_type: bool,
+    pattern: AclPatternKind,
+    exact: bool,
+    wildcard: bool,
+    prefix: bool,
+) -> bool {
+    same_type
+        && match pattern {
+            AclPatternKind::Literal => exact || wildcard,
+            AclPatternKind::Prefixed => prefix,
+        }
+}
+
+/// Match exact operations, `All`, and Kafka's one-way implication arrows.
+#[ensures(result == (stored == requested
+    || stored == AclOperationKind::All
+    || (stored == AclOperationKind::Read && requested == AclOperationKind::Describe)
+    || (stored == AclOperationKind::Write && requested == AclOperationKind::Describe)
+    || (stored == AclOperationKind::Delete && requested == AclOperationKind::Describe)
+    || (stored == AclOperationKind::Alter && requested == AclOperationKind::Describe)
+    || (stored == AclOperationKind::AlterConfigs
+        && requested == AclOperationKind::DescribeConfigs)))]
+#[must_use]
+pub fn acl_operation_match(stored: AclOperationKind, requested: AclOperationKind) -> bool {
+    match stored {
+        AclOperationKind::All => true,
+        AclOperationKind::Read => matches!(
+            requested,
+            AclOperationKind::Read | AclOperationKind::Describe
+        ),
+        AclOperationKind::Write => matches!(
+            requested,
+            AclOperationKind::Write | AclOperationKind::Describe
+        ),
+        AclOperationKind::Create => matches!(requested, AclOperationKind::Create),
+        AclOperationKind::Delete => matches!(
+            requested,
+            AclOperationKind::Delete | AclOperationKind::Describe
+        ),
+        AclOperationKind::Alter => matches!(
+            requested,
+            AclOperationKind::Alter | AclOperationKind::Describe
+        ),
+        AclOperationKind::Describe => matches!(requested, AclOperationKind::Describe),
+        AclOperationKind::ClusterAction => matches!(requested, AclOperationKind::ClusterAction),
+        AclOperationKind::DescribeConfigs => {
+            matches!(requested, AclOperationKind::DescribeConfigs)
+        }
+        AclOperationKind::AlterConfigs => matches!(
+            requested,
+            AclOperationKind::AlterConfigs | AclOperationKind::DescribeConfigs
+        ),
+        AclOperationKind::IdempotentWrite => {
+            matches!(requested, AclOperationKind::IdempotentWrite)
+        }
+        AclOperationKind::TwoPhaseCommit => {
+            matches!(requested, AclOperationKind::TwoPhaseCommit)
+        }
+    }
+}
+
 /// Authentication phase used to admit a Kafka request.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
@@ -71,6 +176,72 @@ mod tests {
         check!(acl_decision(false, false, true) == DenyExplicit);
         check!(acl_decision(false, true, true) == DenyExplicit);
         check!(acl_decision(true, false, true) == AllowSuperuser);
+    }
+
+    #[test]
+    fn acl_applicability_truth_tables_are_exact() {
+        use AclOperationKind::{
+            All, Alter, AlterConfigs, ClusterAction, Create, Delete, Describe, DescribeConfigs,
+            IdempotentWrite, Read, TwoPhaseCommit, Write,
+        };
+
+        for (wildcard, exact, expected) in [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            check!(acl_identity_match(wildcard, exact) == expected);
+        }
+
+        for same_type in [false, true] {
+            for pattern in [AclPatternKind::Literal, AclPatternKind::Prefixed] {
+                for exact in [false, true] {
+                    for wildcard in [false, true] {
+                        for prefix in [false, true] {
+                            let expected = same_type
+                                && match pattern {
+                                    AclPatternKind::Literal => exact || wildcard,
+                                    AclPatternKind::Prefixed => prefix,
+                                };
+                            check!(
+                                acl_resource_match(same_type, pattern, exact, wildcard, prefix)
+                                    == expected
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let operations = [
+            All,
+            Read,
+            Write,
+            Create,
+            Delete,
+            Alter,
+            Describe,
+            ClusterAction,
+            DescribeConfigs,
+            AlterConfigs,
+            IdempotentWrite,
+            TwoPhaseCommit,
+        ];
+        let arrows = [
+            (Read, Describe),
+            (Write, Describe),
+            (Delete, Describe),
+            (Alter, Describe),
+            (AlterConfigs, DescribeConfigs),
+        ];
+        for stored in operations {
+            for requested in operations {
+                let expected =
+                    stored == requested || stored == All || arrows.contains(&(stored, requested));
+                check!(acl_operation_match(stored, requested) == expected);
+            }
+        }
     }
 
     #[test]

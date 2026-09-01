@@ -20,7 +20,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::matching::{matches_host, matches_operation, matches_principal};
+use self::matching::{matches_host, matches_operation, matches_principal, matches_resource};
 use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
 
 /// Authorizer that consults the cluster's persisted ACLs.
@@ -73,7 +73,8 @@ impl Authorizer for SimpleAclAuthorizer {
             let user_pattern = format!("User:{}", req.principal.name);
             let host_str = req.host.ip().to_string();
             for entry in source.matching_acls(req.resource_type, req.resource_name) {
-                if !matches_principal(entry, &user_pattern)
+                if !matches_resource(entry, req.resource_type, req.resource_name)
+                    || !matches_principal(entry, &user_pattern)
                     || !matches_host(entry, &host_str)
                     || !matches_operation(entry.operation, req.operation)
                 {

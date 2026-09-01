@@ -7,14 +7,31 @@
 //! operation-implication table, which is why it lives beside them rather than
 //! in the decision loop.
 
-use krabka_metadata::{AclEntry, AclOperation};
+use krabka_metadata::{AclEntry, AclOperation, PatternType, ResourceType};
+use krabka_verified::{
+    AclOperationKind, AclPatternKind, acl_identity_match, acl_operation_match, acl_resource_match,
+};
 
 pub(super) fn matches_principal(entry: &AclEntry, user_pattern: &str) -> bool {
-    entry.principal == "User:*" || entry.principal == user_pattern
+    acl_identity_match(entry.principal == "User:*", entry.principal == user_pattern)
 }
 
 pub(super) fn matches_host(entry: &AclEntry, host: &str) -> bool {
-    entry.host == "*" || entry.host == host
+    acl_identity_match(entry.host == "*", entry.host == host)
+}
+
+pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, name: &str) -> bool {
+    let pattern = match entry.pattern_type {
+        PatternType::Literal => AclPatternKind::Literal,
+        PatternType::Prefixed => AclPatternKind::Prefixed,
+    };
+    acl_resource_match(
+        entry.resource_type == resource_type,
+        pattern,
+        entry.resource_name == name,
+        entry.resource_name == "*",
+        name.starts_with(entry.resource_name.as_str()),
+    )
 }
 
 /// Returns true when an ACL with the `stored` operation grants access for an
@@ -34,23 +51,24 @@ pub(super) fn matches_host(entry: &AclEntry, host: &str) -> bool {
 ///
 /// The table is one-way: Describe does NOT imply Read, and so on.
 pub(super) fn matches_operation(stored: AclOperation, requested: AclOperation) -> bool {
-    if stored == requested {
-        return true;
-    }
-    if matches!(stored, AclOperation::All) {
-        return true;
-    }
-    implies(stored, requested)
+    acl_operation_match(operation_kind(stored), operation_kind(requested))
 }
 
-fn implies(stored: AclOperation, requested: AclOperation) -> bool {
-    matches!(
-        (stored, requested),
-        (
-            AclOperation::Read | AclOperation::Write | AclOperation::Delete | AclOperation::Alter,
-            AclOperation::Describe,
-        ) | (AclOperation::AlterConfigs, AclOperation::DescribeConfigs)
-    )
+fn operation_kind(operation: AclOperation) -> AclOperationKind {
+    match operation {
+        AclOperation::All => AclOperationKind::All,
+        AclOperation::Read => AclOperationKind::Read,
+        AclOperation::Write => AclOperationKind::Write,
+        AclOperation::Create => AclOperationKind::Create,
+        AclOperation::Delete => AclOperationKind::Delete,
+        AclOperation::Alter => AclOperationKind::Alter,
+        AclOperation::Describe => AclOperationKind::Describe,
+        AclOperation::ClusterAction => AclOperationKind::ClusterAction,
+        AclOperation::DescribeConfigs => AclOperationKind::DescribeConfigs,
+        AclOperation::AlterConfigs => AclOperationKind::AlterConfigs,
+        AclOperation::IdempotentWrite => AclOperationKind::IdempotentWrite,
+        AclOperation::TwoPhaseCommit => AclOperationKind::TwoPhaseCommit,
+    }
 }
 
 #[cfg(test)]
@@ -67,6 +85,44 @@ mod tests {
             acl_op_on, addr, alice, img, no_super, req, req_on, topic_acl, topic_acl_op,
         },
     };
+
+    use super::matches_operation;
+
+    #[test]
+    fn operation_implications_are_exhaustive_and_one_way() {
+        use AclOperation::{
+            All, Alter, AlterConfigs, ClusterAction, Create, Delete, Describe, DescribeConfigs,
+            IdempotentWrite, Read, TwoPhaseCommit, Write,
+        };
+        let operations = [
+            All,
+            Read,
+            Write,
+            Create,
+            Delete,
+            Alter,
+            Describe,
+            ClusterAction,
+            DescribeConfigs,
+            AlterConfigs,
+            IdempotentWrite,
+            TwoPhaseCommit,
+        ];
+        let arrows = [
+            (Read, Describe),
+            (Write, Describe),
+            (Delete, Describe),
+            (Alter, Describe),
+            (AlterConfigs, DescribeConfigs),
+        ];
+        for stored in operations {
+            for requested in operations {
+                let expected =
+                    stored == requested || stored == All || arrows.contains(&(stored, requested));
+                assert2::assert!(matches_operation(stored, requested) == expected);
+            }
+        }
+    }
 
     #[test]
     fn principal_wildcard_matches_any_user() {
