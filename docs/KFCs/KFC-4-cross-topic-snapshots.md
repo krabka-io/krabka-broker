@@ -274,7 +274,7 @@ The same path leaves `partition_leader_epoch` at the `RecordBatch` default of ze
 
 ### The Coordinator Sits Where the Transaction Coordinator Sits
 
-`murmur2(group) % num_partitions` maps a group name to one `__barrier_state` partition, and the broker that leads that partition coordinates the group. This is Kafka's `Utils.abs(murmur2(...)) % numPartitions` convention, the same one `__transaction_state` and `__share_group_state` use, including the JVM rule that `Integer.MIN_VALUE` maps to 0.
+`murmur2(group) % num_partitions` maps a group name to one `__barrier_state` partition, and the broker that leads that partition coordinates the group. The barrier partitioner follows Kafka's `Utils.abs(murmur2(...)) % numPartitions` convention, including the JVM rule that `Integer.MIN_VALUE` maps to 0.
 
 One partition per group is what gives the group's epochs a total order. Every group record, injection-start record and cut record of one group lands in one partition, so a single log decides which epoch came first. Two brokers never allocate the same epoch, because only one of them leads that partition.
 
@@ -412,7 +412,7 @@ The three unenforced limits in [Broker Configuration](#broker-configuration) are
 
 The load-bearing claim of this feature is that an ordinary Kafka consumer is unaffected by the markers, so the test plan is built around proving that against a real JVM client rather than against krabka's own.
 
-**Unit.** Each module is tested against constructed values with no log, no metadata image and no partition. The pure decisions in `state` carry the largest share: epoch allocation, target expansion, cut construction from a placement map, the retention window, and the record fold that recovery uses. `marker` round-trips the control record and pins the three producer fields and the control bit. `partitioner` asserts the canonical JVM `murmur2` vectors, so a barrier group and a transactional id of the same name land on the same index. `coordinator` drives the injection protocol against a mocked `RemoteMarkerWriter`, including the crash cases: a start record with no cut, and a pending injection frozen at a higher coordinator epoch.
+**Unit.** Each module is tested against constructed values with no log, no metadata image and no partition. The pure decisions in `state` carry the largest share: epoch allocation, target expansion, cut construction from a placement map, the retention window, and the record fold that recovery uses. `marker` round-trips the control record and pins the three producer fields and the control bit. `partitioner` asserts the canonical JVM `murmur2` vectors. `coordinator` drives the injection protocol against a mocked `RemoteMarkerWriter`, including the crash cases: a start record with no cut, and a pending injection frozen at a higher coordinator epoch.
 
 **Golden vector.** The cut wire format is pinned by a vector encoded straight from the specification, with no implementation in the loop. Four implementations read this format and only the broker writes it, so a drift between them surfaces as a wrong cut rather than as a decode error. The broker decodes the vector, re-encodes it, and compares byte for byte. `krabka-streams-rs`, `krabka-streams-java` and `krabka-streams-go` assert the same bytes.
 

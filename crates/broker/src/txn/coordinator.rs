@@ -197,15 +197,15 @@ mod tests {
     };
 
     #[test]
-    fn partition_for_maps_tid_via_murmur2_over_num_partitions() {
-        // Canonical JVM murmur2 vectors (see `partitioner` tests) with N=50.
+    fn partition_for_maps_tid_via_java_hash_over_num_partitions() {
+        // Canonical JVM String.hashCode vectors (see `partitioner` tests) with N=50.
         // Pins the real mapping so a
         // constant `PartitionIndex(0)` (the Default) is caught: none of these
         // hash to 0.
         let coordinator = test_coordinator();
-        check!(coordinator.partition_for("my-tid") == PartitionIndex(43));
-        check!(coordinator.partition_for("producer-1") == PartitionIndex(45));
-        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(26));
+        check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
+        check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
+        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
     }
 
     #[test]
