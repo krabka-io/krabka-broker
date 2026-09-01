@@ -305,7 +305,14 @@ pub(crate) async fn handle(
     );
 
     // KIP-599: apply controller_mutation_rate throttle after response assembly.
-    let delay = quota.delay();
+    // The delay is the only throttle this api applies — the dispatch loop marks
+    // it quota-exempt and never charges it the request quota — so resolving it
+    // through the metric records the throttle phase and the quota that caused
+    // it exactly once per request.
+    let delay = broker.metrics.record_applied_throttle(
+        krabka_protocol::api_key::ApiKey::DeleteTopics as i16,
+        &[(crate::metrics::QuotaType::ControllerMutation, quota.delay())],
+    );
     let throttle_time_ms = crate::quota::throttle_time_ms(delay);
     if should_wait_for_quota_delay(delay) {
         tokio::time::sleep(delay.to_std()).await;
