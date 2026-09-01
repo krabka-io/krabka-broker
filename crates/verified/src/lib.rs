@@ -211,7 +211,11 @@ pub use retention::{
     RetentionPrefix, barrier_cut_expired, local_retention_prefix, retention_delete_target,
     retention_prefix,
 };
-pub use schema::{SchemaFailureDecision, SchemaFailureKind, schema_failure_decision};
+pub use schema::{
+    SchemaBatchAdmission, SchemaFailureDecision, SchemaFailureKind, SchemaFieldAction,
+    SchemaFieldRole, schema_batch_admission, schema_failure_decision, schema_field_action,
+    schema_frame_id,
+};
 pub use scram::{
     ScramAlterationDecision, ScramAlterationFacts, ScramAlterationKind, ScramPriorState,
     scram_alteration_decision,

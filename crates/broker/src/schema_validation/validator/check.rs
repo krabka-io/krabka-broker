@@ -45,7 +45,16 @@ impl SchemaValidator {
             return Ok(());
         }
 
-        let (id, _) = wire::decode(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
+        let [magic, id_0, id_1, id_2, id_3, ..] = field else {
+            return Err(RejectReason::Unframed(
+                "Confluent frame is shorter than its five-byte prefix".to_owned(),
+            ));
+        };
+        let Some(id) = krabka_verified::schema_frame_id(*magic, *id_0, *id_1, *id_2, *id_3) else {
+            return Err(RejectReason::Unframed(format!(
+                "unsupported Confluent magic byte {magic}"
+            )));
+        };
         let subject = TopicNameStrategy.subject(topic, role);
 
         let entry = match self.entry(id, mode, metrics).await {
@@ -76,13 +85,16 @@ impl SchemaValidator {
         // Protobuf carries a message-index between the id and the body, so the
         // body offset depends on the format the id resolved to.
         let (message_index, body) = if *kind == SchemaKind::Protobuf {
-            let (_, index, body) =
+            let (decoded_id, index, body) =
                 wire::decode_protobuf(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
+            if decoded_id != id {
+                return Err(RejectReason::Unframed(
+                    "Protobuf decoder selected a different schema id".to_owned(),
+                ));
+            }
             (index, body)
         } else {
-            let (_, body) =
-                wire::decode(field).map_err(|e| RejectReason::Unframed(e.to_string()))?;
-            (Vec::new(), body)
+            (Vec::new(), &field[5..])
         };
 
         validate_body(*kind, text, &message_index, body).map_err(|e| RejectReason::BodyMismatch {
@@ -114,7 +126,10 @@ impl SchemaValidator {
 mod tests {
     use assert2::{assert, check};
     use krabka_units::{minutes, secs};
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
     use super::*;
     use crate::schema_validation::validator::test_support::{
@@ -143,6 +158,30 @@ mod tests {
             assert!(let Err(reason) = got, "case {name}");
             check!(reason.label() == "unframed", "case {name}: {reason}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_frame_selects_all_four_big_endian_id_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/schemas/ids/16909060/versions"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let v = validator(server.uri());
+        let got = v
+            .check(
+                "orders",
+                Role::Value,
+                ValidationMode::Id,
+                &[0, 1, 2, 3, 4, b'x'],
+                &no_metrics(),
+            )
+            .await;
+
+        assert!(let Err(RejectReason::UnknownId(id)) = got);
+        check!(id == 0x0102_0304);
     }
 
     #[tokio::test]
