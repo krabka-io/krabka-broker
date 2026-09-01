@@ -37,6 +37,7 @@ pub mod producer;
 pub mod producer_id;
 pub mod producer_snapshot;
 pub mod quorum_state;
+pub mod quota;
 pub mod raft;
 pub mod reassignment;
 pub mod reconfiguration;
@@ -164,6 +165,10 @@ pub use producer_snapshot::{
 pub use quorum_state::{
     QuorumStateLoadDecision, QuorumStateWriteDecision, quorum_state_load_decision,
     quorum_state_write_decision,
+};
+pub use quota::{
+    IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts, UserClientQuotaPrecedence,
+    ip_quota_precedence, user_client_quota_precedence,
 };
 pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
 pub use reassignment::{
