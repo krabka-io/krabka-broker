@@ -21,8 +21,8 @@
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELETE_RETENTION_MS, LOCAL_RETENTION_BYTES,
-    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MIN_INSYNC_REPLICAS, REMOTE_STORAGE_ENABLE,
-    RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
+    LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_MESSAGE_BYTES, MIN_INSYNC_REPLICAS,
+    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
@@ -311,6 +311,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             Some("1"),
             "With acks=all, the minimum in-sync replicas required to accept a write; otherwise NOT_ENOUGH_REPLICAS (19).",
             ValueCheck::I32AtLeast(1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes, >=0"),
+        ..key(
+            MAX_MESSAGE_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("1048588"),
+            "Largest record batch accepted for this topic, measured over the batch's whole wire encoding; a larger one is refused with MESSAGE_TOO_LARGE (10). Unset topics inherit the broker's message.max.bytes.",
+            ValueCheck::I32AtLeast(0),
         )
     },
     ConfigKey {

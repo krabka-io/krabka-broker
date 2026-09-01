@@ -1,10 +1,16 @@
 //! Topic-config whitelist for `AlterConfigs` / `IncrementalAlterConfigs`.
 //!
-//! The broker recognizes twenty-two topic keys. Six propagate live to `Log.config`:
+//! The broker recognizes twenty-three topic keys. Six propagate live to `Log.config`:
 //! `retention.ms`, `retention.bytes`, `segment.bytes`, `cleanup.policy`,
 //! `compression.type`, and `delivery.mode`. The tiered-storage local-retention pair
-//! (`local.retention.ms`, `local.retention.bytes`) and the KIP-534
-//! delete-horizon grace window (`delete.retention.ms`) propagate live too.
+//! (`local.retention.ms`, `local.retention.bytes`), the KIP-534
+//! delete-horizon grace window (`delete.retention.ms`), and the batch-size cap
+//! (`max.message.bytes`) propagate live too.
+//!
+//! One key bounds a single write: `max.message.bytes`. The produce path reads
+//! it per topic, falls back to the broker's `message.max.bytes` when the topic
+//! sets none, and refuses a larger record batch with `MESSAGE_TOO_LARGE` (10)
+//! before it verifies a CRC or decompresses a body.
 //!
 //! The produce hot path's pre-flight gate reads one key,
 //! `min.insync.replicas`, which takes integers >= 1. An `acks=-1` produce
@@ -70,6 +76,7 @@ mod delivery;
 mod diskless;
 mod docs;
 mod log_config;
+mod message_size;
 mod qos;
 mod recovery;
 pub(crate) mod registry;
@@ -103,6 +110,7 @@ pub(crate) use self::{
     },
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
+    message_size::resolve_max_message_bytes,
     qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
@@ -125,6 +133,9 @@ pub(crate) const SEGMENT_BYTES: &str = "segment.bytes";
 pub(crate) const CLEANUP_POLICY: &str = "cleanup.policy";
 pub(crate) const COMPRESSION_TYPE: &str = "compression.type";
 pub(crate) const MIN_INSYNC_REPLICAS: &str = "min.insync.replicas";
+/// The largest record batch a topic accepts, measured over the batch's whole
+/// wire encoding. An oversized batch earns `MESSAGE_TOO_LARGE` (10).
+pub(crate) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
 
 /// KIP-405: per-topic tiered-storage opt-in.
 pub(crate) const REMOTE_STORAGE_ENABLE: &str = "remote.storage.enable";
