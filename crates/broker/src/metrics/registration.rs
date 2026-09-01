@@ -83,6 +83,7 @@ impl BrokerMetrics {
             leader_site_drift_partitions: Gauge::default(),
             voted_directory: Family::default(),
             controller_leader_changes_total: Counter::default(),
+            controller_fencing_publications_total: Counter::default(),
             isr_shrinks_total: Counter::default(),
             isr_expands_total: Counter::default(),
             incremental_fetch_sessions: Gauge::default(),

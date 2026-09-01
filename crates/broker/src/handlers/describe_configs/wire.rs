@@ -15,6 +15,10 @@ pub(super) const CONFIG_SOURCE_DYNAMIC_TOPIC: i8 = 1;
 pub(super) const CONFIG_SOURCE_DYNAMIC_BROKER: i8 = 2;
 pub(super) const CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER: i8 = 3;
 pub(super) const CONFIG_SOURCE_STATIC_BROKER: i8 = 4;
+/// `ConfigSource::DYNAMIC_BROKER_LOGGER_CONFIG`, the source every logger
+/// level reports. A JVM broker stamps it on every entry it reads out of the
+/// live log4j2 context.
+pub(super) const CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER: i8 = 6;
 /// `ConfigSource::DEFAULT_CONFIG`, for keys reported at their default.
 pub(super) const CONFIG_SOURCE_DEFAULT: i8 = 5;
 /// `DescribeConfigsResponse.ConfigSource::CLIENT_METRICS_CONFIG` wire byte.
@@ -24,6 +28,7 @@ pub(super) const CONFIG_SOURCE_DYNAMIC_GROUP: i8 = 8;
 
 pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;
 pub(super) const RESOURCE_TYPE_BROKER: i8 = 4;
+pub(super) const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
 pub(super) const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 pub(super) const RESOURCE_TYPE_GROUP: i8 = 32;
 
@@ -40,6 +45,7 @@ mod tests {
         check!(super::CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER == 3i8);
         check!(super::CONFIG_SOURCE_STATIC_BROKER == 4i8);
         check!(super::CONFIG_SOURCE_DEFAULT == 5i8);
+        check!(super::CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER == 6i8);
         check!(super::CONFIG_SOURCE_CLIENT_METRICS == 7i8);
         check!(super::CONFIG_SOURCE_DYNAMIC_GROUP == 8i8);
     }
