@@ -24,11 +24,20 @@ macro_rules! api_version {
     };
 }
 
-/// KIP-919's controller-listener Admin subset. `DescribeQuorum`,
-/// `DescribeCluster`, `ApiVersions`, and controller registration are served
-/// directly by `krabka-raft`, so only the shared broker-handler subset lives
-/// here.
+/// KIP-919's controller-listener Admin subset, plus `BrokerHeartbeat`.
+/// `DescribeQuorum`, `DescribeCluster`, `ApiVersions`, and the two
+/// registration RPCs are served directly by `krabka-raft`, so only the shared
+/// broker-handler subset lives here.
+///
+/// `BrokerHeartbeat` is not an Admin API, but it belongs on this list for the
+/// same reason the Admin subset does: KIP-919 puts it on the controller
+/// listener, and only the broker crate holds what answering it takes -- the
+/// heartbeat registry that decides fencing, the KIP-112 offline-dir failover,
+/// and the controlled-shutdown drain. Routing it here is what keeps a
+/// heartbeat sent to a controller-only node from being answered by a handler
+/// that does none of that.
 const SUPPORTED_APIS: &[ControllerApiVersion] = &[
+    api_version!(broker_heartbeat_request),
     api_version!(alter_configs_request),
     api_version!(create_acls_request),
     api_version!(delete_acls_request),
@@ -179,7 +188,7 @@ mod tests {
 
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
-            keys == maplit::btreeset! {29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 64,}
+            keys == maplit::btreeset! {29, 30, 31, 32, 33, 41, 43, 44, 45, 46, 48, 49, 50, 57, 63, 64,}
         );
     }
 

@@ -2,6 +2,14 @@
 //! controller leader at every configured `heartbeat_interval`. It finds the
 //! current controller in the metadata image, and it retries after transient
 //! errors.
+//!
+//! KIP-919 puts `BrokerHeartbeat` on the controller's CONTROLLER listener, so
+//! the leader's address comes from its `ControllerRegistrationRecord`, not
+//! from a broker registration. A controller-only node never registers as a
+//! broker, so resolving the leader through `image.broker()` would strand every
+//! broker in a role-separated cluster: no heartbeat would ever arrive, and the
+//! controller's liveness registry would fence the whole cluster one
+//! `liveness_tick_interval` after boot.
 
 use std::sync::Arc;
 
@@ -17,12 +25,16 @@ pub(crate) struct Config {
     pub interval: Time,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
     pub shutdown: CancellationToken,
-    /// Shared inter-broker dialer that reaches the controller leader.
-    /// It runs TLS / SASL when the inter-broker listener needs them.
-    /// If not, it uses plain TCP.
-    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub inter_broker_listener_protocol: ListenerProtocol,
-    pub inter_broker_listener_name: String,
+    /// Shared outbound dialer that reaches the controller leader. It runs
+    /// TLS / SASL when the controller listener needs them. If not, it uses
+    /// plain TCP. This is the same dialer the raft transport uses to reach
+    /// its peers, so a heartbeat travels the channel the quorum already
+    /// authenticates on.
+    pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
+    pub controller_listener_protocol: ListenerProtocol,
+    /// SNI and SASL server name for the controller listener, matching the one
+    /// the raft dialer presents.
+    pub controller_server_name: String,
     /// When `true`, the client stamps `want_shut_down=true` on outbound
     /// `BrokerHeartbeat` requests.
     /// [`crate::BrokerHandle::controlled_shutdown`] drives this flag.
@@ -102,6 +114,29 @@ fn heartbeat_request(
     }
 }
 
+/// The listener a KIP-919 controller advertises for the control-plane RPCs a
+/// broker addresses to it. `self_controller_registration_record` publishes the
+/// endpoint under this name.
+const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
+
+/// The controller leader's CONTROLLER-listener endpoint, from the registration
+/// it published for itself.
+///
+/// A registration that names no CONTROLLER listener yields `None` rather than
+/// some other endpoint of the same node: Kafka resolves the controller by the
+/// listener name in `controller.listener.names` and treats a registration
+/// without it as unusable, and dialling the wrong listener would fail the
+/// heartbeat on every tick without saying why.
+fn controller_endpoint(
+    registration: &krabka_metadata::ControllerRegistrationRecord,
+) -> Option<(String, u16)> {
+    registration
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == CONTROLLER_LISTENER_NAME)
+        .map(|endpoint| (endpoint.host.clone(), endpoint.port))
+}
+
 /// Triggers the KIP-112 self-shutdown. It latches `should_shutdown` and
 /// cancels the supervisor. Every early-exit path calls it, so the check is not
 /// accidentally skipped when the controller is temporarily unreachable.
@@ -127,9 +162,8 @@ pub(crate) async fn run(mut cfg: Config) {
             trigger_all_dirs_offline_shutdown(&mut cfg, "detected before controller resolution");
             return;
         }
-        // Resolve current controller leader's listen address from
-        // the metadata image (via brokers() iteration), or skip this
-        // tick if not yet known.
+        // Resolve the current controller leader's CONTROLLER-listener address
+        // from the metadata image, or skip this tick if it is not known yet.
         let leader_id = *cfg.controller.watch_leader().borrow();
         let Some(leader_id) = leader_id else {
             debug!("heartbeat: no controller leader yet");
@@ -145,30 +179,30 @@ pub(crate) async fn run(mut cfg: Config) {
             );
             continue;
         };
-        let Some(broker_rec) = image.broker(leader_id) else {
-            debug!("heartbeat: controller leader not in metadata image yet");
+        let Some(controller_rec) = image.controller(leader_id) else {
+            debug!(
+                leader = leader_id.0,
+                "heartbeat: controller leader registration not in metadata image yet"
+            );
             continue;
         };
-        // Prefer the inter-broker listener's endpoint when available;
-        // fall back to the legacy top-level host/port. Mirrors the
-        // resolution in the replicator supervisor.
-        let (host, port) = broker_rec
-            .endpoints
-            .iter()
-            .find(|e| e.name == cfg.inter_broker_listener_name)
-            .map_or_else(
-                || (broker_rec.host.clone(), broker_rec.port),
-                |e| (e.host.clone(), e.port),
+        let Some((host, port)) = controller_endpoint(controller_rec) else {
+            debug!(
+                leader = leader_id.0,
+                listener = CONTROLLER_LISTENER_NAME,
+                "heartbeat: controller leader advertises no controller listener"
             );
+            continue;
+        };
         let opts = heartbeat_connection_options(cfg.broker_id, cfg.interval);
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
         let client_res = tokio::time::timeout(
             rpc_timeout.to_std(),
-            cfg.inter_broker_client.connect_as_connection(
+            cfg.outbound_client.connect_as_connection(
                 &host,
                 port,
-                cfg.inter_broker_listener_protocol,
-                "localhost",
+                cfg.controller_listener_protocol,
+                &cfg.controller_server_name,
                 opts,
             ),
         )
@@ -282,6 +316,49 @@ mod tests {
         // Both offline: true.
         status.mark_offline(b.path(), "disk error");
         assert!(all_dirs_offline(&paths, &status));
+    }
+
+    fn controller_registration(
+        endpoints: &[(&str, &str, u16)],
+    ) -> krabka_metadata::ControllerRegistrationRecord {
+        krabka_metadata::ControllerRegistrationRecord {
+            node_id: krabka_raft::NodeId(1),
+            incarnation_id: uuid::Uuid::nil(),
+            zk_migration_ready: false,
+            endpoints: endpoints
+                .iter()
+                .map(|&(name, host, port)| krabka_metadata::BrokerEndpoint {
+                    name: name.to_string(),
+                    host: host.to_string(),
+                    port,
+                    protocol: krabka_security::ListenerProtocol::Plaintext,
+                })
+                .collect(),
+            features: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// The heartbeat goes to the leader's CONTROLLER listener, so that is the
+    /// endpoint the registration must yield -- never a sibling listener that
+    /// happens to be advertised alongside it.
+    #[test]
+    fn controller_endpoint_picks_the_controller_listener() {
+        let registration = controller_registration(&[
+            ("BROKER", "broker-host", 9_092),
+            ("CONTROLLER", "controller-host", 9_093),
+        ]);
+
+        assert!(controller_endpoint(&registration) == Some(("controller-host".to_string(), 9_093)));
+    }
+
+    /// A registration that names no CONTROLLER listener is unusable. Falling
+    /// back to another endpoint would send the heartbeat somewhere that does
+    /// not answer it.
+    #[test]
+    fn controller_endpoint_is_none_without_a_controller_listener() {
+        let registration = controller_registration(&[("BROKER", "broker-host", 9_092)]);
+
+        assert!(controller_endpoint(&registration).is_none());
     }
 
     #[test]
