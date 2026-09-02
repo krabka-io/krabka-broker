@@ -20,6 +20,45 @@ the `krabka-*` names to crates.io.
 
 ### Added
 
+- KIP-966 eligible leader replicas. The controller maintains the ELR, elects
+  from it on failover, and `DescribeTopicPartitions` reports its columns from
+  the metadata image. A broker that cannot prove it shut down cleanly drops its
+  membership rather than being re-derived into it from a stale ISR.
+- The Kafka controller listener routes the whole Admin surface, and serves
+  KIP-590 `Envelope`. The broker sends `BrokerHeartbeat` to it.
+- `BROKER_LOGGER` as a config resource, so log levels change without a restart.
+- Request latency split into its local, remote and throttle phases.
+- Creusot proofs for the remaining safety-critical algorithms, and the catalog
+  that records which algorithm each session covers.
+
+### Changed
+
+- `ListOffsets` is fenced on the request leader epoch. `DescribeConfigs`
+  returns typed config metadata, and reads an empty key list as a request for
+  every config. Every broker-owned topic is marked internal.
+- The KIP-219 throttle delay is applied after the response is sent, and the
+  echoed delay is audited against every response schema.
+- Cadence loops run on a `Timer` rather than an `AsyncSleeper`.
+- The Kafka error-code table and the advertised `ApiVersions` table are derived
+  from, and asserted against, the pinned Kafka image.
+
+### Fixed
+
+- `controller_id` advertises a reachable broker rather than the quorum leader.
+- A refused produce partition answers with `base_offset = -1`, and an accepted
+  one reports the partition's real log start offset.
+- `max.message.bytes` is enforced, and an oversized batch refused.
+- An open transaction's offsets answer `UNSTABLE_OFFSET_COMMIT`.
+- Committed offsets expire for a group that went empty, idle and terminal
+  transactional ids expire out of `__transaction_state`, and a connection idle
+  past `connections.max.idle.ms` closes.
+- A failed disk's partition reads as leaderless, the way `kafka-topics` reports
+  it, and offline replicas appear in `Metadata` and `DescribeTopicPartitions`.
+
+## [0.5.2] - 2026-08-31
+
+### Added
+
 - Diskless partitions. `krabka.diskless` is a create-only topic config that
   puts a partition's durability behind a quorum-replicated write-ahead log in
   front of object storage, with an index log that readers project. It is
@@ -101,6 +140,7 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.2
 [0.5.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.1
 [0.5.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.0
