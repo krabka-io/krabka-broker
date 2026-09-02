@@ -7,8 +7,7 @@
 //! The third replays every locally-led `__transaction_state` partition on
 //! broker start to rebuild that map, tombstones included.
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;

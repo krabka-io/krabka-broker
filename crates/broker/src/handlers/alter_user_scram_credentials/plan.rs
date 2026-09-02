@@ -198,12 +198,14 @@ mod tests {
     use krabka_security::{AuthMethod, Principal, scram::MIN_SCRAM_ITERATIONS};
 
     use super::*;
-    use crate::codes;
-    use crate::handlers::alter_user_scram_credentials::{
-        handle,
-        test_support::{
-            KAFKA_DUPLICATE_RESOURCE, expected_result, start_broker, test_context, valid_upsertion,
-            valid_upsertion_for_mechanism, wait_for_leader,
+    use crate::{
+        codes,
+        handlers::alter_user_scram_credentials::{
+            handle,
+            test_support::{
+                KAFKA_DUPLICATE_RESOURCE, expected_result, start_broker, test_context,
+                valid_upsertion, valid_upsertion_for_mechanism, wait_for_leader,
+            },
         },
     };
 

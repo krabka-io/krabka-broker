@@ -183,13 +183,13 @@ pub(crate) fn resolve_freeze_verdict(image: &MetadataImage, topic: &str) -> Opti
 mod tests {
     use assert2::check;
     use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord};
+    use krabka_verified::FreezeMutationKind;
     use uuid::Uuid;
 
     use super::{
         FreezeMutationResolution, FreezeVerdict, resolve_freeze_mutation, resolve_freeze_verdict,
         resolve_topic_freeze,
     };
-    use krabka_verified::FreezeMutationKind;
 
     fn image() -> MetadataImage {
         MetadataImage::new(Uuid::from_u128(0x5150))

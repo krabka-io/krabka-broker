@@ -9,14 +9,18 @@ use krabka_ids::Offset;
 use tokio::sync::oneshot;
 
 use super::CommitWaiter;
-use crate::kraft::controller::test_support::{
-    await_leader, build, build_engine_only, elect_leader_with_helper, elect_single_voter_engine,
-    one_offset_batch, submit_change_with_timeout, topic_record, topic_record_named,
-};
 use crate::{
     SubmitChangeResult,
     error::RaftError,
-    kraft::{event::Event, types::NodeId},
+    kraft::{
+        controller::test_support::{
+            await_leader, build, build_engine_only, elect_leader_with_helper,
+            elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
+            topic_record_named,
+        },
+        event::Event,
+        types::NodeId,
+    },
 };
 
 #[test]

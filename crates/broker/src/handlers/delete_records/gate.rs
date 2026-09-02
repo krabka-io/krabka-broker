@@ -126,9 +126,9 @@ mod tests {
     use krabka_metadata::{BreakGlassAction, MetadataImage};
 
     use super::authorize_trim;
-    use crate::config::BreakGlassConfig;
-    use crate::handlers::delete_records::test_support::{
-        approved_proposal, gated_config, image_of,
+    use crate::{
+        config::BreakGlassConfig,
+        handlers::delete_records::test_support::{approved_proposal, gated_config, image_of},
     };
 
     #[test]

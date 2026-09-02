@@ -81,14 +81,13 @@ mod tests {
         AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
     };
 
+    use super::matches_operation;
     use crate::{
         AuthorizationResult, Authorizer, SimpleAclAuthorizer,
         simple::test_support::{
             acl_op_on, addr, alice, img, no_super, req, req_on, topic_acl, topic_acl_op,
         },
     };
-
-    use super::matches_operation;
 
     #[test]
     fn operation_implications_are_exhaustive_and_one_way() {

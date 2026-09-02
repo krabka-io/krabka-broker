@@ -5,16 +5,17 @@
 //! looks revoked across the flip, and builds the atomic record batch that
 //! tombstones the next-gen records and writes the classic one.
 
+use krabka_verified::{
+    GroupMigrationDirection, GroupMigrationRecordAction, consumer_downgrade_epoch,
+    group_migration_record_plan,
+};
+
 use super::assignment::member_target_assignment;
 use crate::coordinator::unified::{
     actor::{PendingRecords, classic_group_metadata_record},
     classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
     consumer_state::GroupState as ConsumerState,
     reconciler::ReconcileInput,
-};
-use krabka_verified::{
-    GroupMigrationDirection, GroupMigrationRecordAction, consumer_downgrade_epoch,
-    group_migration_record_plan,
 };
 
 /// Can this consumer group be downgraded to a classic group?

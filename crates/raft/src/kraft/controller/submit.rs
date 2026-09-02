@@ -17,8 +17,10 @@ use super::{
     },
     records::metadata_record_batch,
 };
-use crate::kraft::role::Role;
-use crate::{DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError};
+use crate::{
+    DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
+    kraft::role::Role,
+};
 
 impl Engine {
     fn delegation_token_record(token: &DelegationToken) -> DelegationTokenRecord {

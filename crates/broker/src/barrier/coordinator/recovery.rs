@@ -285,19 +285,21 @@ mod tests {
     use krabka_ids::PartitionIndex;
     use tokio::sync::Mutex;
 
-    use crate::barrier::{
-        STATE_TOPIC,
-        coordinator::{
-            GroupDescription, RetainedCut,
-            test_support::{Fixture, GROUP, spec},
+    use crate::{
+        barrier::{
+            STATE_TOPIC,
+            coordinator::{
+                GroupDescription, RetainedCut,
+                test_support::{Fixture, GROUP, spec},
+            },
+            error::BarrierError,
+            persistence::{
+                CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
+                encode_injection_start,
+            },
         },
-        error::BarrierError,
-        persistence::{
-            CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
-            encode_injection_start,
-        },
+        metadata_source::MetadataSource,
     };
-    use crate::metadata_source::MetadataSource;
 
     #[tokio::test]
     async fn recovery_rebuilds_the_group_and_its_cuts() {

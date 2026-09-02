@@ -7,18 +7,21 @@ use std::time::Duration as StdDuration;
 use assert2::assert;
 
 use super::*;
-use crate::kraft::controller::{
-    records::{decode_batches, encode_batches},
-    replication::{
-        FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
-        should_serve_fetch_records, should_start_snapshot_fetch, snapshot_fetch_response_invalid,
+use crate::kraft::{
+    controller::{
+        records::{decode_batches, encode_batches},
+        replication::{
+            FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
+            should_serve_fetch_records, should_start_snapshot_fetch,
+            snapshot_fetch_response_invalid,
+        },
+        test_support::{
+            build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
+            recv_peer_send, recv_peer_send_with_api,
+        },
     },
-    test_support::{
-        build_engine_only, build_engine_only_with_policy, one_offset_batch, record_peer_sends,
-        recv_peer_send, recv_peer_send_with_api,
-    },
+    types::LogOffsetMetadata,
 };
-use crate::kraft::types::LogOffsetMetadata;
 
 #[test]
 fn snapshot_install_admission_rejects_malformed_stale_and_pending_cases() {

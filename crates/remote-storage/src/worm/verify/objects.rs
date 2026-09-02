@@ -18,10 +18,12 @@ use object_store::{GetOptions, ObjectStore, path::Path};
 use sha2::{Digest as _, Sha256};
 
 use super::{VerifyDepth, listing::DirListing};
-use crate::storage_manager::parse_segment_file_name;
-use crate::worm::{
-    error::WormError,
-    manifest::{MANIFEST_SUFFIX, ObjectEntry, SegmentManifest, Sha256Digest},
+use crate::{
+    storage_manager::parse_segment_file_name,
+    worm::{
+        error::WormError,
+        manifest::{MANIFEST_SUFFIX, ObjectEntry, SegmentManifest, Sha256Digest},
+    },
 };
 
 /// Checks every object a manifest names, to the requested depth.

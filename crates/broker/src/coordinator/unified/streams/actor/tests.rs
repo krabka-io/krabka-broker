@@ -2,8 +2,9 @@
 //! heartbeat epoch sequence with no connected `MetadataSource`, and the
 //! resolution of a persisted per-group config override.
 
-use assert2::{assert, check};
 use std::sync::atomic::Ordering;
+
+use assert2::{assert, check};
 
 use super::*;
 use crate::coordinator::unified::{

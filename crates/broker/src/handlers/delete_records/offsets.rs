@@ -25,10 +25,10 @@ pub(super) fn trim_decision(
 
 #[cfg(test)]
 mod tests {
+    use DeleteRecordsTrimDecision::{Apply, Noop, RejectMalformed, RejectOutOfRange};
     use assert2::assert;
 
     use super::*;
-    use DeleteRecordsTrimDecision::{Apply, Noop, RejectMalformed, RejectOutOfRange};
 
     #[test]
     fn trim_decision_covers_bounds_stale_requests_and_retries() {

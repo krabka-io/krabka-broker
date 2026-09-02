@@ -5,9 +5,9 @@
 //! chained record and recomputes the sequence number and the head hash that
 //! follow it. Checkpoints carry no chain headers and are skipped.
 
-use super::Spool;
 use krabka_verified::{ChainStep, chain_step};
 
+use super::Spool;
 use crate::{
     chain::{chain_hash, from_hex32},
     event::AuditEventClass,
