@@ -5,9 +5,9 @@ names an annotated git tag in this repository, and the tag is what a person
 quotes in an incident. [Releasing](docs/releasing.md) gives the commands that
 cut one.
 
-Krabka versions and tags the whole workspace as one unit. The version comes
+krabka versions and tags the whole workspace as one unit. The version comes
 from `[workspace.package]` in the root `Cargo.toml`, and each crate takes it
-from there, so no crate has a release of its own. Krabka is before 1.0 and it
+from there, so no crate has a release of its own. krabka is before 1.0 and it
 is undeployed, so a minor bump is free to break an interface. Read the entries
 rather than the number.
 
@@ -40,9 +40,9 @@ routine reassignment and topic deletion.
   and a kTLS gauge, so an operator can see which drain path a fetch took rather
   than inferring it. A regression that routed every fetch onto the copy path
   used to move no series at all.
-- The operator binaries -- `krabka-format`, `krabka-audit`, `krabka-barrier`,
-  `krabka-guard`, `krabka-worm-verify` and `krabka-restore` -- ship in the
-  container image. The image could not previously run the one mandatory
+- The container image includes `krabka-format`, `krabka-audit`,
+  `krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore`.
+  The image could not previously run the one mandatory
   pre-boot step, and has no shell to work around it with.
 - Benchmarks for the produce hot path, the fetch hand-off, the KIP-227 session
   cache, the fetch drain's sendfile crossover, the per-observation metric label,
@@ -78,7 +78,7 @@ routine reassignment and topic deletion.
   partition.
 - Metric topic labels are held as `Arc<str>` shared with the partition
   registry, so a hot-path observation is a hash and a refcount bump rather than
-  two `String` allocations -- the cost that cancelled out the registry's
+  two `String` allocations. Those allocations cancelled out the registry's
   allocation-free design.
 - Both documented PERF deferrals now carry a measured number and an explicit
   keep-or-fix decision, in the source, beside the code they describe.

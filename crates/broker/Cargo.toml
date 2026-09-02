@@ -161,7 +161,7 @@ krabka-broker = { path = ".", features = ["test-helpers"] }
 # `crabka-docgen` renders (see docs/docgen-contract.md). No production path
 # enables the feature, so it is turned on here to keep the trace shape under
 # test. Bazel reads the feature off the same table.
-krabka-raft = { version = "0.5.3", path = "../raft", features = ["scenarios"] }
+krabka-raft = { version = "0.5.4", path = "../raft", features = ["scenarios"] }
 # `bootstrap_consumption`, `cli_smoke` and `format_features` format a log
 # directory before booting a broker. They call the library rather than spawn the
 # binary: the formatting is setup, not the thing under test, and a subprocess
