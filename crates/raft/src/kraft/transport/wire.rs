@@ -22,9 +22,12 @@ mod codec;
 mod request;
 mod response;
 
+/// The pinned `FetchSnapshot` wire version. Public because a broker-only
+/// observer sends this RPC itself, and the version on its request header has
+/// to be the one [`PeerRequest::FetchSnapshot`] encoded the body at.
+pub use self::codec::FETCH_SNAPSHOT_VERSION;
 pub(crate) use self::codec::{
-    FETCH_SNAPSHOT_VERSION, FETCH_VERSION, NOT_LEADER_OR_FOLLOWER, QUORUM_EPOCH_VERSION,
-    VOTE_VERSION,
+    FETCH_VERSION, NOT_LEADER_OR_FOLLOWER, QUORUM_EPOCH_VERSION, VOTE_VERSION,
 };
 pub use self::{
     request::{

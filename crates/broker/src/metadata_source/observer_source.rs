@@ -94,7 +94,8 @@ impl MetadataSource for ObserverSource {
         SocketAddr::from(([0, 0, 0, 0], 0))
     }
     fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-        // A broker-only observer holds no checkpoint of its own to serve;
+        // A broker-only observer keeps a checkpoint to resume from, but it is
+        // not a member of the metadata quorum and does not serve it:
         // FetchSnapshot is answered by the controller quorum.
         SnapshotRange::NoSnapshot
     }
@@ -132,7 +133,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::metadata_source::test_support::{topic_record, wait_for_controller_leader};
+    use crate::{
+        metadata_observer::test_support::observer_config,
+        metadata_source::test_support::{topic_record, wait_for_controller_leader},
+    };
 
     struct RecordingWriter {
         calls: Mutex<Vec<Vec<MetadataRecord>>>,
@@ -167,18 +171,11 @@ mod tests {
     #[tokio::test]
     async fn observer_source_uses_observer_writer_and_denies_controller_only_ops() {
         let cluster_id = Uuid::new_v4();
+        let dir = TempDir::new().unwrap();
         let observer = crate::metadata_observer::MetadataObserver::start(
             crate::metadata_observer::ObserverConfig {
-                client_dispatch_queue_capacity:
-                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                client_frame_max: krabka_client_core::ClientFrameMax::default(),
-                voters: vec![],
-                dialer: Arc::new(krabka_raft::PlaintextDialer),
                 client_id: "observer-source-test".into(),
-                cluster_id,
-                max_bytes: krabka_units::mebibytes(1),
-                poll_interval: krabka_units::minutes(1),
-                timer: Arc::new(qubit_clock::StdTimer::new()),
+                ..observer_config(cluster_id, dir.path().to_path_buf())
             },
         );
         let writer = Arc::new(RecordingWriter {
@@ -239,18 +236,13 @@ mod tests {
             "test must distinguish every constant-offset mutant"
         );
 
+        let observer_dir = TempDir::new().unwrap();
         let observer = crate::metadata_observer::MetadataObserver::start(
             crate::metadata_observer::ObserverConfig {
-                client_dispatch_queue_capacity:
-                    krabka_client_core::ConnectionDispatchQueueCapacity::default(),
-                client_frame_max: krabka_client_core::ClientFrameMax::default(),
                 voters: vec![(NodeId(1), ctrl.controller_bound_addr().to_string())],
-                dialer: Arc::new(krabka_raft::PlaintextDialer),
                 client_id: "observer-source-offset-test".into(),
-                cluster_id: Uuid::nil(),
-                max_bytes: krabka_units::mebibytes(1),
                 poll_interval: krabka_units::millis(10),
-                timer: Arc::new(qubit_clock::StdTimer::new()),
+                ..observer_config(Uuid::nil(), observer_dir.path().to_path_buf())
             },
         );
         let writer = Arc::new(RecordingWriter {

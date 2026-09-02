@@ -6,6 +6,11 @@ use crate::error::RaftError;
 
 /// Write a KIP-630 `.checkpoint` artifact (bytes only) directly with
 /// temp+rename atomicity.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be created, or the temporary
+/// file cannot be written or renamed into place.
 pub fn write_checkpoint(
     dir: &std::path::Path,
     end_offset: i64,
@@ -26,6 +31,10 @@ pub fn write_checkpoint(
 /// directory is absent or holds no checkpoint. Unlike `snapshot::load_latest`,
 /// this reads only the `.checkpoint` (the `.meta` sidecar is gone in
 /// this engine — the durable epoch lives in the quorum-state file).
+///
+/// # Errors
+///
+/// Returns an error when the selected checkpoint file cannot be read.
 pub fn load_latest_checkpoint(dir: &std::path::Path) -> Result<Option<Vec<u8>>, RaftError> {
     let Some((end_offset, epoch)) = latest_checkpoint_id(dir) else {
         return Ok(None);
@@ -52,6 +61,7 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<(i64, i32)> {
 /// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts and return the
 /// highest `(end_offset, epoch)` id, or `None` when the directory is absent or
 /// holds no checkpoint.
+#[must_use]
 pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<(i64, i32)> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut ids = Vec::new();
@@ -65,6 +75,7 @@ pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<(i64, i32)> {
     krabka_verified::latest_checkpoint_index(&ids).map(|index| ids[index])
 }
 
+#[must_use]
 pub fn checkpoint_id_is_newer(candidate: (i64, i32), current: (i64, i32)) -> bool {
     krabka_verified::checkpoint_id_newer(candidate.0, candidate.1, current.0, current.1)
 }
@@ -93,6 +104,7 @@ pub fn retain_latest_checkpoint(dir: &std::path::Path) {
 
 /// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, or `None`
 /// if it is absent (the leader's `FetchSnapshot` serve path).
+#[must_use]
 pub fn load_checkpoint_by_id(
     dir: &std::path::Path,
     end_offset: i64,

@@ -18,6 +18,17 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Fixed
+
+- A broker-only node no longer stalls forever after a restart once the
+  controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
+  observer metadata fetch now answers a pruned fetch offset with the KIP-630
+  snapshot id that replaced those records, the observer installs that snapshot
+  over `FetchSnapshot` before it resumes, and it keeps its own checkpoint under
+  `<log.dir>/__cluster_metadata/@metadata-0` so a restart resumes there instead
+  of at the log start. An observer that is answered but never applies anything
+  now says so at warn level, with the log-start offset it was told.
+
 ## [0.5.4] - 2026-09-02
 
 Milestones 5 and 6: a deployed cluster can now be probed, measured, watched and

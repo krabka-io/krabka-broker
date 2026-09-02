@@ -1,0 +1,427 @@
+//! The observer's KIP-630 snapshot transfer.
+//!
+//! When a metadata fetch (1004) comes back carrying a `snapshot_id`, the
+//! records the observer asked for have been pruned off the controller's log and
+//! there is nothing to replicate from. It must install that snapshot first,
+//! which it does over the genuine KIP-595 `FetchSnapshot` (api key 59) the
+//! controller listener already serves for its own followers: request one byte
+//! range at a time until the artifact is reassembled, decode it, publish the
+//! image it holds, and resume fetching at the snapshot's end offset.
+//!
+//! Reassembly is the shared [`SnapshotFetchState`] the controller's follower
+//! path uses, so an out-of-order chunk, a changed snapshot id, or a peer that
+//! streams more bytes than the configured maximum aborts here exactly as it
+//! does there.
+//!
+//! The request asks for the whole artifact in one range, bounded by the same
+//! `snapshot_fetch_max` that bounds reassembly. `FetchSnapshot` carries the
+//! bytes in the KIP-595 `unalignedRecords` field, and that field decodes
+//! leniently: a range that stops part-way through a record batch has the
+//! partial batch dropped, so a chunk cut at an arbitrary byte arrives empty. A
+//! whole artifact is a complete run of batches and survives. The loop below
+//! still requests successive ranges — the responder may serve fewer bytes than
+//! asked for — and gives up on a range that carries nothing rather than
+//! re-asking for the same position forever.
+
+use std::sync::Arc;
+
+use krabka_client_core::Connection;
+use krabka_metadata::MetadataImage;
+use krabka_raft::{
+    NodeId,
+    kraft::{
+        snapshot_fetch::{SnapshotFetchState, SnapshotFetchStep},
+        transport::{
+            api_key,
+            wire::{FETCH_SNAPSHOT_VERSION, PeerRequest, PeerResponse},
+        },
+    },
+};
+use krabka_units::convert::ByteSizeExt as _;
+use tokio::sync::watch;
+use tracing::{debug, info, warn};
+
+use super::{ObserverConfig, store::ObserverStore};
+
+/// Fetch, install, and persist `snapshot_id` from the controller on `conn`.
+///
+/// Returns the offset to fetch from next — the snapshot's end offset — or
+/// `None` when the transfer failed, which leaves the caller's fetch offset
+/// unchanged so the next poll asks again (and rotates to another voter).
+pub(super) async fn install_snapshot(
+    config: &ObserverConfig,
+    conn: &Connection,
+    target: NodeId,
+    snapshot_id: (i64, i32),
+    image_tx: &watch::Sender<Arc<MetadataImage>>,
+    store: &mut ObserverStore,
+) -> Option<u64> {
+    let (end_offset, epoch) = snapshot_id;
+    let next_fetch_offset = u64::try_from(end_offset).ok()?;
+    let bytes = transfer(config, conn, target, snapshot_id).await?;
+    let records = match krabka_raft::deserialize_metadata_snapshot(&bytes) {
+        Ok(records) => records,
+        Err(error) => {
+            warn!(%error, end_offset, epoch, "observer could not decode the fetched snapshot");
+            return None;
+        }
+    };
+    info!(
+        end_offset,
+        epoch,
+        records = records.len(),
+        bytes = bytes.len(),
+        "observer installed a metadata snapshot"
+    );
+    let _ = image_tx.send_replace(Arc::new(MetadataImage::from_records(
+        config.cluster_id,
+        &records,
+    )));
+    store.save_fetched_snapshot(snapshot_id, &bytes);
+    Some(next_fetch_offset)
+}
+
+/// Request `snapshot_id` until it is whole.
+async fn transfer(
+    config: &ObserverConfig,
+    conn: &Connection,
+    target: NodeId,
+    snapshot_id: (i64, i32),
+) -> Option<bytes::Bytes> {
+    let mut state = SnapshotFetchState::with_max(snapshot_id, target, config.snapshot_fetch_max);
+    loop {
+        let position = state.next_position();
+        let request = PeerRequest::FetchSnapshot {
+            from: config.node_id,
+            snapshot_id,
+            position,
+            // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the ceiling on
+            // what this node will reassemble converts here, at the wire
+            // boundary, so the responder is free to send the whole artifact.
+            max_bytes: config.snapshot_fetch_max.byte_size().bytes_i32(),
+        }
+        .encode();
+        let body = match conn
+            .raw_request(api_key::FETCH_SNAPSHOT, FETCH_SNAPSHOT_VERSION, request)
+            .await
+        {
+            Ok(body) => body,
+            Err(error) => {
+                debug!(%error, "observer snapshot fetch request failed");
+                return None;
+            }
+        };
+        let Some(PeerResponse::FetchSnapshot {
+            snapshot_id: served,
+            size,
+            position: served_position,
+            bytes,
+            error_code,
+        }) = PeerResponse::decode_fetch_snapshot(&body)
+        else {
+            warn!("observer snapshot fetch response decode failed");
+            return None;
+        };
+        if error_code != 0 {
+            // The controller has pruned past this snapshot, or never held it.
+            // The next metadata fetch names whichever snapshot it does hold.
+            debug!(error_code, "observer snapshot fetch was refused");
+            return None;
+        }
+        match state.on_chunk(served, size, served_position, &bytes) {
+            SnapshotFetchStep::Complete(assembled) => return Some(assembled),
+            SnapshotFetchStep::Restart => {
+                warn!("observer snapshot transfer aborted mid-stream");
+                return None;
+            }
+            // A range that carried nothing leaves the transfer exactly where it
+            // was. Asking again would repeat the same request against the same
+            // responder forever, so give up and let the caller back off and
+            // rotate to another voter.
+            SnapshotFetchStep::Continue { next_position } if next_position == position => {
+                warn!(
+                    position,
+                    size, "observer snapshot range carried no bytes; abandoning the transfer"
+                );
+                return None;
+            }
+            SnapshotFetchStep::Continue { .. } => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_protocol::owned::api_versions_request;
+    use krabka_raft::kraft::transport::wire::decode_fetch_snapshot;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::metadata_observer::{
+        fetch::fetch_once,
+        test_support::{api_versions_response_v0, observer_config},
+    };
+
+    /// Prefix every mock response body with the flexible `ResponseHeader` v1
+    /// tagged-fields byte the client strips before it sees the body.
+    fn framed(body: &bytes::Bytes) -> Vec<u8> {
+        let mut out = vec![0u8];
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// The request body itself.
+    ///
+    /// `MockBroker` splits each frame after the fixed
+    /// `api_key`/`api_version`/`correlation_id` prefix, so what it calls the
+    /// body still carries the rest of the `RequestHeader`: the nullable
+    /// `client_id` string and, on the flexible header a KIP-595 RPC uses, its
+    /// tagged-fields byte.
+    fn request_body(after_correlation_id: &[u8]) -> &[u8] {
+        let (length, rest) = after_correlation_id.split_at(2);
+        let length = i16::from_be_bytes([length[0], length[1]]);
+        let rest = match usize::try_from(length) {
+            Ok(length) => &rest[length..],
+            Err(_) => rest, // a null client_id has no bytes to skip
+        };
+        &rest[1..]
+    }
+
+    fn metadata_fetch_redirect(snapshot_id: (i64, i32)) -> Vec<u8> {
+        let mut out = vec![0u8];
+        krabka_raft::KrabkaMetadataFetchResponse {
+            error_code: 0,
+            leader_hint: 1,
+            log_start_offset: snapshot_id.0,
+            high_watermark: snapshot_id.0,
+            quorum_high_watermark: snapshot_id.0,
+            snapshot_id: Some(snapshot_id),
+            records: bytes::Bytes::new(),
+        }
+        .encode_v0(&mut out)
+        .expect("encode redirect");
+        out
+    }
+
+    fn snapshot_of(cluster_id: Uuid, topic: &str) -> bytes::Bytes {
+        let mut image = MetadataImage::new(cluster_id);
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: topic.to_string(),
+            topic_id: Uuid::new_v4(),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        krabka_raft::serialize_metadata_snapshot(&image, 0).expect("serialize snapshot")
+    }
+
+    /// The whole restart path in one round trip: the controller answers a fetch
+    /// below its pruned log start with a snapshot id, the observer transfers
+    /// that snapshot over `FetchSnapshot`, publishes the image it holds,
+    /// resumes at its end offset, and leaves it on disk so the *next* restart
+    /// resumes from there without transferring anything.
+    #[tokio::test]
+    async fn a_pruned_fetch_installs_the_snapshot_and_resumes_at_its_end_offset() {
+        let cluster_id = Uuid::new_v4();
+        let snapshot_id = (4_096_i64, 7_i32);
+        let artifact = snapshot_of(cluster_id, "pruned-away");
+        let served = artifact.clone();
+        let chunks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&chunks);
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_redirect(snapshot_id));
+                }
+                if api_key == api_key::FETCH_SNAPSHOT {
+                    let Some(PeerRequest::FetchSnapshot {
+                        snapshot_id: wanted,
+                        position,
+                        max_bytes,
+                        ..
+                    }) = decode_fetch_snapshot(request_body(body))
+                    else {
+                        return None;
+                    };
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let start = usize::try_from(position).unwrap().min(served.len());
+                    let end = start
+                        .saturating_add(usize::try_from(max_bytes).unwrap())
+                        .min(served.len());
+                    return Some(framed(
+                        &PeerResponse::FetchSnapshot {
+                            snapshot_id: wanted,
+                            size: i64::try_from(served.len()).unwrap(),
+                            position,
+                            bytes: served.slice(start..end),
+                            error_code: 0,
+                        }
+                        .encode(),
+                    ));
+                }
+                None
+            })
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = ObserverConfig {
+            voters: vec![(NodeId(1), mock.addr.to_string())],
+            ..observer_config(cluster_id, dir.path().to_path_buf())
+        };
+        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let mut store = ObserverStore::open(dir.path(), 0);
+
+        let outcome = fetch_once(
+            &config,
+            &mock.addr.to_string(),
+            NodeId(1),
+            0,
+            &image_tx,
+            &mut store,
+        )
+        .await
+        .expect("the redirected fetch installs the snapshot");
+
+        assert!(outcome.next_fetch_offset == 4_096);
+        assert!(outcome.log_start_offset == 4_096);
+        assert!(image_tx.borrow().topic("pruned-away").is_some());
+        // One range, because the request asks for the whole artifact: a
+        // `FetchSnapshot` range cut part-way through a record batch loses the
+        // partial batch in the records codec and arrives empty.
+        assert!(chunks.load(std::sync::atomic::Ordering::SeqCst) == 1);
+
+        let (restored, fetch_offset) = ObserverStore::open(dir.path(), 0)
+            .resume(cluster_id)
+            .expect("the installed snapshot was persisted");
+        assert!(fetch_offset == 4_096);
+        assert!(restored.topic("pruned-away").is_some());
+
+        mock.stop();
+    }
+
+    /// A responder that answers with a range carrying no bytes leaves the
+    /// transfer exactly where it started. Re-asking would repeat the same
+    /// request against the same voter forever, so the transfer gives up and the
+    /// caller backs off instead — the loop must not spin on it.
+    #[tokio::test]
+    async fn a_range_that_carries_no_bytes_abandons_the_transfer() {
+        let cluster_id = Uuid::new_v4();
+        let snapshot_id = (4_096_i64, 7_i32);
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_redirect(snapshot_id));
+                }
+                if api_key == api_key::FETCH_SNAPSHOT {
+                    // A non-zero total with an empty range: the shape a records
+                    // field takes when it drops a batch it could not complete.
+                    return Some(framed(
+                        &PeerResponse::FetchSnapshot {
+                            snapshot_id,
+                            size: 512,
+                            position: 0,
+                            bytes: bytes::Bytes::new(),
+                            error_code: 0,
+                        }
+                        .encode(),
+                    ));
+                }
+                None
+            })
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = ObserverConfig {
+            voters: vec![(NodeId(1), mock.addr.to_string())],
+            ..observer_config(cluster_id, dir.path().to_path_buf())
+        };
+        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let mut store = ObserverStore::open(dir.path(), 0);
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fetch_once(
+                &config,
+                &mock.addr.to_string(),
+                NodeId(1),
+                0,
+                &image_tx,
+                &mut store,
+            ),
+        )
+        .await
+        .expect("the transfer gives up rather than re-asking forever");
+
+        assert!(outcome.is_none());
+        mock.stop();
+    }
+
+    /// A controller that has pruned past the snapshot it named answers the
+    /// transfer with an error. The observer must not treat that as progress:
+    /// it reports the round trip as failed, so the loop backs off, rotates, and
+    /// asks again rather than jumping its fetch offset over records it never
+    /// applied.
+    #[tokio::test]
+    async fn a_refused_snapshot_transfer_leaves_the_fetch_offset_alone() {
+        let cluster_id = Uuid::new_v4();
+        let snapshot_id = (4_096_i64, 7_i32);
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_redirect(snapshot_id));
+                }
+                if api_key == api_key::FETCH_SNAPSHOT {
+                    return Some(framed(
+                        &PeerResponse::FetchSnapshot {
+                            snapshot_id,
+                            size: 0,
+                            position: 0,
+                            bytes: bytes::Bytes::new(),
+                            // Krabka-internal "snapshot not available".
+                            error_code: 98,
+                        }
+                        .encode(),
+                    ));
+                }
+                None
+            })
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = ObserverConfig {
+            voters: vec![(NodeId(1), mock.addr.to_string())],
+            ..observer_config(cluster_id, dir.path().to_path_buf())
+        };
+        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let mut store = ObserverStore::open(dir.path(), 0);
+
+        let outcome = fetch_once(
+            &config,
+            &mock.addr.to_string(),
+            NodeId(1),
+            0,
+            &image_tx,
+            &mut store,
+        )
+        .await;
+
+        assert!(outcome.is_none());
+        assert!(
+            ObserverStore::open(dir.path(), 0)
+                .resume(cluster_id)
+                .is_none()
+        );
+
+        mock.stop();
+    }
+}
