@@ -264,6 +264,20 @@ pub use broker::{Broker, BrokerHandle};
 pub use config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
 pub use config_keys::{TopicConfigDoc, topic_config_docs};
 pub use error::BrokerError;
+/// Benchmark seam over the zero-copy fetch drain, driven by
+/// `benches/fetch_drain.rs`. It is the drain the connection writer calls, with
+/// the two records resolvers that decide whether a records region reaches the
+/// socket through the kernel or through a buffer.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod fetch_drain {
+    pub use crate::network::fetch_writer::{
+        SendfileSink, WriteOp, resolve_records_inline, write_fetch_plan,
+    };
+
+    crate::sendfile_cfg! {
+        pub use crate::network::fetch_writer::resolve_records_sendfile;
+    }
+}
 /// Benchmark seam over the produce hot path, driven by `benches/produce.rs`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub use handlers::produce::hot_path as produce_hot_path;

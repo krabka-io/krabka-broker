@@ -89,7 +89,7 @@ fn plan_total_len_matches_frame_prefix() {
         let head = inline_bytes(&ops[0]);
         let declared = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
         let header_after_len = head.len() - 4;
-        let tail_len: usize = ops[1..].iter().map(WriteOp::len).sum();
+        let tail_len: usize = ops[1..].iter().map(WriteOp::body_len).sum();
         assert2::assert!((declared) == (header_after_len + tail_len));
     }
 }
