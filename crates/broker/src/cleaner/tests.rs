@@ -1,12 +1,16 @@
 //! Tests for the ticker itself: that it sweeps once at startup, re-arms on
-//! the injected interval, and returns when the shutdown token is cancelled.
+//! the injected interval, returns when the shutdown token is cancelled, and
+//! gives up rather than spinning when its ticker dies.
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_units::secs;
 
 use super::*;
-use crate::cleaner::test_support::{compactable_partition, record_count};
+use crate::{
+    cleaner::test_support::{compactable_partition, record_count},
+    test_support::{BrokenTimer, TimerFailure},
+};
 
 #[tokio::test]
 async fn run_ticks_until_shutdown() {
@@ -86,4 +90,79 @@ async fn run_ticks_until_shutdown() {
 
     shutdown.cancel();
     task.await.expect("cleaner task exits");
+}
+
+/// Spawns the cleaner over one compactable partition on `timer`, and returns
+/// the task, the partition, and its pre-sweep record count.
+///
+/// The shutdown token handed to the task is dropped uncancelled, so the only
+/// way the returned task can finish is the timer giving out.
+fn spawn_on(
+    dir: &tempfile::TempDir,
+    topic: &str,
+    timer: Arc<dyn Timer>,
+) -> (
+    tokio::task::JoinHandle<()>,
+    Arc<crate::partition::Partition>,
+    usize,
+) {
+    let registry = Arc::new(PartitionRegistry::new());
+    let partition =
+        compactable_partition(dir, topic, 0, NodeId(7), krabka_log::CleanupPolicy::Compact);
+    let before = record_count(&partition);
+    registry.insert(topic.to_string(), PartitionIndex(0), Arc::clone(&partition));
+    let task = tokio::spawn(run(
+        registry,
+        NodeId(7),
+        CleanerConfig {
+            interval: secs(30),
+            timer,
+            metadata: None,
+        },
+        CancellationToken::new(),
+        BrokerMetrics::new(),
+    ));
+    (task, partition, before)
+}
+
+#[tokio::test]
+async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
+    let dir = tempfile::tempdir().expect("log root");
+    let timer = BrokenTimer::dead(TimerFailure::Registration);
+    let (task, partition, before) = spawn_on(&dir, "unarmable", timer.injectable());
+
+    // Nobody cancels the token, so the task can only end by giving up on its
+    // ticker — and it gives up before the start-up sweep, so the compactable
+    // partition is left exactly as it was.
+    task.await.expect("cleaner task exits");
+    check!(record_count(&partition) == before);
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
+    let dir = tempfile::tempdir().expect("log root");
+    let timer = BrokenTimer::dead(TimerFailure::Completion);
+    let (task, partition, before) = spawn_on(&dir, "unfired", timer.injectable());
+
+    // The deadline registers, so the loop reaches its select — and then fails,
+    // which ends the task on the other of the two timer paths.
+    task.await.expect("cleaner task exits");
+    check!(record_count(&partition) == before);
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn run_sweeps_once_and_stops_when_the_interval_cannot_be_re_armed() {
+    let dir = tempfile::tempdir().expect("log root");
+    let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
+    let (task, partition, before) = spawn_on(&dir, "unrearmable", timer.injectable());
+
+    // The start-up deadline is honoured, so the first sweep compacts the
+    // partition. The interval the loop re-arms afterwards is refused, and the
+    // task stops rather than retrying it: two registrations in all, not a
+    // climbing count.
+    task.await.expect("cleaner task exits");
+    check!(record_count(&partition) < before);
+    check!(timer.registrations() == 2);
 }
