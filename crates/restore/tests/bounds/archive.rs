@@ -18,14 +18,6 @@ use krabka_remote_storage::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
-/// A `.leader_epoch_checkpoint`'s bytes: one entry, epoch 0 at offset 0.
-/// `verify_segment` checks this file's own internal framing only, never
-/// against the segment's actual offset range (see
-/// `crates/restore/src/verify.rs`'s `parse_leader_epoch_checkpoint`), so the
-/// same bytes are valid for every fixture segment below regardless of what
-/// it archives.
-const LEADER_EPOCH_CHECKPOINT: &[u8] = b"0\n1\n0 0\n";
-
 /// A `LogConfig` that rolls the active segment on every append past the
 /// first, so [`build_archive`] can seal each fixture batch into its own
 /// segment.
@@ -92,6 +84,8 @@ pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBa
     let archive_root = tempfile::tempdir().expect("archive root tempdir");
     let storage = LocalTieredStorage::new(archive_root.path());
     for export in sealed {
+        let leader_epoch_checkpoint =
+            Bytes::from(format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes());
         let metadata = RemoteLogSegmentMetadata::new(
             RemoteLogSegmentId::new(
                 TopicIdPartition::new(topic_id, topic, partition),
@@ -123,7 +117,7 @@ pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBa
                     time_index: export.time_index_path.clone(),
                     transaction_index: export.transaction_index_path.clone(),
                     producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                    leader_epoch_index: Bytes::from_static(LEADER_EPOCH_CHECKPOINT),
+                    leader_epoch_index: leader_epoch_checkpoint,
                 },
             )
             .expect("archive the segment");

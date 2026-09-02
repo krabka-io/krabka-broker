@@ -26,20 +26,43 @@ impl Engine {
     pub fn broadcast_vote(&self, epoch: Epoch, pre_vote: bool) {
         let last_epoch = self.log.last_epoch();
         let last_offset = self.log.end_offset();
+        let state = self.core.quorum_state();
+        let Some(candidate_voter) = state.voters.get(self.me) else {
+            tracing::error!(candidate = self.me.0, "cannot encode Vote for a non-voter");
+            return;
+        };
+        let cluster_id = state.cluster_id;
+        let candidate_directory_id = candidate_voter.directory_id;
         // The wire top-level `voterId` must name the recipient voter; the JVM
         // rejects a Vote addressed to anyone else (or to the sentinel `-1`). So
         // build a per-recipient body inside the loop rather than broadcasting a
         // single shared body.
         for peer in self.other_voters() {
-            let body = wire::PeerRequest::Vote {
+            let Some(voter_directory_id) = state.voters.get(peer).map(|voter| voter.directory_id)
+            else {
+                continue;
+            };
+            let request = wire::PeerRequest::Vote {
+                cluster_id: Some(cluster_id),
                 voter_id: peer,
+                voter_directory_id,
                 candidate_epoch: epoch,
                 candidate: self.me,
+                candidate_directory_id,
                 last_epoch,
                 last_offset,
                 pre_vote,
-            }
-            .encode();
+            };
+            let Some(body) = request.try_encode() else {
+                tracing::error!(
+                    voter = peer.0,
+                    candidate = self.me.0,
+                    epoch,
+                    last_epoch,
+                    "Vote fields exceed Kafka int32 wire range"
+                );
+                continue;
+            };
             self.spawn_send(peer, api_key::VOTE, body);
         }
     }

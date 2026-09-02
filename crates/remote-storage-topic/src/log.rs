@@ -32,8 +32,13 @@ pub struct MetadataEventRecord {
     pub partition: i32,
     /// Offset within that partition.
     pub offset: i64,
+    /// Record key. Compacted metadata topics use it to identify superseded
+    /// state; ordinary append-only metadata events leave it unset.
+    pub key: Option<Bytes>,
     /// Encoded event payload. See [`crate::serde`].
     pub payload: Bytes,
+    /// Whether Kafka carried a null value for this key.
+    pub tombstone: bool,
 }
 
 /// Boxed event stream the [`MetadataEventLog`] hands to subscribers.
@@ -95,6 +100,23 @@ pub trait MetadataEventLog: Send + Sync {
     /// closed.
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError>;
 
+    /// Append a keyed value or tombstone to a compacted metadata topic.
+    ///
+    /// The default keeps existing append-only implementations small. A
+    /// transport used for compaction must override this method.
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        let event = event.ok_or_else(|| {
+            MetadataLogError::Other("metadata log does not support tombstones".into())
+        })?;
+        let _ = key;
+        self.publish(partition, event).await
+    }
+
     /// Start to consume the given partitions, each from its start offset,
     /// which is inclusive. Returns the event stream and a handle to mutate
     /// the live assignment.
@@ -116,4 +138,55 @@ pub trait MetadataEventLog: Send + Sync {
     /// Returns [`MetadataLogError`] only on an underlying store failure. An
     /// empty partition is `0`, not an error.
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct AppendOnlyLog;
+
+    #[async_trait]
+    impl MetadataEventLog for AppendOnlyLog {
+        fn partition_count(&self) -> i32 {
+            1
+        }
+
+        async fn publish(&self, _partition: i32, _event: Bytes) -> Result<i64, MetadataLogError> {
+            Ok(7)
+        }
+
+        fn subscribe(
+            &self,
+            _assignment: Vec<PartitionStart>,
+        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+            unreachable!("not used by these tests")
+        }
+
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+            Ok(vec![0])
+        }
+    }
+
+    #[tokio::test]
+    async fn default_keyed_publish_delegates_values_and_rejects_tombstones() {
+        let log = AppendOnlyLog;
+        assert2::assert!(log.partition_count() == 1);
+        assert2::assert!(log.high_water_marks().await.unwrap() == vec![0]);
+        let offset = log
+            .publish_keyed(
+                0,
+                Bytes::from_static(b"key"),
+                Some(Bytes::from_static(b"value")),
+            )
+            .await
+            .unwrap();
+        assert2::assert!(offset == 7);
+
+        let error = log
+            .publish_keyed(0, Bytes::from_static(b"key"), None)
+            .await
+            .unwrap_err();
+        assert2::assert!(error.to_string().contains("does not support tombstones"));
+    }
 }

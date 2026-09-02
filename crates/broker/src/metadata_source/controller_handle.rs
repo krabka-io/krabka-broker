@@ -6,8 +6,8 @@ use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::{
-    AddVoter, ControllerHandle, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-    SnapshotRange, SubmitChangeResult, UpdateVoter,
+    AddVoter, ControllerHandle, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError,
+    ReconfigOutcome, RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
 };
 use tokio::sync::watch;
 
@@ -38,6 +38,12 @@ impl MetadataSource for ControllerHandle {
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
         ControllerHandle::submit_change(self, records).await
+    }
+    async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        ControllerHandle::submit_delegation_token_mutations(self, mutations).await
     }
     async fn change_membership(&self, new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
         ControllerHandle::change_membership(self, new_voters).await

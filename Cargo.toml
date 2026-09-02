@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["tools/mutants"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.3"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["The Krabka Authors"]
@@ -106,12 +106,15 @@ prometheus-client = "0.25"
 proptest = "1"
 prost = "0.14"
 # Thread-safe clock abstraction (rs-clock). Production code reads time through
-# its `Clock`/`NanoClock`/`Sleeper` traits so tests can drive time deterministically
-# with `MockClock`/`MockTime` instead of `thread::sleep`/`tokio::time::sleep`.
-# Enable the `tokio` feature per-crate where async `AsyncSleeper` is needed.
-# 0.9+ replaced this API with wall/monotonic clocks and timers; keep the
-# compatible release line until consumers are migrated to that new API.
-qubit-clock = "~0.8.1"
+# its three separate traits -- `WallClock` for business timestamps,
+# `MonotonicClock` for elapsed-time arithmetic, and `Timer` for delays -- so
+# tests drive time deterministically with `ManualMonotonicClock` and the
+# `ManualWallClock`/`ManualTimer` it hands out, instead of `thread::sleep` or
+# `tokio::time::sleep`. `StdWallClock`/`StdMonotonicClock`/`StdTimer` are the
+# production implementations; none of them needs a Tokio runtime to construct,
+# which is what keeps the config `Default` impls that build them callable from
+# synchronous code.
+qubit-clock = "~0.13.0"
 rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
 refined_type = "0.6"
 # KIP-848: client-supplied `subscribed_topic_regex` matched against the
@@ -150,6 +153,7 @@ toml = "1.1"
 tonic = "0.14"
 tower = "0.5"
 tracing = "0.1"
+tracing-core = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -159,7 +163,7 @@ wincode = "=0.6"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 # First-party crates inherited by more than one member.
-krabka-audit = { path = "crates/audit", version = "0.5.1" }
+krabka-audit = { path = "crates/audit", version = "0.5.3" }
 krabka-security = "0.4.0"
 krabka-units = "0.4.0"
 

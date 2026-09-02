@@ -64,15 +64,16 @@ impl SharePartitionState {
     }
 
     #[must_use]
-    pub fn to_snapshot(&self) -> ShareSnapshotValue {
-        ShareSnapshotValue {
-            snapshot_epoch: self.snapshot_epoch + 1,
+    pub fn to_snapshot(&self) -> Option<ShareSnapshotValue> {
+        let snapshot_epoch = crate::metadata_epoch::next_i64(self.snapshot_epoch)?;
+        Some(ShareSnapshotValue {
+            snapshot_epoch,
             state_epoch: self.state_epoch,
             leader_epoch: self.leader_epoch,
             start_offset: self.start_offset,
             delivery_complete_count: self.delivery_complete_count,
             state_batches: self.state_batches.clone(),
-        }
+        })
     }
 }
 
@@ -181,7 +182,7 @@ mod tests {
             state_batches: vec![batch(10, 19)],
             ..Default::default()
         };
-        let snap = s.to_snapshot();
+        let snap = s.to_snapshot().expect("successor is available");
         let expected = ShareSnapshotValue {
             snapshot_epoch: 5,
             state_epoch: 1,
@@ -191,5 +192,15 @@ mod tests {
             state_batches: vec![batch(10, 19)],
         };
         assert!(snap == expected);
+    }
+
+    #[test]
+    fn to_snapshot_rejects_epoch_exhaustion() {
+        let state = SharePartitionState {
+            snapshot_epoch: i64::MAX,
+            ..Default::default()
+        };
+
+        assert!(state.to_snapshot().is_none());
     }
 }

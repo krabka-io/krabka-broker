@@ -218,13 +218,17 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     }
 }
 
-/// `UpdateRaftVoter` additionally requires the caller to name the cluster,
-/// to be at the leader's epoch, and to advertise a coherent
-/// `kraft.version` range.
+/// `UpdateRaftVoter` additionally requires the caller to be at the leader's
+/// epoch, to name this cluster if it names one at all, and to advertise a
+/// coherent `kraft.version` range.
 ///
 /// The epoch check is what stops a stale caller rewriting a voter's
 /// endpoints against a quorum that has since moved on, and an inverted
 /// version range advertises support for nothing.
+///
+/// Each check reports the code `KafkaRaftClient.handleUpdateVoterRequest`
+/// reports for it. KIP-853 adds no "invalid voter update" code, so a
+/// malformed request lands on one of the generic ones.
 #[tokio::test]
 async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
     use krabka_protocol::{
@@ -237,9 +241,10 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         },
     };
 
-    // `UpdateRaftVoter` reports a malformed request as 141, where the add
-    // and remove paths use 42.
-    const INVALID_UPDATE: i16 = 141;
+    const INCONSISTENT_CLUSTER_ID: i16 = 104;
+    const UNKNOWN_LEADER_EPOCH: i16 = 75;
+    const FENCED_LEADER_EPOCH: i16 = 74;
+    const INVALID_REQUEST: i16 = 42;
     let version = update_raft_voter_request::MAX_VERSION;
     let (engine, _dir) = single_voter_engine();
     wait_for_leader(&engine).await;
@@ -258,32 +263,8 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         max_supported_version: max,
         ..Default::default()
     };
-
-    // (what it is, cluster id, epoch offered, version range)
-    let cases: Vec<(&str, Option<String>, i32, KRaftVersionFeature)> = vec![
-        ("no cluster id at all", None, epoch, range(0, 1)),
-        (
-            "another cluster's id",
-            Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
-            epoch,
-            range(0, 1),
-        ),
-        (
-            "an epoch the quorum has left behind",
-            Some(cluster_id.clone()),
-            epoch + 1,
-            range(0, 1),
-        ),
-        (
-            "an inverted kraft.version range",
-            Some(cluster_id.clone()),
-            epoch,
-            range(2, 1),
-        ),
-    ];
-
-    for (what, request_cluster_id, current_leader_epoch, k_raft_version_feature) in cases {
-        let request = UpdateRaftVoterRequest {
+    let update =
+        |request_cluster_id, current_leader_epoch, k_raft_version_feature| UpdateRaftVoterRequest {
             cluster_id: request_cluster_id,
             voter_id: 1,
             voter_directory_id: directory,
@@ -292,13 +273,65 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
             listeners: vec![listener()],
             ..Default::default()
         };
+    let code_for = async |request: UpdateRaftVoterRequest| {
         let mut body = BytesMut::new();
         request.encode(&mut body, version).expect("encode");
         let bytes = update_raft_voter_response(version, &body.freeze(), &engine)
             .await
             .expect("response");
         let mut cursor = &bytes[..];
-        let decoded = UpdateRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-        check!(decoded.error_code == INVALID_UPDATE, "{what}");
+        UpdateRaftVoterResponse::decode(&mut cursor, version)
+            .expect("decode")
+            .error_code
+    };
+
+    // (what it is, cluster id, epoch offered, version range, code expected)
+    let cases: Vec<(&str, Option<String>, i32, KRaftVersionFeature, i16)> = vec![
+        (
+            "another cluster's id",
+            Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+            epoch,
+            range(0, 1),
+            INCONSISTENT_CLUSTER_ID,
+        ),
+        (
+            "an epoch ahead of the quorum's",
+            Some(cluster_id.clone()),
+            epoch + 1,
+            range(0, 1),
+            UNKNOWN_LEADER_EPOCH,
+        ),
+        (
+            "an epoch the quorum has left behind",
+            Some(cluster_id.clone()),
+            epoch - 1,
+            range(0, 1),
+            FENCED_LEADER_EPOCH,
+        ),
+        (
+            "an inverted kraft.version range",
+            Some(cluster_id.clone()),
+            epoch,
+            range(2, 1),
+            INVALID_REQUEST,
+        ),
+    ];
+
+    for (what, request_cluster_id, current_leader_epoch, k_raft_version_feature, want) in cases {
+        let request = update(
+            request_cluster_id,
+            current_leader_epoch,
+            k_raft_version_feature,
+        );
+        check!(code_for(request).await == want, "{what}");
     }
+
+    // `KafkaRaftClient.hasValidClusterId` answers true for a null cluster id,
+    // so a request that names no cluster is not an inconsistent one: it runs
+    // the rest of the checks and gets what the same request naming this
+    // cluster gets.
+    let named = code_for(update(Some(cluster_id.clone()), epoch, range(0, 1))).await;
+    let anonymous = code_for(update(None, epoch, range(0, 1))).await;
+    check!(anonymous == named);
+    check!(anonymous != INCONSISTENT_CLUSTER_ID);
 }

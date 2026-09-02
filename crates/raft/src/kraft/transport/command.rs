@@ -84,6 +84,11 @@ pub enum Command {
         records: Vec<krabka_metadata::MetadataRecord>,
         reply: oneshot::Sender<Result<crate::SubmitChangeResult, RaftError>>,
     },
+    /// Handle op: compare and mutate delegation-token state in one engine turn.
+    SubmitDelegationTokenMutations {
+        mutations: Vec<crate::DelegationTokenMutation>,
+        reply: oneshot::Sender<Result<crate::SubmitChangeResult, RaftError>>,
+    },
     /// Handle op: append a KIP-853 control batch and optionally wait for it to
     /// commit under the new voter set.
     Reconfigure {

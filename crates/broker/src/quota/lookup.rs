@@ -1,6 +1,10 @@
 //! Quota lookup with Kafka's 8-priority entity matching.
 
 use krabka_metadata::{EntityKey, MetadataImage};
+use krabka_verified::{
+    IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts, UserClientQuotaPrecedence,
+    ip_quota_precedence, user_client_quota_precedence,
+};
 
 /// Return the configured value for `quota_key` under the most-specific
 /// matching entity for `(principal, client_id)`. First match wins per
@@ -57,7 +61,36 @@ pub fn lookup_quota_with_key(
         vec![("user".into(), None)],
         vec![("client-id".into(), None)],
     ];
-    first_matching_quota(image, candidates, quota_key)
+    let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
+    let present = |index: usize| {
+        if matches[index].is_some() {
+            QuotaCandidatePresence::Present
+        } else {
+            QuotaCandidatePresence::Absent
+        }
+    };
+    let selected = user_client_quota_precedence(UserClientQuotaFacts {
+        exact_pair: present(0),
+        exact_client_default_user: present(1),
+        default_client_exact_user: present(2),
+        default_pair: present(3),
+        exact_user: present(4),
+        exact_client: present(5),
+        default_user: present(6),
+        default_client: present(7),
+    });
+    let index = match selected {
+        UserClientQuotaPrecedence::ExactPair => 0,
+        UserClientQuotaPrecedence::ExactClientDefaultUser => 1,
+        UserClientQuotaPrecedence::DefaultClientExactUser => 2,
+        UserClientQuotaPrecedence::DefaultPair => 3,
+        UserClientQuotaPrecedence::ExactUser => 4,
+        UserClientQuotaPrecedence::ExactClient => 5,
+        UserClientQuotaPrecedence::DefaultUser => 6,
+        UserClientQuotaPrecedence::DefaultClient => 7,
+        UserClientQuotaPrecedence::None => return None,
+    };
+    matches[index].clone()
 }
 
 /// Lookup an `ip`-scoped quota for `peer_ip`. Priority order:
@@ -89,22 +122,24 @@ pub fn lookup_ip_quota_with_key(
         vec![("ip".into(), Some(peer_ip.to_string()))],
         vec![("ip".into(), None)],
     ];
-    first_matching_quota(image, candidates, quota_key)
+    let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
+    match ip_quota_precedence(matches[0].is_some(), matches[1].is_some()) {
+        IpQuotaPrecedence::Exact => matches[0].clone(),
+        IpQuotaPrecedence::Default => matches[1].clone(),
+        IpQuotaPrecedence::None => None,
+    }
 }
 
-fn first_matching_quota(
+fn quota_for_key(
     image: &MetadataImage,
-    candidates: impl IntoIterator<Item = EntityKey>,
+    key: EntityKey,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
-    for key in candidates {
-        if let Some(configs) = image.client_quotas().get(&key)
-            && let Some(&v) = configs.get(quota_key)
-        {
-            return Some((key, v));
-        }
-    }
-    None
+    image
+        .client_quotas()
+        .get(&key)
+        .and_then(|configs| configs.get(quota_key))
+        .map(|value| (key, *value))
 }
 
 #[cfg(test)]

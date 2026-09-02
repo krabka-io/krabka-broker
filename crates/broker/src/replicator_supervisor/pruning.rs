@@ -71,6 +71,7 @@ impl ReplicatorSupervisor {
         if let Some(writer) = removed.take_writer_handle() {
             writer.abort();
         }
+        self.hot_tail.remove_partition(topic_id, index);
         self.reported_dirs.remove(&(topic.clone(), index.get()));
         let owning_dir = removed.log_dir.load_full();
         let remove = if preserve_follower {

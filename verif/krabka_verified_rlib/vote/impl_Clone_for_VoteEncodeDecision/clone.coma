@@ -1,0 +1,17 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 18 27 18 32 *)
+
+(* <vote::VoteEncodeDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_VoteEncodeDecision = Reject | Accept
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoteEncodeDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 18 27 18 32]
+  (self: t_VoteEncodeDecision) (return (x: t_VoteEncodeDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoteEncodeDecision = Any.any_l () | & self: t_VoteEncodeDecision = self ])
+  [ return (result: t_VoteEncodeDecision) -> (! return {result}) ]

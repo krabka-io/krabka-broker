@@ -5,10 +5,14 @@ package(default_visibility = ["//visibility:public"])
 # Cargo.lock/Cargo.toml are consumed by `crate.from_cargo` (see //MODULE.bazel);
 # clippy.toml by the lint aspect in //tools/lint; .cargo/mutants.toml by the
 # mutation sweep, via `--@rules_rs_mutants//mutants:config` in //.bazelrc.
+# MODULE.bazel itself is read by //bazel/images:pinned_digests, which turns the
+# image digests it pins into compile-time environment.
 exports_files([
     ".cargo/mutants.toml",
+    ".creusot-version",
     "Cargo.lock",
     "Cargo.toml",
+    "MODULE.bazel",
     "clippy.toml",
 ])
 

@@ -5,13 +5,13 @@
 # `image_binaries_test` reads the layers the build produced, which is the check
 # worth running on every commit. This one runs the tools under the base image's
 # own loader and libc, so it catches what that cannot -- a binary linked against
-# something distroless does not carry. It needs a Docker daemon and materializes
+# something the apko base does not carry. It needs a Docker daemon and materializes
 # a several-hundred-megabyte tarball, so it is tagged `docker` and left out of
 # the default run:
 #
 #     bazel test --config=docker //packaging:image_docker_test
 #
-# Argument 1 is the `oci_load` runner, argument 2 the tag it loads under, and
+# Argument 1 is the `image_load` runner, argument 2 the tag it loads under, and
 # the rest are the layer tarballs, all passed by //packaging:image_docker_test.
 set -euo pipefail
 

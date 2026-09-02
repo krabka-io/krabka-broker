@@ -2,7 +2,7 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{FakeLog, machine},
+    core::test_support::{FakeLog, machine, voters},
     event::{Event, LogEnd},
 };
 
@@ -32,9 +32,12 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
         m.on_event(
             Event::ReceiveVoteRequest {
                 from: NodeId(2),
+                cluster_id: None,
                 voter_id: NodeId(1),
+                voter_directory_id: uuid::Uuid::nil(),
                 candidate_epoch: 3,
                 candidate: NodeId(2),
+                candidate_directory_id: uuid::Uuid::nil(),
                 candidate_log_end: LogEnd {
                     last_epoch: 1,
                     last_offset: 5,
@@ -248,4 +251,100 @@ fn stale_prevote_grant_ignored_after_promotion() {
     } else {
         panic!("expected Candidate");
     }
+}
+
+#[test]
+fn late_grant_from_removed_voter_does_not_count() {
+    let mut m = machine(
+        NodeId(1),
+        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
+    );
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2001),
+    );
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+
+    m.apply_voter_set(voters(&[NodeId(1), NodeId(4), NodeId(5)]), SimInstant(2002));
+    let actions = m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2003),
+    );
+    check!(
+        (
+            matches!(m.role(), Role::Prospective { .. }),
+            actions.is_empty()
+        ) == (true, true)
+    );
+
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(4),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2004),
+    );
+    assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
+}
+
+#[test]
+fn removed_voter_response_retallies_retained_grants() {
+    let mut m = machine(
+        NodeId(1),
+        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
+    );
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2001),
+    );
+
+    m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(4)]), SimInstant(2002));
+    let actions = m.on_event(
+        Event::ReceiveVoteResponse {
+            from: NodeId(3),
+            epoch: 0,
+            vote_granted: true,
+        },
+        &log,
+        SimInstant(2003),
+    );
+
+    check!(
+        matches!(m.role(), Role::Candidate { .. }),
+        "retained grants form a majority after the voter-set shrink"
+    );
+    assert2::assert!(actions.iter().any(|action| matches!(
+        action,
+        Action::SendVoteRequest {
+            epoch: 1,
+            pre_vote: false
+        }
+    )));
 }

@@ -1,0 +1,133 @@
+(* #"/proof-work-235/crates/verified/src/storage.rs" 30 0 34 24 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sstorage = "/proof-work-235/crates/verified/src/storage.rs" 35 30 35 36
+let%span sstorage'0 = "/proof-work-235/crates/verified/src/storage.rs" 39 14 39 52
+let%span sstorage'1 = "/proof-work-235/crates/verified/src/storage.rs" 40 28 40 46
+let%span sstorage'2 = "/proof-work-235/crates/verified/src/storage.rs" 37 16 38 32
+let%span sstorage'3 = "/proof-work-235/crates/verified/src/storage.rs" 36 16 36 55
+let%span sstorage'4 = "/proof-work-235/crates/verified/src/storage.rs" 40 50 40 79
+let%span sstorage'5 = "/proof-work-235/crates/verified/src/storage.rs" 41 27 41 28
+let%span sstorage'6 = "/proof-work-235/crates/verified/src/storage.rs" 41 8 41 28
+let%span sstorage'7 = "/proof-work-235/crates/verified/src/storage.rs" 47 20 47 25
+let%span sstorage'8 = "/proof-work-235/crates/verified/src/storage.rs" 18 11 19 86
+let%span sstorage'9 = "/proof-work-235/crates/verified/src/storage.rs" 20 10 20 56
+let%span sstorage'10 = "/proof-work-235/crates/verified/src/storage.rs" 21 10 22 28
+let%span sstorage'11 = "/proof-work-235/crates/verified/src/storage.rs" 23 10 24 29
+let%span sstorage'12 = "/proof-work-235/crates/verified/src/storage.rs" 25 10 28 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_LocalTruncationPlan = { retained_sealed: UInt64.t; keep_active: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_truncation_plan [#"/proof-work-235/crates/verified/src/storage.rs" 30 0 34 24]
+  (sealed_bases: Slice64.slice Int64.t) (active_base: t_Option_i64) (cut: Int64.t) (return (x: t_LocalTruncationPlan)) =
+{[@stop_split] [@expl:local_truncation_plan requires] [%#sstorage'8] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view sealed_bases)
+    -> Int64.lt (Seq.get (Slice64.view sealed_bases) i) (Seq.get (Slice64.view sealed_bases) j)}
+  (! bb0
+  [ bb0 = s0 [ s0 = [ &retained_sealed'0 <- [%#sstorage] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sstorage'0] Seq.length (Slice64.view sealed_bases)
+      - UInt64.t'int retained_sealed'0)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sstorage'3] UInt64.t'int retained_sealed'0
+      <= Seq.length (Slice64.view sealed_bases)}
+      {[@expl:loop invariant #1] [%#sstorage'2] forall i: int. 0 <= i /\ i < UInt64.t'int retained_sealed'0
+        -> Int64.to_int (Seq.get (Slice64.view sealed_bases) i) < Int64.to_int cut}
+      (! [ &variant_old_bb1 <- [%#sstorage'0] Seq.length (Slice64.view sealed_bases) - UInt64.t'int retained_sealed'0 ]
+      s0)
+      [ s0 = len_i64 [%#sstorage'1] {sealed_bases} (fun (_x: UInt64.t) -> [ &_33 <- _x ] s1)
+      | s1 = [ &_31 <- UInt64.lt retained_sealed'0 _33 ] s2
+      | s2 = any [ br0 -> {_31 = false} (! bb9) | br1 -> {_31} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_37 <- retained_sealed'0 ] s1
+        | s1 = [ &_38 <- Slice64.length sealed_bases ] s2
+        | s2 = [ &_39 <- UInt64.lt _37 _38 ] s3
+        | s3 = {[@expl:index in bounds] [%#sstorage'4] _39} s4
+        | s4 = Slice64.get [%#sstorage'4] <Int64.t> {sealed_bases} {_37} (fun (r: Int64.t) -> [ &_36 <- r ] s5)
+        | s5 = [ &_35 <- Int64.lt _36 cut ] s6
+        | s6 = any [ br0 -> {_35 = false} (! bb9) | br1 -> {_35} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = UInt64.add [%#sstorage'6] {retained_sealed'0} {[%#sstorage'5] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &retained_sealed'0 <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb9 = any [ br0 -> {active_base = None} (! bb12) | br1 (x0: Int64.t) -> {active_base = Some x0} (! bb13) ]
+  | bb13 = s0
+    [ s0 = elim_Some {active_base} (fun (r0: Int64.t) -> [ &base <- r0 ] s1)
+    | s1 = [ &_43 <- Int64.lt base cut ] s2
+    | s2 = bb14 ]
+  | bb12 = s0 [ s0 = [ &_43 <- [%#sstorage'7] false ] s1 | s1 = bb14 ]
+  | bb14 = s0 [ s0 = [ &_ret <- { retained_sealed = retained_sealed'0; keep_active = _43 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalTruncationPlan = Any.any_l ()
+  | & sealed_bases: Slice64.slice Int64.t = sealed_bases
+  | & active_base: t_Option_i64 = active_base
+  | & cut: Int64.t = cut
+  | & retained_sealed'0: UInt64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _36: Int64.t = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & base: Int64.t = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_LocalTruncationPlan) ->
+  {[@stop_split] [@expl:local_truncation_plan ensures] ([@stop_split] [@expl:local_truncation_plan ensures #0] [%#sstorage'9] UInt64.t'int result.retained_sealed
+      <= Seq.length (Slice64.view sealed_bases))
+    /\ ([@stop_split] [@expl:local_truncation_plan ensures #1] [%#sstorage'10] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result.retained_sealed
+        -> Int64.to_int (Seq.get (Slice64.view sealed_bases) i) < Int64.to_int cut)
+    /\ ([@stop_split] [@expl:local_truncation_plan ensures #2] [%#sstorage'11] forall i: int. UInt64.t'int result.retained_sealed
+            <= i
+          /\ i < Seq.length (Slice64.view sealed_bases)
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view sealed_bases) i)) (Int64.to_int cut))
+    /\ ([@stop_split] [@expl:local_truncation_plan ensures #3] [%#sstorage'12] result.keep_active
+    = match active_base with
+      | Some base -> Int64.to_int base < Int64.to_int cut
+      | None -> false
+      end)}
+    (! return {result}) ]

@@ -176,6 +176,7 @@ impl Archive {
         index: usize,
         signer: Option<Arc<FileEd25519Signer>>,
         prev_head: Option<ChainHead>,
+        entries: Option<Vec<ObjectEntry>>,
     ) {
         let segment = &self.segments[index];
         let mut stamp = segment.manifest.body.chain;
@@ -187,7 +188,7 @@ impl Archive {
             .clone()
             .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
         let sealed = WormArchiver::new(signer)
-            .seal(&stamped, segment.entries.clone())
+            .seal(&stamped, entries.unwrap_or_else(|| segment.entries.clone()))
             .unwrap();
         put_raw(&self.ops, &segment.manifest_key, sealed.bytes).await;
     }
@@ -374,6 +375,10 @@ pub(super) enum Tamper {
     SignWithAnotherKey(usize),
     SignWithUnknownKeyId(usize),
     Unsign(usize),
+    RewritePublicKey(usize),
+    DuplicateObject(usize),
+    WrongObjectCoordinates(usize),
+    DropObjectEntry(usize),
     StrayObject,
     BumpFormatVersion(usize),
 }
@@ -400,6 +405,7 @@ impl Tamper {
                         i,
                         Some(Arc::clone(&archive.signer)),
                         Some(ChainHead([0xaa; 32])),
+                        None,
                     )
                     .await;
             }
@@ -411,13 +417,45 @@ impl Tamper {
                 // check against the key it trusts and not the key the
                 // manifest carries.
                 let (other, _) = signer(KEY_ID);
-                archive.reseal(i, Some(other), None).await;
+                archive.reseal(i, Some(other), None, None).await;
             }
             Tamper::SignWithUnknownKeyId(i) => {
                 let (rogue, _) = signer("rogue-key");
-                archive.reseal(i, Some(rogue), None).await;
+                archive.reseal(i, Some(rogue), None, None).await;
             }
-            Tamper::Unsign(i) => archive.reseal(i, None, None).await,
+            Tamper::Unsign(i) => archive.reseal(i, None, None, None).await,
+            Tamper::RewritePublicKey(i) => {
+                let segment = &archive.segments[i];
+                let mut manifest = segment.manifest.clone();
+                manifest.signature.as_mut().unwrap().public_key.0[0] ^= 0xff;
+                put_raw(
+                    &archive.ops,
+                    &segment.manifest_key,
+                    Bytes::from(serde_json::to_vec(&manifest).unwrap()),
+                )
+                .await;
+            }
+            Tamper::DuplicateObject(i) => {
+                let mut entries = archive.segments[i].entries.clone();
+                entries.push(entries[0].clone());
+                archive
+                    .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
+                    .await;
+            }
+            Tamper::WrongObjectCoordinates(i) => {
+                let mut entries = archive.segments[i].entries.clone();
+                entries[0].suffix = ".timeindex".to_string();
+                archive
+                    .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
+                    .await;
+            }
+            Tamper::DropObjectEntry(i) => {
+                let mut entries = archive.segments[i].entries.clone();
+                entries.pop();
+                archive
+                    .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
+                    .await;
+            }
             Tamper::StrayObject => {
                 put_raw(
                     &archive.ops,

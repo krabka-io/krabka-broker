@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_java_string_hash_partition_model": {
+        "prover": "alt-ergo",
+        "time": 0.013
+      }
+    }
+  }
+}

@@ -11,6 +11,11 @@
 //!   key is list-valued, so the handler rejects these two with
 //!   `INVALID_CONFIG`.
 //!
+//! `BROKER_LOGGER` (8) is the one resource type that stages no metadata
+//! record at all: it retargets this node's live `tracing` filter and nothing
+//! else, which is what a JVM broker does with its log4j2 context. See
+//! [`broker_logger_scope`].
+//!
 //! A controller-managed key is refused whatever the operation is. KFC-9's
 //! [`crate::config_keys::WRITE_FREEZE`] is synthesised for `DescribeConfigs`
 //! and is never stored, so a DELETE of it is an attempt to lift the freeze and
@@ -34,6 +39,7 @@ use krabka_protocol::{
 };
 use krabka_raft::RaftError;
 
+mod broker_logger_scope;
 mod broker_scope;
 mod client_metrics_scope;
 mod group_scope;
@@ -46,8 +52,9 @@ pub(super) use self::broker_scope::{
     validate_broker_config_value,
 };
 use self::{
-    broker_scope::handle_broker_scoped, client_metrics_scope::handle_client_metrics_scoped,
-    group_scope::handle_group_scoped, topic_scope::topic_config_record,
+    broker_logger_scope::handle_broker_logger_scoped, broker_scope::handle_broker_scoped,
+    client_metrics_scope::handle_client_metrics_scoped, group_scope::handle_group_scoped,
+    topic_scope::topic_config_record,
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -58,6 +65,7 @@ use crate::{
 
 const RESOURCE_TYPE_TOPIC: i8 = 2;
 const RESOURCE_TYPE_BROKER: i8 = 4;
+const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
 const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 const RESOURCE_TYPE_GROUP: i8 = 32;
 const OP_SET: i8 = 0;
@@ -113,8 +121,10 @@ async fn process_resource(
     // ── ACL preamble ────────────────────────────────────────
     // Per-resource authorization based on resource_type.
     // Topic (2) → AlterConfigs on Topic(resource_name) → TOPIC_AUTHORIZATION_FAILED on Deny.
-    // Broker (4) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED on Deny.
-    // Other resource types are unsupported (INVALID_RESOURCE_TYPE) — checked after ACL.
+    // Broker (4) and BrokerLogger (8) → AlterConfigs on Cluster("kafka-cluster")
+    // → CLUSTER_AUTHORIZATION_FAILED on Deny.
+    // Other resource types are unsupported; Kafka assigns no distinct code for
+    // that, so they get INVALID_REQUEST — checked after ACL.
     let acl_result = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
             image,
@@ -126,16 +136,18 @@ async fn process_resource(
                 operation: AclOperation::AlterConfigs,
             },
         ),
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Cluster,
-                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                operation: AclOperation::AlterConfigs,
-            },
-        ),
+        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER | RESOURCE_TYPE_CLIENT_METRICS => {
+            broker.config.authorizer.authorize(
+                image,
+                &AuthorizationRequest {
+                    principal: ctx.principal,
+                    host: ctx.peer,
+                    resource_type: ResourceType::Cluster,
+                    resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                    operation: AclOperation::AlterConfigs,
+                },
+            )
+        }
         RESOURCE_TYPE_GROUP => broker.config.authorizer.authorize(
             image,
             &AuthorizationRequest {
@@ -147,7 +159,7 @@ async fn process_resource(
             },
         ),
         _ => {
-            out.error_code = codes::INVALID_RESOURCE_TYPE;
+            out.error_code = codes::INVALID_REQUEST;
             out.error_message = Some(format!(
                 "resource_type={} not supported",
                 resource.resource_type
@@ -182,6 +194,18 @@ async fn process_resource(
                 return out;
             }
         }
+        RESOURCE_TYPE_BROKER_LOGGER => {
+            // Node-local and never persisted, so this returns without
+            // reaching `submit_change` whatever the outcome.
+            handle_broker_logger_scoped(
+                &resource,
+                broker.config.broker_id,
+                &broker.config.log_levels,
+                validate_only,
+                &mut out,
+            );
+            return out;
+        }
         RESOURCE_TYPE_CLIENT_METRICS => {
             handle_client_metrics_scoped(&resource, image, &mut out, &mut to_submit);
             if out.error_code != codes::NONE {
@@ -203,7 +227,7 @@ async fn process_resource(
         _ => {
             // Already handled by the ACL match above (unreachable), but be
             // explicit for exhaustiveness.
-            out.error_code = codes::INVALID_RESOURCE_TYPE;
+            out.error_code = codes::INVALID_REQUEST;
             out.error_message = Some(format!(
                 "resource_type={} not supported",
                 resource.resource_type

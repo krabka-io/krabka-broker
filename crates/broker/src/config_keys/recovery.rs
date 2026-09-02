@@ -1,5 +1,7 @@
 //! The two unclean-recovery keys, the KIP-841 enable flag and the KIP-966
-//! strategy, with the topic-over-cluster-default lookup they share.
+//! strategy. Both resolve through [`topic_or_cluster_default`].
+
+use super::lookup::topic_or_cluster_default;
 
 /// KIP-841: gates whether the controller may auto-elect an out-of-ISR
 /// replica as leader on ISR-empty failover. Default: `false`, which matches
@@ -23,7 +25,7 @@ pub(crate) enum RecoveryStrategy {
     /// No offset-aware recovery. Defer to `unclean.leader.election.enable`.
     None,
     /// Wait for all currently-alive replicas, then elect the most complete
-    /// log. krabka does not track ELR.
+    /// log.
     Balanced,
     /// Elect the most complete log among the replicas that respond within
     /// a short deadline. This optimizes availability.
@@ -39,18 +41,6 @@ impl RecoveryStrategy {
             _ => None,
         }
     }
-}
-
-fn topic_or_cluster_default<'a>(
-    image: &'a krabka_metadata::MetadataImage,
-    topic: &str,
-    key: &str,
-) -> Option<&'a str> {
-    image
-        .topic_config(topic)
-        .and_then(|configs| configs.get(key))
-        .or_else(|| image.default_broker_config()?.get(key))
-        .map(String::as_str)
 }
 
 /// Resolve `unclean.recovery.strategy` for `topic`. A topic override takes

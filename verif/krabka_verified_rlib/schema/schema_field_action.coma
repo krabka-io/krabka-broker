@@ -1,0 +1,40 @@
+(* #"/workspace/crates/verified/src/schema.rs" 105 0 110 22 *)
+
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 96 10 97 63
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 98 10 99 67
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 100 10 103 62
+
+use creusot.prelude.Any
+
+type t_SchemaFieldRole = Key | Value
+
+type t_SchemaFieldAction = Skip | CheckKey | CheckValue
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let schema_field_action [#"/workspace/crates/verified/src/schema.rs" 105 0 110 22] (key_enabled: bool)
+  (value_enabled: bool) (role: t_SchemaFieldRole) (present: bool) (return (x: t_SchemaFieldAction)) = (! bb0
+  [ bb0 = any [ br0 -> {present = false} (! bb12) | br1 -> {present} (! bb1) ]
+  | bb1 = any [ br0 -> {role = Key} (! bb7) | br1 -> {role = Value} (! bb6) ]
+  | bb6 = any [ br0 -> {value_enabled = false} (! bb5) | br1 -> {value_enabled} (! bb10) ]
+  | bb10 = s0 [ s0 = [ &_ret <- CheckValue ] s1 | s1 = return {_ret} ]
+  | bb7 = any [ br0 -> {key_enabled = false} (! bb5) | br1 -> {key_enabled} (! bb8) ]
+  | bb8 = s0 [ s0 = [ &_ret <- CheckKey ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- Skip ] s1 | s1 = return {_ret} ]
+  | bb12 = s0 [ s0 = [ &_ret <- Skip ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SchemaFieldAction = Any.any_l ()
+  | & key_enabled: bool = key_enabled
+  | & value_enabled: bool = value_enabled
+  | & role: t_SchemaFieldRole = role
+  | & present: bool = present ])
+  [ return (result: t_SchemaFieldAction) ->
+  {[@stop_split] [@expl:schema_field_action ensures] ([@stop_split] [@expl:schema_field_action ensures #0] [%#sschema] (result
+        = CheckKey)
+      = (key_enabled /\ present /\ role = Key))
+    /\ ([@stop_split] [@expl:schema_field_action ensures #1] [%#sschema'0] (result = CheckValue)
+      = (value_enabled /\ present /\ role = Value))
+    /\ ([@stop_split] [@expl:schema_field_action ensures #2] [%#sschema'1] (result = Skip)
+    = (not present \/ role = Key /\ not key_enabled \/ role = Value /\ not value_enabled))}
+    (! return {result}) ]

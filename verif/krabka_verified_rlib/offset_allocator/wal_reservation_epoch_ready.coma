@@ -1,0 +1,26 @@
+(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 11 0 11 88 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 9 10 9 59
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let wal_reservation_epoch_ready [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 11 0 11 88]
+  (high_watermark: Int64.t) (epoch_start_offset: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- Int64.gt high_watermark epoch_start_offset ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & high_watermark: Int64.t = high_watermark
+  | & epoch_start_offset: Int64.t = epoch_start_offset ])
+  [ return (result: bool) -> {[@stop_split] [@expl:wal_reservation_epoch_ready ensures] [%#soffset_allocator] result
+    = gt_log_Int (Int64.to_int high_watermark) (Int64.to_int epoch_start_offset)}
+    (! return {result}) ]

@@ -1,0 +1,182 @@
+(* #"/proof-work-215/crates/verified/src/diskless.rs" 81 0 88 16 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span sdiskless = "/proof-work-215/crates/verified/src/diskless.rs" 89 23 89 61
+let%span sdiskless'0 = "/proof-work-215/crates/verified/src/diskless.rs" 89 23 89 81
+let%span sdiskless'1 = "/proof-work-215/crates/verified/src/diskless.rs" 92 16 92 49
+let%span sdiskless'2 = "/proof-work-215/crates/verified/src/diskless.rs" 92 16 92 50
+let%span sdiskless'3 = "/proof-work-215/crates/verified/src/diskless.rs" 93 4 93 41
+let%span sdiskless'4 = "/proof-work-215/crates/verified/src/diskless.rs" 73 10 79 1
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sbool = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/bool.rs" 6 18 6 61
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_u64 = None | Some UInt64.t
+
+constant const_MIN: UInt64.t = (0: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+let checked_add (self_: UInt64.t) (rhs: UInt64.t) (return (x: t_Option_u64)) = any
+  [ return (result: t_Option_u64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (UInt64.t'int self_ + UInt64.t'int rhs < UInt64.t'int const_MIN
+      \/ gt_log_Int (UInt64.t'int self_ + UInt64.t'int rhs) (UInt64.t'int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: UInt64.t. result = Some r
+      -> UInt64.t'int r = UInt64.t'int self_ + UInt64.t'int rhs)}
+    (! return {result}) ]
+
+type t_Option_Int = None'0 | Some'0 int
+
+function deep_model_u64 [@inline:trivial] (self: UInt64.t) : int = [%#snum'1] UInt64.t'int self
+
+meta "rewrite_def" function deep_model_u64
+
+function deep_model_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int = [%#soption] match self with
+    | Some t -> Some'0 (deep_model_u64 t)
+    | None -> None'0
+    end
+
+meta "rewrite_def" function deep_model_Option_u64
+
+function deep_model_ref_Option_u64 [@inline:trivial] (self: t_Option_u64) : t_Option_Int =
+  [%#smodel] deep_model_Option_u64 self
+
+meta "rewrite_def" function deep_model_ref_Option_u64
+
+let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:ne ensures] [%#scmp] result
+    = (deep_model_ref_Option_u64 self_ <> deep_model_ref_Option_u64 rhs)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_u64 = Continue UInt64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0 -> inv_Infallible f0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_u64 (_1: t_ControlFlow_Option_Infallible_u64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_u64 [inv_ControlFlow_Option_Infallible_u64 x]. inv_ControlFlow_Option_Infallible_u64 x
+    = match x with
+      | Continue f0 -> true
+      | Break f0 -> inv_Option_Infallible f0
+      end
+
+let branch_Option_u64 (self_: t_Option_u64) (return (x: t_ControlFlow_Option_Infallible_u64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_u64) ->
+  {[@stop_split] [@expl:branch_Option_u64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_u64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some v -> result = Continue v
+      | None -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_u64) (return (f0: t_Option_Infallible)) = any
+  [ _k (f0: t_Option_Infallible) -> {Break f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_u64 (residual: t_Option_Infallible) (return (x: t_Option_u64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_u64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_u64) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Continue f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let then_some_u64 (self_: bool) (t: UInt64.t) (return (x: t_Option_u64)) = any
+  [ return (result: t_Option_u64) -> {[@stop_split] [@expl:then_some ensures] [%#sbool] result
+    = (if self_ then Some t else None)}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let diskless_span_extension [#"/proof-work-215/crates/verified/src/diskless.rs" 81 0 88 16] (current_start: UInt64.t)
+  (current_len: UInt64.t) (next_start: UInt64.t) (next_len: UInt64.t) (same_object: bool) (max_bytes: UInt64.t)
+  (return (x: t_Option_u64)) = (! bb0
+  [ bb0 = any [ br0 -> {same_object = false} (! bb5) | br1 -> {same_object} (! bb1) ]
+  | bb1 = s0
+    [ s0 = checked_add [%#sdiskless] {current_start} {current_len} (fun (_x: t_Option_u64) -> [ &_18 <- _x ] s1)
+    | s1 = [ &_22 <- Some next_start ] s2
+    | s2 = ne_Option_u64 [%#sdiskless'0] {_18} {_22} (fun (_x: bool) -> [ &_16 <- _x ] s3)
+    | s3 = any [ br0 -> {_16 = false} (! bb6) | br1 -> {_16} (! bb5) ] ]
+  | bb6 = s0
+    [ s0 = checked_add [%#sdiskless'1] {current_len} {next_len} (fun (_x: t_Option_u64) -> [ &_27 <- _x ] s1)
+    | s1 = branch_Option_u64 [%#sdiskless'2] {_27} (fun (_x: t_ControlFlow_Option_Infallible_u64) -> [ &_26 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: UInt64.t) -> {_26 = Continue x0} (! bb11)
+      | br1 (x0: t_Option_Infallible) -> {_26 = Break x0} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = elim_Break {_26} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_u64 [%#sdiskless'2] {residual} (fun (_x: t_Option_u64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb11 = s0
+    [ s0 = elim_Continue {_26} (fun (r0: UInt64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &total <- val' ] s2
+    | s2 = [ &_35 <- UInt64.le total max_bytes ] s3
+    | s3 = then_some_u64 [%#sdiskless'3] {_35} {total} (fun (_x: t_Option_u64) -> [ &_ret <- _x ] s4)
+    | s4 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_u64 = Any.any_l ()
+  | & current_start: UInt64.t = current_start
+  | & current_len: UInt64.t = current_len
+  | & next_start: UInt64.t = next_start
+  | & next_len: UInt64.t = next_len
+  | & same_object: bool = same_object
+  | & max_bytes: UInt64.t = max_bytes
+  | & _16: bool = Any.any_l ()
+  | & _18: t_Option_u64 = Any.any_l ()
+  | & _22: t_Option_u64 = Any.any_l ()
+  | & total: UInt64.t = Any.any_l ()
+  | & _26: t_ControlFlow_Option_Infallible_u64 = Any.any_l ()
+  | & _27: t_Option_u64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': UInt64.t = Any.any_l ()
+  | & _35: bool = Any.any_l () ])
+  [ return (result: t_Option_u64) ->
+  {[@stop_split] [@expl:diskless_span_extension ensures] [%#sdiskless'4] match result with
+      | Some total -> same_object
+      /\ UInt64.t'int current_start + UInt64.t'int current_len = UInt64.t'int next_start
+      /\ UInt64.t'int total = UInt64.t'int current_len + UInt64.t'int next_len
+      /\ UInt64.t'int total <= UInt64.t'int max_bytes
+      | None -> true
+      end}
+    (! return {result}) ]

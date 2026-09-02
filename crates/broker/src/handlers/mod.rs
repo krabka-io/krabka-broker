@@ -9,14 +9,18 @@
 //!
 //! The modules that do not name one api key hold what the handlers share: the
 //! wire type aliases, the krabka-private api keys, the response encoders, the
-//! ACL gates, the coordinator lookups, the internal topic list, and the admin
-//! audit hook. Each of them re-exports here, so a caller writes
-//! `crate::handlers::<item>` for every one of them.
+//! ACL gates, the coordinator lookups, and the admin audit hook. Each of them
+//! re-exports here, so a caller writes `crate::handlers::<item>` for every one
+//! of them.
+//!
+//! Whether a topic is broker-owned is not one of them. `Metadata` and
+//! `DescribeTopicPartitions` both read [`crate::internal_topics`], which lives
+//! beside the subsystems whose topic-name constants it is built from rather
+//! than under the handlers that happen to answer with it.
 
 mod acl_gates;
 mod admin_audit;
 mod coordinator_routing;
-mod internal_topics;
 mod private_api_keys;
 mod response_encoding;
 mod wire_types;
@@ -28,7 +32,6 @@ pub(crate) use self::{
     },
     admin_audit::audit_admin,
     coordinator_routing::{group_coordinator_error, parse_advertised_host_port},
-    internal_topics::is_internal_topic,
     private_api_keys::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
         DESCRIBE_BREAK_GLASS_API_KEY, DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,
@@ -64,6 +67,7 @@ pub(crate) mod broker_heartbeat;
 pub(crate) mod broker_registration;
 pub(crate) mod consumer_group_describe;
 pub(crate) mod consumer_group_heartbeat;
+pub(crate) mod controller_id;
 pub(crate) mod controller_registration;
 pub(crate) mod create_acls;
 pub(crate) mod create_delegation_token;
@@ -90,6 +94,8 @@ pub(crate) mod describe_transactions;
 pub(crate) mod describe_topic_partitions;
 pub(crate) mod describe_user_scram_credentials;
 pub(crate) mod elect_leaders;
+// KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
+// reports, read out of the metadata image.
 pub(crate) mod expire_delegation_token;
 pub(crate) mod fetch;
 pub(crate) mod fetch_downconvert;
@@ -114,6 +120,7 @@ pub(crate) mod list_offsets;
 pub(crate) mod list_partition_reassignments;
 pub(crate) mod list_transactions;
 pub(crate) mod metadata;
+pub(crate) mod offline_replicas;
 pub(crate) mod offset_commit;
 pub(crate) mod offset_delete;
 pub(crate) mod offset_fetch;

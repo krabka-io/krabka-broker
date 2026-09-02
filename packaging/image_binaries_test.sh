@@ -10,9 +10,9 @@
 #   * each of them runs and answers `--help`, which is what the by-hand check
 #     `docker run --entrypoint /usr/bin/<tool> <image> --help` establishes,
 #   * the image references those layers, so a layer that stopped being listed in
-#     `tars` fails here rather than in a registry.
+#     `layers` fails here rather than in a registry.
 #
-# Argument 1 is the OCI layout directory; the rest are the layer tarballs, all
+# Argument 1 is the image manifest JSON; the rest are the layer tarballs, all
 # passed as runfiles by //packaging:image_binaries_test.
 set -euo pipefail
 
@@ -28,7 +28,7 @@ expected=(
     krabka-worm-verify
 )
 
-image="$1"
+manifest="$1"
 shift
 layers=("$@")
 
@@ -49,17 +49,17 @@ sha256() {
     fi
 }
 
+[[ -f "${manifest}" ]] || fail "image manifest ${manifest} is not a file"
+
 for layer in "${layers[@]}"; do
     [[ -f "${layer}" ]] || fail "layer ${layer} is not a file"
     tar -xf "${layer}" -C "${rootfs}"
 
-    # A layer the image no longer lists is a layer that does not ship. `tars`
-    # are stored uncompressed, so the blob digest is the tarball's own.
-    #
-    # `-R`, not `-r`: Bazel hands a tree artifact to a test as a directory of
-    # symlinks, which `-r` walks past without reading.
+    # A layer the image no longer lists is a layer that does not ship. rules_img
+    # stores a layer as the gzipped tarball the rule emits, so the blob digest
+    # the manifest carries is that file's own.
     digest="$(sha256 "${layer}")"
-    if ! grep -RqF "${digest}" "${image}/blobs"; then
+    if ! grep -qF "sha256:${digest}" "${manifest}"; then
         fail "the image does not reference layer ${layer} (sha256:${digest})"
     fi
 done

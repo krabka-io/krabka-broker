@@ -179,6 +179,18 @@ impl WalStore for QuorumWalStore {
     }
 
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
-        self.engine.trim_to_offset(&self.source, new_start).await
+        let result = self.engine.trim_to_offset(&self.source, new_start).await;
+        if result.is_ok() {
+            self.invalidate_hot_tail();
+        }
+        result
+    }
+
+    fn invalidate_hot_tail(&self) {
+        if let Some(target) = &self.hot_tail {
+            target
+                .cache
+                .remove_partition(target.topic_id, target.partition);
+        }
     }
 }

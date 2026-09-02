@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_broker_heartbeat_decision": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}

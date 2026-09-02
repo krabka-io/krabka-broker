@@ -23,6 +23,7 @@ pub struct ReconcileInput {
 pub enum ReconcileOutcome {
     NoChange,
     Recomputed,
+    EpochExhausted,
 }
 
 pub fn reconcile_if_dirty(
@@ -47,7 +48,9 @@ pub fn reconcile_if_dirty(
         partition_racks: input.partition_racks.clone(),
     };
     let assignment = assignor.assign(&subscriptions, &topics);
-    group.bump_epoch();
+    if !group.bump_epoch() {
+        return ReconcileOutcome::EpochExhausted;
+    }
     group.install_target(assignment);
     group.dirty = false;
     ReconcileOutcome::Recomputed
@@ -167,6 +170,20 @@ mod tests {
         g.dirty = false;
         let (inp, _) = input("t", 4);
         assert!(reconcile_if_dirty(&mut g, &inp, &UniformAssignor) == ReconcileOutcome::NoChange);
+    }
+
+    #[test]
+    fn dirty_group_rejects_epoch_exhaustion_without_installing_a_target() {
+        let mut group = GroupState::new("g");
+        group.group_epoch = i32::MAX;
+        group.dirty = true;
+        let input = ReconcileInput::default();
+
+        let outcome = reconcile_if_dirty(&mut group, &input, &UniformAssignor);
+
+        assert!(outcome == ReconcileOutcome::EpochExhausted);
+        assert!(group.group_epoch == i32::MAX);
+        assert!(group.dirty);
     }
 
     #[test]

@@ -59,38 +59,47 @@ impl Log {
 
         let cfg_guard = self.config.read().unwrap();
         let time_evict = retention::time_based_evict(&sealed_refs, &cfg_guard, now);
-        let size_evict = retention::size_based_evict(&sealed_refs, active_size, &cfg_guard);
+        let total_size: ByteSize = sealed_refs
+            .iter()
+            .fold(active_size, |total, segment| total + segment.size());
+        let size_debt = cfg_guard.retention_size.map_or(0, |budget| {
+            if total_size > budget {
+                (total_size - budget).bytes_u64()
+            } else {
+                0
+            }
+        });
         drop(cfg_guard);
 
-        // Union preserving order: time first (oldest first), then size.
-        let mut to_evict: Vec<Offset> = time_evict;
-        let mut seen: HashSet<Offset> = to_evict.iter().copied().collect();
-        for base in size_evict {
-            if seen.insert(base) {
-                to_evict.push(base);
-            }
-        }
-
-        // Guard: never evict a segment that still holds a record nobody has
-        // been allowed to read. Time retention already spares a future
-        // timestamp, because it never falls below the age cutoff, but size
-        // retention has no such property and would delete a scheduled batch
-        // before its activation time. On a topic that does not schedule
-        // delivery the floor is the log end, so nothing is spared.
-        let scheduled: HashSet<Offset> = self
+        let time_expired: Vec<bool> = (0..self.segments.len())
+            .map(|index| index < time_evict.len())
+            .collect();
+        // On an immediate topic the floor is the log end, so every entry is
+        // false. On a scheduled topic the first waiting segment stops the
+        // prefix; later segments are never skipped around it.
+        let scheduled: Vec<bool> = self
             .segments
             .iter()
-            .filter(|segment| segment.last_offset() >= visible_floor)
+            .map(|segment| segment.last_offset() >= visible_floor)
+            .collect();
+        let sizes: Vec<u64> = self
+            .segments
+            .iter()
+            .map(|segment| segment.size().bytes_u64())
+            .collect();
+        let selection = krabka_verified::local_retention_prefix(
+            &time_expired,
+            &scheduled,
+            &sizes,
+            size_debt,
+            self.active.is_some(),
+        );
+        let to_evict: Vec<Offset> = self
+            .segments
+            .iter()
+            .take(selection.len)
             .map(Segment::base_offset)
             .collect();
-        to_evict.retain(|base| !scheduled.contains(base));
-
-        // Guard: never drop the only remaining segment. `total_segments`
-        // includes the active one.
-        let total_segments = self.segments.len() + usize::from(self.active.is_some());
-        if to_evict.len() >= total_segments {
-            to_evict.truncate(total_segments.saturating_sub(1));
-        }
 
         let evict: HashSet<Offset> = to_evict.iter().copied().collect();
         tracing::Span::current().record("evicted", evict.len());

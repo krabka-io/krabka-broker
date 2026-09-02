@@ -2,11 +2,12 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use bytes::Bytes;
 use futures_util::StreamExt;
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
 use tokio::sync::{Mutex, watch};
 
-use super::wal_index::{WalFlushRecord, WalIndexCache};
+use super::wal_index::{WalFlushRecord, WalIndexCache, WalIndexKey};
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -49,10 +50,11 @@ impl DisklessIndexLog {
     /// appends, so a watermark taken afterwards names only offsets the stream
     /// is bound to deliver — including a record another broker appended
     /// between the two calls, which a watermark taken first would have left
-    /// out of the target. Those offsets are the catch-up target that
-    /// [`Self::wait_until_caught_up`] reports against: until the pump has
-    /// walked that far, the projection is a partial view of what object
-    /// storage already holds.
+    /// out of the target. A stable keyed fence is then appended to every
+    /// non-empty partition. The fence offsets are the catch-up target that
+    /// [`Self::wait_until_caught_up`] reports against. Kafka compaction can
+    /// leave holes, including at the former end offset, but the current fence
+    /// remains present and proves the pump walked the whole committed view.
     ///
     /// # Errors
     ///
@@ -72,7 +74,24 @@ impl DisklessIndexLog {
         let high_water_marks = log.high_water_marks().await.map_err(|error| {
             crate::error::BrokerError::Txn(format!("diskless index end offsets: {error}"))
         })?;
-        let mut pending = replay_targets(log.partition_count(), &high_water_marks);
+        let mut pending = HashMap::new();
+        for partition in 0..log.partition_count() {
+            let index = usize::try_from(partition).expect("partition non-negative");
+            if high_water_marks.get(index).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            let offset = log
+                .publish_keyed(
+                    partition,
+                    Bytes::from_static(b"__krabka_diskless_replay_fence"),
+                    Some(Bytes::new()),
+                )
+                .await
+                .map_err(|error| {
+                    crate::error::BrokerError::Txn(format!("diskless index replay fence: {error}"))
+                })?;
+            pending.insert(partition, offset);
+        }
         let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
@@ -84,8 +103,21 @@ impl DisklessIndexLog {
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
             while let Some(event) = stream.next().await {
-                if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
-                    pump_cache.lock().await.apply(&record);
+                if event.tombstone {
+                    if let Some(key) = event.key.as_deref().and_then(WalIndexKey::from_bytes) {
+                        pump_cache.lock().await.remove(key);
+                    }
+                } else if let Ok(record) = WalFlushRecord::from_bytes(&event.payload) {
+                    let mut cache = pump_cache.lock().await;
+                    match event.key.as_deref() {
+                        Some(bytes) => {
+                            if let Some(key) = WalIndexKey::from_bytes(bytes) {
+                                cache.apply_keyed(key, &record);
+                            }
+                        }
+                        None => cache.apply(&record),
+                    }
+                    drop(cache);
                     applied_tx.send_modify(|generation| {
                         *generation = generation.wrapping_add(1);
                     });
@@ -133,7 +165,9 @@ impl DisklessIndexLog {
     pub(crate) async fn wait_until_caught_up(&self, stall_timeout: Duration) -> bool {
         let mut progress = self.progress.clone();
         loop {
-            if progress.borrow_and_update().caught_up {
+            let caught_up = progress.borrow_and_update().caught_up;
+            if caught_up {
+                self.cache.lock().await.finish_legacy_replay();
                 return true;
             }
             match tokio::time::timeout(stall_timeout, progress.changed()).await {
@@ -173,34 +207,57 @@ impl DisklessIndexLog {
         &self,
         record: &WalFlushRecord,
     ) -> Result<i64, crate::error::BrokerError> {
-        let bytes = record.to_bytes().map_err(crate::error::BrokerError::Txn)?;
-        self.log
-            .publish(
-                index_partition(&record.object_key, self.log.partition_count()),
-                bytes,
-            )
-            .await
-            .map_err(|error| {
-                crate::error::BrokerError::Txn(format!("diskless index publish: {error}"))
-            })
+        let mut last_offset = -1;
+        for entry in &record.entries {
+            let key = WalIndexKey::from(entry).to_bytes();
+            let bytes = WalFlushRecord {
+                object_key: record.object_key.clone(),
+                format_version: record.format_version,
+                entries: vec![entry.clone()],
+            }
+            .to_bytes()
+            .map_err(crate::error::BrokerError::Txn)?;
+            last_offset = self
+                .log
+                .publish_keyed(
+                    index_partition(&key, self.log.partition_count()),
+                    key,
+                    Some(bytes),
+                )
+                .await
+                .map_err(|error| {
+                    crate::error::BrokerError::Txn(format!("diskless index publish: {error}"))
+                })?;
+        }
+        Ok(last_offset)
+    }
+
+    /// Tombstone every projected range for a deleted topic.
+    pub(crate) async fn tombstone_topic(
+        &self,
+        topic_id: uuid::Uuid,
+    ) -> Result<(), crate::error::BrokerError> {
+        let keys = self.cache.lock().await.keys_for_topic(topic_id);
+        for key in keys {
+            let bytes = key.to_bytes();
+            self.log
+                .publish_keyed(
+                    index_partition(&bytes, self.log.partition_count()),
+                    bytes,
+                    None,
+                )
+                .await
+                .map_err(|error| {
+                    crate::error::BrokerError::Txn(format!("diskless index tombstone: {error}"))
+                })?;
+            self.cache.lock().await.remove(key);
+        }
+        Ok(())
     }
 }
 
-/// The last offset each non-empty partition must deliver before the replay
-/// is complete, keyed by partition. An empty partition has nothing to
-/// replay and so contributes no target.
-fn replay_targets(partition_count: i32, high_water_marks: &[i64]) -> HashMap<i32, i64> {
-    (0..partition_count)
-        .filter_map(|partition| {
-            let index = usize::try_from(partition).ok()?;
-            let high_water_mark = high_water_marks.get(index).copied().unwrap_or(0);
-            (high_water_mark > 0).then_some((partition, high_water_mark - 1))
-        })
-        .collect()
-}
-
-fn index_partition(key: &str, partitions: i32) -> i32 {
-    let hash = key.bytes().fold(0u32, |acc, byte| {
+fn index_partition(key: &[u8], partitions: i32) -> i32 {
+    let hash = key.iter().copied().fold(0u32, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(u32::from(byte))
     });
     i32::try_from(hash % u32::try_from(partitions).expect("positive partition count"))
@@ -209,8 +266,14 @@ fn index_partition(key: &str, partitions: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use assert2::assert;
-    use krabka_remote_storage_topic::InProcessMetadataEventLog;
+    use async_trait::async_trait;
+    use krabka_remote_storage_topic::{
+        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
+        MetadataLogError, PartitionStart,
+    };
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -219,6 +282,59 @@ mod tests {
         *,
     };
     use crate::diskless::wal_index::WalIndexEntry;
+
+    struct TogglePublishLog {
+        inner: Arc<dyn MetadataEventLog>,
+        fail: AtomicBool,
+    }
+
+    impl TogglePublishLog {
+        fn new(inner: Arc<dyn MetadataEventLog>, fail: bool) -> Arc<Self> {
+            Arc::new(Self {
+                inner,
+                fail: AtomicBool::new(fail),
+            })
+        }
+
+        fn set_failing(&self, fail: bool) {
+            self.fail.store(fail, Ordering::Relaxed);
+        }
+    }
+
+    #[async_trait]
+    impl MetadataEventLog for TogglePublishLog {
+        fn partition_count(&self) -> i32 {
+            self.inner.partition_count()
+        }
+
+        async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+            self.inner.publish(partition, event).await
+        }
+
+        async fn publish_keyed(
+            &self,
+            partition: i32,
+            key: Bytes,
+            event: Option<Bytes>,
+        ) -> Result<i64, MetadataLogError> {
+            if self.fail.load(Ordering::Relaxed) {
+                Err(MetadataLogError::Closed)
+            } else {
+                self.inner.publish_keyed(partition, key, event).await
+            }
+        }
+
+        fn subscribe(
+            &self,
+            assignment: Vec<PartitionStart>,
+        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+            self.inner.subscribe(assignment)
+        }
+
+        async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+            self.inner.high_water_marks().await
+        }
+    }
 
     fn flush_record(object_key: &str, topic_id: Uuid, first: i64, last: i64) -> WalFlushRecord {
         WalFlushRecord {
@@ -370,5 +486,81 @@ mod tests {
         .await
         .unwrap();
         assert!(index.cache().lock().await.lookup(topic_id, 0, 2).is_some());
+    }
+
+    #[tokio::test]
+    async fn startup_surfaces_a_replay_fence_publish_failure() {
+        let inner = InProcessMetadataEventLog::new(1);
+        inner
+            .publish(0, Bytes::from_static(b"legacy"))
+            .await
+            .unwrap();
+
+        let Err(error) = DisklessIndexLog::start(TogglePublishLog::new(inner, true)).await else {
+            panic!("the replay fence publish must fail");
+        };
+        assert!(error.to_string().contains("diskless index replay fence"));
+    }
+
+    #[tokio::test]
+    async fn flush_and_tombstone_publish_failures_are_returned() {
+        let transport = TogglePublishLog::new(InProcessMetadataEventLog::new(1), false);
+        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
+        let topic_id = Uuid::from_u128(7);
+        let record = flush_record("object-a", topic_id, 0, 3);
+
+        index.publish_flush(&record).await.unwrap();
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+        transport.set_failing(true);
+
+        let publish_error = index
+            .publish_flush(&flush_record("object-b", topic_id, 4, 7))
+            .await
+            .unwrap_err();
+        assert!(publish_error.to_string().contains("diskless index publish"));
+
+        let tombstone_error = index.tombstone_topic(topic_id).await.unwrap_err();
+        assert!(
+            tombstone_error
+                .to_string()
+                .contains("diskless index tombstone")
+        );
+    }
+
+    #[tokio::test]
+    async fn consumed_tombstone_removes_the_projected_range() {
+        let transport = InProcessMetadataEventLog::new(1);
+        let index = DisklessIndexLog::start(transport.clone()).await.unwrap();
+        let topic_id = Uuid::from_u128(7);
+        let record = flush_record("object-a", topic_id, 0, 3);
+        let key = WalIndexKey::from(&record.entries[0]);
+
+        index.publish_flush(&record).await.unwrap();
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+        let bytes = key.to_bytes();
+        transport
+            .publish_keyed(
+                index_partition(&bytes, transport.partition_count()),
+                bytes,
+                None,
+            )
+            .await
+            .unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            while index.cache().lock().await.lookup(topic_id, 0, 0).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

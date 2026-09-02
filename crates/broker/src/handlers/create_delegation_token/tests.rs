@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use super::{
     test_support::{
-        RENEW_24H_MS, authed, authed_with_token, empty_super_users, super_users_with,
+        RENEW_24H_MS, anonymous, authed, authed_with_token, empty_super_users, super_users_with,
         test_controller,
     },
     *,
@@ -125,6 +125,33 @@ async fn token_authenticated_caller_is_rejected_with_request_not_allowed() {
     )
     .await;
     assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    controller.cancel().await;
+}
+
+#[tokio::test]
+async fn anonymous_caller_is_rejected_without_minting_or_returning_hmac() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    let req = CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    };
+
+    let resp = handle(
+        &req,
+        &anonymous(),
+        Some(&secret),
+        60_000,
+        RENEW_24H_MS,
+        &*controller,
+        &empty_super_users(),
+    )
+    .await;
+
+    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    assert!(resp.hmac.is_empty());
+    assert!(controller.current_image().all_delegation_tokens().count() == 0);
     controller.cancel().await;
 }
 
@@ -251,6 +278,32 @@ async fn invalid_lifetime_returns_invalid_request() {
     )
     .await;
     assert!(resp.error_code == crate::codes::INVALID_REQUEST);
+    controller.cancel().await;
+}
+
+#[tokio::test]
+async fn overflowing_lifetime_returns_invalid_request_without_minting() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    let req = CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    };
+
+    let resp = handle(
+        &req,
+        &authed("alice"),
+        Some(&secret),
+        i64::MAX,
+        1,
+        &*controller,
+        &empty_super_users(),
+    )
+    .await;
+
+    assert!(resp.error_code == crate::codes::INVALID_REQUEST);
+    assert!(controller.current_image().all_delegation_tokens().count() == 0);
     controller.cancel().await;
 }
 

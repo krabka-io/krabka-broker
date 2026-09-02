@@ -99,12 +99,22 @@ impl ReplicatorSupervisor {
                     continue;
                 }
             } else {
+                let losing_leadership = part.diskless
+                    && part_record.leader != self.node_id
+                    && part
+                        .current_leader
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == self.node_id.0;
                 part.install_replication_target(
                     topic_id,
                     part_record.leader.0,
                     part_record.leader_epoch.0,
                 )
                 .await;
+                if losing_leadership && let Some(topic_id) = topic_id {
+                    self.hot_tail
+                        .remove_partition(topic_id, PartitionIndex(key.1));
+                }
             }
             if part_record.leader == self.node_id {
                 // Install the *current* ISR from the metadata image (not the

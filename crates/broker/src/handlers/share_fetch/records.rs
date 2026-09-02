@@ -167,20 +167,17 @@ pub(super) async fn pending_activation_ranges(
 mod tests {
     use assert2::assert;
     use krabka_log::DeliveryPolicy;
-    use qubit_clock::{Clock, DateTime, MockTime};
+    use qubit_clock::{FixedWallClock, WallClock};
 
     use super::*;
-    use crate::delivery::test_support::{NOW_MS, scheduled_partition};
+    use crate::delivery::test_support::{NOW_MS, scheduled_partition, wall_at};
 
     #[tokio::test]
     async fn only_the_batches_that_are_not_due_are_reported_as_pending() {
         // Three two-record batches: due, not due, due. The middle one is the
         // case a classic Fetch cannot serve around.
         let activations = [NOW_MS - 60_000, NOW_MS + 60_000, NOW_MS - 60_000];
-        let clock: Arc<dyn Clock> = Arc::new(
-            MockTime::at(DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"))
-                .clock(),
-        );
+        let clock: Arc<dyn WallClock> = Arc::new(FixedWallClock::new(wall_at(NOW_MS)));
 
         let dir = tempfile::tempdir().expect("a log root");
         let scheduled = scheduled_partition(

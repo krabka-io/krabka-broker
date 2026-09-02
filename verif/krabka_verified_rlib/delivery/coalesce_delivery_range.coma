@@ -1,0 +1,56 @@
+(* #"/proof-work-209/crates/verified/src/delivery.rs" 79 0 79 82 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sdelivery = "/proof-work-209/crates/verified/src/delivery.rs" 81 8 81 12
+let%span sdelivery'0 = "/proof-work-209/crates/verified/src/delivery.rs" 84 27 84 28
+let%span sdelivery'1 = "/proof-work-209/crates/verified/src/delivery.rs" 84 15 84 28
+let%span sdelivery'2 = "/proof-work-209/crates/verified/src/delivery.rs" 75 28 75 64
+let%span sdelivery'3 = "/proof-work-209/crates/verified/src/delivery.rs" 76 28 76 73
+let%span sdelivery'4 = "/proof-work-209/crates/verified/src/delivery.rs" 77 28 77 73
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_bool_i64 = { f0: bool; f1: Int64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let coalesce_delivery_range [#"/proof-work-209/crates/verified/src/delivery.rs" 79 0 79 82] (last_high: Int64.t)
+  (low: Int64.t) (high: Int64.t) (return (x: tup2_bool_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_14 <- Int64.le low last_high ] s1 | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &merge <- [%#sdelivery] true ] s1 | s1 = bb3 ]
+  | bb2 = s0
+    [ s0 = Int64.add [%#sdelivery'1] {last_high} {[%#sdelivery'0] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_18 <- _x ] s1)
+    | s1 = [ &merge <- low = _18 ] s2
+    | s2 = bb3 ]
+  | bb3 = s0
+    [ s0 = [ &_21 <- Int64.gt high last_high ] s1 | s1 = any [ br0 -> {_21 = false} (! bb5) | br1 -> {_21} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &merged_high <- high ] s1 | s1 = bb6 ]
+  | bb5 = s0 [ s0 = [ &merged_high <- last_high ] s1 | s1 = bb6 ]
+  | bb6 = s0 [ s0 = [ &_ret <- { f0 = merge; f1 = merged_high } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup2_bool_i64 = Any.any_l ()
+  | & last_high: Int64.t = last_high
+  | & low: Int64.t = low
+  | & high: Int64.t = high
+  | & merge: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _18: Int64.t = Any.any_l ()
+  | & merged_high: Int64.t = Any.any_l ()
+  | & _21: bool = Any.any_l () ])
+  [ return (result: tup2_bool_i64) ->
+  {[@stop_split] [@expl:coalesce_delivery_range ensures] ([@stop_split] [@expl:coalesce_delivery_range ensures #0] [%#sdelivery'2] result.f0
+      = (Int64.to_int low <= Int64.to_int last_high + 1))
+    /\ ([@stop_split] [@expl:coalesce_delivery_range ensures #1] [%#sdelivery'3] ge_log_Int (Int64.to_int result.f1) (Int64.to_int last_high)
+      /\ ge_log_Int (Int64.to_int result.f1) (Int64.to_int high))
+    /\ ([@stop_split] [@expl:coalesce_delivery_range ensures #2] [%#sdelivery'4] Int64.to_int result.f1
+      = Int64.to_int last_high
+    \/ Int64.to_int result.f1 = Int64.to_int high)}
+    (! return {result}) ]

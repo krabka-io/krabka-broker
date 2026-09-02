@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 11 27 11 32 *)
+
+(* <list_offsets::ListOffsetsKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsKind [#"/workspace/crates/verified/src/list_offsets.rs" 11 27 11 32] (self: t_ListOffsetsKind)
+  (return (x: t_ListOffsetsKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsKind = Any.any_l () | & self: t_ListOffsetsKind = self ])
+  [ return (result: t_ListOffsetsKind) -> (! return {result}) ]

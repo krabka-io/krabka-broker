@@ -7,8 +7,8 @@ use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_raft::{
-    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    SubmitChangeResult, UpdateVoter,
+    AddVoter, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError, ReconfigOutcome,
+    RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
 };
 use tokio::sync::watch;
 
@@ -60,11 +60,22 @@ impl MetadataSource for ObserverSource {
             per_voter_matched_index: std::collections::BTreeMap::new(),
         }
     }
+    fn current_controller_epoch(&self) -> Option<u64> {
+        None
+    }
     async fn submit_change(
         &self,
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
         self.writer.submit_change(records).await
+    }
+    async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        self.writer
+            .submit_delegation_token_mutations(mutations)
+            .await
     }
     async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
         Err(RaftError::NotLeader {
@@ -136,6 +147,12 @@ mod tests {
             self.calls.lock().unwrap().push(records);
             Ok(SubmitChangeResult::default())
         }
+        async fn submit_delegation_token_mutations(
+            &self,
+            _mutations: Vec<DelegationTokenMutation>,
+        ) -> Result<SubmitChangeResult, RaftError> {
+            Ok(SubmitChangeResult::default())
+        }
     }
 
     fn not_leader_none<T>(result: &Result<T, RaftError>) {
@@ -161,7 +178,7 @@ mod tests {
                 cluster_id,
                 max_bytes: krabka_units::mebibytes(1),
                 poll_interval: krabka_units::minutes(1),
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer = Arc::new(RecordingWriter {
@@ -233,7 +250,7 @@ mod tests {
                 cluster_id: Uuid::nil(),
                 max_bytes: krabka_units::mebibytes(1),
                 poll_interval: krabka_units::millis(10),
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer = Arc::new(RecordingWriter {

@@ -70,7 +70,7 @@ equivalent, so the CLI is a convenience rather than a requirement:
 | Format | `aspect format` | `bazel run //tools/format` |
 | Coverage | `aspect test --coverage` | `bazel coverage //crates/...` |
 | Docs | — | `bazel build //crates/audit:audit_doc` |
-| Delivery | `aspect delivery` | `bazel run //packaging:push` |
+| Delivery | `aspect delivery` | `bazel run //packaging:push -- --tag dev` |
 
 Formatting and linting are Bazel targets rather than a separate `cargo fmt` /
 `cargo clippy` pass, so they see exactly the files and crates the build sees. A
@@ -173,15 +173,14 @@ until it reproduces there.
 
 ```
 bazel run //packaging:image_load    # load into the local daemon
-bazel run //packaging:push          # push to ghcr.io
+bazel run //packaging:push -- --tag dev  # push to ghcr.io
 ```
 
-The broker binary is layered onto a digest-pinned distroless base and runs as
-`nonroot` (65532). The monorepo builds the equivalent with apko from Wolfi; this
-keeps the same shape — glibc, ca-certificates, unprivileged — without a second
-package manager inside the build. `aspect delivery` pushes only when the built
-output actually changed, which for a commit touching one crate is usually not at
-all.
+apko builds the broker base from locked Wolfi packages, including glibc and CA
+certificates. rules_img adds the Bazel-built binary, loads it locally, and
+pushes it. The image runs as `nonroot` (65532). The build uses no Dockerfile or
+host package manager. `aspect delivery` skips the push when the image output did
+not change.
 
 A second layer carries the operator tools — `krabka-format`, `krabka-audit`,
 `krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore` —
@@ -198,10 +197,10 @@ docker run --rm -v "${PWD}/krabka-data:/var/lib/krabka" \
 ```
 
 The `chown` is not incidental. Both the formatter and the broker run as
-`nonroot`, and neither the image nor the distroless base carries
-`/var/lib/krabka`, so a freshly created Docker volume or host directory belongs
-to root and the format step fails with `Permission denied` before it writes
-`meta.properties.json`.
+`nonroot`. The apko base does create `/var/lib/krabka` owned by 65532, but a
+bind mount replaces that directory with the host's, and a freshly created host
+directory belongs to root — so the format step fails with `Permission denied`
+before it writes `meta.properties.json`.
 
 `//packaging:image_binaries_test` asserts what those layers carry and that each
 binary answers `--help`; it needs no daemon and runs in `bazel test //...`.

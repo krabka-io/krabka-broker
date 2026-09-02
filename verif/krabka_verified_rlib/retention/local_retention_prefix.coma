@@ -1,0 +1,292 @@
+(* #"/proof-work-210g/crates/verified/src/retention.rs" 40 0 46 20 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sretention = "/proof-work-210g/crates/verified/src/retention.rs" 47 7 47 25
+let%span sretention'0 = "/proof-work-210g/crates/verified/src/retention.rs" 47 29 47 30
+let%span sretention'1 = "/proof-work-210g/crates/verified/src/retention.rs" 49 17 49 18
+let%span sretention'2 = "/proof-work-210g/crates/verified/src/retention.rs" 54 8 54 26
+let%span sretention'3 = "/proof-work-210g/crates/verified/src/retention.rs" 56 8 56 26
+let%span sretention'4 = "/proof-work-210g/crates/verified/src/retention.rs" 56 29 56 30
+let%span sretention'5 = "/proof-work-210g/crates/verified/src/retention.rs" 56 8 56 30
+let%span sretention'6 = "/proof-work-210g/crates/verified/src/retention.rs" 58 21 58 22
+let%span sretention'7 = "/proof-work-210g/crates/verified/src/retention.rs" 58 36 58 37
+let%span sretention'8 = "/proof-work-210g/crates/verified/src/retention.rs" 58 26 58 38
+let%span sretention'9 = "/proof-work-210g/crates/verified/src/retention.rs" 58 57 58 58
+let%span sretention'10 = "/proof-work-210g/crates/verified/src/retention.rs" 58 44 58 59
+let%span sretention'11 = "/proof-work-210g/crates/verified/src/retention.rs" 58 84 58 85
+let%span sretention'12 = "/proof-work-210g/crates/verified/src/retention.rs" 60 17 60 18
+let%span sretention'13 = "/proof-work-210g/crates/verified/src/retention.rs" 64 18 64 24
+let%span sretention'14 = "/proof-work-210g/crates/verified/src/retention.rs" 66 29 66 30
+let%span sretention'15 = "/proof-work-210g/crates/verified/src/retention.rs" 67 39 67 40
+let%span sretention'16 = "/proof-work-210g/crates/verified/src/retention.rs" 67 33 67 41
+let%span sretention'17 = "/proof-work-210g/crates/verified/src/retention.rs" 68 12 68 13
+let%span sretention'18 = "/proof-work-210g/crates/verified/src/retention.rs" 70 40 70 41
+let%span sretention'19 = "/proof-work-210g/crates/verified/src/retention.rs" 70 34 70 42
+let%span sretention'20 = "/proof-work-210g/crates/verified/src/retention.rs" 70 12 70 42
+let%span sretention'21 = "/proof-work-210g/crates/verified/src/retention.rs" 81 14 81 32
+let%span sretention'22 = "/proof-work-210g/crates/verified/src/retention.rs" 79 16 80 62
+let%span sretention'23 = "/proof-work-210g/crates/verified/src/retention.rs" 78 16 78 68
+let%span sretention'24 = "/proof-work-210g/crates/verified/src/retention.rs" 76 16 77 49
+let%span sretention'25 = "/proof-work-210g/crates/verified/src/retention.rs" 75 16 75 58
+let%span sretention'26 = "/proof-work-210g/crates/verified/src/retention.rs" 74 16 74 50
+let%span sretention'27 = "/proof-work-210g/crates/verified/src/retention.rs" 73 16 73 47
+let%span sretention'28 = "/proof-work-210g/crates/verified/src/retention.rs" 83 11 83 25
+let%span sretention'29 = "/proof-work-210g/crates/verified/src/retention.rs" 83 31 83 48
+let%span sretention'30 = "/proof-work-210g/crates/verified/src/retention.rs" 83 75 83 76
+let%span sretention'31 = "/proof-work-210g/crates/verified/src/retention.rs" 86 33 86 34
+let%span sretention'32 = "/proof-work-210g/crates/verified/src/retention.rs" 87 37 87 47
+let%span sretention'33 = "/proof-work-210g/crates/verified/src/retention.rs" 88 16 88 17
+let%span sretention'34 = "/proof-work-210g/crates/verified/src/retention.rs" 90 38 90 48
+let%span sretention'35 = "/proof-work-210g/crates/verified/src/retention.rs" 90 16 90 48
+let%span sretention'36 = "/proof-work-210g/crates/verified/src/retention.rs" 93 15 93 16
+let%span sretention'37 = "/proof-work-210g/crates/verified/src/retention.rs" 93 8 93 16
+let%span sretention'38 = "/proof-work-210g/crates/verified/src/retention.rs" 17 11 17 50
+let%span sretention'39 = "/proof-work-210g/crates/verified/src/retention.rs" 18 11 18 46
+let%span sretention'40 = "/proof-work-210g/crates/verified/src/retention.rs" 19 10 19 44
+let%span sretention'41 = "/proof-work-210g/crates/verified/src/retention.rs" 20 10 21 37
+let%span sretention'42 = "/proof-work-210g/crates/verified/src/retention.rs" 22 10 22 59
+let%span sretention'43 = "/proof-work-210g/crates/verified/src/retention.rs" 23 10 23 69
+let%span sretention'44 = "/proof-work-210g/crates/verified/src/retention.rs" 24 10 25 65
+let%span sretention'45 = "/proof-work-210g/crates/verified/src/retention.rs" 26 10 31 23
+let%span sretention'46 = "/proof-work-210g/crates/verified/src/retention.rs" 32 10 33 52
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+let len_bool (self_: Slice64.slice bool) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+type t_RetentionPrefix = { len: UInt64.t; remaining_size_debt: UInt64.t }
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let local_retention_prefix [#"/proof-work-210g/crates/verified/src/retention.rs" 40 0 46 20]
+  (time_expired: Slice64.slice bool) (scheduled: Slice64.slice bool) (sizes: Slice64.slice UInt64.t)
+  (initial_size_debt: UInt64.t) (has_active: bool) (return (x: t_RetentionPrefix)) =
+{[@stop_split] [@expl:local_retention_prefix requires] ([@stop_split] [@expl:local_retention_prefix requires #0] [%#sretention'38] Seq.length (Slice64.view time_expired)
+    = Seq.length (Slice64.view scheduled))
+  /\ ([@stop_split] [@expl:local_retention_prefix requires #1] [%#sretention'39] Seq.length (Slice64.view time_expired)
+  = Seq.length (Slice64.view sizes))}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = len_bool [%#sretention] {time_expired} (fun (_x: UInt64.t) -> [ &_35 <- _x ] s1)
+    | s1 = [ &_34 <- _35 = ([%#sretention'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_34 = false} (! bb3) | br1 -> {_34} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_ret <- { len = ([%#sretention'1] (0: UInt64.t)); remaining_size_debt = initial_size_debt } ] s1
+    | s1 = return {_ret} ]
+  | bb3 = any [ br0 -> {has_active = false} (! bb5) | br1 -> {has_active} (! bb4) ]
+  | bb4 = s0
+    [ s0 = len_bool [%#sretention'2] {time_expired} (fun (_x: UInt64.t) -> [ &max_delete <- _x ] s1) | s1 = bb8 ]
+  | bb5 = s0
+    [ s0 = len_bool [%#sretention'3] {time_expired} (fun (_x: UInt64.t) -> [ &_42 <- _x ] s1)
+    | s1 = UInt64.sub [%#sretention'5] {_42} {[%#sretention'4] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &max_delete <- _x ] s2)
+    | s2 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &_45 <- max_delete = ([%#sretention'6] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_45 = false} (! bb10) | br1 -> {_45} (! bb17) ] ]
+  | bb10 = s0
+    [ s0 = [ &_48 <- [%#sretention'7] (0: UInt64.t) ] s1
+    | s1 = [ &_49 <- Slice64.length scheduled ] s2
+    | s2 = [ &_50 <- UInt64.lt _48 _49 ] s3
+    | s3 = {[@expl:index in bounds] [%#sretention'8] _50} s4
+    | s4 = Slice64.get [%#sretention'8] <bool> {scheduled} {_48} (fun (r: bool) -> [ &_47 <- r ] s5)
+    | s5 = any [ br0 -> {_47 = false} (! bb13) | br1 -> {_47} (! bb17) ] ]
+  | bb13 = s0
+    [ s0 = [ &_52 <- [%#sretention'9] (0: UInt64.t) ] s1
+    | s1 = [ &_53 <- Slice64.length time_expired ] s2
+    | s2 = [ &_54 <- UInt64.lt _52 _53 ] s3
+    | s3 = {[@expl:index in bounds] [%#sretention'10] _54} s4
+    | s4 = Slice64.get [%#sretention'10] <bool> {time_expired} {_52} (fun (r: bool) -> [ &_51 <- r ] s5)
+    | s5 = any [ br0 -> {_51 = false} (! bb15) | br1 -> {_51} (! bb20) ] ]
+  | bb15 = s0
+    [ s0 = [ &_55 <- initial_size_debt = ([%#sretention'11] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_55 = false} (! bb20) | br1 -> {_55} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = [ &_ret <- { len = ([%#sretention'12] (0: UInt64.t)); remaining_size_debt = initial_size_debt } ] s1
+    | s1 = return {_ret} ]
+  | bb20 = s0
+    [ s0 = [ &len'0 <- [%#sretention'13] (1: UInt64.t) ] s1
+    | s1 = [ &remaining_size_debt'0 <- initial_size_debt ] s2
+    | s2 = [ &_62 <- UInt64.gt remaining_size_debt'0 ([%#sretention'14] (0: UInt64.t)) ] s3
+    | s3 = any [ br0 -> {_62 = false} (! bb29) | br1 -> {_62} (! bb21) ] ]
+  | bb21 = s0
+    [ s0 = [ &_67 <- [%#sretention'15] (0: UInt64.t) ] s1
+    | s1 = [ &_68 <- Slice64.length sizes ] s2
+    | s2 = [ &_69 <- UInt64.lt _67 _68 ] s3
+    | s3 = {[@expl:index in bounds] [%#sretention'16] _69} s4
+    | s4 = Slice64.get [%#sretention'16] <UInt64.t> {sizes} {_67} (fun (r: UInt64.t) -> [ &_66 <- r ] s5)
+    | s5 = [ &_65 <- UInt64.ge _66 remaining_size_debt'0 ] s6
+    | s6 = any [ br0 -> {_65 = false} (! bb25) | br1 -> {_65} (! bb24) ] ]
+  | bb24 = s0 [ s0 = [ &_64 <- [%#sretention'17] (0: UInt64.t) ] s1 | s1 = bb27 ]
+  | bb25 = s0
+    [ s0 = [ &_73 <- [%#sretention'18] (0: UInt64.t) ] s1
+    | s1 = [ &_74 <- Slice64.length sizes ] s2
+    | s2 = [ &_75 <- UInt64.lt _73 _74 ] s3
+    | s3 = {[@expl:index in bounds] [%#sretention'19] _75} s4
+    | s4 = Slice64.get [%#sretention'19] <UInt64.t> {sizes} {_73} (fun (r: UInt64.t) -> [ &_72 <- r ] s5)
+    | s5 = UInt64.sub [%#sretention'20] {remaining_size_debt'0} {_72} (fun (_x: UInt64.t) -> [ &_64 <- _x ] s6)
+    | s6 = bb27 ]
+  | bb27 = s0 [ s0 = [ &remaining_size_debt'0 <- _64 ] s1 | s1 = bb29 ]
+  | bb29 = bb29invariant
+    [ bb29 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb29 ([%#sretention'21] UInt64.t'int max_delete
+      - UInt64.t'int len'0)}
+      bb29invariant
+    | bb29invariant = {[@expl:loop invariant #0] [%#sretention'27] 0 < UInt64.t'int len'0
+      /\ UInt64.t'int len'0 <= UInt64.t'int max_delete}
+      {[@expl:loop invariant #1] [%#sretention'26] UInt64.t'int max_delete <= Seq.length (Slice64.view time_expired)}
+      {[@expl:loop invariant #2] [%#sretention'25] UInt64.t'int remaining_size_debt'0 <= UInt64.t'int initial_size_debt}
+      {[@expl:loop invariant #3] [%#sretention'24] gt_log_Int (UInt64.t'int len'0) 0
+        /\ gt_log_Int (UInt64.t'int initial_size_debt) 0 /\ gt_log_Int (UInt64.t'int (Seq.get (Slice64.view sizes) 0)) 0
+      -> UInt64.t'int remaining_size_debt'0 < UInt64.t'int initial_size_debt}
+      {[@expl:loop invariant #4] [%#sretention'23] forall i: int. 0 <= i /\ i < UInt64.t'int len'0
+        -> not Seq.get (Slice64.view scheduled) i}
+      {[@expl:loop invariant #5] [%#sretention'22] UInt64.t'int initial_size_debt = 0
+      -> (forall i: int. 0 <= i /\ i < UInt64.t'int len'0 -> Seq.get (Slice64.view time_expired) i)}
+      (! [ &variant_old_bb29 <- [%#sretention'21] UInt64.t'int max_delete - UInt64.t'int len'0 ] s0)
+      [ s0 = [ &_103 <- UInt64.lt len'0 max_delete ] s1
+      | s1 = any [ br0 -> {_103 = false} (! bb51) | br1 -> {_103} (! bb31) ] ]
+      [ bb31 = s0
+        [ s0 = [ &_108 <- len'0 ] s1
+        | s1 = [ &_109 <- Slice64.length scheduled ] s2
+        | s2 = [ &_110 <- UInt64.lt _108 _109 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'28] _110} s4
+        | s4 = Slice64.get [%#sretention'28] <bool> {scheduled} {_108} (fun (r: bool) -> [ &_107 <- r ] s5)
+        | s5 = any [ br0 -> {_107 = false} (! bb34) | br1 -> {_107} (! bb51) ] ]
+      | bb34 = s0
+        [ s0 = [ &_112 <- len'0 ] s1
+        | s1 = [ &_113 <- Slice64.length time_expired ] s2
+        | s2 = [ &_114 <- UInt64.lt _112 _113 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'29] _114} s4
+        | s4 = Slice64.get [%#sretention'29] <bool> {time_expired} {_112} (fun (r: bool) -> [ &_111 <- r ] s5)
+        | s5 = any [ br0 -> {_111 = false} (! bb36) | br1 -> {_111} (! bb41) ] ]
+      | bb36 = s0
+        [ s0 = [ &_115 <- remaining_size_debt'0 = ([%#sretention'30] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_115 = false} (! bb41) | br1 -> {_115} (! bb51) ] ]
+      | bb41 = s0
+        [ s0 = [ &_119 <- UInt64.gt remaining_size_debt'0 ([%#sretention'31] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_119 = false} (! bb49) | br1 -> {_119} (! bb42) ] ]
+      | bb42 = s0
+        [ s0 = [ &_124 <- len'0 ] s1
+        | s1 = [ &_125 <- Slice64.length sizes ] s2
+        | s2 = [ &_126 <- UInt64.lt _124 _125 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'32] _126} s4
+        | s4 = Slice64.get [%#sretention'32] <UInt64.t> {sizes} {_124} (fun (r: UInt64.t) -> [ &_123 <- r ] s5)
+        | s5 = [ &_122 <- UInt64.ge _123 remaining_size_debt'0 ] s6
+        | s6 = any [ br0 -> {_122 = false} (! bb46) | br1 -> {_122} (! bb45) ] ]
+      | bb45 = s0 [ s0 = [ &_121 <- [%#sretention'33] (0: UInt64.t) ] s1 | s1 = bb48 ]
+      | bb46 = s0
+        [ s0 = [ &_130 <- len'0 ] s1
+        | s1 = [ &_131 <- Slice64.length sizes ] s2
+        | s2 = [ &_132 <- UInt64.lt _130 _131 ] s3
+        | s3 = {[@expl:index in bounds] [%#sretention'34] _132} s4
+        | s4 = Slice64.get [%#sretention'34] <UInt64.t> {sizes} {_130} (fun (r: UInt64.t) -> [ &_129 <- r ] s5)
+        | s5 = UInt64.sub [%#sretention'35] {remaining_size_debt'0} {_129} (fun (_x: UInt64.t) -> [ &_121 <- _x ] s6)
+        | s6 = bb48 ]
+      | bb48 = s0 [ s0 = [ &remaining_size_debt'0 <- _121 ] s1 | s1 = bb49 ]
+      | bb49 = s0
+        [ s0 = UInt64.add [%#sretention'37] {len'0} {[%#sretention'36] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &len'0 <- _x ] s1)
+        | s1 = bb29 ] ] ]
+  | bb51 = s0
+    [ s0 = [ &_ret <- { len = len'0; remaining_size_debt = remaining_size_debt'0 } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RetentionPrefix = Any.any_l ()
+  | & time_expired: Slice64.slice bool = time_expired
+  | & scheduled: Slice64.slice bool = scheduled
+  | & sizes: Slice64.slice UInt64.t = sizes
+  | & initial_size_debt: UInt64.t = initial_size_debt
+  | & has_active: bool = has_active
+  | & _34: bool = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & max_delete: UInt64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: UInt64.t = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _55: bool = Any.any_l ()
+  | & len'0: UInt64.t = Any.any_l ()
+  | & remaining_size_debt'0: UInt64.t = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _64: UInt64.t = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _66: UInt64.t = Any.any_l ()
+  | & _67: UInt64.t = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & _69: bool = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _73: UInt64.t = Any.any_l ()
+  | & _74: UInt64.t = Any.any_l ()
+  | & _75: bool = Any.any_l ()
+  | & _103: bool = Any.any_l ()
+  | & _107: bool = Any.any_l ()
+  | & _108: UInt64.t = Any.any_l ()
+  | & _109: UInt64.t = Any.any_l ()
+  | & _110: bool = Any.any_l ()
+  | & _111: bool = Any.any_l ()
+  | & _112: UInt64.t = Any.any_l ()
+  | & _113: UInt64.t = Any.any_l ()
+  | & _114: bool = Any.any_l ()
+  | & _115: bool = Any.any_l ()
+  | & _119: bool = Any.any_l ()
+  | & _121: UInt64.t = Any.any_l ()
+  | & _122: bool = Any.any_l ()
+  | & _123: UInt64.t = Any.any_l ()
+  | & _124: UInt64.t = Any.any_l ()
+  | & _125: UInt64.t = Any.any_l ()
+  | & _126: bool = Any.any_l ()
+  | & _129: UInt64.t = Any.any_l ()
+  | & _130: UInt64.t = Any.any_l ()
+  | & _131: UInt64.t = Any.any_l ()
+  | & _132: bool = Any.any_l ()
+  | & variant_old_bb29: int = Any.any_l () ])
+  [ return (result: t_RetentionPrefix) ->
+  {[@stop_split] [@expl:local_retention_prefix ensures] ([@stop_split] [@expl:local_retention_prefix ensures #0] [%#sretention'40] UInt64.t'int result.len
+      <= Seq.length (Slice64.view time_expired))
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #1] [%#sretention'41] not has_active
+        /\ gt_log_Int (Seq.length (Slice64.view time_expired)) 0
+      -> UInt64.t'int result.len < Seq.length (Slice64.view time_expired))
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #2] [%#sretention'42] UInt64.t'int result.remaining_size_debt
+      <= UInt64.t'int initial_size_debt)
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #3] [%#sretention'43] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result.len -> not Seq.get (Slice64.view scheduled) i)
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #4] [%#sretention'44] UInt64.t'int initial_size_debt = 0
+      -> (forall i: int. 0 <= i /\ i < UInt64.t'int result.len -> Seq.get (Slice64.view time_expired) i))
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #5] [%#sretention'45] gt_log_Int (UInt64.t'int initial_size_debt) 0
+        /\ gt_log_Int (Seq.length (Slice64.view time_expired)) 0
+        /\ (has_active \/ gt_log_Int (Seq.length (Slice64.view time_expired)) 1)
+        /\ not Seq.get (Slice64.view scheduled) 0 /\ gt_log_Int (UInt64.t'int (Seq.get (Slice64.view sizes) 0)) 0
+      -> gt_log_Int (UInt64.t'int result.len) 0)
+    /\ ([@stop_split] [@expl:local_retention_prefix ensures #6] [%#sretention'46] gt_log_Int (UInt64.t'int result.len) 0
+      /\ gt_log_Int (UInt64.t'int initial_size_debt) 0 /\ gt_log_Int (UInt64.t'int (Seq.get (Slice64.view sizes) 0)) 0
+    -> UInt64.t'int result.remaining_size_debt < UInt64.t'int initial_size_debt)}
+    (! return {result}) ]

@@ -1,0 +1,8 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_transaction_marker_closes": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}

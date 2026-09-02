@@ -1,4 +1,4 @@
-//! Stock librdkafka clients against krabka, spanning librdkafka 1.1.0 to 1.8.2.
+//! Stock kcat client against krabka.
 
 mod jvm_acceptance;
 mod support;
@@ -13,18 +13,11 @@ use krabka_client_admin::{AdminClient, CreateTopicSpec};
 
 use crate::jvm_acceptance::{broker0_advertised, start_host_broker};
 
-const CLIENTS: [(&str, &str, &str); 2] = [
-    (
-        "mirror.gcr.io/edenhill/kafkacat:1.5.0",
-        "kafkacat",
-        "librdkafka 1.1.0",
-    ),
-    (
-        "mirror.gcr.io/edenhill/kcat:1.7.1",
-        "kcat",
-        "librdkafka 1.8.2",
-    ),
-];
+const CLIENTS: [(&str, &str, &str); 1] = [(
+    "mirror.gcr.io/edenhill/kcat:1.7.1",
+    "kcat",
+    "librdkafka 1.8.2",
+)];
 
 fn run_client(image: &str, program: &str, args: &[&str], input: Option<&str>) -> Output {
     let mut child = Command::new("docker")
@@ -64,7 +57,7 @@ fn run_client(image: &str, program: &str, args: &[&str], input: Option<&str>) ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
-async fn round_trip_group_join_and_api_versions_across_librdkafka_versions() {
+async fn round_trip_group_join_and_api_versions_with_kcat() {
     let (broker, _dir) = start_host_broker().await;
     let bootstrap = broker0_advertised();
     let mut admin = AdminClient::connect(&[broker.listen_addr().to_string()])

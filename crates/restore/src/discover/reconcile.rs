@@ -27,10 +27,10 @@ fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
             std::io::ErrorKind::NotFound,
             format!("--rlmm-snapshot {} does not exist", path.display()),
         ))),
-        Err(error) => Err(RestoreError::Io(std::io::Error::other(format!(
-            "--rlmm-snapshot {}: {error}",
-            path.display()
-        )))),
+        Err(error) => Err(RestoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("--rlmm-snapshot {}: {error}", path.display()),
+        ))),
     }
 }
 
@@ -63,13 +63,18 @@ pub(super) fn reconcile_with_snapshot(
     let mut dumps: HashMap<(Uuid, i32), &PartitionDump> = HashMap::new();
     for dump in &snapshot.dump.partitions {
         if args.selects_topic(&dump.topic_id_partition.topic) {
-            dumps.insert(
-                (
-                    dump.topic_id_partition.topic_id,
-                    dump.topic_id_partition.partition,
-                ),
-                dump,
+            let key = (
+                dump.topic_id_partition.topic_id,
+                dump.topic_id_partition.partition,
             );
+            if dumps.insert(key, dump).is_some() {
+                return Err(RestoreError::MetadataDisagreement {
+                    topic: dump.topic_id_partition.topic.clone(),
+                    partition: dump.topic_id_partition.partition,
+                    scanned: "duplicate partition entries in RLMM snapshot".to_owned(),
+                    snapshot: summarize_dump(Some(dump)),
+                });
+            }
         }
     }
 
@@ -87,7 +92,11 @@ pub(super) fn reconcile_with_snapshot(
         if scanned_keys.contains(key) {
             continue;
         }
-        if dump.segments.iter().any(|segment| is_live(segment.state())) {
+        if dump
+            .segments
+            .iter()
+            .any(|segment| reconcile_decision(false, Some(segment.state())).is_none())
+        {
             return Err(RestoreError::MetadataDisagreement {
                 topic: dump.topic_id_partition.topic.clone(),
                 partition: dump.topic_id_partition.partition,
@@ -101,14 +110,23 @@ pub(super) fn reconcile_with_snapshot(
     Ok(())
 }
 
-/// `true` for a segment state the snapshot considers present in the remote
-/// tier: a copy in flight or finished, as opposed to a deletion in flight or
-/// finished.
-fn is_live(state: RemoteLogSegmentState) -> bool {
-    matches!(
-        state,
-        RemoteLogSegmentState::CopySegmentStarted | RemoteLogSegmentState::CopySegmentFinished
-    )
+fn snapshot_state_tag(state: Option<RemoteLogSegmentState>) -> u8 {
+    match state {
+        None => krabka_verified::RESTORE_SNAPSHOT_MISSING,
+        Some(
+            RemoteLogSegmentState::CopySegmentStarted | RemoteLogSegmentState::CopySegmentFinished,
+        ) => krabka_verified::RESTORE_SNAPSHOT_LIVE,
+        Some(RemoteLogSegmentState::DeleteSegmentStarted) => {
+            krabka_verified::RESTORE_SNAPSHOT_DELETE_STARTED
+        }
+        Some(RemoteLogSegmentState::DeleteSegmentFinished) => {
+            krabka_verified::RESTORE_SNAPSHOT_DELETE_FINISHED
+        }
+    }
+}
+
+fn reconcile_decision(scanned: bool, state: Option<RemoteLogSegmentState>) -> Option<bool> {
+    krabka_verified::restore_archive_reconcile(scanned, snapshot_state_tag(state))
 }
 
 /// Reconcile one partition's scanned segments against its snapshot entry, if
@@ -122,38 +140,34 @@ fn reconcile_partition(
     partition: &mut PartitionInventory,
     dump: Option<&PartitionDump>,
 ) -> Result<(), RestoreError> {
-    let by_key: HashMap<(Uuid, i64), RemoteLogSegmentState> = dump
-        .map(|dump| {
-            dump.segments
-                .iter()
-                .map(|segment| {
-                    (
-                        (segment.remote_log_segment_id().id, segment.start_offset()),
-                        segment.state(),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut by_key: HashMap<(Uuid, i64), RemoteLogSegmentState> = HashMap::new();
+    let mut duplicate_snapshot_key = false;
+    for segment in dump.into_iter().flat_map(|dump| &dump.segments) {
+        let key = (segment.remote_log_segment_id().id, segment.start_offset());
+        duplicate_snapshot_key |= by_key.insert(key, segment.state()).is_some();
+    }
 
     let scan_disagrees = partition.segments.iter().any(|segment| {
-        matches!(
-            by_key.get(&(segment.segment_id, segment.base_offset.get())),
-            None | Some(RemoteLogSegmentState::DeleteSegmentFinished)
+        reconcile_decision(
+            true,
+            by_key
+                .get(&(segment.segment_id, segment.base_offset.get()))
+                .copied(),
         )
+        .is_none()
     });
     let snapshot_disagrees =
         dump.into_iter()
             .flat_map(|dump| &dump.segments)
             .any(|snapshot_segment| {
-                is_live(snapshot_segment.state())
-                    && !partition.segments.iter().any(|scanned| {
-                        scanned.segment_id == snapshot_segment.remote_log_segment_id().id
-                            && scanned.base_offset.get() == snapshot_segment.start_offset()
-                    })
+                let scanned = partition.segments.iter().any(|scanned| {
+                    scanned.segment_id == snapshot_segment.remote_log_segment_id().id
+                        && scanned.base_offset.get() == snapshot_segment.start_offset()
+                });
+                reconcile_decision(scanned, Some(snapshot_segment.state())).is_none()
             });
 
-    if scan_disagrees || snapshot_disagrees {
+    if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees {
         return Err(RestoreError::MetadataDisagreement {
             topic: partition.partition.topic.clone(),
             partition: partition.partition.partition,
@@ -163,10 +177,12 @@ fn reconcile_partition(
     }
 
     partition.segments.retain(|segment| {
-        !matches!(
-            by_key.get(&(segment.segment_id, segment.base_offset.get())),
-            Some(RemoteLogSegmentState::DeleteSegmentStarted)
-        )
+        reconcile_decision(
+            true,
+            by_key
+                .get(&(segment.segment_id, segment.base_offset.get()))
+                .copied(),
+        ) == Some(true)
     });
     Ok(())
 }

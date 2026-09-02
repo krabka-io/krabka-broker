@@ -30,7 +30,7 @@ use self::{
     authorization::{cluster_action_denied, denied_response},
     isr_update::handle_partition,
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes, elr::ElrPublisher, error::BrokerError};
 
 #[tracing::instrument(
     name = "handle_alter_partition",
@@ -117,6 +117,11 @@ pub(crate) async fn handle(
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             });
         }
+
+        // KIP-966: the ISR moves this request just approved decide the
+        // partition's eligible-leader set, so the state that carries them
+        // rides the same batch.
+        ElrPublisher::new(&image).extend(&mut changes);
 
         if !changes.is_empty()
             && let Err(e) = controller.submit_change(changes).await

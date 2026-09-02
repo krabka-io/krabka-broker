@@ -8,8 +8,9 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        metadata_snapshot_fetch_max, nonnegative_time, positive_time, positive_u64,
-        unit_interval_ratio, whole_bytes_u64, whole_millis_i64_time,
+        disableable_millis_i32_time, metadata_snapshot_fetch_max, nonnegative_time, positive_time,
+        positive_u64, unit_interval_ratio, whole_bytes_u64, whole_millis_i32_time,
+        whole_millis_i64_time,
     },
 };
 
@@ -84,6 +85,23 @@ impl RuntimeFileConfig {
         // Zero disables the reaper, so it bypasses the positive-only macro.
         if let Some(value) = runtime.txn_abort_cleanup_interval {
             cfg.txn_abort_cleanup_interval = nonnegative_time("txn_abort_cleanup_interval", value)?;
+        }
+        // Both KIP-98 expiry knobs are `ConfigDef.Type::INT` in Kafka and
+        // `DescribeConfigs` reports them as such, so neither may hold a value
+        // wider than an `i32` of milliseconds. The expiry itself must run, as
+        // Kafka's `atLeast(1)` says; zero on the sweep cadence disables it.
+        // Both are static broker configs `DescribeConfigs` reports, so the
+        // fact that the operator named them is recorded beside the value: a
+        // supplied setting heads the synonym chain at `STATIC_BROKER_CONFIG`
+        // even when it happens to equal the built-in default.
+        if let Some(value) = runtime.txn_id_expiration {
+            cfg.txn_id_expiration = whole_millis_i32_time("txn_id_expiration", value)?;
+            cfg.static_config_origins.txn_id_expiration = true;
+        }
+        if let Some(value) = runtime.txn_id_expiration_cleanup_interval {
+            cfg.txn_id_expiration_cleanup_interval =
+                disableable_millis_i32_time("txn_id_expiration_cleanup_interval", value)?;
+            cfg.static_config_origins.txn_id_expiration_cleanup_interval = true;
         }
         set_runtime_time_secs!(
             runtime,

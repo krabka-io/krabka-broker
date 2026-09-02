@@ -52,6 +52,36 @@ impl BrokerHandle {
         self.broker.controller.current_image()
     }
 
+    /// Test-only: the node ids this broker's committed image reports as
+    /// fenced, through the same `broker.fenced` resolution the offline-replica
+    /// projection uses. The role-separation suite reads it on every node,
+    /// because the fencing state is replicated: a controller that fences a
+    /// broker it never hears from publishes that to every image in the
+    /// cluster.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn fenced_broker_ids_for_test(&self) -> std::collections::BTreeSet<u64> {
+        crate::config_keys::fenced_node_ids(&self.broker.controller.current_image())
+            .into_iter()
+            .collect()
+    }
+
+    /// Test-only: the highest metadata-log offset this node's image has
+    /// applied, or `-1` before the first record. Every node counts from the
+    /// same replicated log, so an offset one node reports is a point another
+    /// node's image can be compared against.
+    ///
+    /// Pair it with [`Self::wait_until_metadata_offset_at_least`] to turn "the
+    /// controller leader has decided and written it down" into a point a
+    /// follower can be waited past. An image that has not yet applied a record
+    /// is indistinguishable from one that never will, so a test that reads a
+    /// follower's state has to know which side of the record it stands on.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn metadata_offset_for_test(&self) -> i64 {
+        self.broker.controller.current_metadata_offset()
+    }
+
     /// Test-only: the raft voter set this node's metadata source reports.
     /// A controller/combined node returns the openraft membership; a
     /// broker-only (observer) node returns an empty set because it never
@@ -263,6 +293,67 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_brokers_registered(&self, n: usize) {
         self.wait_for_image(|img| img.brokers().count() >= n).await;
+    }
+
+    /// Test-only: whether this node's controller liveness registry currently
+    /// reports `node` as alive — a heartbeat inside the session window from an
+    /// unfenced broker. Only the raft leader receives broker heartbeats, so
+    /// this answers meaningfully on the controller leader alone.
+    ///
+    /// This is the predicate the operator `ElectLeaders` path consults, and it
+    /// is *not* implied by the metadata image: a broker's registration and its
+    /// ISR re-admission are replicated records, while its liveness is local
+    /// heartbeat state that lands afterwards. Tests that drive an election
+    /// must settle on this, not on the image.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn broker_alive_for_test(&self, node: u64) -> bool {
+        self.broker.liveness.is_alive(node).await
+    }
+
+    /// Test-only: await until this node's controller liveness registry reports
+    /// `node` as alive. See [`Self::broker_alive_for_test`] for why the
+    /// metadata image is not a substitute.
+    ///
+    /// The registry has no change-notification channel, so this polls on the
+    /// same ~25ms cadence as [`Self::wait_for_metrics`].
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn wait_until_broker_alive(&self, node: u64) {
+        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+            while !self.broker.liveness.is_alive(node).await {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        assert2::assert!(
+            res.is_ok(),
+            "wait_until_broker_alive({node}) timed out after {TEST_AWAITER_TIMEOUT:?}"
+        );
+    }
+
+    /// Test-only: await until this node's image has applied metadata offset
+    /// `offset` or later. See [`Self::metadata_offset_for_test`] for the offset
+    /// to pass.
+    ///
+    /// The applied index advances inside the raft state machine and has no
+    /// change-notification channel of its own, so this polls on the same ~25ms
+    /// cadence as [`Self::wait_until_broker_alive`].
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn wait_until_metadata_offset_at_least(&self, offset: i64) {
+        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+            while self.broker.controller.current_metadata_offset() < offset {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        assert2::assert!(
+            res.is_ok(),
+            "wait_until_metadata_offset_at_least({offset}) timed out after \
+             {TEST_AWAITER_TIMEOUT:?}; the image is at {}",
+            self.broker.controller.current_metadata_offset()
+        );
     }
 
     /// Test-only: await until `topic-partition` is present in the metadata image.

@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 90 27 90 32 *)
+
+(* <break_glass_persistence::BreakGlassLocalActionDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BreakGlassLocalActionDecision = Reject | Apply
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BreakGlassLocalActionDecision [#"/workspace/crates/verified/src/break_glass_persistence.rs" 90 27 90 32]
+  (self: t_BreakGlassLocalActionDecision) (return (x: t_BreakGlassLocalActionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassLocalActionDecision = Any.any_l () | & self: t_BreakGlassLocalActionDecision = self ])
+  [ return (result: t_BreakGlassLocalActionDecision) -> (! return {result}) ]

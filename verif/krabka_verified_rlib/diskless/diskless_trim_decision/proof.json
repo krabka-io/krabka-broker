@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_diskless_trim_decision": { "prover": "alt-ergo", "time": 0.084 },
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_min_i64": { "prover": "alt-ergo", "time": 0.008 }
+    }
+  }
+}

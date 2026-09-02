@@ -1,0 +1,135 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 163 0 167 16 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sremote_metadata = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 168 35 168 36
+let%span sremote_metadata'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 172 23 172 66
+let%span sremote_metadata'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 173 18 173 49
+let%span sremote_metadata'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 174 9 174 35
+let%span sremote_metadata'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 174 9 174 62
+let%span sremote_metadata'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 151 12 157 13
+let%span sremote_metadata'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 159 10 159 62
+let%span sremote_metadata'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 160 10 161 61
+let%span sremote_metadata'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 38 12 38 71
+let%span sremote_metadata'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 89 28 89 68
+let%span sremote_metadata'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 113 28 113 68
+let%span sremote_metadata'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 114 10 114 22
+let%span sremote_metadata'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 115 10 115 30
+let%span sremote_metadata'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 132 8 138 9
+let%span sremote_metadata'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 28 8 28 63
+let%span sremote_metadata'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 78 8 78 55
+let%span sremote_metadata'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 110 16 110 37
+let%span sremote_metadata'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 11 16 11 47
+let%span sremote_metadata'17 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 62 8 65 30
+
+use creusot.int.Int32
+use creusot.int.UInt128
+use creusot.int.UInt32
+use creusot.int.UInt64
+use int.ComputerDivision
+use creusot.prelude.Bool
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i32 = None | Some Int32.t
+
+function java_long_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 10 0 10 41] (bits: UInt64.t) : Int32.t
+ =
+  [%#sremote_metadata'16] Int32.of_int (UInt64.t'int (UInt64.bw_xor bits (UInt64.shr bits (UInt64.of_int (UInt32.t'int (32: UInt32.t))))))
+
+function java_objects_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 26 0 26 70] (topic_id: UInt128.t) (user_partition: Int32.t) : Int32.t
+ =
+  [%#sremote_metadata'13] let most_significant_bits = UInt64.of_int (UInt128.t'int (UInt128.shr topic_id (UInt128.of_int (UInt32.t'int (64: UInt32.t))))) in let least_significant_bits = UInt64.of_int (UInt128.t'int topic_id) in let first = Int32.add (Int32.mul (1: Int32.t) (31: Int32.t)) (java_long_hash_model least_significant_bits) in let second = Int32.add (Int32.mul first (31: Int32.t)) (java_long_hash_model most_significant_bits) in Int32.add (Int32.mul second (31: Int32.t)) user_partition
+
+let java_objects_hash (topic_id: UInt128.t) (user_partition: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:java_objects_hash ensures] [%#sremote_metadata'7] result
+    = java_objects_hash_model topic_id user_partition}
+    (! return {result}) ]
+
+function reverse_bytes_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 60 0 60 41] (value: UInt32.t) : UInt32.t
+ =
+  [%#sremote_metadata'17] UInt32.bw_or (UInt32.bw_or (UInt32.bw_or (UInt32.shr value (24: UInt32.t)) (UInt32.bw_and (UInt32.shr value (8: UInt32.t)) (65280: UInt32.t))) (UInt32.bw_and (UInt32.shl value (8: UInt32.t)) (16711680: UInt32.t))) (UInt32.shl value (24: UInt32.t))
+
+function kafka_murmur2_i32_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 76 0 76 45] (value: Int32.t) : UInt32.t
+ =
+  [%#sremote_metadata'14] let chunk0 = reverse_bytes_model (UInt32.of_int (Int32.to_int value)) in let chunk1 = UInt32.mul chunk0 (1540483477: UInt32.t) in let chunk2 = UInt32.mul (UInt32.bw_xor chunk1 (UInt32.shr chunk1 (24: UInt32.t))) (1540483477: UInt32.t) in let hash0 = UInt32.mul (UInt32.bw_xor (2538058380: UInt32.t) (4: UInt32.t)) (1540483477: UInt32.t) in let hash1 = UInt32.bw_xor hash0 chunk2 in let hash2 = UInt32.mul (UInt32.bw_xor hash1 (UInt32.shr hash1 (13: UInt32.t))) (1540483477: UInt32.t) in UInt32.bw_xor hash2 (UInt32.shr hash2 (15: UInt32.t))
+
+let kafka_murmur2_i32 (value: Int32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:kafka_murmur2_i32 ensures] [%#sremote_metadata'8] result
+    = kafka_murmur2_i32_model value}
+    (! return {result}) ]
+
+function kafka_to_positive_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 109 0 109 44] (hash: UInt32.t) : int
+ = [%#sremote_metadata'15] ComputerDivision.mod (UInt32.t'int hash) 2147483648
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+let kafka_to_positive (hash: UInt32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) ->
+  {[@stop_split] [@expl:kafka_to_positive ensures] ([@stop_split] [@expl:kafka_to_positive ensures #0] [%#sremote_metadata'9] Int32.to_int result
+      = kafka_to_positive_model hash)
+    /\ ([@stop_split] [@expl:kafka_to_positive ensures #1] [%#sremote_metadata'10] 0 <= Int32.to_int result)
+    /\ ([@stop_split] [@expl:kafka_to_positive ensures #2] [%#sremote_metadata'11] Int32.to_int result
+    <= Int32.to_int const_MAX)}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function remote_metadata_partition_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 126 0 130 8] (topic_id: UInt128.t) (user_partition: Int32.t) (metadata_partition_count: Int32.t) : int
+ = [%#sremote_metadata'12] if Int32.le metadata_partition_count (0: Int32.t) then
+    0
+  else
+    ComputerDivision.mod (kafka_to_positive_model (kafka_murmur2_i32_model (java_objects_hash_model topic_id user_partition))) (Int32.to_int metadata_partition_count)
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_metadata_partition [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 163 0 167 16]
+  (topic_id: UInt128.t) (user_partition: Int32.t) (metadata_partition_count: Int32.t) (return (x: t_Option_i32)) =
+(! bb0
+  [ bb0 = s0
+    [ s0 = [ &_13 <- Int32.le metadata_partition_count ([%#sremote_metadata] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb2) | br1 -> {_13} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = java_objects_hash [%#sremote_metadata'0] {topic_id} {user_partition}
+        (fun (_x: Int32.t) -> [ &objects_hash <- _x ] s1)
+    | s1 = kafka_murmur2_i32 [%#sremote_metadata'1] {objects_hash} (fun (_x: UInt32.t) -> [ &murmur2 <- _x ] s2)
+    | s2 = kafka_to_positive [%#sremote_metadata'2] {murmur2} (fun (_x: Int32.t) -> [ &_22 <- _x ] s3)
+    | s3 = [ &_24 <- metadata_partition_count ] s4
+    | s4 = [ &_25 <- _24 = ([%#sremote_metadata'3] (0: Int32.t)) ] s5
+    | s5 = {[@expl:remainder by zero] [%#sremote_metadata'3] not _25} s6
+    | s6 = [ &_26 <- _24 = ([%#sremote_metadata'3] (-1: Int32.t)) ] s7
+    | s7 = [ &_27 <- _22 = ([%#sremote_metadata'3] (-2147483648: Int32.t)) ] s8
+    | s8 = [ &_28 <- Bool.bw_and _26 _27 ] s9
+    | s9 = {[@expl:Rem overflow] [%#sremote_metadata'3] not _28} s10
+    | s10 = Int32.rem [%#sremote_metadata'3] {_22} {_24} (fun (_x: Int32.t) -> [ &_21 <- _x ] s11)
+    | s11 = [ &_ret <- Some _21 ] s12
+    | s12 = return {_ret} ] ]
+  [ & _ret: t_Option_i32 = Any.any_l ()
+  | & topic_id: UInt128.t = topic_id
+  | & user_partition: Int32.t = user_partition
+  | & metadata_partition_count: Int32.t = metadata_partition_count
+  | & _13: bool = Any.any_l ()
+  | & objects_hash: Int32.t = Any.any_l ()
+  | & murmur2: UInt32.t = Any.any_l ()
+  | & _21: Int32.t = Any.any_l ()
+  | & _22: Int32.t = Any.any_l ()
+  | & _24: Int32.t = Any.any_l ()
+  | & _25: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _28: bool = Any.any_l () ])
+  [ return (result: t_Option_i32) ->
+  {[@stop_split] [@expl:remote_metadata_partition ensures] ([@stop_split] [@expl:remote_metadata_partition ensures #0] [%#sremote_metadata'4] gt_log_Int (Int32.to_int metadata_partition_count) 0
+      -> (exists partition: Int32.t. result = Some partition
+        /\ Int32.to_int partition = remote_metadata_partition_model topic_id user_partition metadata_partition_count))
+    /\ ([@stop_split] [@expl:remote_metadata_partition ensures #1] [%#sremote_metadata'5] (result = None)
+      = (Int32.to_int metadata_partition_count <= 0))
+    /\ ([@stop_split] [@expl:remote_metadata_partition ensures #2] [%#sremote_metadata'6] forall partition: Int32.t. result
+        = Some partition
+      -> 0 <= Int32.to_int partition /\ Int32.to_int partition < Int32.to_int metadata_partition_count)}
+    (! return {result}) ]

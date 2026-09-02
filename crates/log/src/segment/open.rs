@@ -9,6 +9,7 @@ use std::{fs::OpenOptions, path::Path, sync::Arc};
 
 use krabka_ids::Offset;
 use krabka_protocol::records::RecordBatch;
+use krabka_units::prelude::{ByteSize, ByteSizeExt};
 use tracing::instrument;
 
 use super::{Segment, io::seek_to_log_size};
@@ -18,6 +19,13 @@ use crate::{
     io::FileIo,
     name,
 };
+
+struct TailScan {
+    valid_end: u64,
+    last_offset: Offset,
+    max_timestamp: i64,
+    index_entries: Vec<(u32, u32, i64)>,
+}
 
 impl Segment {
     /// Create a fresh active segment at the given base offset. This fails if
@@ -55,10 +63,10 @@ impl Segment {
 
     /// Open as the active segment.
     ///
-    /// When `validate` is true, this method scans from the last-indexed
-    /// position to EOF. It truncates a partial trailing batch, and also a
-    /// batch that fails to decode. Cleanly decoded batches update
-    /// `last_offset` and `max_timestamp`.
+    /// When `validate` is true, this method scans from byte zero to EOF. It
+    /// truncates a partial or invalid trailing batch, rebuilds both sparse
+    /// indexes, and updates `last_offset` and `max_timestamp` from the same
+    /// maximal valid prefix.
     #[instrument(
         level = "info",
         skip_all,
@@ -68,9 +76,23 @@ impl Segment {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn open_active(dir: &Path, base_offset: Offset, validate: bool) -> Result<Self, LogError> {
+        Self::open_active_with_index_interval(
+            dir,
+            base_offset,
+            validate,
+            crate::config::DEFAULT_INDEX_INTERVAL,
+        )
+    }
+
+    pub(crate) fn open_active_with_index_interval(
+        dir: &Path,
+        base_offset: Offset,
+        validate: bool,
+        index_interval: ByteSize,
+    ) -> Result<Self, LogError> {
         let mut seg = Self::open(dir, base_offset)?;
         if validate {
-            seg.recover_active_tail()?;
+            seg.recover_active_tail(index_interval)?;
         }
         Ok(seg)
     }
@@ -85,45 +107,96 @@ impl Segment {
         ),
         err,
     )]
-    fn recover_active_tail(&mut self) -> Result<(), LogError> {
-        let scan_start = self
-            .offset_index
-            .last_entry()
-            .map_or(0u64, |(_, pos)| u64::from(pos));
-        if scan_start >= self.log_size {
-            return Ok(());
+    fn recover_active_tail(&mut self, index_interval: ByteSize) -> Result<(), LogError> {
+        let recovered = self.scan_valid_tail(index_interval)?;
+        u32::try_from(recovered.valid_end)
+            .map_err(|_| LogError::Corrupt("recovered segment position exceeds u32".into()))?;
+        krabka_verified::local_recovery_index_frontier(self.base_offset.0, recovered.last_offset.0)
+            .ok_or_else(|| {
+                LogError::Corrupt("recovered segment offset exceeds index range".into())
+            })?;
+        if recovered.valid_end < self.log_size {
+            self.log_file.set_len(recovered.valid_end)?;
         }
+        self.log_size = recovered.valid_end;
+        seek_to_log_size(&self.log_file, self.log_size)?;
+        self.offset_index.truncate_by_position(0)?;
+        self.time_index.truncate_by_relative_offset(0)?;
+        for (relative, position, max_timestamp) in recovered.index_entries {
+            self.offset_index.append(relative, position)?;
+            self.time_index.append(max_timestamp, relative)?;
+        }
+        self.last_offset = recovered.last_offset;
+        self.max_timestamp = recovered.max_timestamp;
+        tracing::Span::current().record("recovered_last_offset", self.last_offset.0);
+        Ok(())
+    }
 
+    fn scan_valid_tail(&self, index_interval: ByteSize) -> Result<TailScan, LogError> {
         let mut buf = Vec::new();
-        let to_read = usize::try_from(self.log_size - scan_start).unwrap_or(usize::MAX);
-        self.read_log_range(scan_start, &mut buf, to_read)?;
+        let to_read = usize::try_from(self.log_size).unwrap_or(usize::MAX);
+        self.read_log_range(0, &mut buf, to_read)?;
 
         let mut cur: &[u8] = &buf;
-        let mut consumed: u64 = 0;
-        let mut last_offset = self.last_offset;
-        let mut max_ts = self.max_timestamp;
+        let mut valid_end = 0;
+        let mut next_offset = self.base_offset.0;
+        let mut last_offset = self
+            .base_offset
+            .0
+            .checked_sub(1)
+            .map(Offset)
+            .ok_or_else(|| LogError::Corrupt("recovery offset underflow".into()))?;
+        let mut max_timestamp = i64::MIN;
+        let mut index_entries: Vec<(u32, u32, i64)> = Vec::new();
         while !cur.is_empty() {
+            let batch_position = valid_end;
             let before = cur.len();
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
                 break;
             };
-            consumed += (before - cur.len()) as u64;
-            last_offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta));
-            if batch.max_timestamp > max_ts {
-                max_ts = batch.max_timestamp;
+            let encoded_len = u64::try_from(before - cur.len())
+                .map_err(|_| LogError::Corrupt("decoded batch length exceeds u64".into()))?;
+            let Some(step) = krabka_verified::local_recovery_batch_step(
+                valid_end,
+                self.log_size,
+                next_offset,
+                batch.base_offset,
+                batch.last_offset_delta,
+                encoded_len,
+            ) else {
+                break;
+            };
+            valid_end = step.valid_end;
+            last_offset = Offset(step.last_offset);
+            next_offset = step.next_offset;
+            max_timestamp = max_timestamp.max(batch.max_timestamp);
+            let should_index = match index_entries.last() {
+                None => true,
+                Some((_, previous_position, _)) => {
+                    batch_position.saturating_sub(u64::from(*previous_position))
+                        >= index_interval.bytes_u64()
+                }
+            };
+            if should_index {
+                let relative = krabka_verified::truncation_relative_offset(
+                    self.base_offset.0,
+                    batch.base_offset,
+                )
+                .ok_or_else(|| {
+                    LogError::Corrupt("recovered batch offset exceeds index range".into())
+                })?;
+                let position = u32::try_from(batch_position).map_err(|_| {
+                    LogError::Corrupt("recovered batch position exceeds index range".into())
+                })?;
+                index_entries.push((relative, position, max_timestamp));
             }
         }
-
-        let valid_end = scan_start + consumed;
-        if valid_end < self.log_size {
-            self.log_file.set_len(valid_end)?;
-            self.log_size = valid_end;
-        }
-        seek_to_log_size(&self.log_file, self.log_size)?;
-        self.last_offset = last_offset;
-        self.max_timestamp = max_ts;
-        tracing::Span::current().record("recovered_last_offset", last_offset.0);
-        Ok(())
+        Ok(TailScan {
+            valid_end,
+            last_offset,
+            max_timestamp,
+            index_entries,
+        })
     }
 
     /// Open an existing segment for reading. This is lightweight and does no
@@ -195,12 +268,8 @@ mod tests {
         );
     }
 
-    /// Tail recovery must PHYSICALLY truncate a partial or garbage trailing
-    /// tail. It finds the valid end with `consumed += before - cur.len()`,
-    /// which is the exact number of bytes each valid batch decode advanced. A
-    /// mutation of `-` to `+` inflates `consumed` and pushes `valid_end` past
-    /// `log_size`, so the garbage is never truncated and the file keeps its
-    /// trailing bytes.
+    /// Tail recovery must physically truncate a partial or garbage tail and
+    /// rebuild both indexes from exactly the batches in the retained prefix.
     #[test]
     fn recover_active_tail_truncates_trailing_garbage() {
         let dir = tempdir().unwrap();
@@ -209,7 +278,11 @@ mod tests {
             seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap();
             seg.append(&sample_batch(3, 2, 200), DENSE_INDEX).unwrap();
             seg.flush().unwrap();
-            seg.size()
+            let valid_size = seg.log_size;
+            let stale_position = u32::try_from(valid_size).unwrap();
+            seg.offset_index.append(999, stale_position).unwrap();
+            seg.time_index.append(i64::MAX, 999).unwrap();
+            valid_size
         };
 
         // Append 16 bytes of garbage (an undecodable partial batch tail).
@@ -220,8 +293,25 @@ mod tests {
         drop(f);
 
         // Reopen with validation: the tail scan must clip the garbage.
-        let seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
+        let seg =
+            Segment::open_active_with_index_interval(dir.path(), Offset(0), true, DENSE_INDEX)
+                .unwrap();
         assert2::assert!(seg.last_offset() == Offset(4));
-        assert2::assert!(seg.size() == valid_size);
+        assert2::assert!(seg.log_size == valid_size);
+        assert2::assert!(seg.offset_index.entry_count() == 2);
+        assert2::assert!(seg.time_index.entry_count() == 2);
+        assert2::assert!(u64::from(seg.offset_index.lookup(999)) < valid_size);
+        assert2::assert!(seg.time_index.last_entry().unwrap().1 < 999);
+        drop(seg);
+
+        // Recovery is idempotent once the file and both indexes share the
+        // proved frontiers.
+        let retry =
+            Segment::open_active_with_index_interval(dir.path(), Offset(0), true, DENSE_INDEX)
+                .unwrap();
+        assert2::assert!(retry.last_offset() == Offset(4));
+        assert2::assert!(retry.log_size == valid_size);
+        assert2::assert!(retry.offset_index.entry_count() == 2);
+        assert2::assert!(retry.time_index.entry_count() == 2);
     }
 }

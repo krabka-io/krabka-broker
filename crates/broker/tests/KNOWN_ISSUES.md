@@ -44,6 +44,15 @@ The log differential and KIP-631 checkpoint checks run in the same lane as
 `//crates/log:integration_docker_test` and
 `//crates/raft:kraft_checkpoint_jvm_docker_test`.
 
+`jvm_role_separated_admin` and `jvm_broker_loggers` run in that lane too, as
+`//crates/broker:jvm_role_separated_admin_docker_test` and
+`//crates/broker:jvm_broker_loggers_docker_test`. The first drives
+`kafka-configs --alter` and `kafka-features upgrade`/`downgrade` at a
+broker-only node in a role-separated cluster, which is the topology
+`324ab7d` and `4a8e6cb` made a broker survive in; the second drives
+`kafka-configs --entity-type broker-loggers` through both its describe paths
+and its alter.
+
 ## Scheduled GSSAPI validation
 
 `gssapi_e2e` remains a manual Bazel target. Its locally built KDC fixture writes

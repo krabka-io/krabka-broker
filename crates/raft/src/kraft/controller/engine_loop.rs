@@ -105,6 +105,9 @@ impl Engine {
             Command::Inbound(inbound) => self.on_inbound(inbound),
             Command::Timer(tick) => self.on_timer(tick),
             Command::SubmitChange { records, reply } => self.on_submit_change(&records, reply),
+            Command::SubmitDelegationTokenMutations { mutations, reply } => {
+                self.on_submit_delegation_token_mutations(&mutations, reply);
+            }
             Command::Reconfigure { change, reply } => self.on_reconfigure(change, reply),
             Command::TriggerSnapshot { reply } => {
                 let _ = reply.send(self.do_trigger_snapshot());

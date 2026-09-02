@@ -42,7 +42,11 @@ fn checkpoint_name(end_offset: i64, epoch: i32) -> String {
 pub(crate) fn parse_checkpoint_name(name: &str) -> Option<(i64, i32)> {
     let stem = name.strip_suffix(".checkpoint")?;
     let (off, ep) = stem.split_once('-')?;
-    Some((off.parse().ok()?, ep.parse().ok()?))
+    let id = (off.parse().ok()?, ep.parse().ok()?);
+    if id.0 < 0 || id.1 < 0 {
+        return None;
+    }
+    (checkpoint_name(id.0, id.1) == name).then_some(id)
 }
 
 /// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts and return the
@@ -50,22 +54,19 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<(i64, i32)> {
 /// holds no checkpoint.
 pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<(i64, i32)> {
     let entries = std::fs::read_dir(dir).ok()?;
-    let mut best: Option<(i64, i32)> = None;
+    let mut ids = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some((off, ep)) = parse_checkpoint_name(name) else {
-            continue;
-        };
-        if best.is_none_or(|cur| checkpoint_id_is_newer((off, ep), cur)) {
-            best = Some((off, ep));
+        if let Some(id) = parse_checkpoint_name(name) {
+            ids.push(id);
         }
     }
-    best
+    krabka_verified::latest_checkpoint_index(&ids).map(|index| ids[index])
 }
 
 pub fn checkpoint_id_is_newer(candidate: (i64, i32), current: (i64, i32)) -> bool {
-    matches!(candidate.cmp(&current), std::cmp::Ordering::Greater)
+    krabka_verified::checkpoint_id_newer(candidate.0, candidate.1, current.0, current.1)
 }
 
 /// Delete every `.checkpoint` in `dir` except the latest `(end_offset, epoch)`,
@@ -84,7 +85,7 @@ pub fn retain_latest_checkpoint(dir: &std::path::Path) {
         let Some((off, ep)) = parse_checkpoint_name(name) else {
             continue;
         };
-        if (off, ep) != latest {
+        if !krabka_verified::checkpoint_id_retained(off, ep, latest.0, latest.1) {
             let _ = std::fs::remove_file(entry.path());
         }
     }

@@ -140,9 +140,13 @@ pub(super) fn start_liveness_services(
             interval: config.heartbeat_interval,
             controller: Arc::clone(controller),
             shutdown: shutdown.child_token(),
-            inter_broker_client: Arc::clone(inter_broker_client),
-            inter_broker_listener_protocol: listener_protocol,
-            inter_broker_listener_name: config.inter_broker_listener_name.clone(),
+            outbound_client: Arc::clone(inter_broker_client),
+            controller_listener_protocol: config.controller_listener_protocol,
+            controller_server_name: config
+                .controller_server_name
+                .clone()
+                .unwrap_or_else(|| "localhost".to_owned()),
+            controller_quorum_voters: config.controller_quorum_voters.clone(),
             want_shutdown: want_shutdown_rx,
             should_shutdown: Arc::clone(&should_shutdown),
             log_dir_status: log_dirs.0.clone(),

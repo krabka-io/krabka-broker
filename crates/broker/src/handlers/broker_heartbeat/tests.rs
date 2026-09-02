@@ -69,6 +69,61 @@ async fn wait_for_leader(broker: &Broker) {
     }
 }
 
+/// The controller listener decides `ClusterAction` once, when it accepts the
+/// connection, and it admits a peer that carries no identity at all on a
+/// protocol that supplies none. The handler must honour that decision instead
+/// of re-judging the `ANONYMOUS` principal the router substitutes.
+///
+/// Getting this wrong is not a small matter of a rejected request: an
+/// authorizer with no `ClusterAction` ACL would refuse every heartbeat in the
+/// cluster, and the controller would fence every broker it never heard from.
+#[tokio::test]
+async fn a_listener_that_already_authorized_the_peer_is_not_second_guessed() {
+    let deny_all = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+        std::collections::HashSet::new(),
+    ));
+    let (broker_handle, _dir) = start_broker(deny_all).await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    let principal = krabka_security::Principal {
+        name: "ANONYMOUS".into(),
+        auth_method: krabka_security::AuthMethod::Anonymous,
+        groups: vec![],
+    };
+    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+    let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
+    let broker_epoch = broker
+        .controller
+        .current_image()
+        .broker_epoch(NodeId(1))
+        .expect("broker registration should be applied");
+    let req = request(broker_epoch, broker_epoch, vec![]);
+
+    // A listener that did not authorize the peer: the handler runs the gate,
+    // and this authorizer denies it.
+    let unauthorized = test_context(&principal, &peer);
+    let denied = decode_response(
+        &handle(&broker, version, 11, &req, &unauthorized)
+            .await
+            .expect("BrokerHeartbeat handler"),
+        version,
+    );
+    assert!(denied.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
+
+    // The controller listener, which authorized the connection already.
+    let authorized = test_context(&principal, &peer).listener_authorized_for_cluster_action();
+    let accepted = decode_response(
+        &handle(&broker, version, 12, &req, &authorized)
+            .await
+            .expect("BrokerHeartbeat handler"),
+        version,
+    );
+    assert!(accepted.error_code == codes::NONE, "{accepted:?}");
+    assert!(!accepted.is_fenced);
+
+    broker_handle.shutdown().await;
+}
+
 #[tokio::test]
 async fn handle_leader_success_preserves_response_shape() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
