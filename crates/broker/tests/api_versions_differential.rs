@@ -18,7 +18,7 @@
 //!    krabka advertises that Kafka does not -- or one that has moved away from
 //!    Kafka's -- then arrives as a diff on that file.
 //!
-//! That file is also what `tools/generate-kip-matrix.py` reads for the version
+//! That file is also what `aspect generate-kip-matrix` reads for the version
 //! columns of `docs/KIP_MATRIX.md`, so the matrix and the tests cannot disagree.
 //!
 //! Both cases are `#[ignore]`d because they need Docker, and the Bazel lane

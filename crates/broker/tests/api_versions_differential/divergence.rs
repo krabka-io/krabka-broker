@@ -5,7 +5,7 @@
 //! key. It is written to `tests/fixtures/api_versions/divergence.json` and read
 //! back by the differential suite, so a range krabka starts or stops
 //! advertising, or a range that moves away from Kafka's, arrives in a diff
-//! rather than passing unnoticed. `tools/generate-kip-matrix.py` reads the same
+//! rather than passing unnoticed. `aspect generate-kip-matrix` reads the same
 //! file for the version columns of `docs/KIP_MATRIX.md`.
 
 use std::path::Path;

@@ -19,6 +19,7 @@ load("./check_mutants_config_test.axl", "check_mutants_config_tests")
 load("./check_scripts_test.axl", "check_scripts_tests")
 load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
+load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
 load("./rustdoc_site_test.axl", "rustdoc_site_tests")
 load("./testing.axl", "run_suites")
@@ -35,6 +36,7 @@ SUITES = [
     check_scripts_tests,
     creusot_image_tag_tests,
     generate_config_reference_tests,
+    generate_kip_matrix_tests,
     mutants_shard_tests,
     rustdoc_site_tests,
 ]
