@@ -337,6 +337,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "before the delivery time the partition already holds",
@@ -346,6 +347,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
             PartitionProduceResponse {
                 index: 0,
                 error_code: crate::codes::INVALID_TIMESTAMP,
+                base_offset: -1,
                 ..Default::default()
             },
             "further ahead than delivery.max.delay.ms",
@@ -356,6 +358,10 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 index: 0,
                 error_code: crate::codes::NONE,
                 base_offset: 1,
+                // An accepted row carries the partition's real log start
+                // offset. Nothing has trimmed this one, so it is 0 and not
+                // the -1 the two refusals above keep from `Default`.
+                log_start_offset: 0,
                 ..Default::default()
             },
             "after the schedule and inside the bound",
@@ -373,10 +379,10 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                     ))),
                 },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery,
                 topic_name: "sched".into(),
-                topic_denied: false,
-                freeze: None,
+                freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
                 txn_id_denied: false,
                 acks: 1,
                 timeout: Duration::from_secs(5),
@@ -395,6 +401,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
             },
         )
         .await

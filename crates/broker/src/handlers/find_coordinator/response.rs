@@ -46,28 +46,3 @@ pub(super) fn encode_coordinators(
         version,
     )
 }
-
-/// Build an error response in which all coordinators carry the given error code.
-///
-/// The handler uses this function when a top-level failure, for example a
-/// bootstrap failure, prevents the per-key lookup.
-pub(super) fn encode_error_response(
-    broker_id: i32,
-    advertised: &str,
-    version: i16,
-    error_code: i16,
-    error_message: Option<&str>,
-) -> Result<Bytes, BrokerError> {
-    let (host, port) = parse_host_port(advertised);
-    let resp = FindCoordinatorResponse {
-        throttle_time_ms: 0,
-        error_code,
-        error_message: error_message.map(str::to_owned),
-        node_id: broker_id,
-        host,
-        port: i32::from(port),
-        coordinators: vec![],
-        ..Default::default()
-    };
-    crate::handlers::encode_response(&resp, version)
-}

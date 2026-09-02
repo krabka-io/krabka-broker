@@ -1,0 +1,17 @@
+(* #"/proof-work-246/crates/verified/src/diskless.rs" 28 27 28 32 *)
+
+(* <diskless::DisklessWalReplayAction as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_DisklessWalReplayAction = Ignore | Store | Remove
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_DisklessWalReplayAction [#"/proof-work-246/crates/verified/src/diskless.rs" 28 27 28 32]
+  (self: t_DisklessWalReplayAction) (return (x: t_DisklessWalReplayAction)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DisklessWalReplayAction = Any.any_l () | & self: t_DisklessWalReplayAction = self ])
+  [ return (result: t_DisklessWalReplayAction) -> (! return {result}) ]

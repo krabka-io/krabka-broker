@@ -8,10 +8,13 @@ use krabka_metadata::LeaderEpoch;
 
 use super::*;
 use crate::{
-    config_keys::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
+    config_keys::{
+        ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS, UNCLEAN_LEADER_ELECTION_ENABLE,
+        UNCLEAN_RECOVERY_STRATEGY,
+    },
     leader_election::test_support::{
-        img_with_partition, mark_witnesses_in_image, one_partition_change, set_cluster_default,
-        set_topic_config,
+        elected_partition, img_with_partition, mark_witnesses_in_image, one_partition_change,
+        set_cluster_default, set_topic_config, set_topic_configs,
     },
 };
 
@@ -46,6 +49,30 @@ async fn failover_picks_alive_isr_member_when_available() {
         partition_epoch: 1,
     };
     assert!(*pr == expected);
+}
+
+#[tokio::test]
+async fn failover_marks_exhausted_metadata_epochs_unavailable() {
+    for (partition_epoch, leader_epoch) in [(i32::MAX, 5), (0, i32::MAX)] {
+        let mut image = img_with_partition("t", 0, 1, &[1, 2], &[1, 2]);
+        let mut record = image.partition("t", 0).expect("seeded partition").clone();
+        record.partition_epoch = partition_epoch;
+        record.leader_epoch = LeaderEpoch(leader_epoch);
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(record));
+        let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+        liveness.record_heartbeat(2).await;
+
+        let plan = compute_failover_changes(
+            &image,
+            NodeId(1),
+            &liveness,
+            &crate::metrics::BrokerMetrics::new(),
+        )
+        .await;
+
+        assert!(plan.changes.is_empty());
+        assert!(plan.unavailable == vec![("t".to_owned(), 0)]);
+    }
 }
 
 #[tokio::test]
@@ -436,4 +463,115 @@ async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
     assert!(plan.recoveries.is_empty());
     assert!(plan.unavailable == vec![("t".to_string(), 0)]);
     assert!(metrics.unclean_leader_elections_total.get() == 0);
+}
+
+/// One row of the eligible-leader-replica table below.
+struct ElrScanCase<'a> {
+    label: &'a str,
+    /// Extra topic-config overrides, on top of the published ELR.
+    policy: &'a [(&'a str, &'a str)],
+}
+
+/// KIP-966 through the whole dead-broker scan: the emitted record, the
+/// metric, and the two lists the plan carries.
+///
+/// Broker 1 leads and dies, and the ISR named it alone. Broker 3 comes first
+/// in the assignment and is alive, so every pre-ELR path lands on it: the
+/// KIP-841 election picks it and calls the result unclean, and the strategies
+/// hand the partition to the URM. Only broker 2 is published as eligible, so
+/// only broker 2 is known to hold every committed record -- and Kafka's
+/// `electAnyLeader` elects it and reports the election clean, under every one
+/// of these policies.
+#[tokio::test]
+async fn failover_elects_an_eligible_leader_replica_cleanly_under_every_policy() {
+    let cases = [
+        ElrScanCase {
+            label: "no unclean election and no offset-aware strategy",
+            policy: &[],
+        },
+        ElrScanCase {
+            label: "unclean election enabled",
+            policy: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+        },
+        ElrScanCase {
+            label: "balanced offset-aware recovery",
+            policy: &[(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
+        },
+        ElrScanCase {
+            label: "aggressive recovery and unclean election together",
+            policy: &[
+                (UNCLEAN_RECOVERY_STRATEGY, "Aggressive"),
+                (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
+            ],
+        },
+    ];
+    for case in cases {
+        let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 3, 2], &[1]);
+        let mut overrides: Vec<(&str, &str)> = vec![
+            (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
+            (MIN_INSYNC_REPLICAS, "2"),
+        ];
+        overrides.extend_from_slice(case.policy);
+        set_topic_configs(&mut img, "t", &overrides);
+        let l = ControllerLivenessState::new(krabka_units::secs(10));
+        for n in [2u64, 3] {
+            l.record_heartbeat(n).await;
+        }
+        let metrics = crate::metrics::BrokerMetrics::new();
+
+        let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
+
+        let expected = PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(2),
+            replicas: vec![NodeId(1), NodeId(3), NodeId(2)],
+            isr: vec![NodeId(2)],
+            leader_epoch: LeaderEpoch(6),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 1,
+        };
+        assert!(
+            *elected_partition(&plan.changes) == expected,
+            "{}",
+            case.label
+        );
+        assert!(plan.recoveries.is_empty(), "{}", case.label);
+        assert!(plan.unavailable.is_empty(), "{}", case.label);
+        assert!(
+            metrics.unclean_leader_elections_total.get() == 0,
+            "{}: an ELR election loses nothing and must not meter as unclean",
+            case.label
+        );
+    }
+}
+
+/// An eligible leader replica that is not alive fails Kafka's
+/// `isAcceptableLeader`, so the decision falls back to the rung below. With
+/// the KIP-841 toggle on that is the out-of-ISR election of broker 3, and it
+/// is reported as the data loss it is.
+#[tokio::test]
+async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() {
+    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 3, 2], &[1]);
+    set_topic_configs(
+        &mut img,
+        "t",
+        &[
+            (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
+            (MIN_INSYNC_REPLICAS, "2"),
+            (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
+        ],
+    );
+    let l = ControllerLivenessState::new(krabka_units::secs(10));
+    l.record_heartbeat(3).await;
+    let metrics = crate::metrics::BrokerMetrics::new();
+
+    let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
+
+    let pr = elected_partition(&plan.changes);
+    assert!(pr.leader == NodeId(3));
+    assert!(pr.isr == vec![NodeId(3)]);
+    assert!(metrics.unclean_leader_elections_total.get() == 1);
 }

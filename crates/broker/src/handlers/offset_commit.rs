@@ -3,6 +3,14 @@
 //! `__consumer_offsets` partition
 //! via the partition writer, then updates the group's committed offsets
 //! through its actor.
+//!
+//! KIP-211: a v2-v4 request may carry `retention_time_ms`, which overrides the
+//! broker's `offsets.retention.minutes` for the offsets in that one request.
+//! The handler turns it into the absolute `expire_timestamp_ms` that the
+//! record and the in-memory entry both carry, and
+//! `coordinator::retention` honours it. The field was removed at v5,
+//! where the decoder leaves it at its `-1` default, and `-1` at v2-v4 means
+//! the same thing: take the broker-wide retention.
 
 use std::sync::Arc;
 
@@ -26,7 +34,6 @@ use crate::{
     broker::Broker,
     codes,
     coordinator::{
-        bootstrap::OFFSETS_TOPIC,
         partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
@@ -35,8 +42,6 @@ use crate::{
         },
     },
     error::BrokerError,
-    partition::{ProduceData, ProduceJob, WriterMessage},
-    partition_registry::PartitionRegistry,
 };
 
 // ACL preamble (group + per-topic) + commit pipeline; splitting hurts readability
@@ -85,10 +90,10 @@ pub(crate) async fn handle(
         }
     }
 
-    let offsets_partition = {
+    {
         let image = broker.controller.current_image();
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(partition) => partition,
+            Ok(_) => {}
             Err(GroupRoutingError::Unavailable) => {
                 return finalize(
                     version,
@@ -104,9 +109,10 @@ pub(crate) async fn handle(
                 );
             }
         }
-    };
+    }
 
     let now_ms = now_ms();
+    let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
     // Find the group's actor (a classic actor is created for an unknown id —
     // e.g. a "simple" consumer committing offsets without joining a group).
     // Offsets are protocol-agnostic, so an existing actor of either kind serves
@@ -154,20 +160,25 @@ pub(crate) async fn handle(
 
         // Only proceed with allowed topics (append + update).
         let allowed_req = allowed_request(&req, &topic_decisions);
-        if !allowed_req.topics.is_empty() {
-            if let Err(code) =
-                append_batch(&allowed_req, &broker.partitions, offsets_partition, now_ms).await
-            {
-                // If append fails, overwrite allowed topics with the error code.
-                let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
-                let resp = OffsetCommitResponse {
-                    topics: topics_out_err,
-                    throttle_time_ms: 0,
-                    ..Default::default()
-                };
-                return finalize(version, resp, unknown_id_topics.clone());
-            }
-            update_committed(&allowed_req, &handle, now_ms).await;
+        if !allowed_req.topics.is_empty()
+            && let Err(code) = commit_through_actor(
+                &handle,
+                &allowed_req,
+                Commit {
+                    now_ms,
+                    expire_timestamp_ms,
+                },
+            )
+            .await
+        {
+            // If the commit fails, overwrite allowed topics with the error code.
+            let topics_out_err = mixed_response_topics(&req, &topic_decisions, code);
+            let resp = OffsetCommitResponse {
+                topics: topics_out_err,
+                throttle_time_ms: 0,
+                ..Default::default()
+            };
+            return finalize(version, resp, unknown_id_topics.clone());
         }
 
         let resp = OffsetCommitResponse {
@@ -178,16 +189,17 @@ pub(crate) async fn handle(
         return finalize(version, resp, unknown_id_topics.clone());
     }
 
-    // 2. Append a RecordBatch into this group's offsets partition.
-    if let Err(code) = append_batch(&req, &broker.partitions, offsets_partition, now_ms).await {
+    // 2. Append this commit's RecordBatch and apply it, inside the actor.
+    let commit = Commit {
+        now_ms,
+        expire_timestamp_ms,
+    };
+    if let Err(code) = commit_through_actor(&handle, &req, commit).await {
         let resp = build_response_all(&req, code);
         return finalize(version, resp, unknown_id_topics.clone());
     }
 
-    // 3. Update in-memory state.
-    update_committed(&req, &handle, now_ms).await;
-
-    // 4. Uniform per-(topic, partition) success.
+    // 3. Uniform per-(topic, partition) success.
     let resp = build_response_all(&req, codes::NONE);
     finalize(version, resp, unknown_id_topics)
 }
@@ -294,6 +306,31 @@ fn finalize(
     encode(version, &resp)
 }
 
+/// The wire value of `retention_time_ms` that asks for the broker's own
+/// `offsets.retention.minutes`.
+const DEFAULT_RETENTION_TIME_MS: i64 = -1;
+
+/// The two clock values every record of one commit shares.
+#[derive(Debug, Clone, Copy)]
+struct Commit {
+    /// Commit time, stamped on the batch and on every `OffsetCommitValue`.
+    now_ms: i64,
+    /// The KIP-211 per-commit expiry, when the request asked for one.
+    expire_timestamp_ms: Option<i64>,
+}
+
+/// KIP-211: resolve the absolute expiry that this commit asked for.
+///
+/// `OffsetCommitRequest` carries `retention_time_ms` at v2-v4 only. The
+/// decoder leaves the field at its schema default of `-1` for every other
+/// version, and `-1` is also how a v2-v4 client says "use the broker's
+/// `offsets.retention.minutes`". This mirrors
+/// `OffsetMetadataManager.expireTimestampMs`.
+fn expire_timestamp_ms(retention_time_ms: i64, now_ms: i64) -> Option<i64> {
+    (retention_time_ms != DEFAULT_RETENTION_TIME_MS)
+        .then(|| now_ms.saturating_add(retention_time_ms))
+}
+
 fn now_ms() -> i64 {
     i64::try_from(
         std::time::SystemTime::now()
@@ -322,19 +359,24 @@ async fn validate(handle: &Arc<GroupActorHandle>, req: &OffsetCommitRequest) -> 
     .await
 }
 
-/// Append a single `RecordBatch` covering every (topic, partition) in `req`
-/// to the selected `__consumer_offsets` writer. Returns `Err(error_code)` on
-/// failure to either find the partition or hear back from the writer.
-async fn append_batch(
-    req: &OffsetCommitRequest,
-    partitions: &Arc<PartitionRegistry>,
-    offsets_partition: i32,
-    now_ms: i64,
-) -> Result<(), i16> {
+/// One commit's two halves: the `__consumer_offsets` records for every
+/// `(topic, partition)` in the request, and the in-memory entries that mirror
+/// them.
+///
+/// They are built together and travel to the group's actor together, because
+/// the actor is what orders them against the KIP-211 retention sweep.
+struct CommitRecords {
+    batch: RecordBatch,
+    entries: Vec<((String, i32), OffsetEntry)>,
+}
+
+/// Build both halves of one commit.
+fn commit_records(req: &OffsetCommitRequest, commit: Commit) -> CommitRecords {
     let mut batch = RecordBatch {
-        max_timestamp: now_ms,
+        max_timestamp: commit.now_ms,
         ..RecordBatch::default()
     };
+    let mut entries = Vec::new();
     let mut delta: i32 = 0;
     for topic in &req.topics {
         for part in &topic.partitions {
@@ -342,7 +384,8 @@ async fn append_batch(
                 offset: krabka_log::Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
-                commit_timestamp_ms: now_ms,
+                commit_timestamp_ms: commit.now_ms,
+                expire_timestamp_ms: commit.expire_timestamp_ms,
             };
             batch.records.push(Record {
                 offset_delta: delta,
@@ -355,64 +398,57 @@ async fn append_batch(
                 value: Some(value.encode_value()),
                 ..Default::default()
             });
-            delta += 1;
-        }
-    }
-    batch.last_offset_delta = (delta - 1).max(0);
-
-    let Some(part_handle) =
-        partitions.get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(offsets_partition))
-    else {
-        return Err(codes::UNKNOWN_SERVER_ERROR);
-    };
-    let (ack_tx, ack_rx) = oneshot::channel();
-    if part_handle
-        .writer_tx
-        .send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(batch),
-            ack: ack_tx,
-        }))
-        .await
-        .is_err()
-    {
-        return Err(codes::UNKNOWN_SERVER_ERROR);
-    }
-    match ack_rx.await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => {
-            tracing::error!(error = %e, "OffsetCommit writer returned error");
-            Err(codes::from_broker_error(&e))
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "OffsetCommit writer ack dropped");
-            Err(codes::UNKNOWN_SERVER_ERROR)
-        }
-    }
-}
-
-async fn update_committed(req: &OffsetCommitRequest, handle: &Arc<GroupActorHandle>, now_ms: i64) {
-    let mut entries: Vec<((String, i32), OffsetEntry)> = Vec::new();
-    for topic in &req.topics {
-        for part in &topic.partitions {
             entries.push((
                 (topic.name.clone(), part.partition_index),
                 OffsetEntry {
                     offset: krabka_log::Offset(part.committed_offset),
                     leader_epoch: part.committed_leader_epoch,
                     metadata: part.committed_metadata.clone().unwrap_or_default(),
-                    commit_timestamp_ms: now_ms,
+                    commit_timestamp_ms: commit.now_ms,
+                    expire_timestamp_ms: commit.expire_timestamp_ms,
                 },
             ));
+            delta += 1;
         }
     }
-    let (tx, rx) = oneshot::channel();
+    batch.last_offset_delta = (delta - 1).max(0);
+    CommitRecords { batch, entries }
+}
+
+/// Append the commit and apply it to the group, both inside the group's actor.
+///
+/// The append cannot run outside the mailbox. `coordinator::retention` decides
+/// what to tombstone from the actor's in-memory offsets and writes the
+/// tombstones in the same turn, so a commit that appended its record first and
+/// queued the in-memory update afterwards could be acknowledged and then
+/// deleted by a sweep that never saw it — the sweep would read the stale map,
+/// tombstone the offset behind the newer record, and stop the actor with the
+/// queued update still in flight. Sending both halves as one message puts the
+/// commit and the sweep in one order.
+///
+/// Returns `Err(error_code)` when the append failed or the actor is gone.
+async fn commit_through_actor(
+    handle: &Arc<GroupActorHandle>,
+    req: &OffsetCommitRequest,
+    commit: Commit,
+) -> Result<(), i16> {
+    let CommitRecords { batch, entries } = commit_records(req, commit);
+    let (reply, result) = oneshot::channel();
     if handle
         .tx
-        .send(GroupActorMessage::UpdateCommitted { entries, reply: tx })
+        .send(GroupActorMessage::CommitOffsets {
+            batch,
+            entries,
+            reply,
+        })
         .await
-        .is_ok()
+        .is_err()
     {
-        let _ = rx.await;
+        return Err(codes::UNKNOWN_SERVER_ERROR);
+    }
+    match result.await {
+        Ok(result) => result,
+        Err(_) => Err(codes::UNKNOWN_SERVER_ERROR),
     }
 }
 
@@ -444,4 +480,35 @@ fn build_response_all(req: &OffsetCommitRequest, code: i16) -> OffsetCommitRespo
 
 fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(resp, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    /// KIP-211: `-1` is the "use the broker's own retention" sentinel, and it
+    /// is also what the decoder leaves behind for a version that does not
+    /// carry the field at all. Every other value becomes an absolute deadline.
+    #[test]
+    fn per_commit_retention_becomes_an_absolute_deadline_unless_it_is_the_sentinel() {
+        let cases = [
+            (DEFAULT_RETENTION_TIME_MS, 1_000, None),
+            (0, 1_000, Some(1_000)),
+            (86_400_000, 1_000, Some(86_401_000)),
+            // A nonsense value still becomes a deadline rather than being read
+            // as the sentinel, which is what Kafka's `== DEFAULT_RETENTION_TIME`
+            // check does.
+            (-5, 1_000, Some(995)),
+            // Arithmetic that would overflow saturates rather than panicking.
+            (i64::MAX, 1_000, Some(i64::MAX)),
+        ];
+        for (retention_time_ms, now_ms, want) in cases {
+            check!(
+                expire_timestamp_ms(retention_time_ms, now_ms) == want,
+                "retention_time_ms={retention_time_ms} now_ms={now_ms}"
+            );
+        }
+    }
 }

@@ -34,6 +34,7 @@ use crate::{
     broker::Broker,
     codes::POLICY_VIOLATION,
     config::BreakGlassConfig,
+    freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
     handlers::RequestContext,
     time_util::now_ms,
 };
@@ -136,8 +137,16 @@ pub(super) fn alter_one(
     batch: &mut ReassignBatch,
     topic: &str,
     partition: &ReassignablePartition,
+    freeze: FreezeMutationResolution<'_>,
 ) -> ReassignablePartitionResponse {
     let index = partition.partition_index;
+    if let FreezeMutationResolution::Frozen(record) = freeze {
+        return err_row(
+            index,
+            POLICY_VIOLATION,
+            FreezeVerdict::from(record).reassignment_message(),
+        );
+    }
     let target: Option<&[i32]> = partition.replicas.as_deref();
     // KFC-9: only a cancel is gated. A start adds replicas and removes none,
     // and a completion is not a cancel at all.
@@ -359,6 +368,7 @@ mod tests {
                 replicas: None,
                 ..Default::default()
             },
+            FreezeMutationResolution::Admit,
         );
 
         check!(row.error_code == 0);
@@ -404,6 +414,7 @@ mod tests {
                 replicas: None,
                 ..Default::default()
             },
+            FreezeMutationResolution::Admit,
         );
 
         check!(row.error_code == POLICY_VIOLATION);
@@ -415,6 +426,65 @@ mod tests {
                 )
         );
         assert!(batch.records == vec![], "a refused cancel appends nothing");
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_freeze_refuses_start_and_cancel_before_any_record_or_approval_spend() {
+        let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.break_glass = gated_config();
+        })
+        .await;
+        let broker = handle.broker_arc_for_test();
+        let image = img_reassigning(&[approved_proposal("foo-0")]);
+        let principal = crate::test_support::principal("admin");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
+        let env = ReassignEnv {
+            broker: &broker,
+            image: &image,
+            ctx: &ctx,
+            allow_rf_change: true,
+        };
+        let record = krabka_metadata::TopicFreezeRecord {
+            scope: "foo".into(),
+            pattern_type: krabka_metadata::PatternType::Literal,
+            frozen: true,
+            reason: "DR cutover".into(),
+            set_by: "User:alice".into(),
+            set_at_ms: 10,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        };
+
+        for (label, replicas) in [("start", Some(vec![1, 3])), ("cancel", None)] {
+            let mut batch = ReassignBatch::default();
+            let row = alter_one(
+                &env,
+                &mut batch,
+                "foo",
+                &ReassignablePartition {
+                    partition_index: 0,
+                    replicas,
+                    ..Default::default()
+                },
+                FreezeMutationResolution::Frozen(&record),
+            );
+
+            check!(row.error_code == POLICY_VIOLATION, "{label}");
+            check!(
+                row.error_message
+                    == Some(
+                        "a write freeze on the literal scope \"foo\" refuses this reassignment: DR cutover"
+                            .to_owned()
+                    ),
+                "{label}"
+            );
+            assert!(batch.records.is_empty(), "{label} must append nothing");
+        }
         handle.shutdown().await;
     }
 

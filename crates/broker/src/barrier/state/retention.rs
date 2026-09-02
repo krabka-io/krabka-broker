@@ -14,13 +14,9 @@
 /// `retained_cuts` that is not positive drops nothing, and
 /// [`crate::barrier::coordinator::validate_spec`] rejects such a value.
 pub(crate) fn expired_cut_epochs(published: i64, retained_cuts: i32, held: &[i64]) -> Vec<i64> {
-    if retained_cuts <= 0 {
-        return Vec::new();
-    }
-    let cutoff = published - i64::from(retained_cuts);
     held.iter()
         .copied()
-        .filter(|epoch| *epoch <= cutoff)
+        .filter(|epoch| krabka_verified::barrier_cut_expired(published, retained_cuts, *epoch))
         .collect()
 }
 
@@ -97,6 +93,20 @@ mod tests {
                 retained_cuts: -1,
                 held: ALL,
                 expired: &[],
+            },
+            RetentionCase {
+                name: "cutoff underflow drops nothing",
+                published: i64::MIN,
+                retained_cuts: 1,
+                held: &[i64::MIN],
+                expired: &[],
+            },
+            RetentionCase {
+                name: "exact minimum cutoff",
+                published: i64::MIN + 1,
+                retained_cuts: 1,
+                held: &[i64::MIN, i64::MIN + 1],
+                expired: &[i64::MIN],
             },
         ];
         for case in cases {

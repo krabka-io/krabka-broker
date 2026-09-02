@@ -36,7 +36,11 @@ pub(super) async fn handle_session_tick(
         return Ok(());
     }
     // `evict_expired` set `dirty`; the reconcile owns the single `bump_epoch`.
-    reconcile(state, metadata);
+    if !reconcile(state, metadata) {
+        return Err(crate::error::BrokerError::Share(
+            "group epoch is exhausted".to_owned(),
+        ));
+    }
     let mut pending = PendingShareRecords {
         group_metadata: Some(ShareGroupMetadataValue {
             epoch: state.group_epoch,

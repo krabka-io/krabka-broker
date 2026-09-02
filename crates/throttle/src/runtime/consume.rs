@@ -100,20 +100,21 @@ mod tests {
 
     use assert2::check;
     use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, bytes_per_sec};
-    use qubit_clock::MockTime;
+    use qubit_clock::ManualMonotonicClock;
 
     use super::*;
 
-    /// Builds a bucket whose refill clock is a mock timeline anchored at the
-    /// Unix epoch.
+    /// Builds a bucket whose refill clock is a manual timeline starting at its
+    /// own zero-duration origin, which is what the refill differences measure
+    /// from.
     ///
-    /// The function returns the bucket with the [`MockTime`] handle, so the
-    /// test can advance logical time with `mock.advance(..)` instead of
-    /// sleeping.
-    fn mock_bucket() -> (Arc<TokenBucket>, MockTime) {
-        let mock = MockTime::unix_epoch();
-        let bucket = Arc::new(TokenBucket::with_clock(Arc::new(mock.clock())));
-        (bucket, mock)
+    /// The function returns the bucket with the [`ManualMonotonicClock`]
+    /// handle, so the test can advance logical time with `clock.advance(..)`
+    /// instead of sleeping.
+    fn manual_bucket() -> (Arc<TokenBucket>, Arc<ManualMonotonicClock>) {
+        let clock = ManualMonotonicClock::new_shared();
+        let bucket = Arc::new(TokenBucket::with_clock(clock.clone()));
+        (bucket, clock)
     }
 
     const TRY_CONSUME_TIMEOUT: Duration = Duration::from_secs(2);
@@ -179,24 +180,28 @@ mod tests {
 
     #[test]
     fn bucket_refills_at_rate_after_elapsed_time() {
-        let (b, mock) = mock_bucket();
+        let (b, clock) = manual_bucket();
         b.set_byte_rate(bytes_per_sec(1024));
         try_consume_with_timeout(&b, 1024);
         // 500ms at 1024 tokens/s refills exactly 512 tokens — deterministic,
         // where a real 500ms sleep only gets "roughly" 512 under scheduler jitter.
-        mock.advance(Duration::from_millis(500));
+        clock
+            .advance(Duration::from_millis(500))
+            .expect("manual time moves forward");
         let g = try_consume_with_timeout(&b, 1024);
         assert2::assert!(g == 512);
     }
 
     #[test]
     fn bucket_caps_at_burst_capacity() {
-        let (b, mock) = mock_bucket();
+        let (b, clock) = manual_bucket();
         b.set_byte_rate_with_burst(bytes_per_sec(1024), bytes(2048));
         try_consume_with_timeout(&b, 2048);
         // 2.5s at 1024 tokens/s would refill 2560 tokens, but the 2048 burst cap
         // clamps it; advancing logical time makes this exact and instant.
-        mock.advance(Duration::from_millis(2500));
+        clock
+            .advance(Duration::from_millis(2500))
+            .expect("manual time moves forward");
         let g = try_consume_with_timeout(&b, 4096);
         assert2::assert!(g == 2048);
     }

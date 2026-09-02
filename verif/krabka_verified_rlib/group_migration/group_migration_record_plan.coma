@@ -1,0 +1,89 @@
+(* #"/workspace/crates/verified/src/group_migration.rs" 94 0 97 29 *)
+
+let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 78 10 78 47
+let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 79 10 79 56
+let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 80 10 80 55
+let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 81 10 92 1
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_GroupMigrationDirection = Upgrade | Downgrade
+
+type t_GroupMigrationRecordAction = Write | Tombstone
+
+type t_GroupMigrationRecordPlan = {
+  classic_group: t_GroupMigrationRecordAction;
+  next_gen_group: t_GroupMigrationRecordAction;
+  next_gen_target: t_GroupMigrationRecordAction;
+  member_metadata: t_GroupMigrationRecordAction;
+  target_member: t_GroupMigrationRecordAction;
+  current_member: t_GroupMigrationRecordAction;
+  member_count: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let group_migration_record_plan [#"/workspace/crates/verified/src/group_migration.rs" 94 0 97 29]
+  (direction: t_GroupMigrationDirection) (member_count'0: UInt64.t) (return (x: t_GroupMigrationRecordPlan)) = (! bb0
+  [ bb0 = any [ br0 -> {direction = Upgrade} (! bb4) | br1 -> {direction = Downgrade} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_17 <- Write ] s1
+    | s1 = [ &_18 <- Tombstone ] s2
+    | s2 = [ &_19 <- Tombstone ] s3
+    | s3 = [ &_20 <- Tombstone ] s4
+    | s4 = [ &_21 <- Tombstone ] s5
+    | s5 = [ &_22 <- Tombstone ] s6
+    | s6 = [ &_ret <- { classic_group = _17;
+                        next_gen_group = _18;
+                        next_gen_target = _19;
+                        member_metadata = _20;
+                        target_member = _21;
+                        current_member = _22;
+                        member_count = member_count'0 } ] s7
+    | s7 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = [ &_10 <- Tombstone ] s1
+    | s1 = [ &_11 <- Write ] s2
+    | s2 = [ &_12 <- Write ] s3
+    | s3 = [ &_13 <- Write ] s4
+    | s4 = [ &_14 <- Write ] s5
+    | s5 = [ &_15 <- Write ] s6
+    | s6 = [ &_ret <- { classic_group = _10;
+                        next_gen_group = _11;
+                        next_gen_target = _12;
+                        member_metadata = _13;
+                        target_member = _14;
+                        current_member = _15;
+                        member_count = member_count'0 } ] s7
+    | s7 = return {_ret} ] ]
+  [ & _ret: t_GroupMigrationRecordPlan = Any.any_l ()
+  | & direction: t_GroupMigrationDirection = direction
+  | & member_count'0: UInt64.t = member_count'0
+  | & _10: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _11: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _12: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _13: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _14: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _15: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _17: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _18: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _19: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _20: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _21: t_GroupMigrationRecordAction = Any.any_l ()
+  | & _22: t_GroupMigrationRecordAction = Any.any_l () ])
+  [ return (result: t_GroupMigrationRecordPlan) ->
+  {[@stop_split] [@expl:group_migration_record_plan ensures] ([@stop_split] [@expl:group_migration_record_plan ensures #0] [%#sgroup_migration] UInt64.t'int result.member_count
+      = UInt64.t'int member_count'0)
+    /\ ([@stop_split] [@expl:group_migration_record_plan ensures #1] [%#sgroup_migration'0] result.member_metadata
+      = result.target_member)
+    /\ ([@stop_split] [@expl:group_migration_record_plan ensures #2] [%#sgroup_migration'1] result.target_member
+      = result.current_member)
+    /\ ([@stop_split] [@expl:group_migration_record_plan ensures #3] [%#sgroup_migration'2] match direction with
+      | Upgrade -> result.classic_group = Tombstone
+      /\ result.next_gen_group = Write /\ result.next_gen_target = Write /\ result.member_metadata = Write
+      | Downgrade -> result.classic_group = Write
+      /\ result.next_gen_group = Tombstone /\ result.next_gen_target = Tombstone /\ result.member_metadata = Tombstone
+      end)}
+    (! return {result}) ]

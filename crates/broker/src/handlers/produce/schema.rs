@@ -8,6 +8,10 @@ use krabka_protocol::{
     owned::produce_response::BatchIndexAndErrorMessage, records::RecordBatchBorrowed,
 };
 use krabka_schema_serde::subject::Role;
+use krabka_verified::{
+    SchemaBatchAdmission, SchemaFieldAction, SchemaFieldRole, schema_batch_admission,
+    schema_field_action,
+};
 
 use super::prepare::{PreparedBatch, PreparedSource};
 use crate::schema_validation::{RejectReason, SchemaGate, SchemaValidator};
@@ -75,10 +79,13 @@ pub(super) async fn validate_batch_schemas(
         metrics,
     };
     let mut errors = Vec::new();
+    let mut walk_complete = true;
+    let mut applicable = 0_u64;
+    let mut admitted = 0_u64;
     match &prepared.source {
         PreparedSource::Owned(batch) => {
             for (index, record) in batch.records.iter().enumerate() {
-                check
+                let tally = check
                     .record(
                         index,
                         record.key.as_deref(),
@@ -86,7 +93,10 @@ pub(super) async fn validate_batch_schemas(
                         &mut errors,
                     )
                     .await;
+                applicable += tally.applicable;
+                admitted += tally.admitted;
                 if errors.len() >= MAX_RECORD_ERRORS {
+                    walk_complete = false;
                     break;
                 }
             }
@@ -121,22 +131,25 @@ pub(super) async fn validate_batch_schemas(
                         batch_index_error_message: Some(reason.to_string()),
                         ..Default::default()
                     });
+                    walk_complete = false;
                     break;
                 };
-                check
+                let tally = check
                     .record(index, record.key, record.value, &mut errors)
                     .await;
+                applicable += tally.applicable;
+                admitted += tally.admitted;
                 if errors.len() >= MAX_RECORD_ERRORS {
+                    walk_complete = false;
                     break;
                 }
             }
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
+    match schema_batch_admission(walk_complete, applicable, admitted) {
+        SchemaBatchAdmission::Admit => Ok(()),
+        SchemaBatchAdmission::Reject => Err(errors),
     }
 }
 
@@ -149,6 +162,12 @@ struct SchemaCheck<'a> {
     gate: SchemaGate,
     topic_name: &'a str,
     metrics: &'a crate::metrics::BrokerMetrics,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SchemaTally {
+    applicable: u64,
+    admitted: u64,
 }
 
 impl SchemaCheck<'_> {
@@ -164,30 +183,36 @@ impl SchemaCheck<'_> {
         key: Option<&[u8]>,
         value: Option<&[u8]>,
         errors: &mut Vec<BatchIndexAndErrorMessage>,
-    ) {
+    ) -> SchemaTally {
         let batch_index = i32::try_from(index).unwrap_or(i32::MAX);
-        for (wanted, role, field) in [
-            (self.gate.key, Role::Key, key),
-            (self.gate.value, Role::Value, value),
-        ] {
-            if !wanted {
-                continue;
-            }
+        let mut tally = SchemaTally::default();
+        for (role, field) in [(SchemaFieldRole::Key, key), (SchemaFieldRole::Value, value)] {
+            let role =
+                match schema_field_action(self.gate.key, self.gate.value, role, field.is_some()) {
+                    SchemaFieldAction::Skip => continue,
+                    SchemaFieldAction::CheckKey => Role::Key,
+                    SchemaFieldAction::CheckValue => Role::Value,
+                };
             let Some(field) = field else { continue };
-            if let Err(reason) = self
+            tally.applicable += 1;
+            match self
                 .validator
                 .check(self.topic_name, role, self.gate.mode, field, self.metrics)
                 .await
             {
-                self.metrics
-                    .record_schema_validation_rejection(self.topic_name, reason.label());
-                errors.push(BatchIndexAndErrorMessage {
-                    batch_index,
-                    batch_index_error_message: Some(reason.to_string()),
-                    ..Default::default()
-                });
+                Ok(()) => tally.admitted += 1,
+                Err(reason) => {
+                    self.metrics
+                        .record_schema_validation_rejection(self.topic_name, reason.label());
+                    errors.push(BatchIndexAndErrorMessage {
+                        batch_index,
+                        batch_index_error_message: Some(reason.to_string()),
+                        ..Default::default()
+                    });
+                }
             }
         }
+        tally
     }
 }
 

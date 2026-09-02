@@ -33,13 +33,20 @@ pub(super) const SNAPSHOT_ENTRY_LEN: usize = 46;
 /// only one the broker's copy path ever archives.
 pub(super) const SNAPSHOT_VERSION: i16 = 1;
 
-/// Check a Kafka producer-state `.snapshot`: `version` (bytes `0..2`) must be
+/// Check a Kafka producer-state `.snapshot` at its exclusive log frontier:
+/// `version` (bytes `0..2`) must be
 /// [`SNAPSHOT_VERSION`], the object length must equal
 /// `SNAPSHOT_HEADER_LEN + count * SNAPSHOT_ENTRY_LEN` for the `count` (bytes
 /// `6..10`) it declares, and the CRC32C (bytes `2..6`) over
-/// `bytes[SNAPSHOT_CRC_COVERAGE_START..]` must match. Entry fields are not
-/// decoded; only the framing and the checksum are verified.
-pub(super) fn validate_producer_snapshot(key: &Path, bytes: &[u8]) -> Result<(), RestoreError> {
+/// `bytes[SNAPSHOT_CRC_COVERAGE_START..]` must match. Every decoded producer
+/// state must be legal strictly before `snapshot_offset`, and producer IDs
+/// must be unique. The adapter sorts a copy of the decoded IDs before applying
+/// the strict-order proof, so entry order does not affect admission.
+pub(super) fn validate_producer_snapshot(
+    key: &Path,
+    bytes: &[u8],
+    snapshot_offset: i64,
+) -> Result<(), RestoreError> {
     if bytes.len() < SNAPSHOT_HEADER_LEN {
         return Err(RestoreError::TruncatedSegment {
             key: key.to_string(),
@@ -89,5 +96,73 @@ pub(super) fn validate_producer_snapshot(key: &Path, bytes: &[u8]) -> Result<(),
             computed: computed_crc,
         });
     }
+
+    let count = usize::try_from(declared_count).expect("length check accepted a nonnegative count");
+    let mut producer_ids = Vec::with_capacity(count);
+    let mut cursor = SNAPSHOT_HEADER_LEN;
+    for entry_index in 0..count {
+        let producer_id = take_i64(bytes, &mut cursor);
+        let producer_epoch = take_i16(bytes, &mut cursor);
+        let last_sequence = take_i32(bytes, &mut cursor);
+        let last_offset = take_i64(bytes, &mut cursor);
+        let offset_delta = take_i32(bytes, &mut cursor);
+        let _timestamp = take_i64(bytes, &mut cursor);
+        let coordinator_epoch = take_i32(bytes, &mut cursor);
+        let transaction_first_offset = take_i64(bytes, &mut cursor);
+
+        if !krabka_verified::producer_snapshot_entry_valid(
+            snapshot_offset,
+            (producer_id, producer_epoch),
+            (last_sequence, last_offset, offset_delta),
+            (coordinator_epoch, transaction_first_offset),
+        ) {
+            return Err(snapshot_entry_error(
+                key,
+                entry_index,
+                snapshot_offset,
+                last_offset.max(transaction_first_offset),
+            ));
+        }
+        producer_ids.push(producer_id);
+    }
+    producer_ids.sort_unstable();
+    if !krabka_verified::restore_producer_ids_strict(&producer_ids) {
+        return Err(snapshot_entry_error(key, 0, snapshot_offset, 0));
+    }
     Ok(())
+}
+
+fn snapshot_entry_error(
+    key: &Path,
+    entry_index: usize,
+    declared: i64,
+    available: i64,
+) -> RestoreError {
+    RestoreError::TruncatedSegment {
+        key: key.to_string(),
+        position: u64::try_from(
+            SNAPSHOT_HEADER_LEN.saturating_add(entry_index.saturating_mul(SNAPSHOT_ENTRY_LEN)),
+        )
+        .unwrap_or(u64::MAX),
+        declared: offset_as_u64(declared),
+        available: offset_as_u64(available),
+    }
+}
+
+fn take_i16(bytes: &[u8], cursor: &mut usize) -> i16 {
+    let value = i16::from_be_bytes([bytes[*cursor], bytes[*cursor + 1]]);
+    *cursor += 2;
+    value
+}
+
+fn take_i32(bytes: &[u8], cursor: &mut usize) -> i32 {
+    let value = i32::from_be_bytes(bytes[*cursor..*cursor + 4].try_into().expect("four bytes"));
+    *cursor += 4;
+    value
+}
+
+fn take_i64(bytes: &[u8], cursor: &mut usize) -> i64 {
+    let value = i64::from_be_bytes(bytes[*cursor..*cursor + 8].try_into().expect("eight bytes"));
+    *cursor += 8;
+    value
 }

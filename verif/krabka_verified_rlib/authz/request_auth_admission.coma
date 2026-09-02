@@ -1,0 +1,41 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 34 0 34 76 *)
+
+let%span sauthz = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 36 43 36 47
+let%span sauthz'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 37 57 37 59
+let%span sauthz'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 28 10 28 61
+let%span sauthz'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 29 10 30 30
+let%span sauthz'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 31 10 32 66
+
+use creusot.int.Int16
+use creusot.prelude.Any
+
+type t_RequestAuthState = PreAuth | Reauthenticating | Authenticated
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let request_auth_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 34 0 34 76]
+  (state: t_RequestAuthState) (api_key: Int16.t) (return (x: bool)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {state = PreAuth} (! bb4)
+    | br1 -> {state = Reauthenticating} (! bb5)
+    | br2 -> {state = Authenticated} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- api_key = ([%#sauthz'0] (36: Int16.t)) ] s1 | s1 = return {_ret} ]
+  | bb4 = any
+    [ br0 -> {api_key = (17: Int16.t)} (! bb9)
+    | br1 -> {api_key = (18: Int16.t)} (! bb9)
+    | br2 -> {api_key = (36: Int16.t)} (! bb9)
+    | default -> -{api_key <> (17: Int16.t) /\ api_key <> (18: Int16.t) /\ api_key <> (36: Int16.t)}- (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l () | & state: t_RequestAuthState = state | & api_key: Int16.t = api_key ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:request_auth_admission ensures] ([@stop_split] [@expl:request_auth_admission ensures #0] [%#sauthz'1] state
+        = Authenticated -> result)
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #1] [%#sauthz'2] state = Reauthenticating
+      -> result = (Int16.to_int api_key = 36))
+    /\ ([@stop_split] [@expl:request_auth_admission ensures #2] [%#sauthz'3] state = PreAuth
+    -> result = (Int16.to_int api_key = 17 \/ Int16.to_int api_key = 18 \/ Int16.to_int api_key = 36))}
+    (! return {result}) ]

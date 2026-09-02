@@ -1,0 +1,29 @@
+(* #"/workspace/crates/verified/src/delegation_token.rs" 184 27 184 32 *)
+
+(* <delegation_token::TokenMutationFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_TokenMutationKind = Renew | Expire | Delete
+
+type t_TokenMutationState = Missing | Expected | Applied | Stale
+
+type t_TokenMutationFacts = {
+  kind: t_TokenMutationKind;
+  state: t_TokenMutationState;
+  now_ms: Int64.t;
+  expected_expiry_ms: Int64.t;
+  incoming_expiry_ms: Int64.t;
+  max_timestamp_ms: Int64.t;
+  uncommitted_tail: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TokenMutationFacts [#"/workspace/crates/verified/src/delegation_token.rs" 184 27 184 32]
+  (self: t_TokenMutationFacts) (return (x: t_TokenMutationFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenMutationFacts = Any.any_l () | & self: t_TokenMutationFacts = self ])
+  [ return (result: t_TokenMutationFacts) -> (! return {result}) ]

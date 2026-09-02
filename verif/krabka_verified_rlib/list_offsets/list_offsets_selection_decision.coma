@@ -1,0 +1,130 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 257 0 259 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 266 13 266 14
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 265 35 265 36
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 264 70 264 71
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 268 32 268 34
+let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 268 62 268 64
+let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 268 91 268 92
+let%span slist_offsets'5 = "/workspace/crates/verified/src/list_offsets.rs" 271 33 271 35
+let%span slist_offsets'6 = "/workspace/crates/verified/src/list_offsets.rs" 274 28 274 29
+let%span slist_offsets'7 = "/workspace/crates/verified/src/list_offsets.rs" 279 15 279 16
+let%span slist_offsets'8 = "/workspace/crates/verified/src/list_offsets.rs" 224 10 256 1
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+type t_ListOffsetsSelectionFacts = {
+  kind: t_ListOffsetsKind;
+  candidate_offset: Int64.t;
+  candidate_timestamp: Int64.t;
+  candidate_epoch: Int32.t;
+  last_fetchable: Int64.t }
+
+type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_selection_decision [#"/workspace/crates/verified/src/list_offsets.rs" 257 0 259 33]
+  (facts: t_ListOffsetsSelectionFacts) (return (x: t_ListOffsetsSelectionDecision)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.kind = Unsupported} (! bb7)
+    | br1 -> {facts.kind = Earliest} (! bb6)
+    | br2 -> {facts.kind = Latest} (! bb5)
+    | br3 -> {facts.kind = MaxTimestamp} (! bb1)
+    | br4 -> {facts.kind = EarliestLocal} (! bb6)
+    | br5 -> {facts.kind = LatestTiered} (! bb1)
+    | br6 -> {facts.kind = EarliestPendingUpload} (! bb1)
+    | br7 -> {facts.kind = Timestamp} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &mode <- [%#slist_offsets] (2: Int32.t) ] s1 | s1 = bb8 ]
+  | bb5 = s0 [ s0 = [ &mode <- [%#slist_offsets'0] (1: Int32.t) ] s1 | s1 = bb8 ]
+  | bb6 = s0 [ s0 = [ &mode <- [%#slist_offsets'1] (0: Int32.t) ] s1 | s1 = bb8 ]
+  | bb8 = s0
+    [ s0 = [ &_12 <- Int64.lt facts.candidate_offset ([%#slist_offsets'2] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb10) | br1 -> {_12} (! bb14) ] ]
+  | bb10 = s0
+    [ s0 = [ &_14 <- Int32.lt facts.candidate_epoch ([%#slist_offsets'3] (-1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb12) | br1 -> {_14} (! bb14) ] ]
+  | bb12 = s0
+    [ s0 = [ &_16 <- Int64.lt facts.last_fetchable ([%#slist_offsets'4] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb15) | br1 -> {_16} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_20 <- facts.candidate_offset = ([%#slist_offsets'5] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb17) | br1 -> {_20} (! bb16) ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- Unknown ] s1 | s1 = return {_ret} ]
+  | bb17 = s0
+    [ s0 = [ &_24 <- mode = ([%#slist_offsets'6] (1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb22) | br1 -> {_24} (! bb18) ] ]
+  | bb18 = s0
+    [ s0 = [ &_26 <- Int64.lt facts.last_fetchable facts.candidate_offset ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb22) | br1 -> {_26} (! bb20) ] ]
+  | bb20 = s0 [ s0 = [ &offset <- facts.last_fetchable ] s1 | s1 = bb23 ]
+  | bb22 = s0 [ s0 = [ &offset <- facts.candidate_offset ] s1 | s1 = bb23 ]
+  | bb23 = s0
+    [ s0 = [ &_30 <- mode = ([%#slist_offsets'7] (2: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb28) | br1 -> {_30} (! bb24) ] ]
+  | bb24 = s0
+    [ s0 = [ &_32 <- Int64.ge offset facts.last_fetchable ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb28) | br1 -> {_32} (! bb25) ] ]
+  | bb25 = s0 [ s0 = [ &_ret <- Unknown ] s1 | s1 = return {_ret} ]
+  | bb28 = s0
+    [ s0 = [ &_ret <- Resolved offset (facts.candidate_timestamp) (facts.candidate_epoch) ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l ()
+  | & facts: t_ListOffsetsSelectionFacts = facts
+  | & mode: Int32.t = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _30: bool = Any.any_l ()
+  | & _32: bool = Any.any_l () ])
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:list_offsets_selection_decision ensures] [%#slist_offsets'8] match result with
+      | RejectMalformed -> facts.kind = Unsupported
+      \/ Int64.to_int facts.candidate_offset < - 1
+      \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0
+      | Unknown -> facts.kind <> Unsupported
+      /\ ge_log_Int (Int64.to_int facts.candidate_offset) (- 1)
+      /\ ge_log_Int (Int32.to_int facts.candidate_epoch) (- 1)
+      /\ ge_log_Int (Int64.to_int facts.last_fetchable) 0
+      /\ (Int64.to_int facts.candidate_offset = - 1
+      \/ facts.kind <> Earliest
+      /\ facts.kind <> EarliestLocal
+      /\ facts.kind <> Latest /\ ge_log_Int (Int64.to_int facts.candidate_offset) (Int64.to_int facts.last_fetchable))
+      | Resolved offset timestamp leader_epoch -> facts.kind <> Unsupported
+      /\ ge_log_Int (Int64.to_int facts.candidate_offset) 0
+      /\ ge_log_Int (Int32.to_int facts.candidate_epoch) (- 1)
+      /\ ge_log_Int (Int64.to_int facts.last_fetchable) 0
+      /\ ge_log_Int (Int64.to_int offset) 0
+      /\ Int64.to_int timestamp = Int64.to_int facts.candidate_timestamp
+      /\ Int32.to_int leader_epoch = Int32.to_int facts.candidate_epoch
+      /\ (facts.kind = Earliest
+      \/ facts.kind = EarliestLocal
+      \/ Int64.to_int offset < Int64.to_int facts.last_fetchable
+      \/ facts.kind = Latest /\ Int64.to_int offset = Int64.to_int facts.last_fetchable)
+      end}
+    (! return {result}) ]

@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_delivery_watermark_advance": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      }
+    }
+  }
+}

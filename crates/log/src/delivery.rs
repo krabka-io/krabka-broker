@@ -43,6 +43,22 @@ pub(crate) fn visible_at_ms(activation_ms: i64, uncertainty_ms: i64) -> i64 {
     activation_ms.saturating_add(uncertainty_ms)
 }
 
+/// Apply the shared scheduled-delivery visibility rule to one batch.
+#[must_use]
+pub fn batch_is_deliverable(
+    policy: crate::DeliveryPolicy,
+    uncertainty_ms: i64,
+    activation_ms: i64,
+    now_ms: i64,
+) -> bool {
+    krabka_verified::scheduled_delivery_visible(
+        policy == crate::DeliveryPolicy::Scheduled,
+        uncertainty_ms,
+        activation_ms,
+        now_ms,
+    )
+}
+
 /// Merge inclusive offset ranges that touch or overlap.
 ///
 /// The walk produces them in ascending order, one per batch, so a single pass
@@ -52,8 +68,16 @@ pub(crate) fn coalesce_ranges(ranges: Vec<(Offset, Offset)>) -> Vec<(Offset, Off
     let mut out: Vec<(Offset, Offset)> = Vec::with_capacity(ranges.len());
     for (low, high) in ranges {
         match out.last_mut() {
-            Some(last) if low <= last.1 + 1 => last.1 = last.1.max(high),
-            _ => out.push((low, high)),
+            Some(last) => {
+                let (merge, merged_high) =
+                    krabka_verified::coalesce_delivery_range(last.1.0, low.0, high.0);
+                if merge {
+                    last.1 = Offset(merged_high);
+                } else {
+                    out.push((low, high));
+                }
+            }
+            None => out.push((low, high)),
         }
     }
     out
@@ -77,6 +101,12 @@ mod tests {
             (Offset(11), Offset(12)),
         ]);
         check!(merged == vec![(Offset(0), Offset(9)), (Offset(11), Offset(12))]);
+        check!(
+            coalesce_ranges(vec![
+                (Offset(i64::MAX - 1), Offset(i64::MAX)),
+                (Offset(i64::MAX), Offset(i64::MAX)),
+            ]) == vec![(Offset(i64::MAX - 1), Offset(i64::MAX))]
+        );
     }
 
     #[test]
@@ -88,5 +118,27 @@ mod tests {
     fn the_visible_instant_adds_the_bound_and_saturates() {
         check!(visible_at_ms(1_000, 250) == 1_250);
         check!(visible_at_ms(i64::MAX, 250) == i64::MAX);
+    }
+
+    #[test]
+    fn batch_visibility_delegates_to_the_proved_deadline_rule() {
+        check!(batch_is_deliverable(
+            crate::DeliveryPolicy::Immediate,
+            250,
+            10_000,
+            0
+        ));
+        check!(!batch_is_deliverable(
+            crate::DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            10_249
+        ));
+        check!(batch_is_deliverable(
+            crate::DeliveryPolicy::Scheduled,
+            250,
+            10_000,
+            10_250
+        ));
     }
 }

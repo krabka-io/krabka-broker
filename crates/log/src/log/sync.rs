@@ -51,7 +51,7 @@ mod sync_observer {
 
 impl Log {
     /// Flush and `fsync` the active segment to stable storage, independent of
-    /// [`LogConfig::flush_on_append`].
+    /// [`crate::LogConfig::flush_on_append`].
     ///
     /// This method also fsyncs the log directory after it creates a new
     /// segment file. The segment therefore stays reachable after a crash on
@@ -95,13 +95,10 @@ impl Log {
     }
 
     pub(super) fn rollback_failed_append(&mut self, base_offset: Offset) -> Result<(), LogError> {
-        let active = self
-            .active
-            .as_mut()
-            .expect("active segment must exist after Log::open");
-        let relative = u32::try_from(base_offset.0 - active.base_offset().0)
-            .map_err(|_| LogError::BadSegmentName("offset overflow".into()))?;
-        active.truncate_to_relative(relative)?;
+        // Use the full log truncation path so rollback restores bytes, the
+        // file cursor, every sidecar, producer/transaction state, cached
+        // visibility frontiers, and the leader-epoch checkpoint together.
+        self.truncate_to(base_offset)?;
         self.active_segment_flush()
     }
 

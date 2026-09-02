@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 303 27 303 32 *)
+
+(* <transaction::TransactionRegistrationOwnershipFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TransactionRegistrationOwnershipFacts = { is_coordinator: bool; producer_id_valid: bool; entry_exists: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionRegistrationOwnershipFacts [#"/workspace/crates/verified/src/transaction.rs" 303 27 303 32]
+  (self: t_TransactionRegistrationOwnershipFacts) (return (x: t_TransactionRegistrationOwnershipFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionRegistrationOwnershipFacts = Any.any_l ()
+  | & self: t_TransactionRegistrationOwnershipFacts = self ])
+  [ return (result: t_TransactionRegistrationOwnershipFacts) -> (! return {result}) ]

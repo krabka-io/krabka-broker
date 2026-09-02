@@ -2,7 +2,7 @@
 //!
 //! The module holds the JWKS test servers -- plaintext, HTTPS with a freshly
 //! generated self-signed certificate, and a request-counting variant -- the
-//! `JwksRefresher` builders that wire one to an injected sleeper, and the
+//! `JwksRefresher` builders that wire one to an injected timer, and the
 //! polling helper that replaces a real-time sleep in a test.
 
 use std::{
@@ -10,26 +10,32 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use krabka_security::{Jwks, JwksHandle};
 use krabka_units::{Time, hours, millis, secs};
-use qubit_clock::sleep::{AsyncSleepFuture, AsyncSleeper};
+use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::JwksRefresher;
 
-#[derive(Debug)]
-struct PendingSleeper;
-
-impl AsyncSleeper for PendingSleeper {
-    fn sleep_for_async(&self, _duration: Duration) -> AsyncSleepFuture<'_> {
-        Box::pin(std::future::pending())
-    }
+/// Returns a timer that holds every future deadline open indefinitely.
+///
+/// The manual clock behind it is dropped here and never handed out, so
+/// nothing in the process can advance it. Every deadline the refresher arms
+/// on the returned timer therefore stays pending for the whole test -- the
+/// timer keeps its own handle to the clock's timeline, so the clock value
+/// itself does not have to be kept alive to hold the registration open.
+///
+/// The one deadline this does not hold back is the loop's zero-duration
+/// first tick: a deadline that is already due when it is armed completes
+/// immediately, on a manual clock exactly as on a real one, so the t=0 fetch
+/// still happens. Everything after it is dormant.
+pub fn dormant_timer() -> Arc<dyn Timer> {
+    ManualMonotonicClock::new_shared().new_timer()
 }
 
 /// Yield-polls until `cond` holds. A bounded hang-guard makes a real stall
@@ -73,7 +79,7 @@ pub fn test_refresher(
     interval: Time,
     shutdown: CancellationToken,
     tls_trust: Option<PathBuf>,
-    sleeper: Arc<dyn AsyncSleeper>,
+    timer: Arc<dyn Timer>,
 ) -> JwksRefresher {
     let (_tx, rx) = mpsc::channel::<()>(1);
     JwksRefresher {
@@ -86,9 +92,10 @@ pub fn test_refresher(
         signal_rx: rx,
         min_on_demand_pause: secs(1),
         last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
+        cache_generation: Arc::new(AtomicU64::new(0)),
         last_on_demand_refresh_ms: Arc::new(AtomicI64::new(0)),
         ignore_key_use: false,
-        sleeper,
+        timer,
     }
 }
 
@@ -208,12 +215,13 @@ pub async fn serve_jwks_counting(
 
 /// Builds a refresher with a 1-hour periodic interval, so that only
 /// on-demand signals matter for the test. It returns the shared signal
-/// sender, the rate-limit timestamp, and the success timestamp.
+/// sender, the rate-limit timestamp, success timestamp, and cache generation.
 pub type SignalRefresher = (
     JwksRefresher,
     mpsc::Sender<()>,
     Arc<AtomicI64>,
     Arc<AtomicI64>,
+    Arc<AtomicU64>,
     CancellationToken,
     JwksHandle,
 );
@@ -223,6 +231,7 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
     let shutdown = CancellationToken::new();
     let last_successful = Arc::new(AtomicI64::new(0));
     let last_on_demand = Arc::new(AtomicI64::new(0));
+    let cache_generation = Arc::new(AtomicU64::new(0));
     let handle = JwksHandle::new_with_refresher_handles(
         Jwks::empty(),
         last_successful.clone(),
@@ -238,17 +247,21 @@ pub fn make_signal_refresher(endpoint: String, min_on_demand_pause: Time) -> Sig
         signal_rx,
         min_on_demand_pause,
         last_successful_fetch_ms: last_successful.clone(),
+        cache_generation: cache_generation.clone(),
         last_on_demand_refresh_ms: last_on_demand.clone(),
         ignore_key_use: false,
         // Signal tests isolate the on-demand arm; periodic refreshes have
-        // dedicated mock-timeline coverage above.
-        sleeper: Arc::new(PendingSleeper),
+        // dedicated manual-timeline coverage above. The one-hour interval is
+        // armed on a timer nothing advances, so the loop's first tick is the
+        // only periodic fetch a signal test ever sees.
+        timer: dormant_timer(),
     };
     (
         refresher,
         signal_tx,
         last_successful,
         last_on_demand,
+        cache_generation,
         shutdown,
         handle,
     )

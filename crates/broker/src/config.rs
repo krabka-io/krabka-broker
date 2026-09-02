@@ -16,10 +16,12 @@ mod freeze;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
+mod offset_retention;
 mod record_decompression;
 mod replication;
 mod roles;
 mod scalar_checks;
+mod static_origins;
 mod stretch;
 mod test_defaults;
 #[cfg(test)]
@@ -35,6 +37,7 @@ pub use self::{
     listener::{InterBrokerCredentials, ListenerSpec},
     replication::ReplicationRuntimeConfig,
     roles::NodeRole,
+    static_origins::StaticConfigOrigins,
     stretch::StretchProfile,
     tiered_storage::{KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
 };
@@ -45,6 +48,8 @@ pub const DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT: usize = 3;
 pub const DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL: Time = millis(250);
 /// Default byte ceiling for one diskless WAL object-store flush.
 pub const DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE: ByteSize = mebibytes(8);
+/// Default broker-wide byte ceiling for quorum-committed hot-tail batches.
+pub const DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE: ByteSize = mebibytes(64);
 /// Default committed-offset lag retained behind the diskless WAL trim frontier.
 pub const DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG: i64 = 1;
 /// Default wait for a published diskless WAL index record to be projected.
@@ -91,8 +96,21 @@ pub const DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT: Time = secs(20);
 /// Default idle-transaction abort cleanup interval.
 pub const DEFAULT_TXN_ABORT_CLEANUP_INTERVAL: Time = secs(10);
 
+/// Default transactional-id expiry, matching Kafka's
+/// `transactional.id.expiration.ms` default of 604800000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION: Time = days(7);
+
+/// Default cadence of the transactional-id expiry sweep, matching Kafka's
+/// `transaction.remove.expired.transaction.cleanup.interval.ms` default of
+/// 3600000 ms.
+pub const DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL: Time = hours(1);
+
 /// Default TLS material reload polling interval.
 pub const DEFAULT_TLS_RELOAD_INTERVAL: Time = secs(30);
+
+/// Default connection idle window. Matches Apache Kafka's
+/// `connections.max.idle.ms`, whose default is 600000.
+pub const DEFAULT_CONNECTIONS_MAX_IDLE: Time = minutes(10);
 
 /// Default `RemoteLogManager` copy / retention cadence.
 pub const DEFAULT_REMOTE_LOG_MANAGER_INTERVAL: Time = secs(30);
@@ -129,6 +147,24 @@ pub const DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR: i32 = 3;
 /// Default internal topic name for `FedRAMP` MLA audit records.
 pub const DEFAULT_AUDIT_TOPIC: &str = "__krabka_audit";
 
+/// The `EnvFilter` spec the stdout log layer starts from when `RUST_LOG` is
+/// unset, and the spec [`BrokerConfig::log_levels`] is seeded with.
+///
+/// The crate-root entries (`krabka_broker`, `krabka_log`) are redundant as
+/// *filters* — both sit at the root level — but each one names a logger, and
+/// naming is what makes it reachable. Kafka's `BROKER_LOGGER` resource refuses
+/// a level for a logger the node does not have, and a `tracing` callsite
+/// registers under its module path (`krabka_broker::handlers::produce`), never
+/// under the bare crate root. Drop these and `kafka-configs --entity-type
+/// broker-loggers --alter --add-config krabka_broker=DEBUG` answers `Logger
+/// krabka_broker does not exist!`. A JVM broker gets the same names from the
+/// loggers its `log4j2.yaml` declares.
+///
+/// The binary, the [`Default`] config and the wire test all read it here, so a
+/// change to the shipped default cannot silently desync from the spec the
+/// tests prove the feature against.
+pub const DEFAULT_LOG_FILTER: &str = "krabka_broker=info,krabka_log=info,info";
+
 /// Default number of audit records between signed checkpoints.
 pub const DEFAULT_AUDIT_CHECKPOINT_EVERY_N: u64 = 1000;
 
@@ -158,6 +194,15 @@ pub const DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL: Time = hours(1);
 /// renew period when `RenewDelegationToken.renew_period_ms == -1`.
 /// 24 hours, matches Kafka's `delegation.token.expiry.time.ms` default.
 pub const DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD: Time = hours(24);
+
+/// KIP-211: default retention for a committed consumer-group offset after the
+/// group that owns it becomes empty. 7 days, matching Kafka's
+/// `offsets.retention.minutes` default of 10080.
+pub const DEFAULT_OFFSETS_RETENTION: Time = minutes(10_080);
+
+/// Default cadence of the background offset-retention sweep. 10 minutes,
+/// matching Kafka's `offsets.retention.check.interval.ms` default of 600000.
+pub const DEFAULT_OFFSETS_RETENTION_CHECK_INTERVAL: Time = minutes(10);
 
 /// Default ceiling on live entries in the topic write-freeze registry.
 ///

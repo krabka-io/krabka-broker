@@ -22,10 +22,20 @@ impl WalShardEngine {
             .distributed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_voters = distributed
+            .as_ref()
+            .map_or_else(Vec::new, |quorum| quorum.voters.clone());
         if voters.first() != Some(&me) || voters.len() != self.expected_voters {
             *distributed = None;
             drop(distributed);
             self.durable_advanced.notify_waiters();
+            if let Some((shard, metrics)) = self.observability.get() {
+                metrics.remove_diskless_wal_shard(
+                    shard.topic_id,
+                    shard.partition,
+                    &previous_voters,
+                );
+            }
             return;
         }
         if distributed
@@ -37,6 +47,7 @@ impl WalShardEngine {
         let previous = distributed
             .take()
             .map_or_else(HashMap::new, |current| current.durable_offsets);
+        self.remove_voter_observability(&previous_voters);
         let durable_offsets = voters
             .iter()
             .filter_map(|voter| previous.get(voter).copied().map(|offset| (*voter, offset)))
@@ -59,6 +70,7 @@ impl WalShardEngine {
             );
             self.record_durable_offset(me, local_durable, log_start, log_end);
         }
+        self.record_observability();
     }
 
     /// Record the offset a remote voter requested after its preceding fsync.
@@ -155,22 +167,29 @@ impl WalShardEngine {
             })
             .collect::<Vec<_>>();
         let current = self.durable_watermark();
+        let verified_current = current.0.min(leader_end.0);
         // A log normally has start <= end. Keep that kernel precondition local
         // even if this internal boundary receives an inconsistent range.
         let durable = Offset(krabka_verified::recompute_high_watermark(
             leader_end.0,
             &follower_ends,
             strict_majority(quorum.voters.len()),
-            current.0,
+            verified_current,
             log_start.0.min(leader_end.0),
             true,
         ));
+        let offset_changed = offset > previous;
         if durable <= current {
+            drop(distributed);
+            if offset_changed {
+                self.record_observability_at(log_start, leader_end);
+            }
             return false;
         }
         self.durable_watermark.store(durable.0, Ordering::Release);
         drop(distributed);
         self.durable_advanced.notify_waiters();
+        self.record_observability_at(log_start, leader_end);
         true
     }
 }
@@ -196,5 +215,11 @@ mod tests {
         assert!(engine.durable_watermark() == Offset(1));
         assert!(!engine.record_durable_offset(NodeId(2), Offset(2), Offset(2), Offset(1),));
         assert!(engine.durable_watermark() == Offset(1));
+
+        engine
+            .durable_watermark
+            .store(Offset(2).0, Ordering::Release);
+        assert!(!engine.record_durable_offset(NodeId(3), Offset(1), Offset(0), Offset(1),));
+        assert!(engine.durable_watermark() == Offset(2));
     }
 }

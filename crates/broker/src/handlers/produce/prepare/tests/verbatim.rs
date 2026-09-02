@@ -200,6 +200,10 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
     let mut inconsistent_count = plain_batch();
     inconsistent_count.last_offset_delta = 1;
 
+    let mut overflowing_offset_count = plain_batch();
+    overflowing_offset_count.last_offset_delta = i32::MAX;
+    overflowing_offset_count.records = vec![Record::default(); 1];
+
     let mut empty = plain_batch();
     empty.records.clear();
 
@@ -212,6 +216,7 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
         ("invalid base offset", invalid_base_offset),
         ("invalid offset range", invalid_offset_range),
         ("inconsistent count", inconsistent_count),
+        ("overflowing offset count", overflowing_offset_count),
         ("empty batch", empty),
         ("invalid producer sequence", invalid_sequence),
     ] {

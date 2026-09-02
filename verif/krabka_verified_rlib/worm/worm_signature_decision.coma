@@ -1,0 +1,38 @@
+(* #"/proof-work-246/crates/verified/src/worm.rs" 24 0 28 26 *)
+
+let%span sworm = "/proof-work-246/crates/verified/src/worm.rs" 17 10 17 64
+let%span sworm'0 = "/proof-work-246/crates/verified/src/worm.rs" 18 10 18 76
+let%span sworm'1 = "/proof-work-246/crates/verified/src/worm.rs" 19 10 20 48
+let%span sworm'2 = "/proof-work-246/crates/verified/src/worm.rs" 21 10 22 46
+
+use creusot.prelude.Any
+
+type t_WormSignatureDecision = Unsigned | Untrusted | Invalid | Admit
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let worm_signature_decision [#"/proof-work-246/crates/verified/src/worm.rs" 24 0 28 26] (present: bool) (trusted: bool)
+  (canonical_valid: bool) (return (x: t_WormSignatureDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {present = false} (! bb1) | br1 -> {present} (! bb2) ]
+  | bb2 = any [ br0 -> {trusted = false} (! bb3) | br1 -> {trusted} (! bb4) ]
+  | bb4 = any [ br0 -> {canonical_valid = false} (! bb5) | br1 -> {canonical_valid} (! bb6) ]
+  | bb6 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- Untrusted ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- Unsigned ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_WormSignatureDecision = Any.any_l ()
+  | & present: bool = present
+  | & trusted: bool = trusted
+  | & canonical_valid: bool = canonical_valid ])
+  [ return (result: t_WormSignatureDecision) ->
+  {[@stop_split] [@expl:worm_signature_decision ensures] ([@stop_split] [@expl:worm_signature_decision ensures #0] [%#sworm] not present
+      -> result = Unsigned)
+    /\ ([@stop_split] [@expl:worm_signature_decision ensures #1] [%#sworm'0] present /\ not trusted
+      -> result = Untrusted)
+    /\ ([@stop_split] [@expl:worm_signature_decision ensures #2] [%#sworm'1] present /\ trusted /\ not canonical_valid
+      -> result = Invalid)
+    /\ ([@stop_split] [@expl:worm_signature_decision ensures #3] [%#sworm'2] present /\ trusted /\ canonical_valid
+    -> result = Admit)}
+    (! return {result}) ]

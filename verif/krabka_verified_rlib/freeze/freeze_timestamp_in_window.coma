@@ -1,0 +1,91 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 60 0 60 94 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 61 21 61 22
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 62 15 62 20
+let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 64 19 64 53
+let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 65 17 65 51
+let%span sfreeze'3 = "/workspace/crates/verified/src/freeze.rs" 66 4 66 48
+let%span sfreeze'4 = "/workspace/crates/verified/src/freeze.rs" 58 10 58 84
+let%span sfreeze'5 = "/workspace/crates/verified/src/freeze.rs" 51 8 53 51
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+let saturating_sub (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_sub ensures] ([@stop_split] [@expl:saturating_sub ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
+          - Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ - Int64.to_int rhs <= Int64.to_int const_MAX
+      -> Int64.to_int result = Int64.to_int self_ - Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #1] [%#snum'0] Int64.to_int self_ - Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_sub ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
+      - Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+    (! return {result}) ]
+
+let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum'2] ge_log_Int (Int64.to_int self_
+          + Int64.to_int rhs) (Int64.to_int const_MIN)
+        /\ Int64.to_int self_ + Int64.to_int rhs <= Int64.to_int const_MAX
+      -> Int64.to_int result = Int64.to_int self_ + Int64.to_int rhs)
+    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'3] Int64.to_int self_ + Int64.to_int rhs
+        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
+    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'4] gt_log_Int (Int64.to_int self_
+      + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+    (! return {result}) ]
+
+predicate freeze_timestamp_in_window_model [#"/workspace/crates/verified/src/freeze.rs" 49 0 49 94] (set_at_ms: Int64.t) (now_ms: Int64.t) (max_skew_ms: Int64.t) =
+  [%#sfreeze'5] ge_log_Int (Int64.to_int max_skew_ms) 0
+  /\ ge_log_Int (Int64.to_int set_at_ms) (Int64.to_int now_ms - Int64.to_int max_skew_ms)
+  /\ Int64.to_int set_at_ms <= Int64.to_int now_ms + Int64.to_int max_skew_ms
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_timestamp_in_window [#"/workspace/crates/verified/src/freeze.rs" 60 0 60 94] (set_at_ms: Int64.t)
+  (now_ms: Int64.t) (max_skew_ms: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.lt max_skew_ms ([%#sfreeze] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#sfreeze'0] false ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = saturating_sub [%#sfreeze'1] {now_ms} {max_skew_ms} (fun (_x: Int64.t) -> [ &earliest <- _x ] s1)
+    | s1 = saturating_add [%#sfreeze'2] {now_ms} {max_skew_ms} (fun (_x: Int64.t) -> [ &latest <- _x ] s2)
+    | s2 = [ &_18 <- Int64.ge set_at_ms earliest ] s3
+    | s3 = any [ br0 -> {_18 = false} (! bb6) | br1 -> {_18} (! bb5) ] ]
+  | bb5 = s0 [ s0 = [ &_ret <- Int64.le set_at_ms latest ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- [%#sfreeze'3] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & set_at_ms: Int64.t = set_at_ms
+  | & now_ms: Int64.t = now_ms
+  | & max_skew_ms: Int64.t = max_skew_ms
+  | & _9: bool = Any.any_l ()
+  | & earliest: Int64.t = Any.any_l ()
+  | & latest: Int64.t = Any.any_l ()
+  | & _18: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:freeze_timestamp_in_window ensures] [%#sfreeze'4] result
+    = freeze_timestamp_in_window_model set_at_ms now_ms max_skew_ms}
+    (! return {result}) ]

@@ -134,6 +134,11 @@ impl Engine {
     }
 
     pub fn prune_to_snapshot(&mut self, end_offset: Offset) -> Result<(), RaftError> {
+        if !krabka_verified::snapshot_prune_admission(end_offset.0, self.log.hwm().0) {
+            return Err(RaftError::ChangeRejected(
+                "snapshot prune boundary is negative or beyond the committed frontier".into(),
+            ));
+        }
         self.log.prune_to(end_offset)?;
         self.last_snapshot_end_offset = end_offset;
         retain_latest_checkpoint(&checkpoint_dir(&self.data_dir));

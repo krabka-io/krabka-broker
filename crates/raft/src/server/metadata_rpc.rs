@@ -91,6 +91,62 @@ pub(super) async fn dispatch_submit_change(
     Ok(Bytes::from(out))
 }
 
+/// Handle a generation-bound delegation-token mutation forwarded to the
+/// leader. The request reuses the private length-prefixed opaque payload and
+/// response envelope, but deserializes a typed guarded mutation batch.
+pub(super) async fn dispatch_delegation_token_mutation(
+    body: &[u8],
+    engine: &KraftController,
+) -> Result<Bytes, RaftError> {
+    let mut cur = body;
+    let req = KrabkaSubmitChangeRequest::decode_v0(&mut cur)?;
+    let mutations: Vec<crate::DelegationTokenMutation> = match <serde_wincode::SerdeCompat<
+        Vec<crate::DelegationTokenMutation>,
+    > as wincode::Deserialize>::deserialize(
+        &req.records
+    ) {
+        Ok(mutations) => mutations,
+        Err(error) => {
+            tracing::warn!(%error, "delegation-token mutation body decode failed");
+            let response = KrabkaSubmitChangeResponse {
+                error_code: SUBMIT_CHANGE_REJECTED,
+                leader_hint: LEADER_HINT_UNKNOWN,
+                result: Bytes::new(),
+            };
+            let mut out = Vec::with_capacity(16);
+            response.encode_v0(&mut out)?;
+            return Ok(Bytes::from(out));
+        }
+    };
+    let response = match engine.submit_delegation_token_mutations(mutations).await {
+        Ok(result) => KrabkaSubmitChangeResponse {
+            error_code: SUBMIT_CHANGE_APPLIED,
+            leader_hint: LEADER_HINT_UNKNOWN,
+            result: Bytes::from(
+                <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(&result)?,
+            ),
+        },
+        Err(RaftError::NotLeader { current_leader }) => KrabkaSubmitChangeResponse {
+            error_code: SUBMIT_CHANGE_NOT_LEADER,
+            leader_hint: current_leader
+                .and_then(|leader| i64::try_from(leader.0).ok())
+                .unwrap_or(LEADER_HINT_UNKNOWN),
+            result: Bytes::new(),
+        },
+        Err(error) => {
+            tracing::warn!(?error, "delegation-token mutation failed");
+            KrabkaSubmitChangeResponse {
+                error_code: SUBMIT_CHANGE_FAILED,
+                leader_hint: LEADER_HINT_UNKNOWN,
+                result: Bytes::new(),
+            }
+        }
+    };
+    let mut out = Vec::with_capacity(16);
+    response.encode_v0(&mut out)?;
+    Ok(Bytes::from(out))
+}
+
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
 /// from the engine's `KraftLog`.
 pub(super) async fn dispatch_metadata_fetch(

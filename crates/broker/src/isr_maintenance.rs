@@ -101,7 +101,7 @@ mod tests {
 
     use krabka_ids::PartitionIndex;
     use krabka_metadata::MetadataImage;
-    use krabka_units::{millis, secs};
+    use krabka_units::{hours, secs};
     use tempfile::tempdir;
 
     use super::*;
@@ -109,6 +109,16 @@ mod tests {
         TestMetadataSource, fixture_partition, set_replica_state,
     };
 
+    /// One scan of a leader partition whose only follower is lagging must
+    /// classify the proposal as exactly one shrink and zero expands.
+    ///
+    /// `scan_interval` is an hour on purpose. `tokio::time::interval` fires
+    /// its first tick immediately, so the loop performs exactly one scan and
+    /// then parks until shutdown. A short interval would let the loop rescan
+    /// while the test is still waiting on the metric: `TestMetadataSource`
+    /// never applies the `AlterPartition`, so the partition's ISR still holds
+    /// the lagging follower on the next tick and the shrink is counted again.
+    /// That is what produced the intermittent `2 == 1`.
     #[tokio::test]
     async fn run_bumps_shrink_metric_for_leader_partition() {
         let log_dir = tempdir().unwrap();
@@ -136,7 +146,7 @@ mod tests {
                 krabka_client_core::ConnectionDispatchQueueCapacity::default(),
             client_frame_max: krabka_client_core::ClientFrameMax::default(),
             node_id: NodeId(1),
-            scan_interval: millis(7),
+            scan_interval: hours(1),
             partitions,
             controller,
             replica_lag_time_max: secs(5),
@@ -145,9 +155,13 @@ mod tests {
             metrics: metrics.clone(),
         }));
 
-        tokio::time::timeout(Duration::from_millis(500), async {
+        // The scan is a single immediate tick, but the spawned task still has
+        // to be polled to completion of that tick. Poll for the counter rather
+        // than sleeping for a guessed duration; the bound only has to outlast
+        // scheduler starvation on a loaded machine, never a real interval.
+        tokio::time::timeout(Duration::from_secs(30), async {
             while metrics.isr_shrinks_total.get() == 0 {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await

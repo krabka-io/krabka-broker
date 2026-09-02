@@ -1,0 +1,80 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 174 0 174 82 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 175 21 175 22
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 176 47 176 48
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 177 51 177 52
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 160 10 173 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ListOffsetsEarliestFacts = {
+  local: Int64.t;
+  has_remote: bool;
+  remote: Int64.t;
+  has_diskless: bool;
+  diskless: Int64.t }
+
+type t_Option_i64 = None | Some Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let list_offsets_earliest [#"/workspace/crates/verified/src/list_offsets.rs" 174 0 174 82]
+  (facts: t_ListOffsetsEarliestFacts) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.lt facts.local ([%#slist_offsets] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb9) ] ]
+  | bb2 = any [ br0 -> {facts.has_remote = false} (! bb6) | br1 -> {facts.has_remote} (! bb3) ]
+  | bb3 = s0
+    [ s0 = [ &_12 <- Int64.lt facts.remote ([%#slist_offsets'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb6) | br1 -> {_12} (! bb9) ] ]
+  | bb6 = any [ br0 -> {facts.has_diskless = false} (! bb11) | br1 -> {facts.has_diskless} (! bb7) ]
+  | bb7 = s0
+    [ s0 = [ &_15 <- Int64.lt facts.diskless ([%#slist_offsets'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb11) | br1 -> {_15} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb11 = any [ br0 -> {facts.has_remote = false} (! bb15) | br1 -> {facts.has_remote} (! bb12) ]
+  | bb12 = s0
+    [ s0 = [ &_20 <- Int64.lt facts.remote facts.local ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb15) | br1 -> {_20} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &local_or_remote <- facts.remote ] s1 | s1 = bb16 ]
+  | bb15 = s0 [ s0 = [ &local_or_remote <- facts.local ] s1 | s1 = bb16 ]
+  | bb16 = any [ br0 -> {facts.has_diskless = false} (! bb20) | br1 -> {facts.has_diskless} (! bb17) ]
+  | bb17 = s0
+    [ s0 = [ &_25 <- Int64.lt facts.diskless local_or_remote ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb20) | br1 -> {_25} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &offset <- facts.diskless ] s1 | s1 = bb21 ]
+  | bb20 = s0 [ s0 = [ &offset <- local_or_remote ] s1 | s1 = bb21 ]
+  | bb21 = s0 [ s0 = [ &_ret <- Some offset ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & facts: t_ListOffsetsEarliestFacts = facts
+  | & _9: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & local_or_remote: Int64.t = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & _25: bool = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:list_offsets_earliest ensures] [%#slist_offsets'2] match result with
+      | None -> Int64.to_int facts.local < 0
+      \/ facts.has_remote /\ Int64.to_int facts.remote < 0 \/ facts.has_diskless /\ Int64.to_int facts.diskless < 0
+      | Some offset -> ge_log_Int (Int64.to_int facts.local) 0
+      /\ (not facts.has_remote \/ ge_log_Int (Int64.to_int facts.remote) 0)
+      /\ (not facts.has_diskless \/ ge_log_Int (Int64.to_int facts.diskless) 0)
+      /\ Int64.to_int offset <= Int64.to_int facts.local
+      /\ (not facts.has_remote \/ Int64.to_int offset <= Int64.to_int facts.remote)
+      /\ (not facts.has_diskless \/ Int64.to_int offset <= Int64.to_int facts.diskless)
+      /\ (Int64.to_int offset = Int64.to_int facts.local
+      \/ facts.has_remote /\ Int64.to_int offset = Int64.to_int facts.remote
+      \/ facts.has_diskless /\ Int64.to_int offset = Int64.to_int facts.diskless)
+      end}
+    (! return {result}) ]

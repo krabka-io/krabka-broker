@@ -138,6 +138,11 @@ macro_rules! security_fields {
             /// validator's expiry check sees the refresher's writes.
             pub oauthbearer_jwks_last_successful_fetch_ms: std::sync::Arc<std::sync::atomic::AtomicI64>,
 
+            /// Seqlock generation that makes the JWKS keys and successful-fetch
+            /// timestamp one validation snapshot. Even values are stable; odd
+            /// values mean the refresher is publishing a new pair.
+            pub oauthbearer_jwks_cache_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+
             /// Shared on-demand-refresh timestamp for rate-limiting.
             ///
             /// `apply_to` creates it, and `Broker::start` gives a clone to the

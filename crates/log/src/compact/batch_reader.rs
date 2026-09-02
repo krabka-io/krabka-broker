@@ -3,6 +3,7 @@
 //! them instead of inside either one.
 
 use krabka_protocol::records::RecordBatch;
+use krabka_verified::compaction::{CompactionDecodeStep, compaction_decode_step};
 
 use crate::{error::LogError, name, segment::Segment};
 
@@ -19,11 +20,24 @@ pub(super) fn read_all_batches(seg: &Segment) -> Result<Vec<RecordBatch>, LogErr
     let bytes = std::fs::read(&path)?;
     let mut cursor: &[u8] = &bytes;
     let mut out: Vec<RecordBatch> = Vec::new();
-    while !cursor.is_empty() {
-        let Ok(batch) = RecordBatch::decode(&mut cursor) else {
-            break;
-        };
-        out.push(batch);
+    loop {
+        let remaining_before = cursor.len();
+        if compaction_decode_step(remaining_before, false, remaining_before)
+            == CompactionDecodeStep::Done
+        {
+            return Ok(out);
+        }
+
+        match RecordBatch::decode(&mut cursor) {
+            Ok(batch) => match compaction_decode_step(remaining_before, true, cursor.len()) {
+                CompactionDecodeStep::Continue => out.push(batch),
+                CompactionDecodeStep::Done | CompactionDecodeStep::Corrupt => {
+                    return Err(LogError::Corrupt(
+                        "record batch decoder made no progress during compaction".into(),
+                    ));
+                }
+            },
+            Err(error) => return Err(LogError::Records(error)),
+        }
     }
-    Ok(out)
 }

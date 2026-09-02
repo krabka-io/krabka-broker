@@ -1,0 +1,18 @@
+(* #"/proof-work-234/crates/verified/src/registration.rs" 9 27 9 32 *)
+
+(* <registration::BrokerRegistrationDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_BrokerRegistrationDecision = RejectCompatibility | Register | Idempotent Int64.t | DuplicateIncarnation
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BrokerRegistrationDecision [#"/proof-work-234/crates/verified/src/registration.rs" 9 27 9 32]
+  (self: t_BrokerRegistrationDecision) (return (x: t_BrokerRegistrationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BrokerRegistrationDecision = Any.any_l () | & self: t_BrokerRegistrationDecision = self ])
+  [ return (result: t_BrokerRegistrationDecision) -> (! return {result}) ]

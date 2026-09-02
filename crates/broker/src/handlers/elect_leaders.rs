@@ -44,6 +44,7 @@ use self::{
 use crate::{
     broker::Broker,
     codes,
+    elr::ElrPublisher,
     handlers::{RequestContext, cluster_alter_denied},
     leader_election::ElectionType,
 };
@@ -127,6 +128,11 @@ pub(crate) async fn handle(
         }
         by_topic.insert(topic.clone(), rows);
     }
+
+    // KIP-966: an election decides which replicas are still known to hold
+    // every committed record, so the ELR state rides the batch the election
+    // records go out in.
+    ElrPublisher::new(&image).extend(&mut batch.records);
 
     // Submit accumulated records. On failure, mark every queued OK row
     // with COORDINATOR_NOT_AVAILABLE.

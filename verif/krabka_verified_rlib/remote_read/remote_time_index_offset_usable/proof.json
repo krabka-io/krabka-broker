@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_remote_time_index_offset_usable": {
+        "prover": "alt-ergo",
+        "time": 0.015
+      }
+    }
+  }
+}

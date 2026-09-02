@@ -1,0 +1,113 @@
+(* #"/proof-work-213/crates/verified/src/recovery.rs" 103 0 107 25 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span srecovery = "/proof-work-213/crates/verified/src/recovery.rs" 114 21 114 81
+let%span srecovery'0 = "/proof-work-213/crates/verified/src/recovery.rs" 82 10 101 1
+let%span srestore = "/proof-work-213/crates/verified/src/restore.rs" 11 10 20 1
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_ReplayCursorDecision = Advance Int64.t | Stop
+
+type tup2_i64_i32 = { f0: Int64.t; f1: Int32.t }
+
+type t_Option_tup2_i64_i32 = None | Some tup2_i64_i32
+
+let elim_Some (_x: t_Option_tup2_i64_i32) (return (f0'0: tup2_i64_i32)) = any
+  [ _k (f0'0: tup2_i64_i32) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let restore_batch_step (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) -> {[@stop_split] [@expl:restore_batch_step ensures] [%#srestore] match result with
+      | Some'0 next -> ge_log_Int (Int32.to_int last_delta) 0
+      /\ ge_log_Int (Int64.to_int base) (Int64.to_int minimum_base)
+      /\ Int64.to_int next = Int64.to_int base + Int32.to_int last_delta + 1
+      /\ gt_log_Int (Int64.to_int next) (Int64.to_int base) /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None'0 -> Int32.to_int last_delta < 0
+      \/ Int64.to_int base < Int64.to_int minimum_base
+      \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]
+
+let elim_Some'0 (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Some'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let replay_batch_cursor_decision [#"/proof-work-213/crates/verified/src/recovery.rs" 103 0 107 25] (cursor: Int64.t)
+  (end': Int64.t) (batch: t_Option_tup2_i64_i32) (return (x: t_ReplayCursorDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.ge cursor end' ] s1 | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ]
+  | bb2 = any [ br0 -> {batch = None} (! bb3) | br1 (x0: tup2_i64_i32) -> {batch = Some x0} (! bb5) ]
+  | bb3 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = elim_Some {batch} (fun (r0: tup2_i64_i32) -> [ &base <- r0.f0 ] s1)
+    | s1 = elim_Some {batch} (fun (r0: tup2_i64_i32) -> [ &last_delta <- r0.f1 ] s2)
+    | s2 = restore_batch_step [%#srecovery] {cursor} {base} {last_delta} (fun (_x: t_Option_i64) -> [ &_19 <- _x ] s3)
+    | s3 = any [ br0 -> {_19 = None'0} (! bb9) | br1 (x0: Int64.t) -> {_19 = Some'0 x0} (! bb8) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = elim_Some'0 {_19} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
+    | s1 = [ &_24 <- Int64.gt next end' ] s2
+    | s2 = any [ br0 -> {_24 = false} (! bb11) | br1 -> {_24} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Advance next ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplayCursorDecision = Any.any_l ()
+  | & cursor: Int64.t = cursor
+  | & end': Int64.t = end'
+  | & batch: t_Option_tup2_i64_i32 = batch
+  | & _9: bool = Any.any_l ()
+  | & base: Int64.t = Any.any_l ()
+  | & last_delta: Int32.t = Any.any_l ()
+  | & next: Int64.t = Any.any_l ()
+  | & _19: t_Option_i64 = Any.any_l ()
+  | & _24: bool = Any.any_l () ])
+  [ return (result: t_ReplayCursorDecision) ->
+  {[@stop_split] [@expl:replay_batch_cursor_decision ensures] [%#srecovery'0] match result with
+      | Advance next_offset -> match batch with
+        | Some {f0 = base; f1 = last_delta} -> Int64.to_int cursor < Int64.to_int end'
+        /\ ge_log_Int (Int32.to_int last_delta) 0
+        /\ ge_log_Int (Int64.to_int base) (Int64.to_int cursor)
+        /\ Int64.to_int next_offset = Int64.to_int base + Int32.to_int last_delta + 1
+        /\ gt_log_Int (Int64.to_int next_offset) (Int64.to_int cursor)
+        /\ Int64.to_int next_offset <= Int64.to_int end' /\ Int64.to_int next_offset <= Int64.to_int const_MAX
+        | None -> false
+        end
+      | Stop -> match batch with
+        | None -> true
+        | Some {f0 = base; f1 = last_delta} -> ge_log_Int (Int64.to_int cursor) (Int64.to_int end')
+        \/ Int32.to_int last_delta < 0
+        \/ Int64.to_int base < Int64.to_int cursor
+        \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int const_MAX)
+        \/ gt_log_Int (Int64.to_int base + Int32.to_int last_delta + 1) (Int64.to_int end')
+        end
+      end}
+    (! return {result}) ]

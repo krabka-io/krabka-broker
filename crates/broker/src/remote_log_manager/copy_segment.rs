@@ -54,6 +54,11 @@ pub(super) async fn copy_one(
     rsm: &Arc<dyn RemoteStorageManager>,
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
 ) -> CopyOutcome {
+    if chain == ChainPosition::Exhausted {
+        error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+               "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
+        return CopyOutcome::Failed;
+    }
     let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
     // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
     // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
@@ -103,6 +108,7 @@ pub(super) async fn copy_one(
         ChainPosition::At(stamp) => {
             metadata.with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata())
         }
+        ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
     let md_started = metadata.clone();
@@ -154,11 +160,10 @@ pub(super) async fn copy_one(
     // makes the next tick retry it under a fresh segment id.
     let next = match chain {
         ChainPosition::Unchained => ChainPosition::Unchained,
-        ChainPosition::At(_) => {
-            let Some(stamp) = returned
+        ChainPosition::At(requested) => {
+            let Some(receipt) = returned
                 .as_ref()
                 .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
-                .and_then(|receipt| receipt.next_stamp())
             else {
                 error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                        "remote-log-manager: write-once copy returned no chain receipt; \
@@ -166,8 +171,24 @@ pub(super) async fn copy_one(
                         unattested data");
                 return CopyOutcome::Failed;
             };
-            ChainPosition::At(stamp)
+            if receipt.head.is_none()
+                || receipt.epoch_id != requested.epoch_id
+                || receipt.seq != requested.seq
+                || receipt.prev_head != requested.prev_head
+            {
+                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                       "remote-log-manager: write-once copy returned a mismatched chain receipt; \
+                        leaving the segment in CopySegmentStarted rather than serving \
+                        unattested data");
+                return CopyOutcome::Failed;
+            }
+            match receipt.next_stamp() {
+                Some(stamp) => ChainPosition::At(stamp),
+                None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
+                None => return CopyOutcome::Failed,
+            }
         }
+        ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
     let upd = RemoteLogSegmentMetadataUpdate {
@@ -269,6 +290,44 @@ mod tests {
             _data: &LogSegmentData,
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Err(RemoteStorageError::InvalidArgument("boom".into()))
+        }
+        fn fetch_log_segment(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _start: u32,
+            _end: Option<u32>,
+        ) -> Result<Vec<u8>, RemoteStorageError> {
+            Err(RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+        fn fetch_index(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _index_type: IndexType,
+        ) -> Result<Vec<u8>, RemoteStorageError> {
+            Err(RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            Ok(())
+        }
+    }
+
+    /// Returns caller-selected metadata without touching storage.
+    struct ReturningRsm(Option<CustomMetadata>);
+
+    impl RemoteStorageManager for ReturningRsm {
+        fn copy_log_segment_data(
+            &self,
+            _metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            Ok(self.0.clone())
         }
         fn fetch_log_segment(
             &self,
@@ -458,6 +517,48 @@ mod tests {
             check!(
                 seen[0].custom_metadata() == expected.as_ref(),
                 "case {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_one_rejects_unattested_or_mismatched_chain_receipts() {
+        let requested = ChainStamp {
+            epoch_id: EpochId(Uuid::from_u128(0x5eed)),
+            seq: ManifestSeq(4),
+            prev_head: ChainHead([7; 32]),
+        };
+        let cases = [
+            WormChainRecord::request(requested),
+            WormChainRecord::request(ChainStamp {
+                seq: ManifestSeq(5),
+                ..requested
+            })
+            .with_head(ChainHead([8; 32])),
+        ];
+        for receipt in cases {
+            let rsm: Arc<dyn RemoteStorageManager> =
+                Arc::new(ReturningRsm(Some(receipt.to_custom_metadata())));
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+
+            let outcome = copy_one(
+                &tp(),
+                1,
+                LeaderEpoch(0),
+                &synth_export(0, 9, 100, 64),
+                ChainPosition::At(requested),
+                &rsm,
+                &rlmm,
+            )
+            .await;
+
+            check!(matches!(outcome, CopyOutcome::Failed));
+            check!(
+                rlmm.list_remote_log_segments(&tp())
+                    .unwrap()
+                    .iter()
+                    .all(|md| md.state() != RemoteLogSegmentState::CopySegmentFinished)
             );
         }
     }

@@ -1,0 +1,27 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 21 27 21 32 *)
+
+(* <freeze::FreezeSignatureFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_FreezeIdentityState = UnknownKey | WrongKeyPrincipal | WrongConnectionPrincipal | Bound
+
+type t_FreezeSignatureFacts = {
+  identity: t_FreezeIdentityState;
+  set_at_ms: Int64.t;
+  now_ms: Int64.t;
+  max_skew_ms: Int64.t;
+  replaces: bool;
+  replaced_set_at_ms: Int64.t;
+  signature_valid: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeSignatureFacts [#"/workspace/crates/verified/src/freeze.rs" 21 27 21 32] (self: t_FreezeSignatureFacts)
+  (return (x: t_FreezeSignatureFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeSignatureFacts = Any.any_l () | & self: t_FreezeSignatureFacts = self ])
+  [ return (result: t_FreezeSignatureFacts) -> (! return {result}) ]

@@ -22,13 +22,14 @@
 //! reading the criterion report.
 
 use std::{
+    cell::RefCell,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use assert2::assert;
 use bytes::{Bytes, BytesMut};
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use krabka_broker::{
     metrics::BrokerMetrics,
     produce_hot_path::{HotPathSettings, PathChoice, ProducePath, append_one_batch},
@@ -148,16 +149,35 @@ impl BoundedLog {
     }
 }
 
+/// The measured region: one records field through prepare, writer-data build
+/// and append.
+///
+/// The path assertion is what keeps a ratio meaningful. Were a change to the
+/// verbatim predicate to send the `verbatim` case down the fallback, the two
+/// columns would converge and the table would report the fallback as free.
+/// This fails the run instead. It compares two enum discriminants against an
+/// append that costs tens of microseconds, so it stays inside the measured
+/// region rather than buying back a nanosecond by checking only sometimes.
+fn append(
+    store: &mut BoundedLog,
+    payload: Bytes,
+    choice: PathChoice,
+    expected: ProducePath,
+    settings: &HotPathSettings<'_>,
+) {
+    let path = append_one_batch(payload, choice, settings, &mut store.log)
+        .expect("the bench shapes are all valid produce payloads");
+    assert!(path == expected, "{choice:?} took the {path:?} path");
+}
+
 /// Append `records` once, returning only the time the append took.
 ///
 /// The log rotation and the `Bytes` clone sit outside the timer. The clone is
 /// a refcount bump, and the produce pipeline hands the hot path an equivalent
 /// zero-copy view of the request frame.
 ///
-/// The path assertion is what keeps a ratio meaningful. Were a change to the
-/// verbatim predicate to send the `verbatim` case down the fallback, the two
-/// columns would converge and the table would report the fallback as free.
-/// This fails the run instead.
+/// This is [`bench_ratio`]'s own timer. The criterion group leaves the timing
+/// to criterion, which is what lets `CodSpeed` instrument it.
 fn append_once(
     store: &mut BoundedLog,
     records: &Bytes,
@@ -168,11 +188,8 @@ fn append_once(
     store.rotate_if_full(records.len());
     let payload = records.clone();
     let start = Instant::now();
-    let path = append_one_batch(payload, choice, settings, &mut store.log)
-        .expect("the bench shapes are all valid produce payloads");
-    let elapsed = start.elapsed();
-    assert!(path == expected, "{choice:?} took the {path:?} path");
-    elapsed
+    append(store, payload, choice, expected, settings);
+    start.elapsed()
 }
 
 /// Append `records` `iters` times, returning only the time the appends took.
@@ -216,6 +233,16 @@ fn paths(records: i32, payload: usize) -> [(&'static str, Bytes, PathChoice, Pro
     ]
 }
 
+/// Time one append per iteration, with everything around it left untimed.
+///
+/// `iter_batched` rather than `iter_custom`, on purpose. `iter_custom` hands
+/// the suite its own timer, which is the one API the `CodSpeed` compat shim
+/// cannot instrument: its `Bencher::iter_custom` prints a skip line saying
+/// custom iterations are unsupported and never calls the closure, so under
+/// instrumentation every case here would be skipped and the regression this
+/// suite exists to catch would go unmeasured. `iter_batched` is instrumented,
+/// and it keeps the same split — the log rotation and the `Bytes` clone run in
+/// the setup closure, outside the measurement, and only the append is timed.
 fn bench_produce_hot_path(c: &mut Criterion) {
     let mut group = c.benchmark_group("broker/produce");
 
@@ -223,7 +250,27 @@ fn bench_produce_hot_path(c: &mut Criterion) {
         for (path, wire, choice, expected) in paths(records, payload) {
             group.throughput(Throughput::Bytes(wire.len() as u64));
             group.bench_function(format!("{shape}/{path}"), |b| {
-                b.iter_custom(|iters| timed_appends(&wire, choice, expected, iters));
+                let metrics = BrokerMetrics::new();
+                let settings = settings(&metrics);
+                // Both closures reach the log: the setup rotates it, the
+                // routine appends into it.
+                let store = RefCell::new(BoundedLog::new());
+                b.iter_batched(
+                    || {
+                        store.borrow_mut().rotate_if_full(wire.len());
+                        wire.clone()
+                    },
+                    |payload| {
+                        append(
+                            &mut store.borrow_mut(),
+                            payload,
+                            choice,
+                            expected,
+                            &settings,
+                        );
+                    },
+                    BatchSize::PerIteration,
+                );
             });
         }
     }

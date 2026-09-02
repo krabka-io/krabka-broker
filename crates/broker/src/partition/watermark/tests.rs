@@ -39,6 +39,9 @@ async fn high_watermark_reads_cached_value() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state,
         hw_advance_notify: Arc::new(Notify::new()),
@@ -64,6 +67,9 @@ async fn install_isr_populates_replica_state() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(
             crate::replica_state::ReplicaState::new(),
@@ -214,6 +220,9 @@ async fn await_hw_returns_immediately_if_already_satisfied() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state,
         hw_advance_notify: Arc::new(Notify::new()),
@@ -242,6 +251,9 @@ async fn await_hw_returns_timeout_when_unreached() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(
             crate::replica_state::ReplicaState::new(),
@@ -274,6 +286,9 @@ async fn set_follower_hw_clamps_advances_and_notifies() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(
             crate::replica_state::ReplicaState::new(),
@@ -380,6 +395,9 @@ async fn await_hw_wakes_on_advance() {
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
+        marker_materialization: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::default(),
+        )),
         append_notify: Arc::new(Notify::new()),
         replica_state: replica_state.clone(),
         hw_advance_notify: hw_advance_notify.clone(),

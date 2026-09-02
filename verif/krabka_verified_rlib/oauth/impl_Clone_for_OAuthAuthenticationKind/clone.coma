@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 27 27 27 32 *)
+
+(* <oauth::OAuthAuthenticationKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_OAuthAuthenticationKind = Initial | Reauthentication
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OAuthAuthenticationKind [#"/workspace/crates/verified/src/oauth.rs" 27 27 27 32]
+  (self: t_OAuthAuthenticationKind) (return (x: t_OAuthAuthenticationKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthAuthenticationKind = Any.any_l () | & self: t_OAuthAuthenticationKind = self ])
+  [ return (result: t_OAuthAuthenticationKind) -> (! return {result}) ]

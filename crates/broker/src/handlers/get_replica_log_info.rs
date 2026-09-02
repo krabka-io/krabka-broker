@@ -5,7 +5,7 @@
 //!
 //! For each requested partition that this broker hosts locally, the handler
 //! answers with the local LEO and the cached leader epoch. A partition that
-//! this broker does not host gets `REPLICA_NOT_AVAILABLE (11)` with the
+//! this broker does not host gets `REPLICA_NOT_AVAILABLE (9)` with the
 //! sentinel offset `-1`. That matches the JVM behaviour for a replica that the
 //! broker is not a member of.
 

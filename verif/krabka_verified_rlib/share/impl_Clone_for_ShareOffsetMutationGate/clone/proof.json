@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_clone_ShareOffsetMutationGate": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}

@@ -45,15 +45,8 @@ pub(super) async fn maybe_downgrade(
         // downgrade — there are no hosted classic members to re-express.
         return Ok(false);
     }
-    if state.members.values().any(|m| m.classic.is_none()) {
+    if !migration::consumer_is_convertible(state) {
         // A native consumer member is still present: the group stays next-gen.
-        return Ok(false);
-    }
-    // Spec fidelity: a server-managed consumer group is always re-expressible as
-    // a classic group (members become classic members; the server target
-    // becomes the seed assignment). Documents the predicate the downgrade rests
-    // on; always `true` today.
-    if !migration::consumer_is_convertible() {
         return Ok(false);
     }
 
@@ -61,11 +54,12 @@ pub(super) async fn maybe_downgrade(
 
     // The leave or expiration path already reconciled the surviving members,
     // so the target covers the departed native member's partitions.
+    let now_ms = chrono_now_ms();
     let state = group.as_consumer().expect("consumer-kind verified above");
     let classic = migration::convert_consumer_to_classic(state, &image);
-    let pending = migration::downgrade_pending_records(state, &classic);
+    let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
-    let batch = pending.to_batch(&group_id, chrono_now_ms());
+    let batch = pending.to_batch(&group_id, now_ms);
     offsets_log.append(&group_id, batch).await?;
     coordinator.mark_classic_after_downgrade(&group_id);
     *group.kind_mut() = GroupKind::Classic(classic);

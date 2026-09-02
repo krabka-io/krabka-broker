@@ -20,7 +20,11 @@ pub fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
         krabka_metadata::voters::Voter {
             id,
             directory_id: uuid::Uuid::nil(),
-            endpoints: Vec::new(),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9_093,
+            }],
             kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
         }
     }))

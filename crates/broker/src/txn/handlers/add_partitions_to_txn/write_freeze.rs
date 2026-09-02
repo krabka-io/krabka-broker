@@ -10,8 +10,12 @@
 
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic;
+use krabka_verified::{FreezeMutationDecision, FreezeMutationKind, freeze_mutation_decision};
 
-use crate::{codes, freeze::resolve::resolve_topic_freeze};
+use crate::{
+    codes,
+    freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
+};
 
 /// Builds the set of topic names that a KFC-9 write freeze covers.
 ///
@@ -25,10 +29,21 @@ use crate::{codes, freeze::resolve::resolve_topic_freeze};
 pub(super) fn frozen_topics(
     image: &MetadataImage,
     topics: &[AddPartitionsToTxnTopic],
+    denied: &std::collections::HashSet<String>,
 ) -> std::collections::HashSet<String> {
     topics
         .iter()
-        .filter(|t| resolve_topic_freeze(image, &t.name).is_some())
+        .filter(|t| {
+            matches!(
+                resolve_freeze_mutation(
+                    image,
+                    &t.name,
+                    !denied.contains(&t.name),
+                    FreezeMutationKind::TransactionEnlistment,
+                ),
+                FreezeMutationResolution::Frozen(_)
+            )
+        })
         .map(|t| t.name.clone())
         .collect()
 }
@@ -45,12 +60,14 @@ pub(super) fn topic_refusal(
     denied: &std::collections::HashSet<String>,
     frozen: &std::collections::HashSet<String>,
 ) -> Option<i16> {
-    if denied.contains(name) {
-        Some(codes::TOPIC_AUTHORIZATION_FAILED)
-    } else if frozen.contains(name) {
-        Some(codes::POLICY_VIOLATION)
-    } else {
-        None
+    match freeze_mutation_decision(
+        !denied.contains(name),
+        frozen.contains(name),
+        FreezeMutationKind::TransactionEnlistment,
+    ) {
+        FreezeMutationDecision::AuthorizationDenied => Some(codes::TOPIC_AUTHORIZATION_FAILED),
+        FreezeMutationDecision::Frozen => Some(codes::POLICY_VIOLATION),
+        FreezeMutationDecision::Admit => None,
     }
 }
 
@@ -161,7 +178,10 @@ mod tests {
         for (label, names, want) in cases {
             let topics: Vec<_> = names.iter().map(|name| topic(name, &[0])).collect();
             let expected: HashSet<String> = want.iter().map(|name| (*name).to_owned()).collect();
-            check!(frozen_topics(&image, &topics) == expected, "{label}");
+            check!(
+                frozen_topics(&image, &topics, &HashSet::new()) == expected,
+                "{label}"
+            );
         }
     }
 
@@ -170,7 +190,7 @@ mod tests {
         let image = image_with_freezes(&[]);
         let topics = [topic("orders", &[0]), topic("tenant-a.billing", &[1])];
 
-        check!(frozen_topics(&image, &topics) == HashSet::new());
+        check!(frozen_topics(&image, &topics, &HashSet::new()) == HashSet::new());
     }
 
     #[test]

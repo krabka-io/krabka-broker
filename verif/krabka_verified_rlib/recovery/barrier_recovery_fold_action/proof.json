@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_barrier_recovery_fold_action": {
+        "prover": "alt-ergo",
+        "time": 0.015
+      },
+      "vc_eq_Option_i64": { "prover": "alt-ergo", "time": 0.011 }
+    }
+  }
+}

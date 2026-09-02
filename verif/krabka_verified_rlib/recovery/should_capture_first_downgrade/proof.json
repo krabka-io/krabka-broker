@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_should_capture_first_downgrade": {
+        "prover": "alt-ergo",
+        "time": 0.014
+      }
+    }
+  }
+}
