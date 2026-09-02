@@ -1,0 +1,33 @@
+(* #"/workspace/crates/verified/src/schema.rs" 128 0 132 25 *)
+
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 123 10 124 48
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 125 10 126 49
+
+use creusot.prelude.Any
+use creusot.int.UInt64
+
+type t_SchemaBatchAdmission = Admit | Reject
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let schema_batch_admission [#"/workspace/crates/verified/src/schema.rs" 128 0 132 25] (walk_complete: bool)
+  (applicable: UInt64.t) (admitted: UInt64.t) (return (x: t_SchemaBatchAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {walk_complete = false} (! bb4) | br1 -> {walk_complete} (! bb1) ]
+  | bb1 = s0
+    [ s0 = [ &_13 <- applicable = admitted ] s1 | s1 = any [ br0 -> {_13 = false} (! bb4) | br1 -> {_13} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- Admit ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SchemaBatchAdmission = Any.any_l ()
+  | & walk_complete: bool = walk_complete
+  | & applicable: UInt64.t = applicable
+  | & admitted: UInt64.t = admitted
+  | & _13: bool = Any.any_l () ])
+  [ return (result: t_SchemaBatchAdmission) ->
+  {[@stop_split] [@expl:schema_batch_admission ensures] ([@stop_split] [@expl:schema_batch_admission ensures #0] [%#sschema] (result
+        = Admit)
+      = (walk_complete /\ applicable = admitted))
+    /\ ([@stop_split] [@expl:schema_batch_admission ensures #1] [%#sschema'0] (result = Reject)
+    = (not walk_complete \/ applicable <> admitted))}
+    (! return {result}) ]

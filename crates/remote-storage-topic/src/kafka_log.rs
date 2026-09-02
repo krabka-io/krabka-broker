@@ -19,8 +19,8 @@
 //! Topic provisioning runs once at [`KafkaMetadataEventLog::start`] through
 //! the [`krabka_client_admin::AdminClient`]. It reuses an existing topic, and
 //! the topic's actual partition count then overrides the configured
-//! `num_partitions`. It creates an absent topic with `cleanup.policy=delete`
-//! and `retention.ms=-1`. The same admin round-trip surfaces the topic's
+//! `num_partitions`. It creates an absent topic with the configured cleanup
+//! policy and `retention.ms=-1`. The same admin round-trip surfaces the topic's
 //! `Uuid`, which the manual `Fetch` path needs, because Fetch v≥13 carries
 //! `topic_id` and not the name.
 //!
@@ -179,26 +179,16 @@ impl MetadataEventLog for KafkaMetadataEventLog {
         err
     )]
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
-        if partition < 0 || partition >= self.partition_count {
-            return Err(MetadataLogError::PartitionOutOfRange {
-                partition,
-                count: self.partition_count,
-            });
-        }
-        let ack = self
-            .producer
-            .send(ProducerRecord {
-                topic: self.topic.clone(),
-                partition: Some(partition),
-                value: Some(event),
-                ..Default::default()
-            })
-            .await;
-        let meta = ack
-            .await
-            .map_err(|_| MetadataLogError::Publish("producer dropped before ack".into()))?
-            .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
-        Ok(meta.offset)
+        self.publish_record(partition, None, Some(event)).await
+    }
+
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        self.publish_record(partition, Some(key), event).await
     }
 
     fn subscribe(
@@ -286,6 +276,45 @@ impl MetadataEventLog for KafkaMetadataEventLog {
     }
 }
 
+impl KafkaMetadataEventLog {
+    async fn publish_record(
+        &self,
+        partition: i32,
+        key: Option<Bytes>,
+        event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        let record = producer_record(&self.topic, self.partition_count, partition, key, event)?;
+        let ack = self.producer.send(record).await;
+        let meta = ack
+            .await
+            .map_err(|_| MetadataLogError::Publish("producer dropped before ack".into()))?
+            .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
+        Ok(meta.offset)
+    }
+}
+
+fn producer_record(
+    topic: &str,
+    partition_count: i32,
+    partition: i32,
+    key: Option<Bytes>,
+    event: Option<Bytes>,
+) -> Result<ProducerRecord, MetadataLogError> {
+    if partition < 0 || partition >= partition_count {
+        return Err(MetadataLogError::PartitionOutOfRange {
+            partition,
+            count: partition_count,
+        });
+    }
+    Ok(ProducerRecord {
+        topic: topic.to_owned(),
+        partition: Some(partition),
+        key,
+        value: event,
+        ..Default::default()
+    })
+}
+
 fn usize_count(n: i32) -> Result<usize, MetadataLogError> {
     usize::try_from(n).map_err(|_| MetadataLogError::Other(format!("partition_count {n} negative")))
 }
@@ -308,5 +337,36 @@ mod tests {
             panic!("invalid policy must fail before network I/O");
         };
         assert!(error.to_string().contains("topic_create_timeout"));
+    }
+
+    #[test]
+    fn keyed_tombstone_record_is_partitioned_and_preserves_the_null_value() {
+        let record = producer_record(
+            "__diskless_wal_index",
+            3,
+            2,
+            Some(Bytes::from_static(b"range")),
+            None,
+        )
+        .unwrap();
+
+        assert!(record.topic == "__diskless_wal_index");
+        assert!(record.partition == Some(2));
+        assert!(record.key.as_deref() == Some(b"range".as_slice()));
+        assert!(record.value.is_none());
+    }
+
+    #[test]
+    fn keyed_record_rejects_out_of_range_partitions() {
+        for partition in [-1, 3] {
+            let error = producer_record("index", 3, partition, None, None).unwrap_err();
+            assert!(matches!(
+                error,
+                MetadataLogError::PartitionOutOfRange {
+                    partition: got,
+                    count: 3
+                } if got == partition
+            ));
+        }
     }
 }

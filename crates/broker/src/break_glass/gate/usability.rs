@@ -6,6 +6,7 @@
 //! because the rule the feature promises is a rule about people.
 
 use krabka_metadata::BreakGlassProposalRecord;
+use krabka_verified::break_glass::{BreakGlassAdmission, break_glass_admission};
 
 use super::DenialReason;
 use crate::break_glass::config::BreakGlassPolicy;
@@ -17,34 +18,34 @@ pub(super) fn unusable_because(
     now_ms: i64,
 ) -> Option<DenialReason> {
     let proposal_id = proposal.proposal_id;
-    if proposal.withdrawn {
-        return Some(DenialReason::Withdrawn { proposal_id });
-    }
-    if proposal.consumed_at_ms != 0 {
-        return Some(DenialReason::Consumed {
-            proposal_id,
-            consumed_at_ms: proposal.consumed_at_ms,
-        });
-    }
-    if now_ms >= proposal.expires_at_ms {
-        return Some(DenialReason::Expired {
-            proposal_id,
-            expires_at_ms: proposal.expires_at_ms,
-        });
-    }
     let held = distinct_approvers(proposal);
     let required = policy.required_approvals();
-    if held < required {
-        return Some(DenialReason::NotEnoughApprovals {
+    match break_glass_admission(
+        proposal.withdrawn,
+        proposal.consumed_at_ms != 0,
+        now_ms >= proposal.expires_at_ms,
+        held,
+        required,
+        policy.needs_signature(proposal.action),
+        every_approval_is_signed(proposal),
+    ) {
+        BreakGlassAdmission::Withdrawn => Some(DenialReason::Withdrawn { proposal_id }),
+        BreakGlassAdmission::Consumed => Some(DenialReason::Consumed {
+            proposal_id,
+            consumed_at_ms: proposal.consumed_at_ms,
+        }),
+        BreakGlassAdmission::Expired => Some(DenialReason::Expired {
+            proposal_id,
+            expires_at_ms: proposal.expires_at_ms,
+        }),
+        BreakGlassAdmission::NotEnoughApprovals => Some(DenialReason::NotEnoughApprovals {
             proposal_id,
             held,
             required,
-        });
+        }),
+        BreakGlassAdmission::Unsigned => Some(DenialReason::Unsigned { proposal_id }),
+        BreakGlassAdmission::Usable => None,
     }
-    if policy.needs_signature(proposal.action) && !every_approval_is_signed(proposal) {
-        return Some(DenialReason::Unsigned { proposal_id });
-    }
-    None
 }
 
 /// How many distinct principals approved `proposal`.

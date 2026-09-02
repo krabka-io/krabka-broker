@@ -22,18 +22,27 @@ pub(super) fn has_offline_log_dirs(req: &BrokerHeartbeatRequest) -> bool {
 pub(super) fn validate_registration(
     image: &MetadataImage,
     req: &BrokerHeartbeatRequest,
-) -> Result<(u64, bool), i16> {
+) -> Result<(u64, krabka_verified::BrokerHeartbeatDecision), i16> {
     let broker_id = u64::try_from(req.broker_id).map_err(|_| codes::BROKER_ID_NOT_REGISTERED)?;
-    let registration = image
-        .broker(NodeId(broker_id))
-        .ok_or(codes::BROKER_ID_NOT_REGISTERED)?;
-    if req.broker_epoch != registration.broker_epoch {
-        return Err(codes::STALE_BROKER_EPOCH);
+    let decision = krabka_verified::broker_heartbeat_decision(
+        image
+            .broker(NodeId(broker_id))
+            .map(|registration| registration.broker_epoch),
+        req.broker_epoch,
+        req.current_metadata_offset,
+        req.want_fence,
+        req.want_shut_down,
+    );
+    match decision.registration {
+        krabka_verified::BrokerHeartbeatRegistration::Missing => {
+            return Err(codes::BROKER_ID_NOT_REGISTERED);
+        }
+        krabka_verified::BrokerHeartbeatRegistration::Stale => {
+            return Err(codes::STALE_BROKER_EPOCH);
+        }
+        krabka_verified::BrokerHeartbeatRegistration::Current => {}
     }
-    Ok((
-        broker_id,
-        req.current_metadata_offset >= registration.broker_epoch,
-    ))
+    Ok((broker_id, decision))
 }
 
 #[cfg(test)]
@@ -114,9 +123,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(validate_registration(&image, &req) == Ok((7, false)));
+        let (_, decision) = validate_registration(&image, &req).expect("registered broker");
+        assert!(!decision.caught_up && decision.fenced);
         req.current_metadata_offset = 42;
-        assert!(validate_registration(&image, &req) == Ok((7, true)));
+        let (_, decision) = validate_registration(&image, &req).expect("registered broker");
+        assert!(decision.caught_up && !decision.fenced);
     }
 
     #[test]

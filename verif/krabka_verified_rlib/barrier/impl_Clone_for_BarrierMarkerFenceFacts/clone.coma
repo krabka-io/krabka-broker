@@ -1,0 +1,26 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 44 27 44 32 *)
+
+(* <barrier::BarrierMarkerFenceFacts as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_BarrierMarkerFenceFacts = {
+  image_present: bool;
+  expected_leader: UInt64.t;
+  expected_epoch: Int32.t;
+  image_leader: UInt64.t;
+  image_epoch: Int32.t;
+  current_leader: UInt64.t;
+  current_epoch: Int32.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierMarkerFenceFacts [#"/workspace/crates/verified/src/barrier.rs" 44 27 44 32]
+  (self: t_BarrierMarkerFenceFacts) (return (x: t_BarrierMarkerFenceFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierMarkerFenceFacts = Any.any_l () | & self: t_BarrierMarkerFenceFacts = self ])
+  [ return (result: t_BarrierMarkerFenceFacts) -> (! return {result}) ]

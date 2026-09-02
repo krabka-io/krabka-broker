@@ -9,7 +9,8 @@
 use std::ops::ControlFlow;
 
 use krabka_ids::Offset;
-use krabka_units::prelude::{ByteSize, bytes};
+use krabka_protocol::records::RecordBatch;
+use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 
 use super::Segment;
 use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
@@ -34,8 +35,12 @@ impl Segment {
         scan_window: ByteSize,
     ) -> Option<(Offset, i64)> {
         let floor_rel = self.time_index.lookup(target_ts);
-        let scan_from = self.base_offset + i64::from(floor_rel);
-        self.scan_from_floor_windowed(scan_from, scan_window, |ts| ts >= target_ts)
+        let scan_from = self
+            .base_offset
+            .0
+            .checked_add(i64::from(floor_rel))
+            .map(Offset)?;
+        self.scan_from_floor_windowed(scan_from, scan_window, target_ts)
     }
 
     /// Absolute offset and timestamp of the record that carries this
@@ -58,12 +63,16 @@ impl Segment {
             return self.scan_max_timestamp_windowed(scan_window);
         }
         let floor_rel = self.time_index.lookup(self.max_timestamp);
-        let scan_from = self.base_offset + i64::from(floor_rel);
+        let scan_from = self
+            .base_offset
+            .0
+            .checked_add(i64::from(floor_rel))
+            .map(Offset)?;
         // Equality against `max_timestamp` is safe because Kafka's batch
         // `max_timestamp` is always a real record timestamp (the largest
         // among the batch's records), so some record's timestamp equals
         // the segment max exactly.
-        self.scan_from_floor_windowed(scan_from, scan_window, |ts| ts == self.max_timestamp)
+        self.scan_from_floor_windowed(scan_from, scan_window, self.max_timestamp)
     }
 
     /// Recover the maximum timestamp for a sealed segment opened through the
@@ -80,22 +89,26 @@ impl Segment {
             }
             let batches = self.read(cursor, window).ok()?;
             if batches.is_empty() {
-                window *= 2.0;
+                let current = u32::try_from(window.bytes_u64()).ok()?;
+                window = bytes(krabka_verified::timestamp_scan_window(current)?);
                 continue;
             }
             for batch in &batches {
-                for record in &batch.records {
-                    let timestamp = batch.base_timestamp + record.timestamp_delta;
-                    if best.is_none_or(|(_, best_timestamp)| timestamp > best_timestamp) {
-                        best = Some((
-                            Offset(batch.base_offset + i64::from(record.offset_delta)),
-                            timestamp,
-                        ));
+                let records = Self::timestamp_records(batch)?;
+                let timestamps: Vec<_> = records.iter().map(|(_, timestamp)| *timestamp).collect();
+                if let Some(index) = krabka_verified::earliest_max_timestamp_index(&timestamps) {
+                    let candidate = records[index];
+                    if best.is_none_or(|(_, best_timestamp)| candidate.1 > best_timestamp) {
+                        best = Some(candidate);
                     }
                 }
             }
             let last = batches.last().expect("non-empty checked above");
-            cursor = Offset(last.base_offset + i64::from(last.last_offset_delta)) + 1;
+            cursor = Offset(krabka_verified::timestamp_scan_next(
+                cursor.0,
+                last.base_offset,
+                last.last_offset_delta,
+            )?);
         }
     }
 
@@ -116,7 +129,7 @@ impl Segment {
         &self,
         floor_offset: Offset,
         window_size: ByteSize,
-        pred: impl Fn(i64) -> bool,
+        target_ts: i64,
     ) -> Option<(Offset, i64)> {
         let mut cursor = floor_offset;
         let mut window = window_size.max(bytes(1));
@@ -129,24 +142,44 @@ impl Segment {
                 // The batch at `cursor` is larger than the window, so it
                 // could not be fully decoded. Grow the window and retry
                 // the same cursor; bounded by the largest batch size.
-                window *= 2.0;
+                let current = u32::try_from(window.bytes_u64()).ok()?;
+                window = bytes(krabka_verified::timestamp_scan_window(current)?);
                 continue;
             }
             for batch in &batches {
-                for rec in &batch.records {
-                    let ts = batch.base_timestamp + rec.timestamp_delta;
-                    if pred(ts) {
-                        return Some((Offset(batch.base_offset + i64::from(rec.offset_delta)), ts));
-                    }
+                let records = Self::timestamp_records(batch)?;
+                let timestamps: Vec<_> = records.iter().map(|(_, timestamp)| *timestamp).collect();
+                if let Some(index) = krabka_verified::first_timestamp_index(&timestamps, target_ts)
+                {
+                    return Some(records[index]);
                 }
             }
             // No match in this window; resume just past the last batch
             // read. `read` includes the batch covering `cursor`, so
             // `last_read` >= cursor and the cursor strictly advances.
             let last = batches.last().expect("non-empty checked above");
-            let last_read = Offset(last.base_offset + i64::from(last.last_offset_delta));
-            cursor = last_read + 1;
+            cursor = Offset(krabka_verified::timestamp_scan_next(
+                cursor.0,
+                last.base_offset,
+                last.last_offset_delta,
+            )?);
         }
+    }
+
+    fn timestamp_records(batch: &RecordBatch) -> Option<Vec<(Offset, i64)>> {
+        batch
+            .records
+            .iter()
+            .map(|record| {
+                krabka_verified::timestamp_record_coordinates(
+                    batch.base_offset,
+                    record.offset_delta,
+                    batch.base_timestamp,
+                    record.timestamp_delta,
+                )
+                .map(|(offset, timestamp)| (Offset(offset), timestamp))
+            })
+            .collect()
     }
 
     /// Restore `max_timestamp` for a segment loaded through the no-scan
@@ -231,6 +264,59 @@ mod tests {
     }
 
     #[test]
+    fn malformed_record_coordinates_fail_the_scan_closed() {
+        let offset_overflow = RecordBatch {
+            base_offset: i64::MAX,
+            base_timestamp: 0,
+            records: vec![Record {
+                offset_delta: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let timestamp_overflow = RecordBatch {
+            base_offset: 0,
+            base_timestamp: i64::MAX,
+            records: vec![Record {
+                timestamp_delta: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert2::assert!(Segment::timestamp_records(&offset_overflow).is_none());
+        assert2::assert!(Segment::timestamp_records(&timestamp_overflow).is_none());
+    }
+
+    #[test]
+    fn malformed_or_stale_time_index_floor_fails_closed() {
+        let dir = tempdir().unwrap();
+        let mut stale = Segment::create(dir.path(), Offset(0)).unwrap();
+        stale.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
+        stale.time_index.append(200, u32::MAX).unwrap();
+        assert2::assert!(stale.offset_for_timestamp(200).is_none());
+
+        let dir2 = tempdir().unwrap();
+        let mut overflowing = Segment::create(dir2.path(), Offset(i64::MAX)).unwrap();
+        overflowing.last_offset = Offset(i64::MAX);
+        overflowing.time_index.append(0, 1).unwrap();
+        assert2::assert!(overflowing.offset_for_timestamp(0).is_none());
+    }
+
+    #[test]
+    fn truncated_log_failure_exhausts_the_retry_window() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
+        seg.log_file.set_len(1).unwrap();
+
+        assert2::assert!(
+            seg.offset_for_timestamp_with_window(100, bytes(u32::MAX))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn offset_for_timestamp_finds_first_ge() {
         let dir = tempdir().unwrap();
         let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
@@ -289,7 +375,7 @@ mod tests {
             ("no matching record", 10_001, None),
         ] {
             assert2::assert!(
-                seg.scan_from_floor_windowed(Offset(0), bytes(1), |ts| ts >= threshold) == expected
+                seg.scan_from_floor_windowed(Offset(0), bytes(1), threshold) == expected
             );
         }
         drop(dir);
@@ -310,7 +396,7 @@ mod tests {
         // pins the returned offset arithmetic.
         seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
         seg.append(&sample_batch(1, 3, 200), DENSE_INDEX).unwrap();
-        let got = seg.scan_from_floor_windowed(Offset(0), WINDOW, |ts| ts >= 202);
+        let got = seg.scan_from_floor_windowed(Offset(0), WINDOW, 202);
         assert2::assert!(got == Some((Offset(3), 202)));
         drop(dir);
     }

@@ -111,8 +111,8 @@ impl GroupEntry {
 }
 
 /// The next epoch of a group.
-pub(crate) const fn next_epoch(last_epoch: i64) -> i64 {
-    last_epoch + 1
+pub(crate) fn next_epoch(last_epoch: i64) -> Option<i64> {
+    crate::metadata_epoch::next_i64(last_epoch)
 }
 
 #[cfg(test)]
@@ -127,8 +127,9 @@ mod tests {
 
     #[test]
     fn the_next_epoch_follows_the_last_one() {
-        assert!(next_epoch(NO_EPOCH_YET) == 1);
-        assert!(next_epoch(41) == 42);
+        assert!(next_epoch(NO_EPOCH_YET) == Some(1));
+        assert!(next_epoch(41) == Some(42));
+        assert!(next_epoch(i64::MAX).is_none());
     }
 
     #[test]

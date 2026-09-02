@@ -262,6 +262,35 @@ mod tests {
     }
 
     #[test]
+    fn share_auto_offset_reset_accepts_only_earliest() {
+        // Kafka 4.3.1 types this key STRING with
+        // `[latest, earliest, by_duration:PnDTnHnMn.nS]` and defaults it to
+        // `latest`; krabka's share coordinator starts at the earliest offset
+        // and has no other strategy, so the alter path takes `earliest`
+        // alone. The registry row documents exactly that, and this pins the
+        // behaviour the documentation states.
+        for (value, want_ok) in [
+            ("earliest", true),
+            ("latest", false),
+            ("by_duration:PT1H", false),
+        ] {
+            let overrides =
+                maplit::btreemap! {KEY_SHARE_AUTO_OFFSET_RESET.into() => value.to_owned()};
+            assert!(
+                StreamsGroupConfig::default()
+                    .with_group_overrides(&overrides)
+                    .is_ok()
+                    == want_ok,
+                "{KEY_SHARE_AUTO_OFFSET_RESET}={value}"
+            );
+        }
+        assert!(
+            StreamsGroupConfig::default().group_config_values()[KEY_SHARE_AUTO_OFFSET_RESET]
+                == "earliest"
+        );
+    }
+
+    #[test]
     fn group_overrides_reject_unknown_and_out_of_bounds_values() {
         let unknown = maplit::btreemap! {"streams.unknown".into() => "1".into()};
         assert!(

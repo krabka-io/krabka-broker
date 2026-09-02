@@ -65,3 +65,18 @@ pub(super) fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
 pub(super) fn authed(name: &str) -> ConnectionAuth {
     authed_with_token(name, false)
 }
+
+/// Builds the synthetic authenticated state used by PLAINTEXT and SSL
+/// listeners without mTLS. It must not be admitted to token APIs.
+pub(super) fn anonymous() -> ConnectionAuth {
+    ConnectionAuth::Authenticated {
+        principal: Principal {
+            name: "ANONYMOUS".into(),
+            auth_method: AuthMethod::Anonymous,
+            groups: vec![],
+        },
+        mechanism: SaslMechanism::Plain,
+        expires_at_ms: None,
+        authenticated_via_token: false,
+    }
+}

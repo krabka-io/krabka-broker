@@ -100,6 +100,16 @@ pub enum BrokerError {
         requested: i16,
     },
 
+    /// A transaction marker came from an older coordinator generation than
+    /// the latest marker already recorded for the producer.
+    #[error("transaction coordinator epoch fenced: got {requested}, current {current}")]
+    CoordinatorEpochFenced {
+        /// The latest coordinator epoch recorded by the partition log.
+        current: i32,
+        /// The coordinator epoch carried by the marker request.
+        requested: i32,
+    },
+
     #[error("fenced leader epoch (have={have}, current={current})")]
     FencedLeaderEpoch { have: i32, current: i32 },
 

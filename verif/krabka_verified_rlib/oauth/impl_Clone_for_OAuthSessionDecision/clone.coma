@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 56 27 56 32 *)
+
+(* <oauth::OAuthSessionDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_OAuthSessionDecision = Reject | Admit Int64.t Int64.t
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OAuthSessionDecision [#"/workspace/crates/verified/src/oauth.rs" 56 27 56 32] (self: t_OAuthSessionDecision)
+  (return (x: t_OAuthSessionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthSessionDecision = Any.any_l () | & self: t_OAuthSessionDecision = self ])
+  [ return (result: t_OAuthSessionDecision) -> (! return {result}) ]

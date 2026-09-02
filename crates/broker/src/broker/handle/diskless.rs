@@ -27,7 +27,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
     pub fn diskless_put_failure_count_for_test(&self) -> u64 {
-        crate::diskless::flusher::put_failure_count(self.broker.config.broker_id)
+        self.broker.metrics.diskless_wal_flush_failures_total.get()
     }
 
     /// Test-only: await this broker's own diskless index/flusher bootstrap.

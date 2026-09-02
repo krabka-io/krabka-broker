@@ -1,0 +1,77 @@
+(* #"/proof-work-241/crates/verified/src/restore.rs" 25 0 25 83 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span srestore = "/proof-work-241/crates/verified/src/restore.rs" 26 24 26 56
+let%span srestore'0 = "/proof-work-241/crates/verified/src/restore.rs" 29 25 29 46
+let%span srestore'1 = "/proof-work-241/crates/verified/src/restore.rs" 30 33 30 37
+let%span srestore'2 = "/proof-work-241/crates/verified/src/restore.rs" 33 29 33 60
+let%span srestore'3 = "/proof-work-241/crates/verified/src/restore.rs" 34 17 34 22
+let%span srestore'4 = "/proof-work-241/crates/verified/src/restore.rs" 39 13 39 18
+let%span srestore'5 = "/proof-work-241/crates/verified/src/restore.rs" 13 10 14 58
+let%span srestore'6 = "/proof-work-241/crates/verified/src/restore.rs" 15 10 18 76
+let%span srestore'7 = "/proof-work-241/crates/verified/src/restore.rs" 19 10 23 70
+let%span srestore'8 = "/proof-work-241/crates/verified/src/restore.rs" 25 0 25 83
+
+use creusot.int.UInt8
+use creusot.prelude.Any
+use int.Int
+
+constant const_RESTORE_SNAPSHOT_DELETE_FINISHED: UInt8.t = [%#srestore'8] (3: UInt8.t)
+
+type t_Option_bool = None | Some bool
+
+constant const_RESTORE_SNAPSHOT_LIVE: UInt8.t = [%#srestore'8] (1: UInt8.t)
+
+constant const_RESTORE_SNAPSHOT_DELETE_STARTED: UInt8.t = [%#srestore'8] (2: UInt8.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_RESTORE_SNAPSHOT_MISSING: UInt8.t = [%#srestore'8] (0: UInt8.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let restore_archive_reconcile [#"/proof-work-241/crates/verified/src/restore.rs" 25 0 25 83] (scanned: bool)
+  (snapshot_state: UInt8.t) (return (x: t_Option_bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_13 <- UInt8.gt snapshot_state ([%#srestore] const_RESTORE_SNAPSHOT_DELETE_FINISHED) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb2) | br1 -> {_13} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_17 <- snapshot_state = ([%#srestore'0] const_RESTORE_SNAPSHOT_LIVE) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb4) | br1 -> {_17} (! bb3) ] ]
+  | bb3 = any [ br0 -> {scanned = false} (! bb6) | br1 -> {scanned} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- Some ([%#srestore'1] true) ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb4 = any [ br0 -> {scanned = false} (! bb9) | br1 -> {scanned} (! bb8) ]
+  | bb8 = s0
+    [ s0 = [ &_22 <- snapshot_state = ([%#srestore'2] const_RESTORE_SNAPSHOT_DELETE_STARTED) ] s1
+    | s1 = any [ br0 -> {_22 = false} (! bb11) | br1 -> {_22} (! bb10) ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- Some ([%#srestore'3] false) ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Some ([%#srestore'4] false) ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_bool = Any.any_l ()
+  | & scanned: bool = scanned
+  | & snapshot_state: UInt8.t = snapshot_state
+  | & _13: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _22: bool = Any.any_l () ])
+  [ return (result: t_Option_bool) ->
+  {[@stop_split] [@expl:restore_archive_reconcile ensures] ([@stop_split] [@expl:restore_archive_reconcile ensures #0] [%#srestore'5] (result
+        = Some true)
+      = (scanned /\ UInt8.t'int snapshot_state = UInt8.t'int const_RESTORE_SNAPSHOT_LIVE))
+    /\ ([@stop_split] [@expl:restore_archive_reconcile ensures #1] [%#srestore'6] (result = Some false)
+      = (not scanned
+        /\ UInt8.t'int snapshot_state <= UInt8.t'int const_RESTORE_SNAPSHOT_DELETE_FINISHED
+        /\ UInt8.t'int snapshot_state <> UInt8.t'int const_RESTORE_SNAPSHOT_LIVE
+      \/ scanned /\ UInt8.t'int snapshot_state = UInt8.t'int const_RESTORE_SNAPSHOT_DELETE_STARTED))
+    /\ ([@stop_split] [@expl:restore_archive_reconcile ensures #2] [%#srestore'7] (result = None)
+    = (gt_log_Int (UInt8.t'int snapshot_state) (UInt8.t'int const_RESTORE_SNAPSHOT_DELETE_FINISHED)
+    \/ not scanned /\ UInt8.t'int snapshot_state = UInt8.t'int const_RESTORE_SNAPSHOT_LIVE
+    \/ scanned
+    /\ (UInt8.t'int snapshot_state = UInt8.t'int const_RESTORE_SNAPSHOT_MISSING
+    \/ UInt8.t'int snapshot_state = UInt8.t'int const_RESTORE_SNAPSHOT_DELETE_FINISHED)))}
+    (! return {result}) ]

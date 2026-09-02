@@ -12,7 +12,7 @@ use krabka_protocol::records::RecordBatch;
 
 use self::walk::{
     WalkState, check_chained, check_checkpoint, check_records_lost, header,
-    records_lost_count_from_body,
+    records_lost_body_has_field,
 };
 use crate::{
     checkpoint::EVENT_CLASS_CHECKPOINT,
@@ -124,7 +124,7 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
                 let class = header(rec, "event_class").unwrap_or_default();
                 let records_lost_header =
                     class == AuditEventClass::RecordsLost.as_header().as_bytes();
-                let records_lost_body = records_lost_count_from_body(rec).is_some();
+                let records_lost_body = records_lost_body_has_field(rec);
                 let result = if class == EVENT_CLASS_CHECKPOINT.as_bytes() {
                     check_checkpoint(rec, offset, &mut state, trusted)
                 } else if records_lost_header || records_lost_body {

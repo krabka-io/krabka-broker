@@ -1,0 +1,22 @@
+(* #"/proof-work-234/crates/verified/src/registration.rs" 84 27 84 32 *)
+
+(* <registration::BrokerHeartbeatDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BrokerHeartbeatDecision = {
+  registered: bool;
+  epoch_matches: bool;
+  caught_up: bool;
+  fenced: bool;
+  should_shut_down: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BrokerHeartbeatDecision [#"/proof-work-234/crates/verified/src/registration.rs" 84 27 84 32]
+  (self: t_BrokerHeartbeatDecision) (return (x: t_BrokerHeartbeatDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BrokerHeartbeatDecision = Any.any_l () | & self: t_BrokerHeartbeatDecision = self ])
+  [ return (result: t_BrokerHeartbeatDecision) -> (! return {result}) ]

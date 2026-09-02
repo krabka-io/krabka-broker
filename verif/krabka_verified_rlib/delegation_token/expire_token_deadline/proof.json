@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_expire_token_deadline": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_min_i64": { "prover": "alt-ergo", "time": 0.009 }
+    }
+  }
+}

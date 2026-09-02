@@ -1,0 +1,18 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 8 27 8 32 *)
+
+(* <retention::RetentionPrefix as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_RetentionPrefix = { len: UInt64.t; remaining_size_debt: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RetentionPrefix [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 8 27 8 32]
+  (self: t_RetentionPrefix) (return (x: t_RetentionPrefix)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RetentionPrefix = Any.any_l () | & self: t_RetentionPrefix = self ])
+  [ return (result: t_RetentionPrefix) -> (! return {result}) ]

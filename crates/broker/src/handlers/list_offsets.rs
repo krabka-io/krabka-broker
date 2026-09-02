@@ -17,6 +17,13 @@
 //! delivery, LATEST reports the partition's delivery watermark instead of its
 //! log end offset. See [`latest_offset`](self::local::latest_offset).
 //!
+//! KIP-320 fences the whole request the way Fetch does: a partition row that
+//! carries a `current_leader_epoch` (v4 and up) is answered with
+//! `FENCED_LEADER_EPOCH` or `UNKNOWN_LEADER_EPOCH` when that epoch is not the
+//! partition's live one, so a consumer with stale metadata refreshes instead of
+//! receiving an offset its next Fetch would refuse. See
+//! [`resolve_partition`](self::resolve::resolve_partition).
+//!
 //! Every other answer is decided by one bound, Kafka's `lastFetchableOffset`:
 //! the log end offset for a request that is not a client's, the high watermark
 //! for a `read_uncommitted` client, and the last stable offset (KIP-98) for a

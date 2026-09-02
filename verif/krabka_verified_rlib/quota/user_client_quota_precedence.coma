@@ -1,0 +1,141 @@
+(* #"/workspace/crates/verified/src/quota.rs" 102 0 102 93 *)
+
+let%span squota = "/workspace/crates/verified/src/quota.rs" 48 10 49 60
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 50 10 52 78
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 53 10 56 78
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 57 10 61 65
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 62 10 67 63
+let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 68 10 74 65
+let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 75 10 82 65
+let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 83 10 91 67
+let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 92 10 100 67
+
+use creusot.prelude.Any
+
+type t_QuotaCandidatePresence = Absent | Present
+
+type t_UserClientQuotaFacts = {
+  exact_pair: t_QuotaCandidatePresence;
+  exact_client_default_user: t_QuotaCandidatePresence;
+  default_client_exact_user: t_QuotaCandidatePresence;
+  default_pair: t_QuotaCandidatePresence;
+  exact_user: t_QuotaCandidatePresence;
+  exact_client: t_QuotaCandidatePresence;
+  default_user: t_QuotaCandidatePresence;
+  default_client: t_QuotaCandidatePresence }
+
+type t_UserClientQuotaPrecedence =
+  | ExactPair
+  | ExactClientDefaultUser
+  | DefaultClientExactUser
+  | DefaultPair
+  | ExactUser
+  | ExactClient
+  | DefaultUser
+  | DefaultClient
+  | None
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let user_client_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 102 0 102 93]
+  (facts: t_UserClientQuotaFacts) (return (x: t_UserClientQuotaPrecedence)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.exact_pair = Absent} (! bb1) | br1 -> {facts.exact_pair = Present} (! bb3) ]
+  | bb1 = s0 [ s0 = [ &_55 <- false ] s1 | s1 = bb4 ]
+  | bb3 = s0 [ s0 = [ &_55 <- true ] s1 | s1 = bb4 ]
+  | bb4 = any [ br0 -> {_55 = false} (! bb6) | br1 -> {_55} (! bb5) ]
+  | bb5 = s0 [ s0 = [ &_ret <- ExactPair ] s1 | s1 = return {_ret} ]
+  | bb6 = any
+    [ br0 -> {facts.exact_client_default_user = Absent} (! bb7)
+    | br1 -> {facts.exact_client_default_user = Present} (! bb9) ]
+  | bb7 = s0 [ s0 = [ &_57 <- false ] s1 | s1 = bb10 ]
+  | bb9 = s0 [ s0 = [ &_57 <- true ] s1 | s1 = bb10 ]
+  | bb10 = any [ br0 -> {_57 = false} (! bb12) | br1 -> {_57} (! bb11) ]
+  | bb11 = s0 [ s0 = [ &_ret <- ExactClientDefaultUser ] s1 | s1 = return {_ret} ]
+  | bb12 = any
+    [ br0 -> {facts.default_client_exact_user = Absent} (! bb13)
+    | br1 -> {facts.default_client_exact_user = Present} (! bb15) ]
+  | bb13 = s0 [ s0 = [ &_59 <- false ] s1 | s1 = bb16 ]
+  | bb15 = s0 [ s0 = [ &_59 <- true ] s1 | s1 = bb16 ]
+  | bb16 = any [ br0 -> {_59 = false} (! bb18) | br1 -> {_59} (! bb17) ]
+  | bb17 = s0 [ s0 = [ &_ret <- DefaultClientExactUser ] s1 | s1 = return {_ret} ]
+  | bb18 = any [ br0 -> {facts.default_pair = Absent} (! bb19) | br1 -> {facts.default_pair = Present} (! bb21) ]
+  | bb19 = s0 [ s0 = [ &_61 <- false ] s1 | s1 = bb22 ]
+  | bb21 = s0 [ s0 = [ &_61 <- true ] s1 | s1 = bb22 ]
+  | bb22 = any [ br0 -> {_61 = false} (! bb24) | br1 -> {_61} (! bb23) ]
+  | bb23 = s0 [ s0 = [ &_ret <- DefaultPair ] s1 | s1 = return {_ret} ]
+  | bb24 = any [ br0 -> {facts.exact_user = Absent} (! bb25) | br1 -> {facts.exact_user = Present} (! bb27) ]
+  | bb25 = s0 [ s0 = [ &_63 <- false ] s1 | s1 = bb28 ]
+  | bb27 = s0 [ s0 = [ &_63 <- true ] s1 | s1 = bb28 ]
+  | bb28 = any [ br0 -> {_63 = false} (! bb30) | br1 -> {_63} (! bb29) ]
+  | bb29 = s0 [ s0 = [ &_ret <- ExactUser ] s1 | s1 = return {_ret} ]
+  | bb30 = any [ br0 -> {facts.exact_client = Absent} (! bb31) | br1 -> {facts.exact_client = Present} (! bb33) ]
+  | bb31 = s0 [ s0 = [ &_65 <- false ] s1 | s1 = bb34 ]
+  | bb33 = s0 [ s0 = [ &_65 <- true ] s1 | s1 = bb34 ]
+  | bb34 = any [ br0 -> {_65 = false} (! bb36) | br1 -> {_65} (! bb35) ]
+  | bb35 = s0 [ s0 = [ &_ret <- ExactClient ] s1 | s1 = return {_ret} ]
+  | bb36 = any [ br0 -> {facts.default_user = Absent} (! bb37) | br1 -> {facts.default_user = Present} (! bb39) ]
+  | bb37 = s0 [ s0 = [ &_67 <- false ] s1 | s1 = bb40 ]
+  | bb39 = s0 [ s0 = [ &_67 <- true ] s1 | s1 = bb40 ]
+  | bb40 = any [ br0 -> {_67 = false} (! bb42) | br1 -> {_67} (! bb41) ]
+  | bb41 = s0 [ s0 = [ &_ret <- DefaultUser ] s1 | s1 = return {_ret} ]
+  | bb42 = any [ br0 -> {facts.default_client = Absent} (! bb43) | br1 -> {facts.default_client = Present} (! bb45) ]
+  | bb43 = s0 [ s0 = [ &_69 <- false ] s1 | s1 = bb46 ]
+  | bb45 = s0 [ s0 = [ &_69 <- true ] s1 | s1 = bb46 ]
+  | bb46 = any [ br0 -> {_69 = false} (! bb48) | br1 -> {_69} (! bb47) ]
+  | bb47 = s0 [ s0 = [ &_ret <- DefaultClient ] s1 | s1 = return {_ret} ]
+  | bb48 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_UserClientQuotaPrecedence = Any.any_l ()
+  | & facts: t_UserClientQuotaFacts = facts
+  | & _55: bool = Any.any_l ()
+  | & _57: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _63: bool = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _67: bool = Any.any_l ()
+  | & _69: bool = Any.any_l () ])
+  [ return (result: t_UserClientQuotaPrecedence) ->
+  {[@stop_split] [@expl:user_client_quota_precedence ensures] ([@stop_split] [@expl:user_client_quota_precedence ensures #0] [%#squota] (result
+        = ExactPair)
+      = (facts.exact_pair = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #1] [%#squota'0] (result = ExactClientDefaultUser)
+      = (facts.exact_pair = Absent /\ facts.exact_client_default_user = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #2] [%#squota'1] (result = DefaultClientExactUser)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent /\ facts.default_client_exact_user = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #3] [%#squota'2] (result = DefaultPair)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent
+      /\ facts.default_client_exact_user = Absent /\ facts.default_pair = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #4] [%#squota'3] (result = ExactUser)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent
+      /\ facts.default_client_exact_user = Absent /\ facts.default_pair = Absent /\ facts.exact_user = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #5] [%#squota'4] (result = ExactClient)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent
+      /\ facts.default_client_exact_user = Absent
+      /\ facts.default_pair = Absent /\ facts.exact_user = Absent /\ facts.exact_client = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #6] [%#squota'5] (result = DefaultUser)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent
+      /\ facts.default_client_exact_user = Absent
+      /\ facts.default_pair = Absent
+      /\ facts.exact_user = Absent /\ facts.exact_client = Absent /\ facts.default_user = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #7] [%#squota'6] (result = DefaultClient)
+      = (facts.exact_pair = Absent
+      /\ facts.exact_client_default_user = Absent
+      /\ facts.default_client_exact_user = Absent
+      /\ facts.default_pair = Absent
+      /\ facts.exact_user = Absent
+      /\ facts.exact_client = Absent /\ facts.default_user = Absent /\ facts.default_client = Present))
+    /\ ([@stop_split] [@expl:user_client_quota_precedence ensures #8] [%#squota'7] (result = None)
+    = (not (facts.exact_pair = Present
+    \/ facts.exact_client_default_user = Present
+    \/ facts.default_client_exact_user = Present
+    \/ facts.default_pair = Present
+    \/ facts.exact_user = Present
+    \/ facts.exact_client = Present \/ facts.default_user = Present \/ facts.default_client = Present)))}
+    (! return {result}) ]

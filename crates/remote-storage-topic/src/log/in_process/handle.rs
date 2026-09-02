@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use super::{InProcessInner, PartitionCursor};
-use crate::log::{AssignmentHandle, MetadataEventRecord, PartitionStart};
+use crate::log::{AssignmentHandle, PartitionStart};
 
 pub(super) struct InProcessAssignmentHandle {
     pub(super) inner: Arc<InProcessInner>,
@@ -58,12 +58,8 @@ impl AssignmentHandle for InProcessAssignmentHandle {
         };
         let records = &log[idx];
         let begin = usize::try_from(start.start_offset.max(0)).unwrap_or(usize::MAX);
-        for (offset, payload) in records.iter().enumerate().skip(begin) {
-            let _ = state.inject.send(MetadataEventRecord {
-                partition: start.partition,
-                offset: i64::try_from(offset).expect("offset fits in i64"),
-                payload: payload.clone(),
-            });
+        for record in records.iter().skip(begin) {
+            let _ = state.inject.send(record.clone());
         }
         // Live records at or after the current end are forwarded by the
         // broadcast path once `assigned` contains the partition. They are

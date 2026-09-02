@@ -170,6 +170,15 @@ pub struct FileConfig {
     /// default `usize::MAX` (unlimited).
     pub max_connections_per_ip: Option<usize>,
 
+    /// How long a connection may go without a complete request frame before
+    /// the broker closes it (Kafka `connections.max.idle.ms`). Absent leaves
+    /// the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
+    /// `[[listeners]]` entry may carry its own `connections_max_idle`, which
+    /// wins for that listener.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<String>")]
+    pub connections_max_idle: Option<Time>,
+
     /// KIP-595 static controller quorum voter set. Each entry is
     /// `<node_id>@<host>:<port>` pointing at a broker's controller listener
     /// (port 9093). At apply time each entry is parsed (NOT DNS-resolved) and

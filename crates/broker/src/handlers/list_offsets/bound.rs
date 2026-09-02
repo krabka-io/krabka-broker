@@ -9,28 +9,18 @@
 /// Request `replica_id` (-1) that marks an ordinary client. Kafka's
 /// `ListOffsetsRequest.CONSUMER_REPLICA_ID`. A follower sends its own node id
 /// and the offset-debugging path sends -2.
+#[cfg(test)]
 const CONSUMER_REPLICA_ID: i32 = -1;
 /// Request `isolation_level` (1) asking for committed data only. Kafka's
 /// `IsolationLevel.READ_COMMITTED`; 0 is `READ_UNCOMMITTED`. `Fetch` reads the
 /// same field the same way.
+#[cfg(test)]
 const READ_COMMITTED: i8 = 1;
 
-/// Which of the log's three offsets bounds this request's answers.
-///
-/// Kafka's `Partition.fetchOffsetForTimestamp` opens by choosing one of these
-/// and names it `lastFetchableOffset`. Every answer it goes on to give either
-/// is that offset or is measured against it, so the choice made here decides
-/// every sentinel's answer and not only LATEST's. The three variants are the
-/// three arms of its `isolationLevel match`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FetchBound {
-    /// The log end offset, for a request that is not a client's. Kafka's
-    /// `case None`, reached whenever it passed no isolation level down.
-    LogEnd,
-    /// The high watermark, for a `read_uncommitted` client.
-    HighWatermark,
-    /// The last stable offset, for a `read_committed` client.
-    LastStable,
+pub(super) struct FetchBound {
+    replica_id: i32,
+    isolation_level: i8,
 }
 
 /// The bound a request's `replica_id` and `isolation_level` select, one arm per
@@ -44,12 +34,9 @@ pub(super) enum FetchBound {
 /// transaction resolved. `ListOffsetsRequest.DEBUGGING_REPLICA_ID` (-2) is not
 /// -1 either, so it files with the replicas even though no follower sends it.
 pub(super) const fn fetch_bound(replica_id: i32, isolation_level: i8) -> FetchBound {
-    if replica_id != CONSUMER_REPLICA_ID {
-        FetchBound::LogEnd
-    } else if isolation_level == READ_COMMITTED {
-        FetchBound::LastStable
-    } else {
-        FetchBound::HighWatermark
+    FetchBound {
+        replica_id,
+        isolation_level,
     }
 }
 
@@ -73,12 +60,28 @@ pub(super) const fn fetch_bound(replica_id: i32, isolation_level: i8) -> FetchBo
 pub(super) async fn last_fetchable_offset(
     partition: &crate::partition::Partition,
     bound: FetchBound,
-    local_end: i64,
-) -> i64 {
-    match bound {
-        FetchBound::LogEnd => local_end,
-        FetchBound::HighWatermark => partition.high_watermark().await.0,
-        FetchBound::LastStable => partition.lso().0.min(partition.high_watermark().await.0),
+) -> Option<i64> {
+    let high_watermark = partition.high_watermark().await.0;
+    let last_stable = partition.lso().0;
+    let log_end = partition.log_end_offset().0;
+    checked_bound(bound, log_end, high_watermark, last_stable)
+}
+
+fn checked_bound(
+    bound: FetchBound,
+    log_end: i64,
+    high_watermark: i64,
+    last_stable: i64,
+) -> Option<i64> {
+    match krabka_verified::list_offsets_bound_decision(krabka_verified::ListOffsetsBoundFacts {
+        replica_id: bound.replica_id,
+        isolation_level: bound.isolation_level,
+        log_end,
+        high_watermark,
+        last_stable,
+    }) {
+        krabka_verified::ListOffsetsBoundDecision::RejectMalformed => None,
+        krabka_verified::ListOffsetsBoundDecision::Bound { offset } => Some(offset),
     }
 }
 
@@ -103,7 +106,10 @@ mod tests {
                 "read_committed consumer",
                 CONSUMER_REPLICA_ID,
                 READ_COMMITTED,
-                FetchBound::LastStable,
+                FetchBound {
+                    replica_id: CONSUMER_REPLICA_ID,
+                    isolation_level: READ_COMMITTED,
+                },
             ),
             // The same client asking for everything. It still cannot see past
             // what the ISR acknowledged, which is the divergence this bound
@@ -113,13 +119,24 @@ mod tests {
                 "read_uncommitted consumer",
                 CONSUMER_REPLICA_ID,
                 0,
-                FetchBound::HighWatermark,
+                FetchBound {
+                    replica_id: CONSUMER_REPLICA_ID,
+                    isolation_level: 0,
+                },
             ),
             // A follower probing its leader. Kafka discards the byte for any
             // replica id, and it has to: a replica copies uncommitted records
             // too, so bounding it would stall replication behind an open
             // transaction until that transaction resolved.
-            ("follower replica", 3, READ_COMMITTED, FetchBound::LogEnd),
+            (
+                "follower replica",
+                3,
+                READ_COMMITTED,
+                FetchBound {
+                    replica_id: 3,
+                    isolation_level: READ_COMMITTED,
+                },
+            ),
             // The same follower with the byte it actually sends. `None` is
             // chosen by the replica id alone, so the isolation level cannot
             // reach the answer either way.
@@ -127,12 +144,23 @@ mod tests {
                 "follower replica, read_uncommitted",
                 3,
                 0,
-                FetchBound::LogEnd,
+                FetchBound {
+                    replica_id: 3,
+                    isolation_level: 0,
+                },
             ),
             // `ListOffsetsRequest.DEBUGGING_REPLICA_ID`. It is not -1, so Kafka
             // files it with the replicas rather than with the clients even
             // though no follower sends it.
-            ("debugging replica", -2, READ_COMMITTED, FetchBound::LogEnd),
+            (
+                "debugging replica",
+                -2,
+                READ_COMMITTED,
+                FetchBound {
+                    replica_id: -2,
+                    isolation_level: READ_COMMITTED,
+                },
+            ),
         ];
         for (label, replica_id, isolation_level, expected) in cases {
             check!(
@@ -140,5 +168,16 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn selected_bound_fails_closed_without_rejecting_an_unused_tier_fact() {
+        let consumer = fetch_bound(CONSUMER_REPLICA_ID, 0);
+        check!(checked_bound(consumer, 0, 6, 0) == Some(6));
+        check!(checked_bound(consumer, 0, -1, 0).is_none());
+
+        let replica = fetch_bound(3, READ_COMMITTED);
+        check!(checked_bound(replica, 7, -1, -1) == Some(7));
+        check!(checked_bound(replica, -1, 0, 0).is_none());
     }
 }

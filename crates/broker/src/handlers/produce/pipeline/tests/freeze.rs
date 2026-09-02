@@ -23,7 +23,7 @@ use super::super::{
     BrokerProducePolicy, FramedPartition, PartitionInput, PartitionServices, process_partition,
 };
 use crate::{
-    freeze::resolve::{FreezeVerdict, resolve_topic_freeze},
+    freeze::resolve::{FreezeVerdict, resolve_freeze_mutation, resolve_topic_freeze},
     handlers::produce::{
         framing::PartitionPayload,
         test_support::{encode_batch, image_with_topic},
@@ -178,9 +178,12 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         partitions.insert(topic.to_string(), krabka_ids::PartitionIndex(0), part);
     }
 
+    // `base_offset` is spelled out because the refusal happens before any
+    // append, and the wire sentinel for that is -1, not the struct default 0.
     let refused = |scope: &str| PartitionProduceResponse {
         index: 0,
         error_code: crate::codes::POLICY_VIOLATION,
+        base_offset: -1,
         error_message: Some(verdict(scope, PatternType::Literal, "DR cutover").error_message()),
         ..Default::default()
     };
@@ -205,6 +208,11 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 index: 0,
                 error_code: crate::codes::NONE,
                 base_offset: 1,
+                // The one accepted row in the table, so the one row that
+                // carries the partition's real log start offset. Nothing has
+                // trimmed the control topic, so it is 0 and not the -1 every
+                // refusal above keeps from `Default`.
+                log_start_offset: 0,
                 ..Default::default()
             },
         ),
@@ -213,15 +221,20 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     for (label, topic, payload, want) in cases {
         // The handler resolves the freeze inside its per-topic loop, which
         // is what keeps one topic's verdict off another topic's rows.
-        let freeze = resolve_topic_freeze(&image, topic);
+        let freeze = resolve_freeze_mutation(
+            &image,
+            topic,
+            true,
+            krabka_verified::FreezeMutationKind::Produce,
+        );
         let resp = process_partition(
             PartitionInput {
                 part_data: FramedPartition { index: 0, payload },
                 topic_compression: None,
+                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery: None,
                 schema: None,
                 topic_name: topic.into(),
-                topic_denied: false,
                 freeze,
                 txn_id_denied: false,
                 acks: 1,
@@ -240,6 +253,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 },
                 record_decompression_policy: RecordDecompressionPolicy::default(),
                 metrics: &metrics,
+                phases: &crate::metrics::RequestPhases::default(),
                 schema_validator: None,
             },
         )

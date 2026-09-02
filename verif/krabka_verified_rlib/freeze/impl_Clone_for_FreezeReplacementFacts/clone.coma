@@ -1,0 +1,24 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 203 27 203 32 *)
+
+(* <freeze::FreezeReplacementFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_FreezeStoredState = Missing | Present Int64.t
+
+type t_FreezeReplacementFacts = {
+  stored: t_FreezeStoredState;
+  incoming_frozen: bool;
+  incoming_set_at_ms: Int64.t;
+  uncommitted_tail: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FreezeReplacementFacts [#"/workspace/crates/verified/src/freeze.rs" 203 27 203 32]
+  (self: t_FreezeReplacementFacts) (return (x: t_FreezeReplacementFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeReplacementFacts = Any.any_l () | & self: t_FreezeReplacementFacts = self ])
+  [ return (result: t_FreezeReplacementFacts) -> (! return {result}) ]

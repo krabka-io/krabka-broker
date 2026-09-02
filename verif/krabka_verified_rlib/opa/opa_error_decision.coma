@@ -1,0 +1,22 @@
+(* #"/workspace/crates/verified/src/opa.rs" 75 0 75 75 *)
+
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 73 10 73 71
+
+use creusot.prelude.Any
+
+type t_OpaAuthorizationDecision = Allow | Deny
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let opa_error_decision [#"/workspace/crates/verified/src/opa.rs" 75 0 75 75] (allow_on_error: bool)
+  (return (x: t_OpaAuthorizationDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {allow_on_error = false} (! bb2) | br1 -> {allow_on_error} (! bb1) ]
+  | bb1 = s0 [ s0 = [ &_ret <- Allow ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- Deny ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OpaAuthorizationDecision = Any.any_l () | & allow_on_error: bool = allow_on_error ])
+  [ return (result: t_OpaAuthorizationDecision) -> {[@stop_split] [@expl:opa_error_decision ensures] [%#sopa] (result
+      = Allow)
+    = allow_on_error}
+    (! return {result}) ]

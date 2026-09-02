@@ -1,0 +1,66 @@
+(* #"/proof-work-227/crates/verified/src/broker.rs" 100 0 109 25 *)
+
+let%span sbroker = "/proof-work-227/crates/verified/src/broker.rs" 61 10 67 1
+let%span sbroker'0 = "/proof-work-227/crates/verified/src/broker.rs" 68 10 75 1
+let%span sbroker'1 = "/proof-work-227/crates/verified/src/broker.rs" 76 10 84 1
+let%span sbroker'2 = "/proof-work-227/crates/verified/src/broker.rs" 85 10 93 1
+
+use creusot.prelude.Any
+use creusot.int.Int32
+
+type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let replica_fetch_mutation [#"/proof-work-227/crates/verified/src/broker.rs" 100 0 109 25] (topic_matches: bool)
+  (partition_matches: bool) (request_leader_epoch: Int32.t) (current_leader_epoch: Int32.t) (target_matches: bool)
+  (reported_target_matches: bool) (response_success: bool) (has_divergence: bool) (return (x: t_ReplicaFetchMutation)) =
+(! bb0
+  [ bb0 = any [ br0 -> {topic_matches = false} (! bb6) | br1 -> {topic_matches} (! bb1) ]
+  | bb1 = any [ br0 -> {partition_matches = false} (! bb6) | br1 -> {partition_matches} (! bb2) ]
+  | bb2 = s0
+    [ s0 = [ &_44 <- request_leader_epoch <> current_leader_epoch ] s1
+    | s1 = any [ br0 -> {_44 = false} (! bb4) | br1 -> {_44} (! bb6) ] ]
+  | bb4 = any [ br0 -> {target_matches = false} (! bb6) | br1 -> {target_matches} (! bb5) ]
+  | bb5 = any [ br0 -> {reported_target_matches = false} (! bb6) | br1 -> {reported_target_matches} (! bb7) ]
+  | bb7 = any [ br0 -> {response_success = false} (! bb8) | br1 -> {response_success} (! bb9) ]
+  | bb9 = any [ br0 -> {has_divergence = false} (! bb11) | br1 -> {has_divergence} (! bb10) ]
+  | bb10 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ReplicaFetchMutation = Any.any_l ()
+  | & topic_matches: bool = topic_matches
+  | & partition_matches: bool = partition_matches
+  | & request_leader_epoch: Int32.t = request_leader_epoch
+  | & current_leader_epoch: Int32.t = current_leader_epoch
+  | & target_matches: bool = target_matches
+  | & reported_target_matches: bool = reported_target_matches
+  | & response_success: bool = response_success
+  | & has_divergence: bool = has_divergence
+  | & _44: bool = Any.any_l () ])
+  [ return (result: t_ReplicaFetchMutation) ->
+  {[@stop_split] [@expl:replica_fetch_mutation ensures] ([@stop_split] [@expl:replica_fetch_mutation ensures #0] [%#sbroker] (result
+        = Reject)
+      = (not topic_matches
+      \/ not partition_matches
+      \/ Int32.to_int request_leader_epoch <> Int32.to_int current_leader_epoch
+      \/ not target_matches \/ not reported_target_matches))
+    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #1] [%#sbroker'0] (result = Retry)
+      = (topic_matches
+      /\ partition_matches
+      /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
+      /\ target_matches /\ reported_target_matches /\ not response_success))
+    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #2] [%#sbroker'1] (result = Truncate)
+      = (topic_matches
+      /\ partition_matches
+      /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
+      /\ target_matches /\ reported_target_matches /\ response_success /\ has_divergence))
+    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #3] [%#sbroker'2] (result = Append)
+    = (topic_matches
+    /\ partition_matches
+    /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
+    /\ target_matches /\ reported_target_matches /\ response_success /\ not has_divergence))}
+    (! return {result}) ]

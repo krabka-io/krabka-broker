@@ -7,34 +7,45 @@ so there is no second dependency set to keep in sync.
 
 module(
     name = "krabka_broker",
-    version = "0.5.1",
+    version = "0.5.3",
 )
 
-bazel_dep(name = "rules_rs", version = "0.0.106")
-bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
+# `tools/creusot` constrains its container layers with `@platforms//os:linux`.
+# That label resolved transitively until the rules_img work reshaped the module
+# graph; naming it here makes the visibility explicit rather than incidental.
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_rs", version = "0.0.107")
+bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
-# rules_rs 0.0.106 treats unknown cfg keys as false, so a dependency guarded by
+# rules_rs 0.0.107 treats unknown cfg keys as false, so a dependency guarded by
 # `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
+#
+# It also pins the zlib1g .deb its rustc toolchain links against by exact pool
+# URL. Ubuntu superseded 3.1ubuntu2.1 with 3.1ubuntu2.2 and drops superseded
+# builds from the pool, so both arches now 404 and every Rust toolchain fetch
+# fails during analysis. The second patch repoints that pin at the build the
+# pool actually serves; drop it once rules_rs carries a URL that does not rot.
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
-    patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
-    version = "0.0.106",
+    patches = [
+        "//bazel/patches:rules-rs-target-has-atomic.patch",
+        "//bazel/patches:rules_rs_zlib_url.patch",
+    ],
+    version = "0.0.107",
 )
 
 # Expose the metadata rules already used by rules_rs so workspace crates appear
 # in the same Bazel dependency graph as third-party crates.
-bazel_dep(name = "package_metadata", version = "0.0.7")
+bazel_dep(name = "package_metadata", version = "0.0.10")
 
 # rules_rs_mutants is not published to the Bazel Central Registry, so the
 # `bazel_dep` above has nothing to resolve against without this override.
 git_override(
     module_name = "rules_rs_mutants",
-    # Resolved to a commit so the checkout is reproducible. Past v0.0.1 for
-    # `//mutants:config`, without which the sweep enumerates from a synthetic
-    # workspace where this repo's `.cargo/mutants.toml` is not in scope -- so the
-    # exclusions written there did not exclude.
-    commit = "fd8902e425382aaa58490c22721f563127ab9467",
+    # Resolved to the integration-test-capable revision so the checkout is
+    # reproducible and mutation sweeps exercise both unit and integration tests.
+    commit = "e08d0fea86472d4897e3c61c0bb07266d3d9eadf",
     remote = "https://github.com/robot-head/rules_rs_mutants",
 )
 
@@ -52,13 +63,15 @@ bazel_dep(name = "llvm", version = "0.8.18")
 register_toolchains("@llvm//toolchain:all")
 
 # ---------------------------------------------------------------------------
-# Kafka images for the container-driven suites.
+# Container images.
 #
-# Pinned by digest and fetched by Bazel, so a test loads known bytes from the
-# repository cache instead of pulling a mutable tag over the network mid-run.
-# See //bazel/images, which turns each into a `docker load`-able tarball.
+# rules_img owns every pulled and assembled image. Third-party images are pinned
+# to linux/amd64 manifest digests, so loading one never depends on the runner's
+# platform selection or a mutable tag. Images built here start from apko lock
+# files; see //packaging and //tools/creusot.
 # ---------------------------------------------------------------------------
-bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "rules_img", version = "0.3.19")
+bazel_dep(name = "rules_apko", version = "1.5.56")
 
 # `sh_test`, for the wrapper that loads those images before a suite runs.
 bazel_dep(name = "rules_shell", version = "0.8.0")
@@ -70,60 +83,53 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 # machine happens to have a JDK installed.
 bazel_dep(name = "rules_java", version = "9.8.0")
 
-# `write_file`, for the tag list //packaging hands oci_push.
-bazel_dep(name = "bazel_skylib", version = "1.9.2")
-
-# `pkg_tar`, for the layer //packaging puts the broker binary in.
-bazel_dep(name = "rules_pkg", version = "1.1.0")
-
-oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
 
 [
-    oci.pull(
+    pull_image(
         name = name,
         digest = digest,
-        image = image,
-        platforms = ["linux/amd64"],
+        layer_handling = "eager",
+        registry = registry,
+        repository = repository,
+        tag = tag,
     )
-    for name, image, digest in [
-        ("apache_kafka_4_0_0", "mirror.gcr.io/apache/kafka", "sha256:3f7b939115cd4872e9cee9369d80bd69712fde55f9902f46d793f64848dedc75"),
-        ("apache_kafka_4_1_0", "mirror.gcr.io/apache/kafka", "sha256:bff074a5d0051dbc0bbbcd25b045bb1fe84833ec0d3c7c965d1797dd289ec88f"),
-        ("apache_kafka_4_3_1", "mirror.gcr.io/apache/kafka", "sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837"),
-        ("cp_kafka_3_1_2", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:f49a936269d36434ee29ca2c53876d891aee9a4ff7750147ded38db2b31c2c9a"),
-        ("cp_kafka_6_1_1", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:537c303f182ff6ba665f324520105c44970c97d7ef94b306709a5d68b8c1aed7"),
-        ("cp_kafka_7_4_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63"),
-        ("cp_kafka_7_5_0", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:fbbb6fa11b258a88b83f54d4f0bddfcffbf2279f99d66a843486e3da7bdfbf41"),
-        ("cp_kafka_7_8_8", "mirror.gcr.io/confluentinc/cp-kafka", "sha256:6ed4c074b8169cd0e280350c41cddf1495a2ce4bf144d90f68b3a8856369ccd7"),
-        ("kafkacat_1_5_0", "mirror.gcr.io/edenhill/kafkacat", "sha256:05daf8af237495df2bc726427e421d101072cf2d2306fb2379243acbffe40823"),
-        ("kcat_1_7_1", "mirror.gcr.io/edenhill/kcat", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
-        # The base //packaging ships the broker on: glibc and ca-certificates,
-        # a nonroot user, and nothing else. The monorepo builds the equivalent
-        # with apko from Wolfi; this pins a prebuilt one by digest instead, so
-        # the image is reproducible without a second package manager in the
-        # build.
-        ("distroless_cc", "gcr.io/distroless/cc-debian12", "sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77"),
+    for name, registry, repository, tag, digest in [
+        ("apache_kafka_4_0_0", "mirror.gcr.io", "apache/kafka", "4.0.0", "sha256:01b9a4030e54c6068e66eb3ba4cb82c0d89238629ef1c30d79b86036bf89b1b7"),
+        ("apache_kafka_4_1_0", "mirror.gcr.io", "apache/kafka", "4.1.0", "sha256:bce21a1a56707320ce239d743143bf4359ba45da27d31a5236f2169001eec751"),
+        ("apache_kafka_4_3_1", "mirror.gcr.io", "apache/kafka", "4.3.1", "sha256:ccd1314e47ec76909e01f86308b4dcf2064f19f7c89759234322314b0e319e26"),
+        ("cp_kafka_3_1_2", "mirror.gcr.io", "confluentinc/cp-kafka", "3.1.2", "sha256:f49a936269d36434ee29ca2c53876d891aee9a4ff7750147ded38db2b31c2c9a"),
+        ("cp_kafka_6_1_1", "mirror.gcr.io", "confluentinc/cp-kafka", "6.1.1", "sha256:537c303f182ff6ba665f324520105c44970c97d7ef94b306709a5d68b8c1aed7"),
+        ("cp_kafka_7_4_0", "mirror.gcr.io", "confluentinc/cp-kafka", "7.4.0", "sha256:9080235b1e58a57ca16d480cba6c9cbde72619f2bd43b77d70bada5aecf7811a"),
+        ("cp_kafka_7_5_0", "mirror.gcr.io", "confluentinc/cp-kafka", "7.5.0", "sha256:69022c46b7f4166ecf21689ab4c20d030b0a62f2d744c20633abfc7c0040fa80"),
+        ("cp_kafka_7_8_8", "mirror.gcr.io", "confluentinc/cp-kafka", "7.8.8", "sha256:a8c5e3c481e58b130e1673e201c364fa23a9c6ff0f6ab017a31c326285822bf3"),
+        ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # jvm_acceptance_tiered's cases back the remote tier with MinIO.
-        ("minio", "mirror.gcr.io/minio/minio", "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"),
-        ("minio_mc", "mirror.gcr.io/minio/mc", "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"),
+        ("minio", "mirror.gcr.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
+        ("minio_mc", "mirror.gcr.io", "minio/mc", "RELEASE.2025-08-13T08-35-41Z", "sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780"),
     ]
 ]
 
-use_repo(
-    oci,
-    "apache_kafka_4_0_0",
-    "apache_kafka_4_1_0",
-    "apache_kafka_4_3_1",
-    "cp_kafka_3_1_2",
-    "cp_kafka_6_1_1",
-    "cp_kafka_7_4_0",
-    "cp_kafka_7_5_0",
-    "cp_kafka_7_8_8",
-    "distroless_cc",
-    "kafkacat_1_5_0",
-    "kcat_1_7_1",
-    "minio",
-    "minio_mc",
+apko_toolchain = use_extension("@rules_apko//apko:extensions.bzl", "apko")
+apko_toolchain.toolchain(apko_version = "v1.2.40")
+use_repo(apko_toolchain, "apko_toolchains")
+
+register_toolchains("@apko_toolchains//:all")
+
+apk = use_extension("@rules_apko//apko:extensions.bzl", "apko")
+apk.translate_lock(
+    name = "broker_base_lock",
+    lock = "//packaging:base.apko.lock.json",
 )
+apk.translate_lock(
+    name = "creusot_base_lock",
+    lock = "//tools/creusot:image.apko.lock.json",
+)
+apk.translate_lock(
+    name = "kdc_base_lock",
+    lock = "//crates/broker/tests/fixtures/security/kdc:image.apko.lock.json",
+)
+use_repo(apk, "broker_base_lock", "creusot_base_lock", "kdc_base_lock")
 
 # ---------------------------------------------------------------------------
 # Format and lint. See //tools/format and //tools/lint.
@@ -137,7 +143,7 @@ bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
 bazel_dep(name = "aspect_rules_lint_rust", version = "0.0.2")
 
 # See the patch header: that module registers `@default_rust_toolchains//:all`,
-# a package rules_rs 0.0.106 does not create.
+# a package rules_rs 0.0.107 does not create.
 single_version_override(
     module_name = "aspect_rules_lint_rust",
     patch_strip = 1,
@@ -173,11 +179,11 @@ toolchains.toolchain(
     # exactly this.
     rustfmt_version = "nightly/2026-08-14",
     # Matches rust-toolchain.toml. These had drifted apart -- Bazel built with
-    # 1.97.0 while Cargo used 1.97.1 -- which is precisely the split the "one
+    # 1.97.0 while Cargo used 1.98.0 -- which is precisely the split the "one
     # dependency source of truth" arrangement exists to avoid.
-    version = "1.97.1",
+    version = "1.98.0",
 )
-use_repo(toolchains, "krabka_rust_toolchains")
+use_repo(toolchains, "default_rust_toolchains", "krabka_rust_toolchains")
 
 register_toolchains("@krabka_rust_toolchains//...")
 

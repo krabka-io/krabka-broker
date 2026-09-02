@@ -234,15 +234,17 @@ Two invariants follow, and a break in either one is a bug. A freeze never stops 
 | Follower replication | Allowed, always | Replication is what makes the frozen prefix durable. |
 | Barrier marker injection | Allowed | The broker authors it, it carries no application data, and a freeze is when an operator wants a cut. |
 | Compaction | Refused | Compaction removes records, and a promotion needs the frozen prefix byte-identical between sites. |
-| Retention eviction | Refused by the rule, with no gate to write | See below. |
+| Retention eviction | Refused | Local and remote retention both remove bytes. |
 | Tiering copy | Allowed | A copy adds a replica. The local eviction that follows removes bytes, so the broker refuses that. |
 | `DeleteRecords` and `DeleteTopics` | Refused | A break-glass approval for either one does not defeat a freeze. |
+| Reassignment start or cancel | Refused | Either request can schedule or perform replica removal. No row may consume an approval or append metadata while frozen. |
+| Reassignment completion | Allowed | The cluster accepted the reassignment before the freeze. Completion follows the same rule as a transaction marker. |
 
 The transaction marker rule is the one that most needs its reason stated. Refusing a marker would leave a permanently open transaction, which pins the last stable offset and stops every `read_committed` consumer of the partition. The freeze would then break reads, and a frozen topic that cannot be read is not the state this feature offers.
 
 That gives the rule its honest limit. **A freeze does not roll back a transaction that is already in flight.** A producer that enlisted a partition before the freeze can still commit what it already wrote. The log grows by those records after the freeze lands. The freeze stops the next `AddPartitionsToTxn` and the next produce, and it lets the open work finish. An operator who needs the log to stop at an exact offset should take a barrier cut, which is what [KFC-4](KFC-4-cross-topic-snapshots.md) is for.
 
-The retention row is a rule with nothing to enforce it, and this note is here because nothing else in the repository reports it. **Nothing in this workspace calls the log tick outside tests**, so no code path applies time retention or size retention to a live partition today. The rule is stated so that a sweeper written later gates on the freeze. A gate written into a path that nothing calls would be dead code that reads like a guarantee.
+The cleaner and remote-log-manager sweeps enforce the removal rows. A frozen topic can still copy a segment into the remote tier, but neither local nor remote retention may delete it. A thaw makes the next sweep eligible without another operator step.
 
 ### Internal Topics Are Never Freezable
 
@@ -360,10 +362,12 @@ Unclean recovery also runs from leader election and from a broker heartbeat, wit
 The recovery job carries the proposal that authorized it when a person asked for it, and carries none when the controller started it. A three-valued setting decides what the broker does in the second case.
 
 - `off` keeps today's behaviour, with no audit event and no counter.
-- `audit-only` is the default. Recovery runs, and the broker emits an audit event with the bypassed phase that names the partition and the strategy, and increments `break_glass_bypassed`. An operator can prove after the fact that a data-losing election happened with no approval.
-- `require` fails closed. The partition stays leaderless and visibly offline, and the broker audits the refusal.
+- `audit-only` is the default. Recovery runs, and the broker emits one audit event that names the partition, the strategy, the replica it elected, and the rule that chose it. An election that fell back to the most complete surviving log carries the bypassed phase and increments `break_glass_bypassed`, so an operator can prove after the fact that a data-losing election happened with no approval. An election that took a surviving eligible leader replica carries the applied phase and counts no bypass.
+- `require` fails closed against the election that can lose data. The partition stays leaderless and visibly offline, and the broker audits the refusal.
 
 The split default holds in one sentence. An operator who types an unclean election can be asked for a second signature, and a controller that reacts to a dead broker at 03:00 cannot.
+
+KIP-966 narrows what the second and third settings are about. A partition whose eligible-leader-replica set still has a surviving member is recovered from that member, and that election loses no committed record: there is nothing in it for a second person to weigh, so `require` lets it through and `audit-only` does not count it as a bypass. Only the fallback to the most complete surviving log is the data-losing act the rule exists for. `require` refuses a partition with no published ELR before the broker spends a round trip polling the survivors, and refuses one whose poll reached the fallback anyway.
 
 ### Every Step Reaches the Audit Log, and Names Both People
 
@@ -486,11 +490,11 @@ The mixture is the price, and the design pays for it in two ways. `freeze list -
 
 ### A Two-Person Gate on the Background Unclean-Recovery Path
 
-The background recovery path loses committed data exactly as the operator-driven path does, so the two-person rule seems to belong on both. Anything less looks like a hole in the rule.
+The background recovery path can lose committed data exactly as the operator-driven path does, whenever no eligible leader replica survives to be elected instead, so the two-person rule seems to belong on both. Anything less looks like a hole in the rule.
 
 It loses on the absence of a caller. That path runs from leader election and from a broker heartbeat, with no request, no connection, and no principal. Nobody waits for an answer, so a refusal has no recipient. The only thing the broker can do is leave the partition offline until a person notices.
 
-That is a real option and it is what `require` does. It is not the default. Every partition whose leader dies at 03:00 pays the availability cost, and not only the ones an incident touches. `audit-only` is the default because it gives the property that matters most and costs nothing. An operator can prove after the fact that a data-losing election happened with no approval, and `break_glass_bypassed` is the counter that says so at the time.
+That is a real option and it is what `require` does, for every partition that has no eligible leader replica left to elect. It is not the default. Every such partition whose leader dies at 03:00 pays the availability cost, and not only the ones an incident touches. `audit-only` is the default because it gives the property that matters most and costs nothing. An operator can prove after the fact that a data-losing election happened with no approval, and `break_glass_bypassed` is the counter that says so at the time.
 
 ### An Internal Topic for the Proposals
 

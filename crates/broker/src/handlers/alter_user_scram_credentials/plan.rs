@@ -17,16 +17,16 @@ use krabka_protocol::owned::{
     alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
 };
 use krabka_security::SaslMechanism;
+use krabka_verified::{ScramAlterationDecision, ScramPriorState};
 
 use super::{
     records::{delete_record, upsertion_record},
     response::{err_result, ok_result},
-    validation::{AlterationError, validate_deletion, validate_upsertion},
+    validation::{
+        AlterationError, decide_deletion, decide_upsertion, decision_error, decision_mechanism,
+    },
 };
-use crate::{broker::Broker, codes};
-
-const DUPLICATE_ALTERATION_MESSAGE: &str =
-    "A user credential cannot be altered twice in the same request";
+use crate::broker::Broker;
 
 pub(super) struct AlterationPlan {
     pub(super) user_results: Vec<AlterUserScramCredentialsResult>,
@@ -42,22 +42,6 @@ pub(super) fn plan_alterations(
     let mut deletions = HashMap::new();
     let mut upsertions = HashMap::new();
     let mut errors = HashMap::new();
-
-    if !authorized {
-        for deletion in &req.deletions {
-            remember_user(&mut user_order, &deletion.name);
-        }
-        for upsertion in &req.upsertions {
-            remember_user(&mut user_order, &upsertion.name);
-        }
-        return AlterationPlan {
-            user_results: user_order
-                .into_iter()
-                .map(|user| err_result(user, codes::CLUSTER_AUTHORIZATION_FAILED, "not super-user"))
-                .collect(),
-            records: Vec::new(),
-        };
-    }
 
     for deletion in req.deletions {
         remember_user(&mut user_order, &deletion.name);
@@ -126,27 +110,44 @@ fn stage_deletion(
     deletions: &mut HashMap<String, (ScramCredentialDeletion, SaslMechanism)>,
     errors: &mut HashMap<String, AlterationError>,
 ) {
-    // Kafka reports the first per-user validation/resource error. Once an
-    // error exists, later same-user rows must not replace it with DUPLICATE.
-    if errors.contains_key(&deletion.name) {
-        return;
-    }
-
-    // A pending prior deletion means the previous same-user alteration was
-    // accepted so far; the second alteration converts that pending success
-    // into Kafka's DUPLICATE_RESOURCE result.
-    if deletions.remove(&deletion.name).is_some() {
-        errors.insert(deletion.name, duplicate_alteration_error());
-        return;
-    }
-
-    match validate_deletion(broker, &deletion, authorized) {
-        Ok(mechanism) => {
-            deletions.insert(deletion.name.clone(), (deletion, mechanism));
-        }
-        Err(error) => {
+    let prior = prior_state(
+        &deletion.name,
+        deletions.contains_key(&deletion.name),
+        false,
+        errors,
+    );
+    let decision = decide_deletion(broker, &deletion, authorized, prior);
+    match decision {
+        ScramAlterationDecision::KeepPriorError => {}
+        ScramAlterationDecision::Duplicate => {
+            deletions.remove(&deletion.name);
+            let error = decision_error(decision).expect("duplicate has an error");
             errors.insert(deletion.name, error);
         }
+        ScramAlterationDecision::AcceptSha256 | ScramAlterationDecision::AcceptSha512 => {
+            let mechanism =
+                decision_mechanism(decision).expect("accepted decision has a mechanism");
+            deletions.insert(deletion.name.clone(), (deletion, mechanism));
+        }
+        _ => {
+            let error = decision_error(decision).expect("rejected decision has an error");
+            errors.insert(deletion.name, error);
+        }
+    }
+}
+
+fn prior_state(
+    user: &str,
+    has_deletion: bool,
+    has_upsertion: bool,
+    errors: &HashMap<String, AlterationError>,
+) -> ScramPriorState {
+    if errors.contains_key(user) {
+        ScramPriorState::Rejected
+    } else if has_deletion || has_upsertion {
+        ScramPriorState::Accepted
+    } else {
+        ScramPriorState::Unseen
     }
 }
 
@@ -157,34 +158,30 @@ fn stage_upsertion(
     upsertions: &mut HashMap<String, (ScramCredentialUpsertion, SaslMechanism)>,
     errors: &mut HashMap<String, AlterationError>,
 ) {
-    // Kafka reports the first per-user validation/resource error. Once an
-    // error exists, later same-user rows must not replace it with DUPLICATE.
-    if errors.contains_key(&upsertion.name) {
-        return;
-    }
-
-    // A pending prior deletion/upsertion means the previous same-user
-    // alteration was accepted so far; the second alteration converts that
-    // pending success into Kafka's DUPLICATE_RESOURCE result.
-    if deletions.remove(&upsertion.name).is_some() || upsertions.remove(&upsertion.name).is_some() {
-        errors.insert(upsertion.name, duplicate_alteration_error());
-        return;
-    }
-
-    match validate_upsertion(&upsertion, authorized) {
-        Ok(mechanism) => {
-            upsertions.insert(upsertion.name.clone(), (upsertion, mechanism));
-        }
-        Err(error) => {
+    let prior = prior_state(
+        &upsertion.name,
+        deletions.contains_key(&upsertion.name),
+        upsertions.contains_key(&upsertion.name),
+        errors,
+    );
+    let decision = decide_upsertion(&upsertion, authorized, prior);
+    match decision {
+        ScramAlterationDecision::KeepPriorError => {}
+        ScramAlterationDecision::Duplicate => {
+            deletions.remove(&upsertion.name);
+            upsertions.remove(&upsertion.name);
+            let error = decision_error(decision).expect("duplicate has an error");
             errors.insert(upsertion.name, error);
         }
-    }
-}
-
-fn duplicate_alteration_error() -> AlterationError {
-    AlterationError {
-        code: codes::DUPLICATE_RESOURCE,
-        message: DUPLICATE_ALTERATION_MESSAGE,
+        ScramAlterationDecision::AcceptSha256 | ScramAlterationDecision::AcceptSha512 => {
+            let mechanism =
+                decision_mechanism(decision).expect("accepted decision has a mechanism");
+            upsertions.insert(upsertion.name.clone(), (upsertion, mechanism));
+        }
+        _ => {
+            let error = decision_error(decision).expect("rejected decision has an error");
+            errors.insert(upsertion.name, error);
+        }
     }
 }
 
@@ -201,13 +198,50 @@ mod tests {
     use krabka_security::{AuthMethod, Principal, scram::MIN_SCRAM_ITERATIONS};
 
     use super::*;
-    use crate::handlers::alter_user_scram_credentials::{
-        handle,
-        test_support::{
-            KAFKA_DUPLICATE_RESOURCE, expected_result, start_broker, test_context,
-            valid_upsertion_for_mechanism, wait_for_leader,
+    use crate::{
+        codes,
+        handlers::alter_user_scram_credentials::{
+            handle,
+            test_support::{
+                KAFKA_DUPLICATE_RESOURCE, expected_result, start_broker, test_context,
+                valid_upsertion, valid_upsertion_for_mechanism, wait_for_leader,
+            },
         },
     };
+
+    #[tokio::test]
+    async fn plan_emits_one_record_per_success_and_is_retry_stable() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let mut overflow = valid_upsertion("overflow");
+        overflow.iterations = i32::MAX;
+        let req = AlterUserScramCredentialsRequest {
+            upsertions: vec![
+                valid_upsertion("accepted"),
+                overflow,
+                valid_upsertion_for_mechanism("duplicate", 1, SaslMechanism::ScramSha256),
+                valid_upsertion_for_mechanism("duplicate", 2, SaslMechanism::ScramSha512),
+            ],
+            ..Default::default()
+        };
+
+        let first = plan_alterations(&broker, req.clone(), true);
+        let retry = plan_alterations(&broker, req, true);
+
+        assert!(first.user_results.len() == 3);
+        assert!(first.user_results[0].error_code == 0);
+        assert!(first.user_results[1].error_code == codes::UNACCEPTABLE_CREDENTIAL);
+        assert!(first.user_results[2].error_code == codes::DUPLICATE_RESOURCE);
+        assert!(first.records.len() == 1);
+        let MetadataRecord::V1ScramCredential(record) = &first.records[0] else {
+            panic!("accepted upsertion must emit a SCRAM credential record");
+        };
+        assert!(record.user == "accepted");
+        assert!(retry.user_results == first.user_results);
+        assert!(retry.records == first.records);
+        broker_handle.shutdown().await;
+    }
 
     #[tokio::test]
     async fn handle_duplicate_username_across_upsertion_mechanisms_returns_one_error_row() {

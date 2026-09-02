@@ -16,8 +16,10 @@ mod operator;
 mod policy;
 mod scan;
 
+// `unclean_recovery::selection` reads the same witness set the failover scans
+// do, so its tests build one out of these fixtures too.
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 // `leader_failover_model` checks the real per-partition policy, so these
 // two are re-exported for it alone.
@@ -29,7 +31,8 @@ pub(crate) use self::{
         ElectError, ElectionType, select_new_leader_for_partition,
         select_replacement_leader_for_shutdown,
     },
-    scan::compute_offline_dir_failover_changes,
+    policy::FailoverPlan,
+    scan::{compute_offline_dir_failover_changes, compute_unclean_restart_changes},
 };
 
 #[cfg(test)]

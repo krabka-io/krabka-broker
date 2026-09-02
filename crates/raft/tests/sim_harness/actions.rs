@@ -21,9 +21,12 @@ impl<L: SimNodeLog> Sim<L> {
                     peer,
                     Event::ReceiveVoteRequest {
                         from: id,
+                        cluster_id: None,
                         voter_id: peer,
+                        voter_directory_id: uuid::Uuid::nil(),
                         candidate_epoch: epoch,
                         candidate: id,
+                        candidate_directory_id: uuid::Uuid::nil(),
                         candidate_log_end: cand_log,
                         pre_vote,
                     },

@@ -5,15 +5,22 @@
 use std::time::Duration as StdDuration;
 
 use assert2::{assert, check};
+use krabka_ids::Offset;
+use tokio::sync::oneshot;
 
-use super::*;
-use crate::kraft::{
-    controller::test_support::{
-        await_leader, build, build_engine_only, elect_leader_with_helper,
-        elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
-        topic_record_named,
+use super::CommitWaiter;
+use crate::{
+    SubmitChangeResult,
+    error::RaftError,
+    kraft::{
+        controller::test_support::{
+            await_leader, build, build_engine_only, elect_leader_with_helper,
+            elect_single_voter_engine, one_offset_batch, submit_change_with_timeout, topic_record,
+            topic_record_named,
+        },
+        event::Event,
+        types::NodeId,
     },
-    transport::NullPeerSender,
 };
 
 #[test]
@@ -89,7 +96,7 @@ fn offset_advance_submit_rejects_counts_outside_verified_domain() {
     }
     let log_end = engine.log.log_end_offset();
 
-    for count in [-1, i64::MAX] {
+    for count in [-1, 0, i64::MAX] {
         let (reply, mut rx) = oneshot::channel();
         engine.on_submit_change(&advance(count), reply);
 
@@ -100,6 +107,490 @@ fn offset_advance_submit_rejects_counts_outside_verified_domain() {
         assert!(engine.image.partition_next_offset("topic", 0) == Some(1));
         assert!(engine.log.log_end_offset() == log_end);
     }
+}
+
+#[tokio::test]
+async fn pending_offset_reservations_are_contiguous_before_commit() {
+    use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+
+    let create_ctrl = ctrl.clone();
+    let create =
+        tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let advance = |count| {
+        vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count,
+            },
+        )]
+    };
+    let first_ctrl = ctrl.clone();
+    let first = tokio::spawn(async move { first_ctrl.submit_change(advance(3)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let second_ctrl = ctrl.clone();
+    let second = tokio::spawn(async move { second_ctrl.submit_change(advance(5)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+
+    let first = first.await.unwrap().unwrap();
+    let second = second.await.unwrap().unwrap();
+    assert!(first.offset_reservations[0].base_offset == 0);
+    assert!(first.offset_reservations[0].count == 3);
+    assert!(first.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
+    assert!(second.offset_reservations[0].base_offset == 3);
+    assert!(second.offset_reservations[0].count == 5);
+    assert!(second.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
+    assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(8));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
+    use krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord, MetadataRecord};
+    use uuid::Uuid;
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    let proposal = BreakGlassProposalRecord {
+        proposal_id: Uuid::from_u128(0x271),
+        action: BreakGlassAction::DeleteRecords,
+        target: "orders-3".to_owned(),
+        proposer: "User:alice".to_owned(),
+        reason: "incident".to_owned(),
+        created_at_ms: 1,
+        expires_at_ms: 1_000,
+        approvals: Vec::new(),
+        consumed_at_ms: 0,
+        withdrawn: false,
+    };
+
+    let create_ctrl = ctrl.clone();
+    let proposed = proposal.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    for malformed in [
+        BreakGlassProposalRecord {
+            consumed_at_ms: -1,
+            ..proposal.clone()
+        },
+        BreakGlassProposalRecord {
+            target: "orders-4".to_owned(),
+            consumed_at_ms: 10,
+            ..proposal.clone()
+        },
+    ] {
+        let result = ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(malformed)])
+            .await;
+        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    }
+
+    let consumed = BreakGlassProposalRecord {
+        consumed_at_ms: i64::MAX,
+        ..proposal.clone()
+    };
+    let first_ctrl = ctrl.clone();
+    let first_record = consumed.clone();
+    let first = tokio::spawn(async move {
+        first_ctrl
+            .submit_change(vec![MetadataRecord::V1BreakGlassProposal(first_record)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())]),
+    )
+    .await
+    .expect("a concurrent consume must be rejected before append");
+    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    first.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .break_glass_proposal(proposal.proposal_id)
+            .is_some_and(|stored| stored.consumed_at_ms == i64::MAX)
+    );
+
+    let retry = ctrl
+        .submit_change(vec![MetadataRecord::V1BreakGlassProposal(consumed)])
+        .await;
+    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit() {
+    use krabka_metadata::{MetadataRecord, PatternType, TopicFreezeRecord};
+    use uuid::Uuid;
+
+    fn freeze(scope: &str, set_at_ms: i64, frozen: bool) -> TopicFreezeRecord {
+        TopicFreezeRecord {
+            scope: scope.to_owned(),
+            pattern_type: PatternType::Literal,
+            frozen,
+            reason: "incident".to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms,
+            proposal_id: Uuid::nil(),
+            key_id: String::new(),
+            signature: Vec::new(),
+        }
+    }
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    let epoch = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: epoch.leader_epoch,
+        fetch_offset: epoch.log_end_offset,
+    })
+    .await
+    .unwrap();
+
+    let create_ctrl = ctrl.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(freeze(
+                "orders", 10, true,
+            ))])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    for rejected in [
+        freeze("orders", 10, true),
+        freeze("orders", 9, true),
+        freeze("missing", 11, false),
+    ] {
+        let result = ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(rejected)])
+            .await;
+        assert2::assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    }
+    let batch = ctrl
+        .submit_change(vec![
+            MetadataRecord::V1TopicFreeze(freeze("a", 11, true)),
+            MetadataRecord::V1TopicFreeze(freeze("b", 11, true)),
+        ])
+        .await;
+    assert2::assert!(matches!(batch, Err(RaftError::ChangeRejected(_))));
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let replacement = freeze("orders", i64::MAX, true);
+    let replace_ctrl = ctrl.clone();
+    let first = replacement.clone();
+    let replace = tokio::spawn(async move {
+        replace_ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(first)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_change(vec![MetadataRecord::V1TopicFreeze(replacement.clone())]),
+    )
+    .await
+    .expect("a concurrent replacement must be rejected before append");
+    assert2::assert!(matches!(concurrent, Err(RaftError::ChangeRejected(_))));
+
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    replace.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .topic_freeze("orders")
+            .is_some_and(|stored| stored.set_at_ms == i64::MAX)
+    );
+
+    let retry = ctrl
+        .submit_change(vec![MetadataRecord::V1TopicFreeze(replacement)])
+        .await;
+    assert2::assert!(matches!(retry, Err(RaftError::ChangeRejected(_))));
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
+    use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+    use krabka_security::KafkaPrincipal;
+
+    fn principal(name: &str) -> KafkaPrincipal {
+        KafkaPrincipal {
+            principal_type: "User".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    async fn commit_pending(ctrl: &crate::kraft::KraftController) {
+        let quorum = ctrl.quorum_state().await.unwrap();
+        ctrl.inject_event(Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: quorum.leader_epoch,
+            fetch_offset: quorum.log_end_offset,
+        })
+        .await
+        .unwrap();
+    }
+
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let original = DelegationTokenRecord {
+        token_id: "token-273".to_string(),
+        owner: principal("alice"),
+        hmac: vec![0x27; 32],
+        issue_timestamp_ms: now - 1_000,
+        expiry_timestamp_ms: now + 60_000,
+        max_timestamp_ms: now + 600_000,
+        renewers: vec![principal("bob")],
+    };
+    let renewed = DelegationTokenRecord {
+        expiry_timestamp_ms: now + 120_000,
+        ..original.clone()
+    };
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    commit_pending(&ctrl).await;
+
+    let create_ctrl = ctrl.clone();
+    let create_record = original.clone();
+    let create = tokio::spawn(async move {
+        create_ctrl
+            .submit_change(vec![MetadataRecord::V1DelegationToken(create_record)])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_pending(&ctrl).await;
+    create.await.unwrap().unwrap();
+
+    let renew_ctrl = ctrl.clone();
+    let renew = {
+        let expected = original.clone();
+        let replacement = renewed.clone();
+        tokio::spawn(async move {
+            renew_ctrl
+                .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+                    expected,
+                    replacement,
+                }])
+                .await
+        })
+    };
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+
+    let concurrent_delete = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        ctrl.submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: original.clone(),
+        }]),
+    )
+    .await
+    .expect("concurrent delete must return before the first mutation commits");
+    assert2::assert!(matches!(
+        concurrent_delete,
+        Err(RaftError::ChangeRejected(_))
+    ));
+
+    commit_pending(&ctrl).await;
+    renew.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .delegation_token_by_id(&original.token_id)
+            .is_some_and(|token| token.expiry_timestamp_ms == renewed.expiry_timestamp_ms)
+    );
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let retry = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+            expected: original.clone(),
+            replacement: renewed.clone(),
+        }])
+        .await;
+    assert2::assert!(retry.is_ok());
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let stale = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: original,
+        }])
+        .await;
+    assert2::assert!(matches!(stale, Err(RaftError::ChangeRejected(_))));
+
+    let malformed = DelegationTokenRecord {
+        owner: principal("mallory"),
+        expiry_timestamp_ms: i64::MAX,
+        ..renewed.clone()
+    };
+    let rejected = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Renew {
+            expected: renewed.clone(),
+            replacement: malformed,
+        }])
+        .await;
+    assert2::assert!(matches!(rejected, Err(RaftError::ChangeRejected(_))));
+
+    let delete_ctrl = ctrl.clone();
+    let delete_expected = renewed.clone();
+    let delete = tokio::spawn(async move {
+        delete_ctrl
+            .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+                expected: delete_expected,
+            }])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_pending(&ctrl).await;
+    delete.await.unwrap().unwrap();
+    assert2::check!(
+        ctrl.current_image()
+            .delegation_token_by_id(&renewed.token_id)
+            .is_none()
+    );
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let delete_retry = ctrl
+        .submit_delegation_token_mutations(vec![crate::DelegationTokenMutation::Delete {
+            expected: renewed,
+        }])
+        .await;
+    assert2::assert!(delete_retry.is_ok());
+    assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
+    use krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord};
+
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+
+    let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
+    let result = ctrl
+        .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "topic".to_string(),
+                partition: 0,
+                count: 1,
+            },
+        )])
+        .await;
+
+    assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
+    assert!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
+
+    let create_ctrl = ctrl.clone();
+    let create =
+        tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create.await.unwrap().unwrap();
+
+    let retry_ctrl = ctrl.clone();
+    let retry = tokio::spawn(async move {
+        retry_ctrl
+            .submit_change(vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "topic".to_string(),
+                    partition: 0,
+                    count: 1,
+                },
+            )])
+            .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    let retry = retry.await.unwrap().unwrap();
+    assert!(retry.offset_reservations[0].base_offset == 0);
+    assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(1));
+    ctrl.shutdown().await;
 }
 
 #[test]

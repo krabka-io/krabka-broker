@@ -1,0 +1,50 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 188 0 188 92 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 189 14 189 15
+let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 189 4 192 50
+let%span sdelegation_token'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 181 10 186 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let token_is_active [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 188 0 188 92]
+  (now_ms: Int64.t) (expiry_timestamp_ms: Int64.t) (max_timestamp_ms: Int64.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_8 <- Int64.ge now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb7) | br1 -> {_8} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_10 <- Int64.gt expiry_timestamp_ms now_ms ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb7) | br1 -> {_10} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = [ &_13 <- Int64.gt max_timestamp_ms now_ms ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb7) | br1 -> {_13} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- Int64.le expiry_timestamp_ms max_timestamp_ms ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sdelegation_token'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & now_ms: Int64.t = now_ms
+  | & expiry_timestamp_ms: Int64.t = expiry_timestamp_ms
+  | & max_timestamp_ms: Int64.t = max_timestamp_ms
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & _13: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:token_is_active ensures] [%#sdelegation_token'1] result
+    = (ge_log_Int (Int64.to_int now_ms) 0
+    /\ gt_log_Int (Int64.to_int expiry_timestamp_ms) (Int64.to_int now_ms)
+    /\ gt_log_Int (Int64.to_int max_timestamp_ms) (Int64.to_int now_ms)
+    /\ Int64.to_int expiry_timestamp_ms <= Int64.to_int max_timestamp_ms)}
+    (! return {result}) ]

@@ -1,0 +1,155 @@
+//! Withdrawing one replica's ELR membership: what moves, what does not, and
+//! what the published value looks like afterwards.
+
+use std::collections::BTreeMap;
+
+use assert2::assert;
+use krabka_metadata::{
+    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
+    TopicRecord,
+};
+
+use super::withdraw_elr_membership;
+use crate::{
+    config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
+    elr::state::{PartitionElr, TopicElr},
+};
+
+fn nodes(ids: &[u64]) -> Vec<NodeId> {
+    ids.iter().copied().map(NodeId).collect()
+}
+
+/// A topic with `partitions` partitions and the ELR value `elr`.
+fn topic_records(name: &str, partitions: i32, elr: &str) -> Vec<MetadataRecord> {
+    let mut overrides = BTreeMap::new();
+    overrides.insert(MIN_INSYNC_REPLICAS.to_string(), "2".to_string());
+    if !elr.is_empty() {
+        overrides.insert(ELIGIBLE_LEADER_REPLICAS.to_string(), elr.to_string());
+    }
+    let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
+        name: name.into(),
+        topic_id: uuid::Uuid::new_v4(),
+        partitions,
+        replication_factor: 3,
+    })];
+    records.extend((0..partitions).map(|partition| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: name.into(),
+            partition,
+            leader: NodeId(1),
+            replicas: nodes(&[1, 2, 3]),
+            isr: nodes(&[1]),
+            leader_epoch: LeaderEpoch(1),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![uuid::Uuid::nil(); 3],
+            partition_epoch: 1,
+        })
+    }));
+    records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: name.into(),
+        overrides,
+    }));
+    records
+}
+
+fn image_of(topics: &[(&str, i32, &str)]) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    for (name, partitions, elr) in topics {
+        for record in topic_records(name, *partitions, elr) {
+            image.apply(&record);
+        }
+    }
+    image
+}
+
+/// Apply `records` to `image` and read one partition's ELR back out.
+fn elr_after(image: &MetadataImage, records: &[MetadataRecord], topic: &str) -> TopicElr {
+    let mut image = image.clone();
+    for record in records {
+        image.apply(record);
+    }
+    TopicElr::of_topic(&image, topic)
+}
+
+/// The move Kafka's `maybePopulateTargetElr` makes for an unclean-shutdown
+/// replica: struck from the ELR, kept in the last-known ELR. The replica is no
+/// longer offered as a safe election, and an operator can still see it was the
+/// last one known to be complete.
+#[test]
+fn an_unclean_replica_moves_from_the_elr_to_the_last_known_elr() {
+    let image = image_of(&[("orders", 1, "0:2,3:")]);
+
+    let records = withdraw_elr_membership(&image, NodeId(2));
+
+    assert!(
+        elr_after(&image, &records, "orders").partition(0)
+            == PartitionElr {
+                eligible_leader_replicas: vec![3],
+                last_known_elr: vec![2],
+            }
+    );
+}
+
+/// Every partition of every topic that names the replica moves, and no other
+/// partition does. Withdrawal is cluster-wide, the way Kafka walks
+/// `brokersToElrs.partitionsWithBrokerInElr(brokerId)`.
+#[test]
+fn withdrawal_reaches_every_partition_that_names_the_replica() {
+    let image = image_of(&[("orders", 2, "0:2,3:;1:3:"), ("payments", 1, "0:2:4")]);
+
+    let records = withdraw_elr_membership(&image, NodeId(2));
+
+    let orders = elr_after(&image, &records, "orders");
+    assert!(
+        orders.partition(0)
+            == PartitionElr {
+                eligible_leader_replicas: vec![3],
+                last_known_elr: vec![2],
+            }
+    );
+    // Partition 1 never named node 2, so it is untouched.
+    assert!(
+        orders.partition(1)
+            == PartitionElr {
+                eligible_leader_replicas: vec![3],
+                last_known_elr: vec![],
+            }
+    );
+    assert!(
+        elr_after(&image, &records, "payments").partition(0)
+            == PartitionElr {
+                eligible_leader_replicas: vec![],
+                last_known_elr: vec![2, 4],
+            }
+    );
+}
+
+/// A replica in no ELR anywhere produces no records at all -- the common case,
+/// and the one that must not churn the metadata log on every restart.
+#[test]
+fn a_replica_in_no_elr_produces_no_records() {
+    let image = image_of(&[("orders", 1, "0:2,3:"), ("payments", 1, "")]);
+
+    assert!(withdraw_elr_membership(&image, NodeId(9)).is_empty());
+}
+
+/// Withdrawing the only eligible replica leaves the topic with no ELR value at
+/// all rather than an entry that renders as "no ELR", and the topic's other
+/// overrides survive: applying a `V1TopicConfig` replaces the whole map.
+#[test]
+fn the_last_eligible_replica_leaving_tombstones_the_key_and_keeps_other_overrides() {
+    let image = image_of(&[("orders", 1, "0:2:")]);
+
+    let records = withdraw_elr_membership(&image, NodeId(2));
+
+    let mut after = image.clone();
+    for record in &records {
+        after.apply(record);
+    }
+    let overrides = after.topic_config("orders").expect("topic keeps overrides");
+    assert!(overrides.get(MIN_INSYNC_REPLICAS) == Some(&"2".to_string()));
+    // Node 2 is still last-known-complete, so the key stays -- with only that
+    // half of the entry.
+    assert!(overrides.get(ELIGIBLE_LEADER_REPLICAS) == Some(&"0::2".to_string()));
+}

@@ -12,9 +12,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
-use qubit_clock::{NanoClock, NanoMonotonicClock};
+use qubit_clock::{MonotonicClock, StdMonotonicClock};
 
 use super::{
     epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
@@ -30,10 +31,17 @@ pub struct FetchSession {
     pub privileged: bool,
     pub creator_principal: String,
     pub partitions: HashMap<FetchSessionKey, CachedPartitionState>,
-    /// Monotonic epoch-nanosecond timestamp of the last use of this session,
-    /// read from the cache's injected [`NanoClock`]. The order of these values
-    /// selects the LRU eviction victim. Only their relative order matters.
-    pub last_used_nanos: i128,
+    /// Time elapsed since the origin of the cache's clock at the last use of
+    /// this session, read from the cache's injected [`MonotonicClock`]. Only
+    /// the *order* of these values matters: the smallest one names the LRU
+    /// eviction victim. Every stamp in one cache comes from that one cache's
+    /// own injected clock, so they all share a single clock domain — and that
+    /// is what makes an elapsed-since-origin [`Duration`] a total order over
+    /// exactly the values the eviction scan compares. A
+    /// [`qubit_clock::MonotonicInstant`] could not serve here: it is
+    /// `PartialOrd` but not `Ord`, because instants from different clock
+    /// domains do not compare.
+    pub last_used: Duration,
 }
 
 pub(super) struct Inner {
@@ -56,26 +64,27 @@ pub struct FetchSessionCache {
     /// lock-free.
     pub(super) num_partitions: AtomicUsize,
     /// Monotonic time source that the cache stamps onto
-    /// `FetchSession::last_used_nanos` for LRU eviction. It is injectable, so
-    /// tests drive the eviction order with a [`qubit_clock::MockClock`]
+    /// `FetchSession::last_used` for LRU eviction. It is injectable, so tests
+    /// drive the eviction order with a [`qubit_clock::ManualMonotonicClock`]
     /// instead of `thread::sleep`.
-    pub(super) clock: Arc<dyn NanoClock>,
+    pub(super) clock: Arc<dyn MonotonicClock>,
 }
 
 impl FetchSessionCache {
     #[must_use]
     pub fn new(max_slots: usize) -> Self {
-        Self::with_clock(max_slots, Arc::new(NanoMonotonicClock::new()))
+        Self::with_clock(max_slots, Arc::new(StdMonotonicClock::new()))
     }
 
-    /// Constructs a cache with a caller-supplied monotonic [`NanoClock`].
+    /// Constructs a cache with a caller-supplied [`MonotonicClock`].
     ///
     /// Production uses [`FetchSessionCache::new`], which supplies a
-    /// [`NanoMonotonicClock`]. Tests pass a [`qubit_clock::MockClock`], so
-    /// that successive allocations get distinct, deterministic
-    /// `last_used_nanos` without a sleep between them.
+    /// [`StdMonotonicClock`]. Tests pass a
+    /// [`qubit_clock::ManualMonotonicClock`], so that successive allocations
+    /// get distinct, deterministic `last_used` stamps without a sleep between
+    /// them.
     #[must_use]
-    pub fn with_clock(max_slots: usize, clock: Arc<dyn NanoClock>) -> Self {
+    pub fn with_clock(max_slots: usize, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 sessions: HashMap::new(),

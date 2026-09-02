@@ -4,7 +4,8 @@
 //!
 //! Covered:
 //!   * named-request, fetch-all, and unknown-topic paths
-//!   * `is_internal` flag set on Krabka's three internal topics
+//!   * the `is_internal` flag lives in `tests/internal_topics.rs`, which
+//!     pins it across this API and `Metadata` at once
 //!   * `topic_authorized_operations` populated (KIP-430 helper) on every
 //!     Allow row. This API's v0 schema has no opt-in flag.
 //!   * Pagination through `response_partition_limit` and the `cursor` /
@@ -175,44 +176,6 @@ async fn unknown_topic_in_named_request_returns_error_row() {
     check!(resp.topics[1].name.as_deref() == Some("real-topic"));
     check!(resp.topics[1].error_code == 0);
     check!(resp.topics[1].partitions.len() == 1);
-
-    p.broker.shutdown().await;
-}
-
-#[tokio::test]
-async fn internal_topics_carry_is_internal_flag() {
-    let p = support::start().await;
-    // Drive a `CreateTopics` on `__consumer_offsets` to make sure the
-    // internal-topic row exists in the metadata image. (The broker's
-    // bootstrap creates it lazily on group-coordination traffic, which
-    // hasn't fired here.) We can't create internal topics through the
-    // wire, but the bootstrap also runs eagerly on `support::start` for
-    // `__consumer_offsets` — verify by inspection of the fetch-all
-    // response.
-    create_topic(&p, "regular", 1).await;
-
-    let resp = p
-        .client
-        .send(DescribeTopicPartitionsRequest {
-            topics: Vec::new(),
-            response_partition_limit: 2000,
-            cursor: None,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeTopicPartitions");
-
-    for row in &resp.topics {
-        let n = row.name.as_deref().unwrap_or("");
-        let expect_internal = matches!(
-            n,
-            "__consumer_offsets" | "__transaction_state" | "__remote_log_metadata"
-        );
-        assert!(
-            row.is_internal == expect_internal,
-            "is_internal mismatch for {n}: {row:?}"
-        );
-    }
 
     p.broker.shutdown().await;
 }

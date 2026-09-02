@@ -1,9 +1,8 @@
 //! `murmur2(group) % num_partitions`.
 //!
 //! Every record of one barrier group lands on one `__barrier_state`
-//! partition, so the group's epochs hold a total order. The hash is Apache
-//! Kafka's `Utils.abs(murmur2(...)) % numPartitions` convention, the same one
-//! that `__transaction_state` and `__share_group_state` use.
+//! partition, so the group's epochs hold a total order. The hash follows
+//! Apache Kafka's `Utils.abs(murmur2(...)) % numPartitions` convention.
 
 use crate::kafka_hash::murmur2_partition;
 
@@ -22,10 +21,8 @@ mod tests {
 
     use super::*;
 
-    // The transaction partitioner hashes the same bytes with the same
-    // convention, so a barrier group and a transactional id of the same name
-    // land on the same index. The vectors come from the canonical JVM
-    // `Utils.abs(Utils.murmur2(s.getBytes(UTF_8))) % 50`.
+    // The vectors come from the canonical JVM
+    // `Utils.abs(Utils.murmur2(s.getBytes(UTF_8))) % 50` implementation.
     #[test]
     fn matches_the_jvm_murmur2_vectors() {
         let cases: &[(&str, i32)] = &[("my-tid", 43), ("producer-1", 45), ("tx-orders-prod", 26)];

@@ -1,0 +1,22 @@
+(* #"/workspace/crates/verified/src/recovery.rs" 84 27 84 32 *)
+
+(* <recovery::BarrierRecoveryFinalizeDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BarrierRecoveryFinalizeDecision =
+  | NoPending
+  | MalformedPending
+  | UnknownCoordinator
+  | FencedCoordinator
+  | FinalizePartial
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierRecoveryFinalizeDecision [#"/workspace/crates/verified/src/recovery.rs" 84 27 84 32]
+  (self: t_BarrierRecoveryFinalizeDecision) (return (x: t_BarrierRecoveryFinalizeDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierRecoveryFinalizeDecision = Any.any_l () | & self: t_BarrierRecoveryFinalizeDecision = self ])
+  [ return (result: t_BarrierRecoveryFinalizeDecision) -> (! return {result}) ]

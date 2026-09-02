@@ -1,0 +1,11 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_barrier_placement_decision": {
+        "prover": "alt-ergo",
+        "time": 0.003
+      }
+    }
+  }
+}

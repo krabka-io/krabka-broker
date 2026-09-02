@@ -105,6 +105,9 @@ mod tests {
                     ..Default::default()
                 }
         );
+
+        let retry = await_remote(Duration::from_secs(1), async { Ok(7_u8) }).await;
+        assert!(matches!(retry, Some(Ok(7))));
     }
 
     #[tokio::test]

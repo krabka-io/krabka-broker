@@ -23,6 +23,7 @@ fn legacy_elect(
     dead: NodeId,
     alive: &HashSet<NodeId>,
     _witnesses: &HashSet<NodeId>,
+    _eligible: &[i32],
     _strategy: RecoveryStrategy,
     _unclean_enabled: bool,
 ) -> FailoverDecision {

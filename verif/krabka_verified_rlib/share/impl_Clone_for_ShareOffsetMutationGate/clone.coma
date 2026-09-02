@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/share.rs" 23 27 23 32 *)
+
+(* <share::ShareOffsetMutationGate as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ShareOffsetMutationGate = NotCoordinator | NonEmptyGroup | Unrequested | Admissible bool
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ShareOffsetMutationGate [#"/workspace/crates/verified/src/share.rs" 23 27 23 32]
+  (self: t_ShareOffsetMutationGate) (return (x: t_ShareOffsetMutationGate)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ShareOffsetMutationGate = Any.any_l () | & self: t_ShareOffsetMutationGate = self ])
+  [ return (result: t_ShareOffsetMutationGate) -> (! return {result}) ]
