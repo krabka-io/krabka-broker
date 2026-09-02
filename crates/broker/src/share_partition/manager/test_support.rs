@@ -4,16 +4,10 @@
 //! build their manager from here, so every test runs against the same mock
 //! metadata source and the same lock duration.
 
-use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
-use krabka_raft::{
-    AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    UpdateVoter,
-};
+use krabka_metadata::{MetadataImage, NodeId};
 use krabka_security::ListenerProtocol;
-use tokio::sync::watch;
 
 use super::SharePartitionLeaderManager;
 use crate::{
@@ -25,82 +19,26 @@ use crate::{
         config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
         persister_client::SharePersister,
     },
+    test_support::FakeMetadataSource,
 };
 
 pub(super) const LOCK: Duration = Duration::from_secs(30);
 
-/// Minimal `MetadataSource` over a fixed image that holds no brokers.
+/// A metadata source over `image`, with this node reported as the
+/// controller leader.
 ///
-/// The bootstrap of the share-state topic cannot run against this image,
-/// because it has no brokers. The `read_state` of the persister thus stops
-/// early with an error, before any routing. This exercises the best-effort
-/// empty-window fallback of `get_or_load` without an inter-broker server.
-struct MockSource {
-    image: Arc<MetadataImage>,
-    leader_rx: watch::Receiver<Option<NodeId>>,
-    _leader_tx: watch::Sender<Option<NodeId>>,
-}
-
-impl MockSource {
-    fn new() -> Self {
-        Self::with_image(Arc::new(MetadataImage::new(uuid::Uuid::nil())))
-    }
-
-    fn with_image(image: Arc<MetadataImage>) -> Self {
-        let (tx, rx) = watch::channel(Some(krabka_metadata::NodeId(1)));
-        Self {
-            image,
-            leader_rx: rx,
-            _leader_tx: tx,
-        }
-    }
-}
-
-#[async_trait]
-impl MetadataSource for MockSource {
-    fn current_image(&self) -> Arc<MetadataImage> {
-        self.image.clone()
-    }
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        unimplemented!()
-    }
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_rx.clone()
-    }
-    fn quorum_state(&self) -> QuorumState {
-        unimplemented!()
-    }
-    async fn submit_change(
-        &self,
-        _records: Vec<MetadataRecord>,
-    ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-        Ok(krabka_raft::SubmitChangeResult::default())
-    }
-    async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    fn controller_bound_addr(&self) -> SocketAddr {
-        unimplemented!()
-    }
-    fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-        unimplemented!()
-    }
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        unimplemented!()
-    }
-    async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        unimplemented!()
-    }
-    async fn cancel(&self) {}
+/// An image that holds no brokers is deliberate in the default case: the
+/// bootstrap of the share-state topic cannot run against it, so `read_state`
+/// on the persister stops early with an error, before any routing. That
+/// exercises the best-effort empty-window fallback of `get_or_load` without an
+/// inter-broker server.
+fn fake_source(image: Arc<MetadataImage>) -> Arc<dyn MetadataSource> {
+    Arc::new(
+        FakeMetadataSource::builder()
+            .image(image)
+            .leader(Some(NodeId(1)))
+            .build(),
+    )
 }
 
 pub(super) fn manager() -> Arc<SharePartitionLeaderManager> {
@@ -115,7 +53,7 @@ pub(super) fn manager() -> Arc<SharePartitionLeaderManager> {
 /// partition leadership.
 pub(super) fn manager_with_image(image: Arc<MetadataImage>) -> Arc<SharePartitionLeaderManager> {
     let reg = Arc::new(PartitionRegistry::new());
-    let controller: Arc<dyn MetadataSource> = Arc::new(MockSource::with_image(image));
+    let controller = fake_source(image);
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         reg.clone(),
@@ -142,7 +80,7 @@ pub(super) fn manager_with_image(image: Arc<MetadataImage>) -> Arc<SharePartitio
 
 pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<SharePartitionLeaderManager> {
     let reg = Arc::new(PartitionRegistry::new());
-    let controller: Arc<dyn MetadataSource> = Arc::new(MockSource::new());
+    let controller = fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         reg.clone(),

@@ -173,13 +173,12 @@ mod tests {
     use krabka_metadata::MetadataImage;
 
     use super::*;
-    use crate::isr_maintenance::test_support::{TestMetadataSource, reg};
+    use crate::isr_maintenance::test_support::{fake_source, reg};
 
     #[tokio::test]
     async fn send_alter_partition_errors_without_controller_target() {
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
-            TestMetadataSource::new(MetadataImage::new(uuid::Uuid::nil()), None),
-        );
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> =
+            Arc::new(fake_source(MetadataImage::new(uuid::Uuid::nil()), None));
 
         let err = send_alter_partition(
             &controller,

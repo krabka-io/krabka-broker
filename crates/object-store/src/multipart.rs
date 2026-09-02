@@ -82,7 +82,9 @@ pub async fn list_s3_multipart_uploads(
         let mut signed = http::Request::get(url.as_str())
             .body(HttpRequestBody::empty())
             .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-        AwsAuthorizer::new(&credential, "s3", &cfg.region).authorize(&mut signed, None);
+        AwsAuthorizer::new(&credential, "s3", &cfg.region)
+            .try_authorize(&mut signed, None)
+            .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
         let response = client
             .get(url)
             .headers(signed.into_parts().0.headers)

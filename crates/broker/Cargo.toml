@@ -210,6 +210,12 @@ criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
 name = "produce"
 harness = false
 
+# The zero-copy fetch drain: `sendfile(2)` against the `pread` + write copy,
+# swept across response size to locate the crossover `sendfile_min` encodes.
+[[bench]]
+name = "fetch_drain"
+harness = false
+
 # The two documented PERF deferrals: the response-framing copies against a
 # chained-`Buf` prototype, and the replicator's extra `encoded_len` walk
 # against the `replicate_batch` it precedes.

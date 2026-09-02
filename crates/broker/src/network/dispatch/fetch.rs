@@ -47,8 +47,12 @@ where
                 tracing::warn!(%error, "framed.flush error before fetch plan, closing");
                 return AfterResponse::Close;
             }
-            if let Err(error) =
-                crate::network::fetch_writer::write_fetch_plan(framed.get_mut(), operations).await
+            if let Err(error) = crate::network::fetch_writer::write_fetch_plan(
+                framed.get_mut(),
+                operations,
+                &broker.metrics,
+            )
+            .await
             {
                 tracing::warn!(%error, "fetch plan write error, closing");
                 return AfterResponse::Close;

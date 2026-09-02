@@ -158,7 +158,7 @@ mod tests {
     use krabka_units::{millis, secs};
 
     use super::*;
-    use crate::broker::test_support::MockMetadataSource;
+    use crate::broker::test_support::fake_source;
 
     #[tokio::test]
     async fn broker_gauge_uses_configured_default_min_isr() {
@@ -193,7 +193,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         spawn_broker_gauge_updater(
             Arc::new(PartitionRegistry::new()),
-            Arc::new(MockMetadataSource::new(image, None)),
+            Arc::new(fake_source(image, None)),
             Arc::new(crate::heartbeat::controller_state::ControllerLivenessState::new(secs(10))),
             node_id,
             metrics.clone(),

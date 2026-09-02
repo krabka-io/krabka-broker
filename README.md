@@ -9,6 +9,45 @@ It builds on two sibling repositories and nothing else in the stack —
 layer and [`krabka-client-rs`](https://github.com/krabka-io/krabka-client-rs)
 for the Kafka client the broker and its tests use.
 
+## AI co-development and verification
+
+A human maintainer and AI coding agents codeveloped krabka-broker. AI output is
+a proposed change, not evidence that the code is correct. The repository checks
+changes against executable tests, proof obligations, model checks, and observed
+Kafka behavior.
+
+The checks use several independent methods:
+
+* Unit, property, integration, and crash-recovery tests check behavior at
+  different boundaries.
+* Mutation testing changes production code and checks whether the test suite
+  detects each change.
+* Creusot proves contracts for small executable kernels. Stateright enumerates
+  all reachable states within each model's stated bounds. Pull request CI reruns
+  every registered proof and model check.
+* Differential and JVM acceptance suites start digest-pinned Apache Kafka and
+  Confluent Platform brokers. They compare krabka with live reference processes
+  and run real Kafka clients and admin tools against krabka.
+
+Stateright covers event orderings that example-based tests can miss. It explores
+every reachable state within explicit bounds for crashes, retries, failover,
+replay, and concurrent operations. Some models drive production decision
+functions directly. Other models compose those functions with a small
+environment.
+
+Each entry in the [Stateright inventory](docs/verification.md#stateright-model-check-tier)
+records its bounds, properties, reached state and transition counts, truncation
+guards, and modeled assumptions. Pull request CI runs every model-bearing target
+even when impact analysis would skip it.
+
+A proved kernel can still have a bad adapter. Mutation testing can expose weak
+assertions, while live Kafka comparisons can reveal undocumented or
+version-specific behavior.
+
+This process is not a whole-system formal proof. The
+[verification catalog](docs/verification.md) lists each proof, each model's
+bounds, caller preconditions, and the I/O or orchestration outside its scope.
+
 ## Crates
 
 | Crate | What it is |
@@ -182,6 +221,70 @@ pushes it. The image runs as `nonroot` (65532). The build uses no Dockerfile or
 host package manager. `aspect delivery` skips the push when the image output did
 not change.
 
+A second layer carries the operator tools — `krabka-format`, `krabka-audit`,
+`krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore` —
+beside the broker under `/usr/bin`. The base has no shell, so a tool that is not
+in the image cannot be run in a container at all, and `krabka-format` has to run
+against the log directory before the broker will boot:
+
+```
+mkdir -p krabka-data && chown 65532:65532 krabka-data
+docker run --rm -v "${PWD}/krabka-data:/var/lib/krabka" \
+    --entrypoint /usr/bin/krabka-format krabka-io/krabka-broker:dev \
+    --log-dir /var/lib/krabka --standalone --node-id 1 \
+    --controller-listener 127.0.0.1:9093
+```
+
+The `chown` is not incidental. Both the formatter and the broker run as
+`nonroot`. The apko base does create `/var/lib/krabka` owned by 65532, but a
+bind mount replaces that directory with the host's, and a freshly created host
+directory belongs to root — so the format step fails with `Permission denied`
+before it writes `meta.properties.json`.
+
+`//packaging:image_binaries_test` asserts what those layers carry and that each
+binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
+`bazel test --config=docker //packaging:image_docker_test` repeats the check
+against a loaded image through Docker.
+
+## Kubernetes
+
+`packaging/k8s/` holds a reference deployment of that image: a three-node
+StatefulSet, a headless Service plus a bootstrap Service, and a
+PodDisruptionBudget. They are a starting point to read and adapt, not a chart.
+Set the image tag, the storage class and size, and above all the two identities
+the manifests ship placeholders for -- `KRABKA_CLUSTER_ID` and the seed
+directory ids in `KRABKA_INITIAL_CONTROLLERS` -- before you apply them. They
+have not been applied to a live cluster.
+
+```
+kubectl apply -f packaging/k8s/
+```
+
+Three parts of them carry the design, not only the wiring:
+
+* **The format step is an init container on the same image.** The tools ride
+  beside the broker, so there is no second image to keep in step with it and no
+  volume to share between two pods. `krabka-format --ignore-formatted`, the same
+  flag Kafka's `kafka-storage.sh format` carries, makes the step a no-op on the
+  second and every later boot of a pod that keeps its volume. Without that flag
+  the init container fails every restart after the first, because the image has
+  no shell to test the directory with first.
+* **The two probes answer different questions.** `/healthz` says the process is
+  up. It stays green through log-dir recovery and through metadata catch-up, so
+  the kubelet cannot kill a node partway through a recovery. `/readyz` says the
+  node can serve a client: log dirs recovered, listeners bound, and its
+  `__cluster_metadata` offset within `--readiness-max-metadata-lag` records of
+  the quorum's committed offset. A 503 names the condition that failed, so
+  `kubectl describe pod` reports which one. The rolling update waits on
+  readiness, and that is what stops a restart from running ahead of the quorum.
+* **`minAvailable: 2` is the majority of three.** A drain that evicted two of
+  these pods costs the metadata quorum its majority. Scale the StatefulSet and
+  the budget has to move with it. The budget also keeps the default
+  `unhealthyPodEvictionPolicy`: a krabka pod that fails `/readyz` is usually
+  still a voter, because the controller joins the quorum before log-dir
+  recovery runs, so `AlwaysAllow` would let a drain take a second voter out
+  while the budget was already unmet.
+
 ## Mutation testing
 
 Mutation sweeps run through
@@ -192,13 +295,13 @@ Mutation sweeps run through
 bazel test //crates/raft:raft_mutants
 ```
 
-They are tagged `manual`, so `bazel test //...` skips them and a nightly job runs
-the full sweep. Two things to know about the results:
+They are tagged `manual`, so `bazel test //...` skips them. The on-demand,
+sharded `mutants` workflow runs a requested crate's full sweep. A non-excluded
+survivor fails its shard. Two things to know about the results:
 
-* Only `#[cfg(test)]` unit tests take part. Mutants that the `tests/*.rs` suites
-  would kill are reported as survivors, so scores read lower than the monorepo's
-  `cargo mutants` numbers for the same code. The nightly job is therefore
-  `continue-on-error`: it exists to produce a list to read, not to gate.
+* The target runs unit tests and ordinary `tests/*.rs` integration tests. It
+  excludes manual and Docker-backed suites because the sweep reruns the tests
+  for each mutant.
 * The `cargo-mutants` version is pinned by `tools/mutants/Cargo.lock`, not by
   whatever is on `PATH`.
 
@@ -219,8 +322,20 @@ command needs only the metadata and security crates, so it lives here as
 `krabka-format` — a library as well as a binary, so `krabka-cli` can call it
 rather than carry a second copy.
 
+## Releases
+
+A release of this repository is an annotated `vX.Y.Z` tag on `main`. Pushing
+that tag builds the image, signs it, attests its SBOM and provenance, and
+creates the GitHub release. [`CHANGELOG.md`](CHANGELOG.md) records what each tag
+contains, and [releasing](docs/releasing.md) gives the commands that cut one.
+
+The workspace is versioned and tagged as one unit, so no crate has a release of
+its own and no crate changelog records one. `tools/lint/crate_changelogs.py`
+holds that rule in CI. Each crate changelog keeps an `[Unreleased]` heading and
+points at robot-head/crabka for the history before the extraction.
+
 ## Publishing
 
 `krabka-log` and the other published names in this tree are released to crates.io
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
-has no release automation; consumers pin it by git revision.
+publishes no crate; consumers pin it by git revision.

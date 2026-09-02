@@ -27,6 +27,9 @@ impl MetadataSource for ControllerHandle {
     fn quorum_state(&self) -> QuorumState {
         ControllerHandle::quorum_state(self)
     }
+    fn quorum_committed_offset(&self) -> i64 {
+        ControllerHandle::quorum_committed_offset(self)
+    }
     fn voted_directory_id(&self) -> Option<uuid::Uuid> {
         ControllerHandle::voted_directory_id(self)
     }
@@ -127,6 +130,11 @@ mod tests {
             "test must distinguish a constant offset"
         );
         assert2::assert!((source.current_metadata_offset()) == (expected_offset));
+        // On a leader the quorum's committed offset is this node's own: it is
+        // the node that decides what "committed" means, so the readiness probe
+        // must measure exactly zero lag here. A follower is where the two part
+        // company, which `krabka-raft`'s engine tests cover.
+        assert2::assert!((source.quorum_committed_offset()) == (expected_offset));
         source.trigger_snapshot().await.expect("snapshot");
         assert2::assert!(matches!(
             source.read_snapshot_range(0, 1),
