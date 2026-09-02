@@ -4,8 +4,8 @@
 # controller publishes as the `apps.kubernetes.io/pod-index` label. The
 # downward API turns that into KRABKA_POD_INDEX, and Kubernetes expands
 # `$(KRABKA_POD_INDEX)` in `args`, so the node id and the broker id are the
-# ordinal without a shell to compute them in. The image is distroless and
-# carries none. That label is what sets the floor on the Kubernetes version
+# ordinal without a shell to compute them in: the apko base the image is built
+# on carries none. That label is what sets the floor on the Kubernetes version
 # these manifests need: it reached beta, and so became set by default, in 1.29.
 # On anything older KRABKA_POD_INDEX resolves to the empty string and the
 # format step fails on `--node-id=`.
@@ -53,7 +53,7 @@ spec:
         # safe: on the first boot it seeds the directory, and on every boot
         # after it exits 0 without touching the identity already there.
         - name: format
-          image: krabka-io/krabka-broker:dev
+          image: docker.io/krabka-io/krabka-broker:dev
           command: ["/usr/bin/krabka-format"]
           args:
             - --log-dir=/var/lib/krabka
@@ -100,7 +100,7 @@ spec:
               mountPath: /var/lib/krabka
       containers:
         - name: broker
-          image: krabka-io/krabka-broker:dev
+          image: docker.io/krabka-io/krabka-broker:dev
           args:
             - --log-dir=/var/lib/krabka
             - --broker-id=$(KRABKA_POD_INDEX)
