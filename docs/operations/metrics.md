@@ -24,8 +24,13 @@ the build until this directory catches up.
   The **Labels** column lists only the labels the broker adds.
 
 A series is one per broker unless its labels say otherwise. Cardinality is
-bounded by the metadata image or a closed enum in every family: no client can
-invent a label value.
+bounded by the metadata image or a closed enum in every family but one.
+`client_software_versions_total` takes its `software_name` and
+`software_version` labels from the client's own `ApiVersions` request. The
+broker checks only the character set, not the value, and `ApiVersions` is
+allowed before authentication. Nothing caps or releases the series, so a client
+can grow that family without bound. Drop or relabel it at the scrape if a
+listener is open to peers you do not control.
 
 ## Topics and partitions
 
@@ -41,7 +46,7 @@ invent a label value.
 | `krabka_broker_produce_message_conversions_total` | counter | `topic` | `BrokerTopicMetrics,name=ProduceMessageConversionsPerSec` | v0 or v1 to v2 up-conversions on the Produce path. |
 | `krabka_broker_fetch_message_conversions_total` | counter | `topic` | `BrokerTopicMetrics,name=FetchMessageConversionsPerSec` | v2 to v0 or v1 down-conversions for a `Fetch v < 4` client. |
 | `krabka_broker_partition_bytes_in_total` | counter | `topic`, `partition` | - | Bytes received from producers, per partition. |
-| `krabka_broker_partition_bytes_out_total` | counter | `topic`, `partition` | - | Bytes served to consumers, per partition. |
+| `krabka_broker_partition_bytes_out_total` | counter | `topic`, `partition` | - | Bytes delivered to fetchers, consumers and followers both, per partition. Subtract `replication_bytes_out_total` for the consumer share. |
 | `krabka_broker_partition_disk_bytes` | gauge | `topic`, `partition` | `kafka.log:type=Log,name=Size` | On-disk size of the partition's log directory. Sampled every `--partition-disk-scan-interval` (default 60s); `0s` disables the scanner and the series stops. |
 | `krabka_broker_partition_cpu_micros_total` | counter | `topic`, `partition` | - | Handler-thread microseconds spent on the partition. `rate(...) / 1000000` is the core occupancy. |
 | `krabka_broker_log_cleaner_runs_total` | counter | - | `kafka.log:type=LogCleaner` (run accounting) | Completed compaction sweeps, one per pass whether or not a partition was eligible. |
@@ -106,9 +111,9 @@ lands under `Unknown`.
 The three phase families are disjoint and do not cover the total.
 `local + remote + throttle <= request_duration_seconds`. The remainder is the
 work no phase names: decode, authorization, record validation and response
-encode. Compare the `_sum` streams; a remainder that grows is handler CPU. All
-five latency families share one bucket set, so a phase can be subtracted from
-the total bucket by bucket.
+encode. Compare the `_sum` streams; a remainder that grows is handler CPU. Do
+not subtract `_bucket` streams: each family observes its own durations, so one
+bucket of a phase says nothing about the same bucket of the total.
 
 ## Connections and clients
 

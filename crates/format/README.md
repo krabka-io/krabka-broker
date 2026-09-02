@@ -43,10 +43,15 @@ krabka-format \
   --release-version 4.0
 ```
 
-Format a dynamic controller that joins an existing quorum later:
+Format a dynamic controller that joins an existing quorum later. Pass the
+cluster's existing id; without `--cluster-id` the tool generates a new one, and
+the quorum rejects a joiner whose cluster id differs:
 
 ```sh
-krabka-format --log-dir /var/lib/krabka --no-initial-controllers
+krabka-format \
+  --log-dir /var/lib/krabka \
+  --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10 \
+  --no-initial-controllers
 ```
 
 The exit code is `0` on success and non-zero on every failure the operator can

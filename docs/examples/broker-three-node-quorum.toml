@@ -1,9 +1,11 @@
 # One node of a three-node krabka-broker cluster with a static KRaft quorum.
 #
 # This is the file for node 1. Nodes 2 and 3 differ in `broker_id`, in the
-# `advertised` address of each listener, and in `rack`. Every node was
-# formatted with `krabka-format --initial-controllers` naming the same three
-# voters. Every key here is documented in docs/config-reference.md, which is
+# `advertised` address of each listener, and in `rack`. The node whose `rack`
+# is the `[stretch]` `witness_site` also adds `witness` to `[process] roles`,
+# next to `controller` and `broker`; the broker refuses to start a node in the
+# witness site without that role. Every node was formatted with
+# `krabka-format --initial-controllers` naming the same three voters. Every key here is documented in docs/config-reference.md, which is
 # generated from the same schema this file is checked against.
 #
 # Comment conventions: a line that starts with `# ` is prose. A line that
@@ -17,9 +19,11 @@ log_dir = "/var/lib/krabka/data"
 rack = "zone-a"
 replica_selector = "rack-aware"
 
-# KIP-595 static quorum. Each entry is `<node_id>@<host>:<port>` and points at
-# that node's controller listener. Hosts are resolved on every dial, so a pod
-# that comes back on a new IP is reached again without a restart.
+# Controller addresses. Each entry is `<node_id>@<host>:<port>` and points at
+# that node's controller listener. After a `--initial-controllers` format the
+# voter set comes from the VotersRecord, and this list only reaches the leader
+# before the committed voter set names it. Hosts are resolved on every dial, so
+# a pod that comes back on a new IP is reached again without a restart.
 controller_quorum_voters = [
     "1@krabka-0.krabka.default.svc:9093",
     "2@krabka-1.krabka.default.svc:9093",

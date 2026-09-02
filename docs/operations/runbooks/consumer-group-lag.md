@@ -35,10 +35,12 @@ members than partitions.
 1. Read the same group's other partitions. One partition lagging is a hot
    key or a stuck member. Every partition lagging is a group that is too
    slow for the topic.
-2. Compare `rate(krabka_broker_partition_bytes_out_total[5m])` for the
-   partition with `rate(krabka_broker_partition_bytes_in_total[5m])`. A read
-   rate below the write rate is a consumer that cannot keep up. A read rate
-   of zero is a consumer that stopped.
+2. Compare `rate(krabka_broker_partition_bytes_out_total[5m])` minus
+   `rate(krabka_broker_replication_bytes_out_total[5m])` for the partition
+   with `rate(krabka_broker_partition_bytes_in_total[5m])`. The first counter
+   includes follower fetches, so the subtraction leaves the consumer share. A
+   read rate below the write rate is a consumer that cannot keep up. A read
+   rate of zero is a consumer that stopped.
 3. Read the group's `Fetch` and `OffsetCommit` rates in
    `krabka_broker_api_requests_total` on the coordinator. Fetches without
    commits is a client that reads and does not commit, which the lag counts

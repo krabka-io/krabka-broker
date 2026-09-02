@@ -62,8 +62,8 @@ spent its time.
 - Total minus the three phases growing: handler CPU. Decode, authorization,
   validation and encode. Add cores or spread partitions.
 
-All five latency families share one bucket set, so a phase can be subtracted
-from the total bucket by bucket.
+Compare the `_sum` streams for that remainder. Do not subtract `_bucket`
+streams: each family observes its own durations, so the buckets do not line up.
 
 ## Diskless WAL
 

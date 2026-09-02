@@ -68,13 +68,15 @@ The parts that carry the design:
 
 | Port | Listener | Configured by |
 | :--- | :--- | :--- |
-| 9092 | Kafka client and inter-broker listener | `--listen-addr`, or `[[listeners]]` in the config file |
+| 9092 | Kafka client and inter-broker listener | `--listen-addr` (default `127.0.0.1:9092`). Under `--config-file` each `[[listeners]]` entry sets its own port. |
 | 9093 | KIP-595 controller listener | Always `listen_addr` with the port set to 9093. Under `--config-file` it binds all interfaces. |
 | 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR`. `none` disables it. |
 | 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR`. `none` disables them. |
 
 Every broker in the cluster must reach every other broker's 9093. Clients
-need 9092 only.
+need only the port of the listener they connect to: 9092 under
+`--listen-addr`, or the `bind_addr` port of their `[[listeners]]` entry under
+`--config-file`. The three-node file below serves clients on 9094.
 
 ## Format the log directory
 
@@ -89,10 +91,12 @@ krabka-format --log-dir /var/lib/krabka --standalone --node-id 1 \
     --controller-listener broker-1.example:9093
 ```
 
-A three-node static quorum. Every node runs the same command with its own
-`--node-id`, its own `--directory-id` and the shared `--cluster-id`. The
-`--initial-controllers` list names every voter as `id@host:port:directory-id`
-and must include the node itself:
+A three-node quorum with a KIP-853 dynamic initial voter set. Every node
+runs the same command with its own `--node-id`, its own `--directory-id` and
+the shared `--cluster-id`. The `--initial-controllers` list names every voter
+as `id@host:port:directory-id` and must include the node itself. The tool
+writes `kraft.version` 1 and a `VotersRecord` that holds the list. The broker
+takes its voter set from that record, not from `controller_quorum_voters`:
 
 ```
 krabka-format --log-dir /var/lib/krabka --node-id 1 \
@@ -102,8 +106,14 @@ krabka-format --log-dir /var/lib/krabka --node-id 1 \
 ```
 
 A node that will join an existing quorum later formats with
-`--no-initial-controllers` and boots with `--controller-bootstrap-servers`
-and, to become a voter, `--controller-auto-join`.
+`--no-initial-controllers` and the existing `--cluster-id`. It boots with
+`--controller-bootstrap-servers` and, to become a voter,
+`--controller-auto-join`.
+
+A format with none of `--standalone`, `--initial-controllers` and
+`--no-initial-controllers` is the static KIP-595 path. `kraft.version` stays
+0, no `VotersRecord` is written, and each broker derives the voter set from
+`controller_quorum_voters` in its config file at start.
 
 Other format-time options:
 
@@ -120,9 +130,11 @@ Other format-time options:
 The binary takes a TOML file with `--config-file`. When the file is present,
 `--listen-addr` and `--advertised-listener` must not be set; the listeners
 come from the file. Every other flag still applies and overrides the file's
-`[runtime]` value. The flags all have an environment variable form, named in
+`[runtime]` value. Most flags also read an environment variable, named in
 `--help`; `KRABKA_CLUSTER_ID`, `KRABKA_PROCESS_ROLES` and
 `KRABKA_METRICS_LISTEN_ADDR` are the ones a container normally sets.
+`--listen-addr`, `--config-file`, `--print-config-schema`, `--log-dir` and
+`--broker-id` have no environment variable form.
 
 A minimal three-node file for `broker-1`:
 
@@ -131,7 +143,11 @@ rack = "zone-a"
 inter_broker_listener_name = "INTERNAL"
 replica_lag_time_max = "30s"
 
-# KIP-595 static voters, one entry per controller. Hosts are resolved on
+# Controller addresses, one entry per controller. After a format with
+# `--initial-controllers` the voter set comes from the VotersRecord, and the
+# broker uses this list only to reach the leader before the committed voter
+# set names it; `krabka_broker_ignored_static_voters` counts its entries. A
+# broker-only node dials this list to fetch metadata. Hosts are resolved on
 # every connect, so a pod that restarts with a new IP is reached again.
 controller_quorum_voters = [
   "1@broker-1.example:9093",
@@ -200,7 +216,7 @@ it has run from before. It logs `metrics server listening` once `/metrics` is
 up. Logs are one JSON object
 per line on stdout; `RUST_LOG` sets the level.
 
-Start the three static voters within a few seconds of each other. The
+Start the three voters within a few seconds of each other. The
 quorum elects a leader once a majority is up, and the brokers register with
 it. `kafka-metadata-quorum --bootstrap-server broker-1.example:9092 describe
 --status` shows the leader and each voter's lag.
