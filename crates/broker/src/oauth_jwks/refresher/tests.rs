@@ -1,15 +1,18 @@
 //! Behaviour tests for the refresh loop: the immediate first fetch, HTTPS with
-//! a custom trust bundle, the on-demand signal and its rate limit, and the two
-//! shared timestamps a validator reads.
+//! a custom trust bundle, the on-demand signal and its rate limit, the two
+//! shared timestamps a validator reads, and the shutdown a dead ticker forces.
 
 use assert2::{assert, check};
 use krabka_units::{millis, minutes};
 use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer};
 
 use super::*;
-use crate::oauth_jwks::test_support::{
-    JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks, serve_jwks_counting,
-    serve_jwks_https, test_refresher,
+use crate::{
+    oauth_jwks::test_support::{
+        JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks,
+        serve_jwks_counting, serve_jwks_https, test_refresher,
+    },
+    test_support::{BrokenTimer, TimerFailure},
 };
 
 #[tokio::test]
@@ -320,5 +323,84 @@ async fn refresher_passes_ignore_key_use_through_to_jwks_parser() {
 
     shutdown.cancel();
     let _ = task.await;
+    srv_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn refresher_stops_without_fetching_when_the_first_deadline_is_refused() {
+    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
+    let handle = JwksHandle::default();
+    let timer = BrokenTimer::dead(TimerFailure::Registration);
+    let refresher = test_refresher(
+        format!("http://{addr}/jwks"),
+        handle.clone(),
+        millis(50),
+        // Nothing cancels this token, so the refused start-up deadline is the
+        // only thing that can end the task.
+        CancellationToken::new(),
+        None,
+        timer.injectable(),
+    );
+
+    // The loop gives up before its t=0 fetch, so the endpoint is never called
+    // and the key set validators read stays empty.
+    tokio::spawn(refresher.run())
+        .await
+        .expect("refresher task exits");
+    check!(handle.load().is_empty());
+    check!(requests.load(Ordering::Relaxed) == 0);
+    check!(timer.registrations() == 1);
+    srv_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn refresher_stops_when_the_first_deadline_is_armed_but_never_completes() {
+    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
+    let handle = JwksHandle::default();
+    let timer = BrokenTimer::dead(TimerFailure::Completion);
+    let refresher = test_refresher(
+        format!("http://{addr}/jwks"),
+        handle.clone(),
+        millis(50),
+        CancellationToken::new(),
+        None,
+        timer.injectable(),
+    );
+
+    // The registration is accepted, so the loop reaches its select; the
+    // deadline then fails, which is the other way a ticker goes away.
+    tokio::spawn(refresher.run())
+        .await
+        .expect("refresher task exits");
+    check!(handle.load().is_empty());
+    check!(requests.load(Ordering::Relaxed) == 0);
+    check!(timer.registrations() == 1);
+    srv_shutdown.cancel();
+}
+
+#[tokio::test]
+async fn refresher_fetches_once_and_stops_when_the_interval_cannot_be_re_armed() {
+    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
+    let handle = JwksHandle::default();
+    let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
+    let refresher = test_refresher(
+        format!("http://{addr}/jwks"),
+        handle.clone(),
+        millis(50),
+        CancellationToken::new(),
+        None,
+        timer.injectable(),
+    );
+
+    // The start-up deadline is honoured, so the t=0 fetch lands and the keys
+    // reach the handle. The interval the loop re-arms afterwards is refused,
+    // and the task stops rather than retrying it: two registrations in all,
+    // not a climbing count.
+    tokio::spawn(refresher.run())
+        .await
+        .expect("refresher task exits");
+    check!(handle.load().len() == 1);
+    check!(requests.load(Ordering::Relaxed) == 1);
+    check!(timer.registrations() == 2);
     srv_shutdown.cancel();
 }

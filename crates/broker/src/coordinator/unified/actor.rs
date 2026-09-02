@@ -172,8 +172,38 @@ async fn actor_loop(
     metadata: Arc<dyn MetadataProvider>,
     offsets_log: Arc<dyn OffsetsLog>,
     coordinator: Arc<GroupCoordinator>,
-    mut rx: mpsc::Receiver<GroupActorMessage>,
+    rx: mpsc::Receiver<GroupActorMessage>,
 ) {
+    // The `Group` the loop hands back belongs to nobody once the actor is
+    // gone, so the spawned task drops it. See `run_actor`.
+    run_actor(
+        group_id,
+        kind,
+        config,
+        metadata,
+        offsets_log,
+        coordinator,
+        rx,
+    )
+    .await;
+}
+
+/// The mailbox loop, returning the `Group` as it stood when the actor stopped.
+///
+/// The spawned task drops that value, because nothing outside the actor may
+/// touch a `Group` it no longer owns. A test keeps it, so that the
+/// offset-retention clock every exit stamps — including the one the loop takes
+/// when its session-expiry ticker cannot even be armed — is readable after the
+/// loop has gone away.
+async fn run_actor(
+    group_id: String,
+    kind: GroupKindTag,
+    config: Arc<NextGenConfig>,
+    metadata: Arc<dyn MetadataProvider>,
+    offsets_log: Arc<dyn OffsetsLog>,
+    coordinator: Arc<GroupCoordinator>,
+    mut rx: mpsc::Receiver<GroupActorMessage>,
+) -> CoordinatorGroup {
     let mut group = match kind {
         GroupKindTag::Classic => CoordinatorGroup::new_classic(group_id),
         GroupKindTag::Consumer => CoordinatorGroup::new_consumer(group_id),
@@ -215,7 +245,7 @@ async fn actor_loop(
         // No ticker, no actor. Take the same exit the loop body takes below,
         // so the offset-retention clock is stamped once before we go away.
         group.observe_membership(chrono_now_ms());
-        return;
+        return group;
     };
     loop {
         let deadline = classic_deadline(&group);
@@ -278,6 +308,7 @@ async fn actor_loop(
             break;
         }
     }
+    group
 }
 
 /// The classic rebalance-completion deadline, if a rebalance is open.

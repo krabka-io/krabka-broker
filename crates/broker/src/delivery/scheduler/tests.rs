@@ -5,17 +5,20 @@ use krabka_ids::{Offset, PartitionIndex};
 use krabka_log::DeliveryPolicy;
 use krabka_metadata::NodeId;
 use krabka_units::{millis, secs};
-use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, WallClock};
+use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer, WallClock};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::delivery::{
-    PartitionDelivery,
-    metrics::NoDeliveryMetrics,
-    test_support::{
-        BOUND_MS, NOW_MS, RecordingMetrics, register, scheduled_partition, wait_parked, wait_until,
-        wall_at,
+use crate::{
+    delivery::{
+        PartitionDelivery,
+        metrics::NoDeliveryMetrics,
+        test_support::{
+            BOUND_MS, NOW_MS, RecordingMetrics, register, scheduled_partition, wait_parked,
+            wait_until, wall_at,
+        },
     },
+    test_support::{BrokenTimer, TimerFailure},
 };
 
 const THIS_BROKER: u64 = 7;
@@ -128,6 +131,12 @@ impl Harness {
     }
 
     fn spawn(&self) -> tokio::task::JoinHandle<()> {
+        self.spawn_on(self.timeline.new_timer())
+    }
+
+    /// Spawns the scheduler on `timer` rather than on the harness timeline, so
+    /// that a test can hand the loop a ticker that gives out.
+    fn spawn_on(&self, timer: Arc<dyn Timer>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(run(
             Arc::clone(&self.registry),
             NodeId(THIS_BROKER),
@@ -135,7 +144,7 @@ impl Harness {
                 idle_sleep: secs(1),
                 min_sleep: millis(1),
                 clock: Arc::clone(&self.clock),
-                timer: self.timeline.new_timer(),
+                timer,
             },
             Arc::clone(&self.metrics) as Arc<dyn DeliveryMetrics>,
             Arc::clone(&self.waker),
@@ -346,4 +355,69 @@ async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
 
     check!(partition.delivery_watermark() == Offset(2));
     check!(heap.earliest().is_none());
+}
+
+#[tokio::test]
+async fn the_scheduler_stops_without_sweeping_when_the_first_deadline_is_refused() {
+    let dir = tempfile::tempdir().expect("log root");
+    let harness = Harness::new();
+    let partition = scheduled_partition(
+        &dir,
+        "unarmable",
+        DeliveryPolicy::Scheduled,
+        &[NOW_MS + 10_000],
+        THIS_BROKER,
+        &harness.clock,
+    );
+    register(&harness.registry, &partition);
+
+    let timer = BrokenTimer::dead(TimerFailure::Registration);
+    let task = harness.spawn_on(timer.injectable());
+
+    // Nothing cancels the shutdown token, so the refused start-up deadline is
+    // the only thing that can end the task — and it ends it before the first
+    // sweep, so the loop reports no wake at all.
+    task.await.expect("the scheduler task exits");
+    check!(harness.metrics.wakeups() == 0);
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn the_scheduler_stops_when_the_first_deadline_is_armed_but_never_completes() {
+    let harness = Harness::new();
+    let timer = BrokenTimer::dead(TimerFailure::Completion);
+    let task = harness.spawn_on(timer.injectable());
+
+    // The registration is accepted, so the loop reaches its select; the
+    // deadline then fails, which is the other way a ticker goes away.
+    task.await.expect("the scheduler task exits");
+    check!(harness.metrics.wakeups() == 0);
+    check!(timer.registrations() == 1);
+}
+
+#[tokio::test]
+async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed() {
+    let dir = tempfile::tempdir().expect("log root");
+    let harness = Harness::new();
+    let partition = scheduled_partition(
+        &dir,
+        "unrearmable",
+        DeliveryPolicy::Scheduled,
+        &[NOW_MS - 60_000],
+        THIS_BROKER,
+        &harness.clock,
+    );
+    register(&harness.registry, &partition);
+
+    let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
+    let task = harness.spawn_on(timer.injectable());
+
+    // The start-up deadline is honoured, so the loop takes exactly one sweep
+    // and publishes the batch that is already due. The sleep it arms afterwards
+    // is refused, and the task stops rather than retrying it: two registrations
+    // in all, not a climbing count.
+    task.await.expect("the scheduler task exits");
+    check!(harness.metrics.wakeups() == 1);
+    check!(partition.delivery_watermark() == Offset(2));
+    check!(timer.registrations() == 2);
 }
