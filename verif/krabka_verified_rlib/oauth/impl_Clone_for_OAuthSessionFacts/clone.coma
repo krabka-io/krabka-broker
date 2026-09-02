@@ -1,0 +1,33 @@
+(* #"/workspace/crates/verified/src/oauth.rs" 43 27 43 32 *)
+
+(* <oauth::OAuthSessionFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_OAuthExpiryPresence = Missing | Present
+
+type t_OAuthSessionCap = Disabled | Enabled
+
+type t_OAuthAuthenticationKind = Initial | Reauthentication
+
+type t_OAuthPrincipalMatch = Matches | Differs
+
+type t_OAuthSessionFacts = {
+  expiry: t_OAuthExpiryPresence;
+  token_expires_at_ms: Int64.t;
+  now_ms: Int64.t;
+  cap: t_OAuthSessionCap;
+  cap_ms: Int64.t;
+  authentication: t_OAuthAuthenticationKind;
+  principal: t_OAuthPrincipalMatch }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_OAuthSessionFacts [#"/workspace/crates/verified/src/oauth.rs" 43 27 43 32] (self: t_OAuthSessionFacts)
+  (return (x: t_OAuthSessionFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_OAuthSessionFacts = Any.any_l () | & self: t_OAuthSessionFacts = self ])
+  [ return (result: t_OAuthSessionFacts) -> (! return {result}) ]

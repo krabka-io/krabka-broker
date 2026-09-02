@@ -14,6 +14,7 @@ use std::{
 };
 
 use assert2::assert;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -118,12 +119,18 @@ pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
 pub async fn bootstrap_share_state(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
-    key: &str,
+    group: &str,
+    topic_id: uuid::Uuid,
+    partition: i32,
 ) {
+    let key = format!(
+        "{group}:{}:{partition}",
+        URL_SAFE_NO_PAD.encode(topic_id.as_bytes())
+    );
     let resp = client
         .send(FindCoordinatorRequest {
             key_type: 2, // SHARE
-            coordinator_keys: vec![key.to_string()],
+            coordinator_keys: vec![key],
             ..Default::default()
         })
         .await

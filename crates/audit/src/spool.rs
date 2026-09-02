@@ -24,6 +24,7 @@ use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _},
 };
+use krabka_verified::spool_append_decision;
 
 use self::codec::{decode_record, encode_frame};
 use crate::{
@@ -56,6 +57,33 @@ pub(crate) struct LossBatch {
 struct LossState {
     generation: u64,
     count: u64,
+}
+
+pub(crate) fn add_loss_state(generation: u64, count: u64, added: u64) -> (u64, u64) {
+    let generation = if count == 0 {
+        generation.saturating_add(1)
+    } else {
+        generation
+    };
+    (generation, count.saturating_add(added))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayRecovery {
+    ClearPoison,
+    RequireExplicitRecovery,
+}
+
+pub(crate) fn replay_recovery(
+    valid_frame: bool,
+    poison_offset: Option<u64>,
+    replay_offset: u64,
+) -> ReplayRecovery {
+    if valid_frame && poison_offset.is_some_and(|offset| offset < replay_offset) {
+        ReplayRecovery::ClearPoison
+    } else {
+        ReplayRecovery::RequireExplicitRecovery
+    }
 }
 
 /// Writer-persisted count of fail-open records awaiting a chain marker.
@@ -103,10 +131,7 @@ impl PendingLosses {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.count == 0 {
-            state.generation = state.generation.saturating_add(1);
-        }
-        state.count = state.count.saturating_add(count);
+        (state.generation, state.count) = add_loss_state(state.generation, state.count, count);
     }
 
     #[cfg(test)]
@@ -461,16 +486,25 @@ impl Spool {
             .map(u32::from_be_bytes)
             .and_then(|len| usize::try_from(len).ok())
             .is_some_and(|len| len.checked_add(12) == Some(bytes.len()));
-        if !valid_frame || poison_offset.is_none_or(|offset| offset >= self.replay_offset) {
-            return Err(AuditError::Poisoned(path.display().to_string()));
+        match replay_recovery(valid_frame, poison_offset, self.replay_offset) {
+            ReplayRecovery::ClearPoison => self.clear_replay_poison(),
+            ReplayRecovery::RequireExplicitRecovery => {
+                Err(AuditError::Poisoned(path.display().to_string()))
+            }
         }
-        self.clear_replay_poison()
     }
 
     fn append_inner(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
         let frame = encode_frame(record);
-        let frame_len = SpoolBytes(u64::try_from(frame.len()).unwrap_or(u64::MAX));
-        if (self.bytes + frame_len).0 > self.max_bytes.0 {
+        let frame_len = u64::try_from(frame.len()).unwrap_or(u64::MAX);
+        let decision = spool_append_decision(
+            self.bytes.0,
+            frame_len,
+            self.max_bytes.0,
+            self.unsynced,
+            self.sync_every.get(),
+        );
+        if !decision.accepted {
             return Ok(false);
         }
         let old_len = self.file.metadata().map_err(io)?.len();
@@ -478,19 +512,14 @@ impl Spool {
         if let Err(error) = self.file.write_all(&frame) {
             return Err(self.rollback_append(old_len, error));
         }
-        let unsynced = self.unsynced.saturating_add(1);
-        if unsynced >= self.sync_every.get()
+        if decision.sync
             && let Err(error) = self.file.sync_all()
         {
             return Err(self.rollback_append(old_len, error));
         }
-        self.unsynced = if unsynced >= self.sync_every.get() {
-            0
-        } else {
-            unsynced
-        };
-        self.bytes += frame_len;
-        self.count.0 += 1;
+        self.unsynced = decision.next_unsynced;
+        self.bytes = SpoolBytes(decision.new_bytes);
+        self.count.0 = self.count.0.saturating_add(1);
         Ok(true)
     }
 
@@ -641,14 +670,21 @@ fn sync_parent(path: &Path) -> Result<(), AuditError> {
 }
 
 #[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> Result<(), AuditError> {
-    Ok(())
+fn sync_parent(path: &Path) -> Result<(), AuditError> {
+    // Windows exposes no directory handle to fsync, so the directory entry is
+    // already durable by the time the file write returns. Stat the parent so a
+    // vanished spool directory still surfaces here rather than silently later.
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .metadata()
+        .map_err(io)
+        .map(drop)
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
+    use krabka_units::prelude::ByteSize;
 
     use super::*;
     use crate::{
@@ -737,6 +773,26 @@ mod tests {
         check!(s.append(&r).unwrap()); // accepted
         check!(!s.append(&r).unwrap()); // rejected (would exceed the cap)
         check!((s.count().0, s.read_all().unwrap().len()) == (1, 1)); // not corrupted
+    }
+
+    #[test]
+    fn append_rejects_size_overflow_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ByteSize::from_bytes(u64::MAX)).unwrap();
+        spool.bytes = SpoolBytes(u64::MAX);
+
+        check!(
+            !spool
+                .append(&chained_record(0, &GENESIS_HEAD, b"x"))
+                .unwrap()
+        );
+        check!((spool.bytes.0, spool.count.0) == (u64::MAX, 0));
+        check!(
+            std::fs::metadata(dir.path().join(SPOOL_FILE))
+                .unwrap()
+                .len()
+                == 0
+        );
     }
 
     #[test]
@@ -870,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_sync_finishes_a_batched_cadence() {
+    fn cadence_and_explicit_sync_reset_the_unsynced_counter() {
         let dir = tempfile::tempdir().unwrap();
         let mut spool =
             Spool::open_with_sync_every(dir.path(), ROOMY_CAP, NonZeroU64::new(2).unwrap())
@@ -878,6 +934,18 @@ mod tests {
         check!(
             spool
                 .append(&chained_record(0, &GENESIS_HEAD, b"a"))
+                .unwrap()
+        );
+        check!(spool.unsynced == 1);
+        check!(
+            spool
+                .append(&chained_record(1, &GENESIS_HEAD, b"b"))
+                .unwrap()
+        );
+        check!(spool.unsynced == 0);
+        check!(
+            spool
+                .append(&chained_record(2, &GENESIS_HEAD, b"c"))
                 .unwrap()
         );
         check!(spool.unsynced == 1);

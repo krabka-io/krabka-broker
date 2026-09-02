@@ -9,9 +9,11 @@
 use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::RecordBatch;
 use krabka_remote_storage::{
-    IndexType, LogOffset, RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
-    end_position_for, first_batch_at_or_after, parse_offset_index, position_for_relative_offset,
+    IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+    TopicIdPartition, end_position_for, first_batch_at_or_after, parse_offset_index,
+    position_for_relative_offset,
 };
+use krabka_verified::remote_read_relative_offset;
 
 use super::RemoteReader;
 
@@ -48,49 +50,33 @@ impl RemoteReader {
         // checkpoint that `epoch_for_offset` cannot bridge).  When the primary
         // misses, scan `list_remote_log_segments` for finished segments that
         // cover `offset` and prefer the one whose `segment_leader_epochs` map
-        // contains the passed epoch (same lineage) — this closes the
-        // wrong-segment-under-log-divergence hazard.  Only if no lineage-
-        // matching candidate exists does the fallback revert to
-        // `max_by_key(start_offset)` as a last resort; in a clean log without
-        // epoch-range overlap that tie-break is always deterministic.
-        let metadata = if let Some(m) = primary {
-            m
+        // contains the passed epoch (same lineage). No lineage-unmatched
+        // segment is a safe fallback under log divergence, so that case is a
+        // miss rather than a read from a different history.
+        let primary = primary.and_then(|metadata| {
+            relative_offset(&metadata, leader_epoch, offset).map(|relative| (metadata, relative))
+        });
+        let (metadata, target_rel) = if let Some(selected) = primary {
+            selected
         } else {
             let candidates = self.rlmm.list_remote_log_segments(tp)?;
-            let covering: Vec<_> = candidates
+            let Some(selected) = candidates
                 .into_iter()
-                .filter(|m| {
-                    m.state() == RemoteLogSegmentState::CopySegmentFinished
-                        && m.start_offset() <= offset
-                        && offset <= m.end_offset()
+                .filter_map(|metadata| {
+                    relative_offset(&metadata, leader_epoch, offset)
+                        .map(|relative| (metadata, relative))
                 })
-                .collect();
-            // Prefer a segment whose epoch map contains the owning epoch
-            // (same lineage as the checkpoint resolution).
-            let Some(m) = covering
-                .iter()
-                .filter(|m| m.segment_leader_epochs().contains_key(&leader_epoch))
-                .max_by_key(|m| m.start_offset())
-                .or_else(|| {
-                    // No lineage-matching candidate — last resort: highest
-                    // start_offset among all covering finished segments.
-                    covering.iter().max_by_key(|m| m.start_offset())
-                })
-                .cloned()
+                .max_by_key(|(metadata, _)| metadata.start_offset())
             else {
                 return Ok(None);
             };
-            m
+            selected
         };
-        if metadata.state() != RemoteLogSegmentState::CopySegmentFinished {
-            return Ok(None);
-        }
 
         let index_bytes = self
             .fetch_index_blocking(metadata.clone(), IndexType::Offset)
             .await?;
         let entries = parse_offset_index(&index_bytes)?;
-        let target_rel = u32::try_from((offset - metadata.start_offset()).max(0)).unwrap_or(0);
         let start_position = position_for_relative_offset(entries, target_rel);
 
         // Cap the read so the broker doesn't pull an entire segment when the
@@ -107,6 +93,28 @@ impl RemoteReader {
         let batch = first_batch_at_or_after(&data, offset);
         Ok(batch)
     }
+}
+
+fn relative_offset(
+    metadata: &RemoteLogSegmentMetadata,
+    leader_epoch: LeaderEpoch,
+    requested_offset: LogOffset,
+) -> Option<u32> {
+    let epochs = metadata.segment_leader_epochs();
+    let epoch_start = epochs.get(&leader_epoch).copied();
+    let next_epoch_start = epochs
+        .iter()
+        .filter(|(epoch, _)| **epoch > leader_epoch)
+        .map(|(_, start)| *start)
+        .min();
+    remote_read_relative_offset(
+        metadata.start_offset(),
+        metadata.end_offset(),
+        requested_offset,
+        metadata.state() == RemoteLogSegmentState::CopySegmentFinished,
+        epoch_start,
+        next_epoch_start,
+    )
 }
 
 #[cfg(test)]
@@ -234,20 +242,50 @@ mod tests {
         assert!(matches!(err, RemoteStorageError::NotReady { partition: 3 }));
     }
 
+    #[test]
+    fn relative_offset_respects_epoch_subrange_boundary() {
+        let metadata = RemoteLogSegmentMetadata::new(
+            krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4()),
+            0,
+            99,
+            0,
+            1,
+            0,
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
+                1024,
+                RemoteLogSegmentState::CopySegmentFinished,
+                maplit::btreemap! {
+                    LeaderEpoch(0) => 0,
+                    LeaderEpoch(1) => 50,
+                },
+            ),
+        )
+        .unwrap();
+
+        for (epoch, offset, expected) in [
+            (LeaderEpoch(0), 49, Some(49)),
+            (LeaderEpoch(0), 50, None),
+            (LeaderEpoch(1), 49, None),
+            (LeaderEpoch(1), 50, Some(50)),
+        ] {
+            assert!(
+                relative_offset(&metadata, epoch, offset) == expected,
+                "epoch={epoch:?} offset={offset}"
+            );
+        }
+    }
+
     /// The broker tiers segments under the leader epoch that was active at
     /// copy time. In normal operation `fetch_batch` receives the owning epoch,
     /// which the caller resolves from the leader-epoch checkpoint, and the
     /// epoch-indexed primary lookup hits.
     ///
-    /// This test exercises the *defensive fallback*. The caller passes an
-    /// epoch that is NOT in the segment's `segment_leader_epochs` map, which
-    /// simulates a missing or empty checkpoint. The lineage-unmatched fallback
-    /// must still resolve the segment through `list_remote_log_segments` and
-    /// return the batch. It closes the wrong-segment hazard: it prefers
-    /// lineage-matching candidates first, and uses `max_by_key(start_offset)`
-    /// only as a last resort.
+    /// This test exercises the defensive fallback with an epoch that is not in
+    /// the segment's lineage, as an empty or stale checkpoint could supply.
+    /// Serving that segment could cross divergent histories, so the fallback
+    /// must fail closed.
     #[tokio::test]
-    async fn fallback_resolves_segment_across_leader_epoch_change() {
+    async fn fallback_rejects_segment_from_the_wrong_leader_epoch() {
         let log_dir = tempfile::tempdir().unwrap();
         let remote_dir = tempfile::tempdir().unwrap();
 
@@ -263,20 +301,12 @@ mod tests {
 
         // Query with epoch 1 — the RLMM epoch-indexed primary path returns
         // None because the segment's `segment_leader_epochs` only contains
-        // epoch 0.  The lineage-unmatched defensive fallback must find it via
-        // `list_remote_log_segments` and return the batch.
+        // epoch 0. The fallback must not cross that lineage boundary.
         let got = reader
             .fetch_batch(&tp(), LeaderEpoch(1), target_offset, 4096)
             .await
-            .expect("ok")
-            .expect("defensive fallback must resolve the segment despite epoch mismatch");
+            .expect("ok");
 
-        let last = got.base_offset + i64::from(got.last_offset_delta);
-        assert!(
-            got.base_offset <= target_offset && last >= target_offset,
-            "batch [{},{}] doesn't cover target {target_offset}",
-            got.base_offset,
-            last,
-        );
+        assert!(got.is_none(), "wrong-epoch remote data must fail closed");
     }
 }

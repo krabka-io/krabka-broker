@@ -147,6 +147,54 @@ impl BrokerMetrics {
         );
 
         registry.register(
+            "request_local_duration_seconds",
+            "Per-Kafka-API seconds one request spent on this \
+             broker's own log: the Produce writer round-trip summed over the \
+             request's partitions, or the Fetch read of every planned \
+             partition. Mirrors Kafka's RequestMetrics.LocalTimeMs. Labelled \
+             by the ApiKey variant name, like request_duration_seconds.",
+            self.request_local_duration_seconds.clone(),
+        );
+
+        registry.register(
+            "request_remote_duration_seconds",
+            "Per-Kafka-API seconds one request spent waiting on \
+             another broker: the acks=all high-watermark gate for Produce, \
+             the long poll for Fetch. Mirrors Kafka's \
+             RequestMetrics.RemoteTimeMs. High here with a low \
+             request_local_duration_seconds is a lagging follower, not a slow \
+             disk.",
+            self.request_remote_duration_seconds.clone(),
+        );
+
+        registry.register(
+            "request_throttle_duration_seconds",
+            "Per-Kafka-API seconds one request slept in the \
+             KIP-219 quota throttle, or in the KIP-599 controller-mutation \
+             throttle the topic-mutating admin apis apply inline. Mirrors \
+             Kafka's RequestMetrics.ThrottleTimeMs. Observed once per request \
+             whose quota the broker accounts for, with an explicit zero when no \
+             quota applied. The three phase families are disjoint and sum to \
+             at most the total; the remainder is decode, authorization, \
+             validation and encode.",
+            self.request_throttle_duration_seconds.clone(),
+        );
+
+        registry.register(
+            "quota_throttle_duration_seconds",
+            "Seconds of throttle the broker actually applied, \
+             labelled by the client quota that caused it (Produce = \
+             producer_byte_rate, Fetch = consumer_byte_rate, Request = \
+             request_percentage, ControllerMutation = \
+             controller_mutation_rate). A request sleeps for the largest of the \
+             delays it is charged, and the sample lands under the quota that \
+             produced it — the one an operator would raise to stop the \
+             throttle. Unthrottled requests are not observed, so _count is \
+             the number of throttled requests.",
+            self.quota_throttle_duration_seconds.clone(),
+        );
+
+        registry.register(
             "in_flight_requests",
             "Number of requests currently being handled by this broker \
              (gauge). Incremented on dispatch entry, decremented on exit; \
@@ -160,6 +208,16 @@ impl BrokerMetrics {
              (gauge). Incremented when the per-connection serve loop \
              starts, decremented when it exits (EOF / error / SASL expiry).",
             self.active_connections.clone(),
+        );
+
+        registry.register(
+            "connection_closes",
+            "Cumulative count of client connections the broker closed on its \
+             own, labelled by reason: idle, sasl_session_expired, \
+             decode_error, peer_closed. Alert on \
+             rate(...{reason=\"idle\"}[5m]) to catch a peer that connects and \
+             then sends nothing.",
+            self.connection_closes.clone(),
         );
 
         registry.register(

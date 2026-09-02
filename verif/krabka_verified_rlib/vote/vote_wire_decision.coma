@@ -1,0 +1,60 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 66 0 71 21 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span svote = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 72 18 72 19
+let%span svote'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 72 38 72 39
+let%span svote'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 72 61 72 62
+let%span svote'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 72 79 72 80
+let%span svote'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 59 10 61 1
+let%span svote'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 62 10 64 1
+
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_VoteWireDecision = Reject | Accept
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let vote_wire_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/vote.rs" 66 0 71 21]
+  (voter_id: Int32.t) (candidate_id: Int32.t) (candidate_epoch: Int32.t) (last_epoch: Int32.t)
+  (return (x: t_VoteWireDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_15 <- Int32.lt voter_id ([%#svote] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb2) | br1 -> {_15} (! bb8) ] ]
+  | bb2 = s0
+    [ s0 = [ &_17 <- Int32.lt candidate_id ([%#svote'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb4) | br1 -> {_17} (! bb8) ] ]
+  | bb4 = s0
+    [ s0 = [ &_19 <- Int32.lt candidate_epoch ([%#svote'1] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb6) | br1 -> {_19} (! bb8) ] ]
+  | bb6 = s0
+    [ s0 = [ &_21 <- Int32.lt last_epoch ([%#svote'2] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb9) | br1 -> {_21} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Accept ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoteWireDecision = Any.any_l ()
+  | & voter_id: Int32.t = voter_id
+  | & candidate_id: Int32.t = candidate_id
+  | & candidate_epoch: Int32.t = candidate_epoch
+  | & last_epoch: Int32.t = last_epoch
+  | & _15: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _21: bool = Any.any_l () ])
+  [ return (result: t_VoteWireDecision) ->
+  {[@stop_split] [@expl:vote_wire_decision ensures] ([@stop_split] [@expl:vote_wire_decision ensures #0] [%#svote'3] (result
+        = Reject)
+      = (Int32.to_int voter_id < 0
+      \/ Int32.to_int candidate_id < 0 \/ Int32.to_int candidate_epoch < 0 \/ Int32.to_int last_epoch < 0))
+    /\ ([@stop_split] [@expl:vote_wire_decision ensures #1] [%#svote'4] (result = Accept)
+    = (ge_log_Int (Int32.to_int voter_id) 0
+    /\ ge_log_Int (Int32.to_int candidate_id) 0
+    /\ ge_log_Int (Int32.to_int candidate_epoch) 0 /\ ge_log_Int (Int32.to_int last_epoch) 0))}
+    (! return {result}) ]

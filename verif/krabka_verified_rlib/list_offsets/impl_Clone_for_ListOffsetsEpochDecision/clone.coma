@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 54 27 54 32 *)
+
+(* <list_offsets::ListOffsetsEpochDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ListOffsetsEpochDecision = RejectMalformed | Proceed | Fenced | Unknown
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsEpochDecision [#"/workspace/crates/verified/src/list_offsets.rs" 54 27 54 32]
+  (self: t_ListOffsetsEpochDecision) (return (x: t_ListOffsetsEpochDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsEpochDecision = Any.any_l () | & self: t_ListOffsetsEpochDecision = self ])
+  [ return (result: t_ListOffsetsEpochDecision) -> (! return {result}) ]

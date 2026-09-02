@@ -88,6 +88,16 @@ impl Fixture {
     }
 
     pub(super) async fn coordinator(&self) -> BarrierCoordinator {
+        for (topic, count) in [("orders", 2), ("payments", 1)] {
+            for partition in 0..count {
+                if let Some(handle) = self
+                    .registry
+                    .get(topic, krabka_ids::PartitionIndex(partition))
+                {
+                    handle.install_leader_change(NodeId(1).get(), 3).await;
+                }
+            }
+        }
         let controller: Arc<dyn MetadataSource> = Arc::clone(&self.source) as _;
         let coordinator = BarrierCoordinator::new(
             NodeId(1),

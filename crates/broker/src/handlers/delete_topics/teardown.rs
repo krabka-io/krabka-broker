@@ -24,7 +24,14 @@ pub(super) fn remove_local_partitions(
     local_partitions: Vec<PartitionIndex>,
 ) {
     for idx in local_partitions {
-        partitions.remove(name, idx);
+        if let Some(partition) = partitions.remove(name, idx)
+            && let Some(writer) = partition.take_writer_handle()
+        {
+            writer.abort();
+        }
+        if let Some(topic_id) = topic_id {
+            broker.hot_tail.remove_partition(topic_id, idx);
+        }
         // JBOD: the partition may live in any log dir; resolve
         // its actual location (existing-location wins).
         let dir = log_dir::place_partition_dir(log_dirs, name, idx.get());

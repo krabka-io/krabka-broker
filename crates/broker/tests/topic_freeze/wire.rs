@@ -1,11 +1,12 @@
 //! The request shapes every case sends, and the vocabulary it judges a produce by.
 //!
 //! A freeze case asks "produce once, then tell me what happened", and
-//! [`ProduceOutcome`] answers in the three terms that together decide the
+//! [`ProduceOutcome`] answers in the four terms that together decide the
 //! feature: the error code, the `error_message` the producer's on-call reads,
-//! and the partition's log end offset afterwards. [`accepted`] and [`refused`]
-//! build the two expected values, so a case compares one whole struct instead
-//! of three fields that could each pass while the outcome is wrong.
+//! the `base_offset` the row reports, and the partition's log end offset
+//! afterwards. [`accepted`] and [`refused`] build the two expected values, so
+//! a case compares one whole struct instead of four fields that could each
+//! pass while the outcome is wrong.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,6 +28,10 @@ use crate::support;
 
 /// The unfrozen topic that every case produces to beside the frozen one.
 pub(super) const CONTROL: &str = "control";
+
+/// The wire's "no offset assigned", which is `ProduceResponse.INVALID_OFFSET`.
+/// A row refused before any append carries it in `base_offset`.
+const INVALID_OFFSET: i64 = -1;
 
 /// Milliseconds since the Unix epoch, which is what `set_at_ms` carries.
 pub(super) fn now_ms() -> i64 {
@@ -107,15 +112,21 @@ pub(super) async fn produce(
     resp.responses[0].partition_responses[0].clone()
 }
 
-/// What one produce did, in the three terms a freeze case cares about.
+/// What one produce did, in the four terms a freeze case cares about.
 ///
 /// The log end offset is part of the value rather than a second assertion,
 /// because the two have to be read together: a `POLICY_VIOLATION` that still
 /// moved the log is a pass on the error code and a catastrophe on the feature.
+///
+/// `base_offset` is read off the wire for the same reason. A refused row has
+/// no offset to report, and Kafka says so with -1; a row that answered
+/// `POLICY_VIOLATION` and still claimed offset 0 would tell a producer its
+/// batch landed at the head of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProduceOutcome {
     error_code: i16,
     error_message: Option<String>,
+    base_offset: i64,
     log_end_offset: Option<i64>,
 }
 
@@ -130,15 +141,20 @@ pub(super) async fn produce_outcome(
     ProduceOutcome {
         error_code: response.error_code,
         error_message: response.error_message,
+        base_offset: response.base_offset,
         log_end_offset: broker.local_log_end_offset(topic, 0),
     }
 }
 
 /// The outcome of an accepted produce that leaves the log at `log_end_offset`.
+///
+/// Every produce here sends one single-record batch, so the offset it was
+/// assigned is the one the log ended just past.
 pub(super) fn accepted(log_end_offset: i64) -> ProduceOutcome {
     ProduceOutcome {
         error_code: codes::NONE,
         error_message: None,
+        base_offset: log_end_offset - 1,
         log_end_offset: Some(log_end_offset),
     }
 }
@@ -162,6 +178,7 @@ pub(super) fn refused(
         error_message: Some(format!(
             "a write freeze on the {kind} scope {scope:?} refuses this write: {reason}"
         )),
+        base_offset: INVALID_OFFSET,
         log_end_offset: Some(log_end_offset),
     }
 }

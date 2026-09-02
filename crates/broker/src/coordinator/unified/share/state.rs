@@ -48,14 +48,14 @@ impl ShareMemberState {
 }
 
 /// The target assignment computed by the most recent reconcile.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShareTargetAssignment {
     pub epoch: i32,
     pub per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
 }
 
 /// Full membership state of a single share group.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShareGroupState {
     pub group_id: String,
     pub group_epoch: i32,
@@ -87,8 +87,12 @@ impl ShareGroupState {
         }
     }
 
-    pub fn bump_epoch(&mut self) {
-        self.group_epoch += 1;
+    pub fn bump_epoch(&mut self) -> bool {
+        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
+            return false;
+        };
+        self.group_epoch = group_epoch;
+        true
     }
 
     pub fn add_or_update_member(&mut self, m: ShareMemberState) {
@@ -164,6 +168,15 @@ mod tests {
         ));
         assert!(g.members.len() == 1);
         assert!(g.dirty);
+    }
+
+    #[test]
+    fn bump_epoch_rejects_exhaustion() {
+        let mut group = ShareGroupState::new("g");
+        group.group_epoch = i32::MAX;
+
+        assert!(!group.bump_epoch());
+        assert!(group.group_epoch == i32::MAX);
     }
 
     #[test]

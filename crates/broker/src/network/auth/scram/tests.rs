@@ -172,6 +172,49 @@ mod token_scram_fallback {
         controller.cancel().await;
     }
 
+    #[tokio::test]
+    async fn scram_sha256_rejects_expired_delegation_token() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let hmac = vec![0xACu8; 32];
+        append_token(
+            &controller,
+            "expired-token",
+            "alice",
+            hmac.clone(),
+            crate::time_util::now_ms() - 1,
+        )
+        .await;
+
+        let password = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&hmac)
+        };
+        let mut auth = ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::ScramSha256,
+            exchange: SaslExchange::ScramPending,
+            pending_token_expiry_ms: None,
+        };
+        let client = ScramClientExchange::new(
+            "expired-token".into(),
+            password.into_bytes(),
+            SaslMechanism::ScramSha256,
+        );
+        let (c1, _) = client.client_first().unwrap();
+        let response = handle_authenticate_scram(
+            &SaslAuthenticateRequest {
+                auth_bytes: bytes::Bytes::from(c1),
+                ..Default::default()
+            },
+            &mut auth,
+            &*controller,
+        );
+
+        check!(response.error_code == SASL_AUTHENTICATION_FAILED);
+        assert_failed_authenticate_response(&response);
+        controller.cancel().await;
+    }
+
     /// Round-2 success: full two-round-trip drive ends in
     /// `Authenticated` whose principal is the token's owner (`alice`),
     /// with `authenticated_via_token: true` and `expires_at_ms` set

@@ -1,0 +1,138 @@
+(* #"/proof-work-240/crates/verified/src/transaction.rs" 75 0 79 23 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 80 21 80 22
+let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 83 16 83 30
+let%span stransaction'1 = "/proof-work-240/crates/verified/src/transaction.rs" 65 10 73 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'0 v -> result = Continue v
+      | None'0 -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_tup2_i64_i64 (residual: t_Option_Infallible) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let aborted_transaction_interval [#"/proof-work-240/crates/verified/src/transaction.rs" 75 0 79 23]
+  (pending_start: t_Option_i64) (marker_last: Int64.t) (producer_id: Int64.t) (return (x: t_Option_tup2_i64_i64)) =
+(! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.lt producer_id ([%#stransaction] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = branch_Option_i64 [%#stransaction'0] {pending_start}
+        (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_13 <- _x ] s1)
+    | s1 = any
+      [ br0 (x0: Int64.t) -> {_13 = Continue x0} (! bb6) | br1 (x0: t_Option_Infallible) -> {_13 = Break x0} (! bb7) ] ]
+  | bb7 = s0
+    [ s0 = elim_Break {_13} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#stransaction'0] {residual}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = elim_Continue {_13} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &start <- val' ] s2
+    | s2 = [ &_21 <- Int64.gt start marker_last ] s3
+    | s3 = any [ br0 -> {_21 = false} (! bb10) | br1 -> {_21} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb10 = s0
+    [ s0 = [ &_25 <- { f0 = start; f1 = marker_last } ] s1 | s1 = [ &_ret <- Some _25 ] s2 | s2 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & pending_start: t_Option_i64 = pending_start
+  | & marker_last: Int64.t = marker_last
+  | & producer_id: Int64.t = producer_id
+  | & _9: bool = Any.any_l ()
+  | & start: Int64.t = Any.any_l ()
+  | & _13: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
+  | & _21: bool = Any.any_l ()
+  | & _25: tup2_i64_i64 = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:aborted_transaction_interval ensures] [%#stransaction'1] match result with
+      | Some {f0 = start; f1 = last} -> ge_log_Int (Int64.to_int producer_id) 0
+      /\ pending_start = Some'0 start
+      /\ Int64.to_int last = Int64.to_int marker_last /\ Int64.to_int start <= Int64.to_int last
+      | None -> Int64.to_int producer_id < 0
+      \/ pending_start = None'0
+      \/ match pending_start with
+        | Some'0 start -> gt_log_Int (Int64.to_int start) (Int64.to_int marker_last)
+        | None'0 -> false
+        end
+      end}
+    (! return {result}) ]

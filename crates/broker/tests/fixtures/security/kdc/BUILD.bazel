@@ -1,0 +1,56 @@
+"""The MIT Kerberos KDC fixture image."""
+
+load("@rules_apko//apko:defs.bzl", "apko_image")
+load("@rules_img//img:convert.bzl", "image_manifest_from_oci_layout")
+load("@rules_img//img:image.bzl", "image_manifest")
+load("@rules_img//img:layer.bzl", "file_metadata", "image_layer")
+load("@rules_img//img:load.bzl", "image_load")
+load("@rules_img//img:media_types.bzl", "GZIP_LAYER")
+
+package(default_visibility = ["//visibility:public"])
+
+apko_image(
+    name = "base_oci",
+    config = "image.apko.yaml",
+    contents = "@kdc_base_lock//:contents",
+    tag = "krabka-kdc-base:locked",
+    tags = ["docker"],
+)
+
+image_manifest_from_oci_layout(
+    name = "base",
+    src = ":base_oci",
+    architecture = "amd64",
+    layers = [GZIP_LAYER],
+    os = "linux",
+    tags = ["docker"],
+)
+
+image_layer(
+    name = "seed_layer",
+    srcs = {
+        "/seed/kdc.conf": ":kdc.conf",
+        "/seed/krb5.conf": ":krb5.conf",
+        "/usr/local/bin/bootstrap-kdc": ":bootstrap.sh",
+    },
+    default_metadata = file_metadata(mode = "0644"),
+    file_metadata = {
+        "/usr/local/bin/bootstrap-kdc": file_metadata(mode = "0755"),
+    },
+    tags = ["docker"],
+)
+
+image_manifest(
+    name = "image",
+    base = ":base",
+    entrypoint = ["/usr/local/bin/bootstrap-kdc"],
+    layers = [":seed_layer"],
+    tags = ["docker"],
+)
+
+image_load(
+    name = "image_load",
+    image = ":image",
+    tag = "docker.io/krabka-io/krb5-kdc:test",
+    tags = ["docker"],
+)

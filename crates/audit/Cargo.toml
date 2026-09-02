@@ -24,21 +24,23 @@ sha2 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync", "rt", "time"] }
-qubit-clock = { workspace = true, features = ["tokio"] }
+qubit-clock = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 krabka-protocol = { version = "0.4.0", default-features = false }
 krabka-ids = { version = "0.4.0" }
+krabka-verified = { version = "0.5.3", path = "../verified" }
 krabka-units = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 assert2 = { workspace = true }
-krabka-log = { version = "0.5.1", path = "../log" }
+krabka-log = { version = "0.5.3", path = "../log" }
 mutants = { workspace = true }
+stateright = { workspace = true }
 tempfile = { workspace = true }
 
 [[bin]]

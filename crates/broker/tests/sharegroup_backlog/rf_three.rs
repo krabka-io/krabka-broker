@@ -11,6 +11,7 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::metrics::ShareGroupLabel;
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -30,6 +31,13 @@ use crate::{
 
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
+
+fn share_coordinator_key(group: &str, topic_id: uuid::Uuid, partition: i32) -> String {
+    format!(
+        "{group}:{}:{partition}",
+        URL_SAFE_NO_PAD.encode(topic_id.as_bytes())
+    )
+}
 
 fn java_hash(value: &str) -> i32 {
     value.encode_utf16().fold(0_i32, |hash, unit| {
@@ -60,7 +68,34 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             config.offsets_topic_num_partitions = 3;
             config.share_coordinator.state_topic_num_partitions = 1;
             config.share_group.backlog_poll_interval = Duration::from_millis(50);
+            // Everything below the poll interval exists to keep the stopped
+            // follower inside the ISR for the whole probe. That is what holds
+            // the data leader's high watermark at 0 while its log end offset
+            // runs on to 5, and the gap between those two numbers is the only
+            // thing that tells a committed-HWM sample apart from a LEO sample.
+            // Once the follower leaves the ISR the watermark catches up and
+            // the distinction is gone -- so an ISR shrink does not merely
+            // upset an assertion, it dissolves the fixture.
+            //
+            // Two independent clocks propose that shrink, and both used to be
+            // shorter than the work between the shutdown and the sample:
+            //
+            // * `isr_maintenance` scans every `isr_scan_interval` (1s by test
+            //   default) and drops any follower whose last fetch is older than
+            //   `replica_lag_time_max`. `tokio::time::interval` fires its
+            //   first tick immediately, so an hour-long interval means each
+            //   broker scans exactly once, at startup, with an empty partition
+            //   registry -- and never again while the test runs.
+            // * The controller fails a broker over once its heartbeat session
+            //   expires after `heartbeat_timeout` (2s by test default), which
+            //   rewrites the partition with the dead node removed from the
+            //   ISR. Ten minutes puts that expiry far beyond every bounded
+            //   wait the test performs after the shutdown -- the longest is a
+            //   single 30s `wait_for_metrics` -- so the test cannot reach an
+            //   assertion on the far side of it.
             config.replica_lag_time_max = krabka_units::secs(30);
+            config.isr_scan_interval = krabka_units::hours(1);
+            config.heartbeat_timeout = krabka_units::minutes(10);
         })
         .await
         {
@@ -82,9 +117,9 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             .await
             .unwrap(),
     );
-    create_topic(&admin, 3, 3).await;
+    create_topic(&admin, 1, 3).await;
     for (broker, _, _) in &cluster {
-        broker.wait_until_partition_present(TOPIC, 2).await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
     }
     let topic_id = cluster[0]
         .0
@@ -97,7 +132,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         let response = admin
             .send(FindCoordinatorRequest {
                 key_type: 2,
-                coordinator_keys: vec![format!("backlog-rf3-bootstrap:{topic_id}:0")],
+                coordinator_keys: vec![share_coordinator_key("backlog-rf3-bootstrap", topic_id, 0)],
                 ..Default::default()
             })
             .await
@@ -134,7 +169,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             .partition(OFFSETS_TOPIC, offsets_partition)
             .expect("offsets partition")
             .leader;
-        for data_partition in 0..3 {
+        for data_partition in 0..1 {
             let data_leader_id = image
                 .partition(TOPIC, data_partition)
                 .expect("data partition")
@@ -169,7 +204,6 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .expect("data partition metadata")
         .leader_epoch;
     drop(image);
-
     let coordinator_index = cluster
         .iter()
         .position(|(_, config, _)| config.node_id == coordinator_id)
@@ -186,7 +220,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     let share_coordinator = coordinator_client
         .send(FindCoordinatorRequest {
             key_type: 2,
-            coordinator_keys: vec![format!("{group_id}:{topic_id}:{data_partition}")],
+            coordinator_keys: vec![share_coordinator_key(&group_id, topic_id, data_partition)],
             ..Default::default()
         })
         .await

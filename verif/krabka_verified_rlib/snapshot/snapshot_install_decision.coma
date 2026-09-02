@@ -1,0 +1,69 @@
+(* #"/proof-work-223/crates/verified/src/snapshot.rs" 44 0 49 28 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span ssnapshot = "/proof-work-223/crates/verified/src/snapshot.rs" 50 43 50 44
+let%span ssnapshot'0 = "/proof-work-223/crates/verified/src/snapshot.rs" 50 65 50 66
+let%span ssnapshot'1 = "/proof-work-223/crates/verified/src/snapshot.rs" 50 80 50 81
+let%span ssnapshot'2 = "/proof-work-223/crates/verified/src/snapshot.rs" 27 10 42 1
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+type t_SnapshotInstallDecision = Reject | Stale | Install
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let snapshot_install_decision [#"/proof-work-223/crates/verified/src/snapshot.rs" 44 0 49 28] (downgrade_pending: bool)
+  (snapshot_end: Int64.t) (snapshot_epoch: Int32.t) (log_end: Int64.t) (return (x: t_SnapshotInstallDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {downgrade_pending = false} (! bb1) | br1 -> {downgrade_pending} (! bb7) ]
+  | bb1 = s0
+    [ s0 = [ &_11 <- Int64.lt snapshot_end ([%#ssnapshot] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb3) | br1 -> {_11} (! bb7) ] ]
+  | bb3 = s0
+    [ s0 = [ &_13 <- Int32.lt snapshot_epoch ([%#ssnapshot'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb5) | br1 -> {_13} (! bb7) ] ]
+  | bb5 = s0
+    [ s0 = [ &_15 <- Int64.lt log_end ([%#ssnapshot'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb8) | br1 -> {_15} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
+  | bb8 = s0
+    [ s0 = [ &_17 <- Int64.le snapshot_end log_end ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb10) | br1 -> {_17} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- Stale ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- Install ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SnapshotInstallDecision = Any.any_l ()
+  | & downgrade_pending: bool = downgrade_pending
+  | & snapshot_end: Int64.t = snapshot_end
+  | & snapshot_epoch: Int32.t = snapshot_epoch
+  | & log_end: Int64.t = log_end
+  | & _11: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _17: bool = Any.any_l () ])
+  [ return (result: t_SnapshotInstallDecision) ->
+  {[@stop_split] [@expl:snapshot_install_decision ensures] [%#ssnapshot'2] match result with
+      | Reject -> downgrade_pending
+      \/ Int64.to_int snapshot_end < 0 \/ Int32.to_int snapshot_epoch < 0 \/ Int64.to_int log_end < 0
+      | Stale -> not downgrade_pending
+      /\ ge_log_Int (Int64.to_int snapshot_end) 0
+      /\ ge_log_Int (Int32.to_int snapshot_epoch) 0
+      /\ ge_log_Int (Int64.to_int log_end) 0 /\ Int64.to_int snapshot_end <= Int64.to_int log_end
+      | Install -> not downgrade_pending
+      /\ ge_log_Int (Int64.to_int snapshot_end) 0
+      /\ ge_log_Int (Int32.to_int snapshot_epoch) 0
+      /\ ge_log_Int (Int64.to_int log_end) 0 /\ gt_log_Int (Int64.to_int snapshot_end) (Int64.to_int log_end)
+      end}
+    (! return {result}) ]

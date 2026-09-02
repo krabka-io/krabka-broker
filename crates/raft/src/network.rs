@@ -19,7 +19,7 @@
 //! [`PeerSender`](crate::kraft::transport::PeerSender) implementation itself in
 //! `peer_sender`.
 
-mod addressing;
+pub(crate) mod addressing;
 mod dialer;
 mod peer_sender;
 

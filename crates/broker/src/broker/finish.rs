@@ -219,6 +219,7 @@ fn spawn_diskless_bootstrap(
         object_store: handle.object_store(),
         node_id: broker.config.node_id,
         broker_id: broker.config.broker_id,
+        metrics: broker.metrics.clone(),
         flush_config: crate::diskless::flusher::FlushConfig::from_broker(&broker.config),
         ready: Arc::clone(&ready),
     };

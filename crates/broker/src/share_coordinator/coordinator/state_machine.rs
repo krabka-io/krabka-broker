@@ -153,7 +153,13 @@ impl ShareCoordinator {
 
         // Snapshot fold + prune once the update count crosses the threshold.
         if st.updates_since_snapshot >= self.config.snapshot_update_records_per_snapshot {
-            let snapshot = st.to_snapshot();
+            let Some(snapshot) = st.to_snapshot() else {
+                warn!(
+                    group,
+                    partition, "share snapshot skipped because its epoch is exhausted"
+                );
+                return Ok(());
+            };
             let snap_key = ShareStateKey {
                 record_type: KEY_SHARE_SNAPSHOT,
                 group_id: group.to_string(),

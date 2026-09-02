@@ -24,6 +24,12 @@ mod tests;
 /// histogram. Spans ~100µs (idempotent `ApiVersions`) to 10s (a slow
 /// controller round-trip or a throttled admin RPC), tuned so the common
 /// Produce/Fetch band (0.5ms–50ms) lands on distinct buckets.
+///
+/// The `request_{local,remote,throttle}_duration_seconds` phases and
+/// `quota_throttle_duration_seconds` share these boundaries deliberately. A
+/// phase is a part of the total, and an operator checks the phases against the
+/// total bucket by bucket; two bucket sets would make that comparison an
+/// interpolation rather than a subtraction.
 const REQUEST_DURATION_BUCKETS: [f64; 12] = [
     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 10.0,
 ];
@@ -77,6 +83,7 @@ impl BrokerMetrics {
             leader_site_drift_partitions: Gauge::default(),
             voted_directory: Family::default(),
             controller_leader_changes_total: Counter::default(),
+            controller_fencing_publications_total: Counter::default(),
             isr_shrinks_total: Counter::default(),
             isr_expands_total: Counter::default(),
             fetch_response_drain: Family::default(),
@@ -92,8 +99,21 @@ impl BrokerMetrics {
             request_duration_seconds: Family::new_with_constructor(|| {
                 Histogram::new(REQUEST_DURATION_BUCKETS)
             }),
+            request_local_duration_seconds: Family::new_with_constructor(|| {
+                Histogram::new(REQUEST_DURATION_BUCKETS)
+            }),
+            request_remote_duration_seconds: Family::new_with_constructor(|| {
+                Histogram::new(REQUEST_DURATION_BUCKETS)
+            }),
+            request_throttle_duration_seconds: Family::new_with_constructor(|| {
+                Histogram::new(REQUEST_DURATION_BUCKETS)
+            }),
+            quota_throttle_duration_seconds: Family::new_with_constructor(|| {
+                Histogram::new(REQUEST_DURATION_BUCKETS)
+            }),
             in_flight_requests: Gauge::default(),
             active_connections: Gauge::default(),
+            connection_closes: Family::default(),
             request_errors: Family::default(),
             tiered_storage_rlmm_topic_backed: Gauge::default(),
             tiered_storage_rlmm_bootstrap_attempts: Counter::default(),
@@ -135,6 +155,17 @@ impl BrokerMetrics {
             break_glass_proposals: Family::default(),
             break_glass_refusals: Family::default(),
             break_glass_bypassed: Family::default(),
+            diskless_wal_durable_watermark: Family::default(),
+            diskless_wal_voter_lag: Family::default(),
+            diskless_wal_quorum_loss_events_total: Counter::default(),
+            diskless_wal_flush_attempts_total: Counter::default(),
+            diskless_wal_flush_bytes_total: Counter::default(),
+            diskless_wal_flush_failures_total: Counter::default(),
+            diskless_wal_index_projection_lag: Family::default(),
+            diskless_wal_trim_frontier: Family::default(),
+            diskless_wal_cold_read_hits_total: Counter::default(),
+            diskless_wal_cold_read_misses_total: Counter::default(),
+            diskless_wal_cold_read_errors_total: Counter::default(),
         }
     }
 
@@ -157,6 +188,7 @@ impl BrokerMetrics {
             metrics.register_group_5(&mut registry);
             metrics.register_group_6(&mut registry);
             metrics.register_group_7(&mut registry);
+            metrics.register_group_8(&mut registry);
         }
         metrics
     }

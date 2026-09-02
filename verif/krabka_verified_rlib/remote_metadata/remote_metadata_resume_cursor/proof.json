@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_remote_metadata_resume_cursor": {
+        "prover": "alt-ergo",
+        "time": 0.01
+      }
+    }
+  }
+}

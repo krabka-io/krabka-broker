@@ -21,22 +21,24 @@ use crate::{
         DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL, DEFAULT_DELEGATION_TOKEN_EXPIRY_CHECK_INTERVAL,
         DEFAULT_DELEGATION_TOKEN_MAX_LIFETIME, DEFAULT_DELEGATION_TOKEN_RENEW_PERIOD,
         DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
-        DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
-        DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG, DEFAULT_HEARTBEAT_INTERVAL,
-        DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, DEFAULT_JWKS_REFRESH_INTERVAL,
-        DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL, DEFAULT_LEADER_IMBALANCE_PER_BROKER,
-        DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
+        DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE, DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
+        DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
+        DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
+        DEFAULT_JWKS_REFRESH_INTERVAL, DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
+        DEFAULT_LEADER_IMBALANCE_PER_BROKER, DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         DEFAULT_METADATA_MAX_BYTES_BETWEEN_SNAPSHOTS, DEFAULT_METADATA_MAX_SNAPSHOT_INTERVAL,
         DEFAULT_METADATA_SNAPSHOT_FETCH_MAX, DEFAULT_METADATA_SNAPSHOT_INTERVAL_RECORDS,
         DEFAULT_OBSERVER_LAG_BOUND, DEFAULT_REMOTE_LOG_MANAGER_INTERVAL,
         DEFAULT_REPLICA_LAG_TIME_MAX, DEFAULT_TLS_RELOAD_INTERVAL,
-        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
+        DEFAULT_TXN_ABORT_CLEANUP_INTERVAL, DEFAULT_TXN_ID_EXPIRATION,
+        DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL, FreezeConfig, KafkaRlmmConfig, NodeRole,
         ReplicationRuntimeConfig, RlmmKind, feature_flags::default_feature_flags, shared_epoch_ms,
     },
     operator_keys::OperatorKeys,
 };
 
 impl Default for BrokerConfig {
+    #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let addr: SocketAddr = "127.0.0.1:9092".parse().expect("hard-coded valid addr");
         let controller_addr: SocketAddr = "127.0.0.1:9093".parse().expect("hard-coded valid addr");
@@ -93,6 +95,7 @@ impl Default for BrokerConfig {
             diskless_wal_local_replica_count: DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
             diskless_wal_flush_interval: DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL,
             diskless_wal_flush_max_size: DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
+            diskless_wal_hot_tail_max_size: DEFAULT_DISKLESS_WAL_HOT_TAIL_MAX_SIZE,
             diskless_wal_trim_safety_lag: DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
             diskless_wal_index_projection_timeout: DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
             unclean_recovery_queue_capacity: 256,
@@ -118,6 +121,8 @@ impl Default for BrokerConfig {
             default_min_insync_replicas: 1,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
+            offsets_retention_override: None,
+            offsets_retention_check_interval_override: None,
             offsets_topic_replication_factor: 3,
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),
@@ -147,6 +152,7 @@ impl Default for BrokerConfig {
             bootstrap_servers: vec![],
             directory_id: uuid::Uuid::from_u128(1),
             incarnation_id: uuid::Uuid::nil(),
+            previous_broker_epoch: crate::clean_shutdown::UNPROVEN,
             auto_join: false,
             observer_lag_bound: DEFAULT_OBSERVER_LAG_BOUND,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
@@ -189,12 +195,21 @@ impl Default for BrokerConfig {
             oauthbearer_max_session_lifetime: None,
             oauthbearer_jwks_signal_rx: std::sync::Arc::new(std::sync::Mutex::new(None)),
             oauthbearer_jwks_last_successful_fetch_ms: shared_epoch_ms(),
+            oauthbearer_jwks_cache_generation: std::sync::Arc::new(
+                std::sync::atomic::AtomicU64::new(0),
+            ),
             oauthbearer_jwks_last_on_demand_refresh_ms: shared_epoch_ms(),
             oauthbearer_jwks_min_on_demand_pause: DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE,
             features: default_feature_flags(),
             // KIP-98/KIP-939 idle-transaction reaper cadence (Kafka's
             // `transaction.abort.timed.out.transaction.cleanup.interval.ms`).
             txn_abort_cleanup_interval: DEFAULT_TXN_ABORT_CLEANUP_INTERVAL,
+            // KIP-98 transactional-id expiry (Kafka's
+            // `transactional.id.expiration.ms` and
+            // `transaction.remove.expired.transaction.cleanup.interval.ms`).
+            txn_id_expiration: DEFAULT_TXN_ID_EXPIRATION,
+            txn_id_expiration_cleanup_interval: DEFAULT_TXN_ID_EXPIRATION_CLEANUP_INTERVAL,
+            static_config_origins: crate::config::StaticConfigOrigins::default(),
             next_gen_consumer_group: Box::new(
                 crate::coordinator::unified::config::NextGenConfig::default(),
             ),
@@ -222,6 +237,15 @@ impl Default for BrokerConfig {
             profiling: krabka_telemetry::profiling::ProfilingConfig::default(),
             client_metrics_otlp_endpoint: None,
             client_metrics_otlp_protocol: krabka_telemetry::OtlpProtocol::Grpc,
+            // The broker binary replaces this with the controller that drives
+            // the subscriber it installed. The seed matters for every other
+            // way a config is built: it carries the same directives as
+            // `DEFAULT_LOG_FILTER`, so a `BROKER_LOGGER` describe lists the
+            // krabka targets before anything has logged through them.
+            log_levels: krabka_telemetry::LogLevelController::new(
+                crate::config::DEFAULT_LOG_FILTER,
+            )
+            .0,
             partition_disk_scan_interval: secs(60),
             max_incremental_fetch_session_cache_slots:
                 DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
@@ -229,6 +253,11 @@ impl Default for BrokerConfig {
             // max.connections / max.connections.per.ip (Integer.MAX_VALUE).
             max_connections: usize::MAX,
             max_connections_per_ip: usize::MAX,
+            // Unset: the broker runs Kafka's connections.max.idle.ms default
+            // and reports the key at DEFAULT_CONFIG. No per-listener override
+            // until an operator writes one.
+            connections_max_idle: None,
+            connections_max_idle_overrides: std::collections::BTreeMap::new(),
             // Master key off by default. Operators flip this on
             // via `KRABKA_DELEGATION_TOKEN_SECRET_KEY` env var or the
             // `[delegation_token] secret_key` TOML stanza.

@@ -1,0 +1,74 @@
+(* #"/workspace/crates/verified/src/freeze.rs" 167 0 170 24 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 171 10 171 30
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 157 10 165 1
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_FreezeScopeRank = NoMatch | Prefix UInt64.t | Literal
+
+type tup2_FreezeScopeRank_FreezeScopeRank = { f0: t_FreezeScopeRank; f1: t_FreezeScopeRank }
+
+let elim_Prefix (_x: t_FreezeScopeRank) (return (length: UInt64.t)) = any
+  [ _k (length: UInt64.t) -> {Prefix length = _x} (! return {length})
+  | _chk -> (! {[@expl:elim Prefix] match _x with
+      | Prefix _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+type t_FreezeScopeDecision = Keep | Replace
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let freeze_scope_decision [#"/workspace/crates/verified/src/freeze.rs" 167 0 170 24] (current': t_FreezeScopeRank)
+  (candidate: t_FreezeScopeRank) (return (x: t_FreezeScopeDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_6 <- { f0 = current'; f1 = candidate } ] s1
+    | s1 = any
+      [ br0 -> {_6.f1 = NoMatch} (! bb8)
+      | br1 (x0: UInt64.t) -> {_6.f1 = Prefix x0} (! bb1)
+      | br2 -> {_6.f1 = Literal} (! bb1) ] ]
+  | bb1 = any
+    [ br0 -> {_6.f0 = NoMatch} (! bb7)
+    | br1 (x0: UInt64.t) -> {_6.f0 = Prefix x0} (! bb3)
+    | br2 -> {_6.f0 = Literal} (! bb8) ]
+  | bb3 = any
+    [ br0 -> {_6.f1 = NoMatch} (! bb2)
+    | br1 (x0: UInt64.t) -> {_6.f1 = Prefix x0} (! bb4)
+    | br2 -> {_6.f1 = Literal} (! bb7) ]
+  | bb2 = {[%#sfreeze] false} any
+  | bb4 = s0
+    [ s0 = elim_Prefix {_6.f0} (fun (rlength: UInt64.t) -> [ &current_length <- rlength ] s1)
+    | s1 = elim_Prefix {_6.f1} (fun (rlength: UInt64.t) -> [ &candidate_length <- rlength ] s2)
+    | s2 = [ &_14 <- UInt64.gt candidate_length current_length ] s3
+    | s3 = any [ br0 -> {_14 = false} (! bb10) | br1 -> {_14} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- Replace ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- Keep ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- Replace ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- Keep ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FreezeScopeDecision = Any.any_l ()
+  | & current': t_FreezeScopeRank = current'
+  | & candidate: t_FreezeScopeRank = candidate
+  | & _6: tup2_FreezeScopeRank_FreezeScopeRank = Any.any_l ()
+  | & current_length: UInt64.t = Any.any_l ()
+  | & candidate_length: UInt64.t = Any.any_l ()
+  | & _14: bool = Any.any_l () ])
+  [ return (result: t_FreezeScopeDecision) -> {[@stop_split] [@expl:freeze_scope_decision ensures] [%#sfreeze'0] (result
+      = Replace)
+    = match { f0 = current'; f1 = candidate } with
+      | {f1 = NoMatch} | {f0 = Literal} -> false
+      | {f0 = NoMatch} -> true
+      | {f0 = Prefix _; f1 = Literal} -> true
+      | {f0 = Prefix current_length; f1 = Prefix candidate_length} -> gt_log_Int (UInt64.t'int candidate_length) (UInt64.t'int current_length)
+      end}
+    (! return {result}) ]

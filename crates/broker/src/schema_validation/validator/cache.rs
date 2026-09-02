@@ -10,9 +10,10 @@ use std::collections::HashSet;
 
 use krabka_schema_serde::{error::SchemaSerdeError, subject::SchemaKind};
 use krabka_units::convert::TimeExt as _;
+use qubit_clock::WallClock as _;
 
 use super::{SchemaValidator, UNAVAILABLE_TTL_MS, reject::RejectReason};
-use crate::{metrics::BrokerMetrics, schema_validation::ValidationMode};
+use crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util};
 
 /// What the registry said about one schema id.
 #[derive(Debug, Clone)]
@@ -46,7 +47,7 @@ impl SchemaValidator {
         mode: ValidationMode,
         metrics: &BrokerMetrics,
     ) -> Result<SchemaEntry, RejectReason> {
-        let now = self.clock.millis();
+        let now = time_util::epoch_millis(self.clock.now());
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
         // thousands, and it is what the OPA cache does.
@@ -125,23 +126,39 @@ impl SchemaValidator {
 
     /// Turn a registry failure into the reason it stands for.
     ///
-    /// A 404 is the registry answering: this id is not registered. Anything
-    /// else is the registry failing to answer, which `fail_open` governs.
+    /// A 404 is an unknown ID. Transport errors, request timeouts, throttling,
+    /// and 5xx responses are transient; other statuses and malformed success
+    /// responses fail closed.
     fn fetch_error(id: u32, error: &SchemaSerdeError) -> RejectReason {
+        use krabka_verified::SchemaFailureKind::{Malformed, Permanent};
+
         match error {
             SchemaSerdeError::RegistryStatus { status: 404, .. } => RejectReason::UnknownId(id),
-            other => RejectReason::RegistryUnavailable(other.to_string()),
+            SchemaSerdeError::RegistryTransport(_)
+            | SchemaSerdeError::RegistryStatus {
+                status: 408 | 429 | 500..=599,
+                ..
+            } => RejectReason::RegistryUnavailable(error.to_string()),
+            SchemaSerdeError::RegistryDecode(_) => RejectReason::RegistryRejected {
+                kind: Malformed,
+                detail: error.to_string(),
+            },
+            _ => RejectReason::RegistryRejected {
+                kind: Permanent,
+                detail: error.to_string(),
+            },
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::time::{Duration, SystemTime};
 
     use assert2::{assert, check};
     use krabka_schema_serde::subject::Role;
     use krabka_units::{millis, minutes, secs};
+    use qubit_clock::ManualMonotonicClock;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -206,16 +223,10 @@ mod tests {
     async fn a_cache_entry_expires_on_its_ttl() {
         // Two calls: one before the TTL passes and one after.
         let server = registry(2).await;
-        let clock = Arc::new(qubit_clock::MockClock::new());
-        let v = SchemaValidator::with_clock(
-            server.uri(),
-            false,
-            100,
-            millis(10),
-            secs(5),
-            clock.clone(),
-        )
-        .expect("validator");
+        let timeline = ManualMonotonicClock::new_shared();
+        let clock = timeline.new_wall_clock(SystemTime::now());
+        let v = SchemaValidator::with_clock(server.uri(), false, 100, millis(10), secs(5), clock)
+            .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         check!(
@@ -230,8 +241,11 @@ mod tests {
             .is_ok()
         );
         // Past the TTL on a controlled timeline, so the expiry is an assertion
-        // and not a race against a real sleep.
-        clock.advance(Duration::from_millis(50));
+        // and not a race against a real sleep. The wall clock is anchored to
+        // that timeline, so advancing it moves the cache's stamp with it.
+        timeline
+            .advance(Duration::from_millis(50))
+            .expect("manual time moves forward");
         check!(
             v.check(
                 "orders",
@@ -294,16 +308,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let clock = Arc::new(qubit_clock::MockClock::new());
-        let v = SchemaValidator::with_clock(
-            server.uri(),
-            false,
-            100,
-            minutes(5),
-            secs(5),
-            clock.clone(),
-        )
-        .expect("validator");
+        let timeline = ManualMonotonicClock::new_shared();
+        let clock = timeline.new_wall_clock(SystemTime::now());
+        let v = SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), clock)
+            .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         let got = v
@@ -318,7 +326,9 @@ mod tests {
         assert!(let Err(reason) = got);
         check!(reason.label() == "registry_unavailable", "{reason}");
 
-        clock.advance(Duration::from_millis(unavailable_ttl_ms() + 1));
+        timeline
+            .advance(Duration::from_millis(unavailable_ttl_ms() + 1))
+            .expect("manual time moves forward");
         check!(
             v.check(
                 "orders",
@@ -345,16 +355,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let clock = Arc::new(qubit_clock::MockClock::new());
-        let v = SchemaValidator::with_clock(
-            server.uri(),
-            false,
-            100,
-            minutes(5),
-            secs(5),
-            clock.clone(),
-        )
-        .expect("validator");
+        let timeline = ManualMonotonicClock::new_shared();
+        let clock = timeline.new_wall_clock(SystemTime::now());
+        let v = SchemaValidator::with_clock(server.uri(), false, 100, minutes(5), secs(5), clock)
+            .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
         for _ in 0..2 {
@@ -369,7 +373,9 @@ mod tests {
                 .await;
             assert!(let Err(reason) = got);
             check!(reason.label() == "unknown_id", "{reason}");
-            clock.advance(Duration::from_millis(unavailable_ttl_ms() + 1));
+            timeline
+                .advance(Duration::from_millis(unavailable_ttl_ms() + 1))
+                .expect("manual time moves forward");
         }
     }
 }

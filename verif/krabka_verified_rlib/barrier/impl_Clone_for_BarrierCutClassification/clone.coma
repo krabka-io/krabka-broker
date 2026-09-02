@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/barrier.rs" 116 27 116 32 *)
+
+(* <barrier::BarrierCutClassification as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BarrierCutClassification = Complete | Partial
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BarrierCutClassification [#"/workspace/crates/verified/src/barrier.rs" 116 27 116 32]
+  (self: t_BarrierCutClassification) (return (x: t_BarrierCutClassification)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BarrierCutClassification = Any.any_l () | & self: t_BarrierCutClassification = self ])
+  [ return (result: t_BarrierCutClassification) -> (! return {result}) ]

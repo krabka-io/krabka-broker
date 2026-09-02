@@ -1,0 +1,113 @@
+(* #"/proof-work-212/crates/verified/src/raft.rs" 133 0 133 72 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
+let%span sraft = "/proof-work-212/crates/verified/src/raft.rs" 134 17 134 23
+let%span sraft'0 = "/proof-work-212/crates/verified/src/raft.rs" 135 17 135 30
+let%span sraft'1 = "/proof-work-212/crates/verified/src/raft.rs" 141 32 141 39
+let%span sraft'2 = "/proof-work-212/crates/verified/src/raft.rs" 139 34 140 68
+let%span sraft'3 = "/proof-work-212/crates/verified/src/raft.rs" 137 34 138 54
+let%span sraft'4 = "/proof-work-212/crates/verified/src/raft.rs" 136 34 136 69
+let%span sraft'5 = "/proof-work-212/crates/verified/src/raft.rs" 143 23 143 32
+let%span sraft'6 = "/proof-work-212/crates/verified/src/raft.rs" 143 35 143 36
+let%span sraft'7 = "/proof-work-212/crates/verified/src/raft.rs" 143 23 143 36
+let%span sraft'8 = "/proof-work-212/crates/verified/src/raft.rs" 143 18 143 36
+let%span sraft'9 = "/proof-work-212/crates/verified/src/raft.rs" 144 11 144 23
+let%span sraft'10 = "/proof-work-212/crates/verified/src/raft.rs" 145 23 145 24
+let%span sraft'11 = "/proof-work-212/crates/verified/src/raft.rs" 145 12 145 24
+let%span sraft'12 = "/proof-work-212/crates/verified/src/raft.rs" 125 29 126 73
+let%span sraft'13 = "/proof-work-212/crates/verified/src/raft.rs" 127 28 127 53
+let%span sraft'14 = "/proof-work-212/crates/verified/src/raft.rs" 128 28 129 54
+let%span sraft'15 = "/proof-work-212/crates/verified/src/raft.rs" 130 28 131 68
+
+use creusot.int.UInt64
+use creusot.slice.Slice64
+use creusot.int.Int64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate gt_log_usize [@inline:trivial] (self: UInt64.t) (other: UInt64.t) = [%#sord] UInt64.lt other self
+
+meta "rewrite_def" predicate gt_log_usize
+
+predicate well_founded_relation_usize [@inline:trivial] (self: UInt64.t) (other: UInt64.t) =
+  [%#swell_founded] gt_log_usize self other
+
+meta "rewrite_def" predicate well_founded_relation_usize
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let control_history_frontier [#"/proof-work-212/crates/verified/src/raft.rs" 133 0 133 72]
+  (offsets: Slice64.slice Int64.t) (frontier: Int64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:control_history_frontier requires] [%#sraft'12] forall i: int, j: int. 0 <= i
+      /\ i < j /\ j < Seq.length (Slice64.view offsets)
+    -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int (Seq.get (Slice64.view offsets) j)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &lo <- [%#sraft] (0: UInt64.t) ] s1
+    | s1 = len_i64 [%#sraft'0] {offsets} (fun (_x: UInt64.t) -> [ &hi <- _x ] s2)
+    | s2 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 = {[@expl:loop variant] well_founded_relation_usize variant_old_bb2 ([%#sraft'1] UInt64.sub hi lo)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#sraft'4] UInt64.t'int lo <= UInt64.t'int hi
+      /\ UInt64.t'int hi <= Seq.length (Slice64.view offsets)}
+      {[@expl:loop invariant #1] [%#sraft'3] forall i: int. 0 <= i /\ i < UInt64.t'int lo
+        -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontier}
+      {[@expl:loop invariant #2] [%#sraft'2] forall i: int. UInt64.t'int hi <= i
+          /\ i < Seq.length (Slice64.view offsets)
+        -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view offsets) i)}
+      (! [ &variant_old_bb2 <- [%#sraft'1] UInt64.sub hi lo ] s0)
+      [ s0 = [ &_34 <- UInt64.lt lo hi ] s1 | s1 = any [ br0 -> {_34 = false} (! bb10) | br1 -> {_34} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = UInt64.sub [%#sraft'5] {hi} {lo} (fun (_x: UInt64.t) -> [ &_40 <- _x ] s1)
+        | s1 = [ &_43 <- ([%#sraft'6] (2: UInt64.t)) = ([%#sraft'7] (0: UInt64.t)) ] s2
+        | s2 = {[@expl:division by zero] [%#sraft'7] not _43} s3
+        | s3 = UInt64.div [%#sraft'7] {_40} {[%#sraft'6] (2: UInt64.t)} (fun (_x: UInt64.t) -> [ &_39 <- _x ] s4)
+        | s4 = UInt64.add [%#sraft'8] {lo} {_39} (fun (_x: UInt64.t) -> [ &mid <- _x ] s5)
+        | s5 = [ &_46 <- mid ] s6
+        | s6 = [ &_47 <- Slice64.length offsets ] s7
+        | s7 = [ &_48 <- UInt64.lt _46 _47 ] s8
+        | s8 = {[@expl:index in bounds] [%#sraft'9] _48} s9
+        | s9 = Slice64.get [%#sraft'9] <Int64.t> {offsets} {_46} (fun (r: Int64.t) -> [ &_45 <- r ] s10)
+        | s10 = [ &_44 <- Int64.lt _45 frontier ] s11
+        | s11 = any [ br0 -> {_44 = false} (! bb8) | br1 -> {_44} (! bb7) ] ]
+      | bb7 = s0
+        [ s0 = UInt64.add [%#sraft'11] {mid} {[%#sraft'10] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &lo <- _x ] s1)
+        | s1 = bb2 ]
+      | bb8 = s0 [ s0 = [ &hi <- mid ] s1 | s1 = bb2 ] ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- lo ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & offsets: Slice64.slice Int64.t = offsets
+  | & frontier: Int64.t = frontier
+  | & lo: UInt64.t = Any.any_l ()
+  | & hi: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & mid: UInt64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _45: Int64.t = Any.any_l ()
+  | & _46: UInt64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & variant_old_bb2: UInt64.t = Any.any_l () ])
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:control_history_frontier ensures] ([@stop_split] [@expl:control_history_frontier ensures #0] [%#sraft'13] UInt64.t'int result
+      <= Seq.length (Slice64.view offsets))
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #1] [%#sraft'14] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int frontier)
+    /\ ([@stop_split] [@expl:control_history_frontier ensures #2] [%#sraft'15] forall i: int. UInt64.t'int result <= i
+        /\ i < Seq.length (Slice64.view offsets)
+      -> Int64.to_int frontier <= Int64.to_int (Seq.get (Slice64.view offsets) i))}
+    (! return {result}) ]

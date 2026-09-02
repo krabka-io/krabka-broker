@@ -33,17 +33,16 @@ impl RemoteLogSegmentState {
     /// or a duplicate, not as an advance.
     #[must_use]
     pub fn is_valid_transition(self, target: Self) -> bool {
-        use RemoteLogSegmentState::{
-            CopySegmentFinished, CopySegmentStarted, DeleteSegmentFinished, DeleteSegmentStarted,
-        };
-        matches!(
-            (self, target),
-            (
-                CopySegmentStarted,
-                CopySegmentFinished | DeleteSegmentStarted
-            ) | (CopySegmentFinished, DeleteSegmentStarted)
-                | (DeleteSegmentStarted, DeleteSegmentFinished)
-        )
+        krabka_verified::remote_segment_transition(self.proof_tag(), target.proof_tag())
+    }
+
+    const fn proof_tag(self) -> u8 {
+        match self {
+            Self::CopySegmentStarted => 0,
+            Self::CopySegmentFinished => 1,
+            Self::DeleteSegmentStarted => 2,
+            Self::DeleteSegmentFinished => 3,
+        }
     }
 }
 
@@ -54,35 +53,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn segment_state_valid_transitions() {
+    fn segment_state_transition_matrix_is_exhaustive() {
         use RemoteLogSegmentState::{
             CopySegmentFinished, CopySegmentStarted, DeleteSegmentFinished, DeleteSegmentStarted,
         };
-        for (from, to) in [
-            (CopySegmentStarted, CopySegmentFinished),
-            (CopySegmentStarted, DeleteSegmentStarted),
-            (CopySegmentFinished, DeleteSegmentStarted),
-            (DeleteSegmentStarted, DeleteSegmentFinished),
-        ] {
-            check!(from.is_valid_transition(to), "{from:?} -> {to:?}");
-        }
-    }
-
-    #[test]
-    fn segment_state_invalid_transitions() {
-        use RemoteLogSegmentState::{
-            CopySegmentFinished, CopySegmentStarted, DeleteSegmentFinished, DeleteSegmentStarted,
-        };
-        // No backward / skipping / same-state transitions.
-        for (from, to) in [
-            (CopySegmentStarted, CopySegmentStarted),
-            (CopySegmentStarted, DeleteSegmentFinished),
-            (CopySegmentFinished, CopySegmentStarted),
-            (CopySegmentFinished, CopySegmentFinished),
-            (DeleteSegmentStarted, CopySegmentFinished),
-            (DeleteSegmentFinished, DeleteSegmentStarted),
-        ] {
-            check!(!from.is_valid_transition(to), "{from:?} -> {to:?}");
+        let states = [
+            CopySegmentStarted,
+            CopySegmentFinished,
+            DeleteSegmentStarted,
+            DeleteSegmentFinished,
+        ];
+        let expected = [
+            [false, true, true, false],
+            [false, false, true, false],
+            [false, false, false, true],
+            [false, false, false, false],
+        ];
+        for (from_index, from) in states.into_iter().enumerate() {
+            for (to_index, to) in states.into_iter().enumerate() {
+                check!(
+                    from.is_valid_transition(to) == expected[from_index][to_index],
+                    "{from:?} -> {to:?}"
+                );
+            }
         }
     }
 }

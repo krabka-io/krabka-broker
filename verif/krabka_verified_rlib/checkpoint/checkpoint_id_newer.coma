@@ -1,0 +1,43 @@
+(* #"/proof-work-224/crates/verified/src/checkpoint.rs" 9 0 14 9 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span scheckpoint = "/proof-work-224/crates/verified/src/checkpoint.rs" 15 4 15 100
+let%span scheckpoint'0 = "/proof-work-224/crates/verified/src/checkpoint.rs" 15 35 15 100
+let%span scheckpoint'1 = "/proof-work-224/crates/verified/src/checkpoint.rs" 6 10 7 77
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+use int.Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let checkpoint_id_newer [#"/proof-work-224/crates/verified/src/checkpoint.rs" 9 0 14 9] (candidate_end: Int64.t)
+  (candidate_epoch: Int32.t) (current_end: Int64.t) (current_epoch: Int32.t) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_10 <- Int64.gt candidate_end current_end ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#scheckpoint] true ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_13 <- candidate_end = current_end ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb4) | br1 -> {_13} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &_ret <- Int32.gt candidate_epoch current_epoch ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#scheckpoint'0] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & candidate_end: Int64.t = candidate_end
+  | & candidate_epoch: Int32.t = candidate_epoch
+  | & current_end: Int64.t = current_end
+  | & current_epoch: Int32.t = current_epoch
+  | & _10: bool = Any.any_l ()
+  | & _13: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:checkpoint_id_newer ensures] [%#scheckpoint'1] result
+    = (gt_log_Int (Int64.to_int candidate_end) (Int64.to_int current_end)
+    \/ Int64.to_int candidate_end = Int64.to_int current_end
+    /\ gt_log_Int (Int32.to_int candidate_epoch) (Int32.to_int current_epoch))}
+    (! return {result}) ]

@@ -29,8 +29,10 @@ impl BrokerConfig {
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
+    /// - `audit_topic` is named outside the internal-topic convention.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
+        crate::internal_topics::validate_audit_topic_name(&self.audit_topic)?;
         if self.roles.is_empty() {
             return Err(BrokerError::EmptyRoles);
         }

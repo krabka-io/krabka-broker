@@ -76,16 +76,15 @@ pub(crate) fn decide_end_txn_completion(
     prepare: TxnState,
     complete: TxnState,
 ) -> CompletionDecision {
-    if entry.state == complete
-        && entry.producer_id == expected_completion_pid
-        && entry.producer_epoch == expected_completion_epoch
-    {
-        return CompletionDecision::AlreadyComplete {
-            response_pid: entry.producer_id,
-            response_epoch: entry.producer_epoch,
-        };
-    }
-    match validate_complete_reacquire(entry, expected_pid, expected_epoch, prepare, complete) {
+    match validate_complete_reacquire(
+        entry,
+        expected_pid,
+        expected_epoch,
+        expected_completion_pid,
+        expected_completion_epoch,
+        prepare,
+        complete,
+    ) {
         ReacquireDecision::Proceed => CompletionDecision::Proceed {
             next_state: complete,
             response_pid: expected_completion_pid,
@@ -95,7 +94,10 @@ pub(crate) fn decide_end_txn_completion(
             response_pid: entry.producer_id,
             response_epoch: entry.producer_epoch,
         },
-        ReacquireDecision::Reject(code) => CompletionDecision::Reject(code),
+        ReacquireDecision::RejectStaleIdentity => {
+            CompletionDecision::Reject(codes::INVALID_PRODUCER_EPOCH)
+        }
+        ReacquireDecision::RejectState => CompletionDecision::Reject(codes::INVALID_TXN_STATE),
     }
 }
 

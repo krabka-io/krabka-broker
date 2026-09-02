@@ -1,0 +1,76 @@
+(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 31 0 35 16 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 36 17 36 18
+let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 36 66 36 67
+let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 39 4 39 38
+let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 19 10 29 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let wal_reservation_frontier [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 31 0 35 16] (current': Int64.t)
+  (pending_base: Int64.t) (pending_count: Int64.t) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.lt current' ([%#soffset_allocator] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_11 <- pending_base <> current' ] s1 | s1 = any [ br0 -> {_11 = false} (! bb4) | br1 -> {_11} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_14 <- Int64.le pending_count ([%#soffset_allocator'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb7) | br1 -> {_14} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = checked_add [%#soffset_allocator'1] {current'} {pending_count} (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_i64 = Any.any_l ()
+  | & current': Int64.t = current'
+  | & pending_base: Int64.t = pending_base
+  | & pending_count: Int64.t = pending_count
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
+  | & _14: bool = Any.any_l () ])
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:wal_reservation_frontier ensures] [%#soffset_allocator'2] match result with
+      | Some next -> ge_log_Int (Int64.to_int current') 0
+      /\ Int64.to_int pending_base = Int64.to_int current'
+      /\ gt_log_Int (Int64.to_int pending_count) 0
+      /\ Int64.to_int next = Int64.to_int current' + Int64.to_int pending_count
+      /\ Int64.to_int next <= Int64.to_int const_MAX
+      | None -> Int64.to_int current' < 0
+      \/ Int64.to_int pending_base <> Int64.to_int current'
+      \/ Int64.to_int pending_count <= 0
+      \/ gt_log_Int (Int64.to_int current' + Int64.to_int pending_count) (Int64.to_int const_MAX)
+      end}
+    (! return {result}) ]

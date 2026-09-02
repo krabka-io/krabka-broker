@@ -1,0 +1,27 @@
+(* #"/workspace/crates/verified/src/group_migration.rs" 22 27 22 32 *)
+
+(* <group_migration::GroupMigrationRecordPlan as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_GroupMigrationRecordAction = Write | Tombstone
+
+type t_GroupMigrationRecordPlan = {
+  classic_group: t_GroupMigrationRecordAction;
+  next_gen_group: t_GroupMigrationRecordAction;
+  next_gen_target: t_GroupMigrationRecordAction;
+  member_metadata: t_GroupMigrationRecordAction;
+  target_member: t_GroupMigrationRecordAction;
+  current_member: t_GroupMigrationRecordAction;
+  member_count: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_GroupMigrationRecordPlan [#"/workspace/crates/verified/src/group_migration.rs" 22 27 22 32]
+  (self: t_GroupMigrationRecordPlan) (return (x: t_GroupMigrationRecordPlan)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_GroupMigrationRecordPlan = Any.any_l () | & self: t_GroupMigrationRecordPlan = self ])
+  [ return (result: t_GroupMigrationRecordPlan) -> (! return {result}) ]

@@ -1,0 +1,18 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_aborted_transaction_interval": {
+        "prover": "alt-ergo",
+        "time": 0.014
+      },
+      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_from_residual_Option_tup2_i64_i64": {
+        "prover": "alt-ergo",
+        "time": 0.008
+      }
+    }
+  }
+}

@@ -1,18 +1,22 @@
-//! `murmur2("{group}:{topicId}:{partition}") % num_partitions`.
+//! `String.hashCode("{group}:{topicId}:{partition}") % num_partitions`.
 //!
 //! This is Apache Kafka's share-coordinator key form. The module hashes it
-//! with the same `Utils.abs(murmur2(...)) % numPartitions` convention as
-//! `__transaction_state`. A share key therefore resolves to the same
-//! `__share_group_state` partition on Krabka as on Apache Kafka.
+//! with Java's UTF-16 `String.hashCode` and Kafka's `Utils.abs` convention. A
+//! share key therefore resolves to the same `__share_group_state` partition on
+//! Krabka as on Apache Kafka.
 
-use crate::kafka_hash::murmur2_partition;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 /// Map a share-coordinator key `(group_id, topic_id, partition)` to a
 /// partition index in `__share_group_state`.
 ///
-/// The function builds Kafka's key string
-/// `"{group_id}:{topic_id}:{partition}"` and hashes it with murmur2. It then
-/// applies the JVM `Utils.abs(int)` semantics, which return 0 for `i32::MIN`.
+/// The function builds Kafka's key string with the JVM's URL-safe, unpadded
+/// topic-id encoding and delegates Java UTF-16 hashing, `Utils.abs`, and the
+/// partition modulo to the verified kernel.
+///
+/// # Panics
+///
+/// Panics when `num` is not positive; broker configuration enforces that invariant.
 #[must_use]
 pub fn partition_for_share_key(
     group_id: &str,
@@ -20,8 +24,11 @@ pub fn partition_for_share_key(
     partition: i32,
     num: i32,
 ) -> i32 {
+    let topic_id = URL_SAFE_NO_PAD.encode(topic_id.as_bytes());
     let key = format!("{group_id}:{topic_id}:{partition}");
-    murmur2_partition(key.as_bytes(), num)
+    let utf16: Vec<u16> = key.encode_utf16().collect();
+    krabka_verified::broker::java_string_hash_partition(&utf16, num)
+        .expect("share coordinator partition count must be positive")
 }
 
 #[cfg(test)]
@@ -37,6 +44,13 @@ mod tests {
         let a = partition_for_share_key("g", &id, 0, 50);
         let b = partition_for_share_key("g", &id, 0, 50);
         assert!(a == b);
+    }
+
+    #[test]
+    fn matches_jvm_base64_key_and_java_hash_golden() {
+        let id = Uuid::from_bytes([5; 16]);
+        assert!(partition_for_share_key("g", &id, 0, 50) == 2);
+        assert!(partition_for_share_key("🦀", &id, 7, 17) == 8);
     }
 
     #[test]

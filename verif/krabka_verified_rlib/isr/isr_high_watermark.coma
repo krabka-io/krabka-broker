@@ -1,0 +1,120 @@
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 14 0 14 72 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sisr = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 16 16 16 17
+let%span sisr'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 23 32 23 57
+let%span sisr'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 24 14 24 33
+let%span sisr'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 21 34 22 75
+let%span sisr'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 19 34 20 41
+let%span sisr'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 18 34 18 56
+let%span sisr'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 17 34 17 60
+let%span sisr'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 25 11 25 27
+let%span sisr'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 26 21 26 37
+let%span sisr'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 28 13 28 14
+let%span sisr'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 28 8 28 14
+let%span sisr'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 6 10 6 32
+let%span sisr'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 7 10 8 37
+let%span sisr'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 9 10 11 40
+let%span sisr'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 12 10 12 62
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let isr_high_watermark [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/isr.rs" 14 0 14 72]
+  (leader_leo: Int64.t) (follower_leos: Slice64.slice Int64.t) (return (x: Int64.t)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &result <- leader_leo ] s1 | s1 = [ &i <- [%#sisr] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sisr'0] Seq.length (Slice64.view follower_leos)
+      - UInt64.t'int i)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sisr'5] UInt64.t'int i <= Seq.length (Slice64.view follower_leos)}
+      {[@expl:loop invariant #1] [%#sisr'4] Int64.to_int result <= Int64.to_int leader_leo}
+      {[@expl:loop invariant #2] [%#sisr'3] forall k: int. 0 <= k /\ k < UInt64.t'int i
+        -> Int64.to_int result <= Int64.to_int (Seq.get (Slice64.view follower_leos) k)}
+      {[@expl:loop invariant #3] [%#sisr'2] Int64.to_int result = Int64.to_int leader_leo
+      \/ (exists k: int. 0 <= k
+        /\ k < UInt64.t'int i /\ Int64.to_int result = Int64.to_int (Seq.get (Slice64.view follower_leos) k))}
+      (! [ &variant_old_bb1 <- [%#sisr'0] Seq.length (Slice64.view follower_leos) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#sisr'1] {follower_leos} (fun (_x: UInt64.t) -> [ &_38 <- _x ] s1)
+      | s1 = [ &_36 <- UInt64.lt i _38 ] s2
+      | s2 = any [ br0 -> {_36 = false} (! bb10) | br1 -> {_36} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_43 <- i ] s1
+        | s1 = [ &_44 <- Slice64.length follower_leos ] s2
+        | s2 = [ &_45 <- UInt64.lt _43 _44 ] s3
+        | s3 = {[@expl:index in bounds] [%#sisr'6] _45} s4
+        | s4 = Slice64.get [%#sisr'6] <Int64.t> {follower_leos} {_43} (fun (r: Int64.t) -> [ &_42 <- r ] s5)
+        | s5 = [ &_41 <- Int64.lt _42 result ] s6
+        | s6 = any [ br0 -> {_41 = false} (! bb9) | br1 -> {_41} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_48 <- i ] s1
+        | s1 = [ &_49 <- Slice64.length follower_leos ] s2
+        | s2 = [ &_50 <- UInt64.lt _48 _49 ] s3
+        | s3 = {[@expl:index in bounds] [%#sisr'7] _50} s4
+        | s4 = Slice64.get [%#sisr'7] <Int64.t> {follower_leos} {_48} (fun (r: Int64.t) -> [ &_47 <- r ] s5)
+        | s5 = [ &result <- _47 ] s6
+        | s6 = bb9 ]
+      | bb9 = s0
+        [ s0 = UInt64.add [%#sisr'9] {i} {[%#sisr'8] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb10 = s0 [ s0 = [ &_ret <- result ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & leader_leo: Int64.t = leader_leo
+  | & follower_leos: Slice64.slice Int64.t = follower_leos
+  | & result: Int64.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _42: Int64.t = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _47: Int64.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:isr_high_watermark ensures] ([@stop_split] [@expl:isr_high_watermark ensures #0] [%#sisr'10] Int64.to_int result
+      <= Int64.to_int leader_leo)
+    /\ ([@stop_split] [@expl:isr_high_watermark ensures #1] [%#sisr'11] forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view follower_leos)
+        -> Int64.to_int result <= Int64.to_int (Seq.get (Slice64.view follower_leos) i))
+    /\ ([@stop_split] [@expl:isr_high_watermark ensures #2] [%#sisr'12] Int64.to_int result = Int64.to_int leader_leo
+      \/ (exists i: int. 0 <= i
+        /\ i < Seq.length (Slice64.view follower_leos)
+        /\ Int64.to_int result = Int64.to_int (Seq.get (Slice64.view follower_leos) i)))
+    /\ ([@stop_split] [@expl:isr_high_watermark ensures #3] [%#sisr'13] Seq.length (Slice64.view follower_leos) = 0
+    -> Int64.to_int result = Int64.to_int leader_leo)}
+    (! return {result}) ]

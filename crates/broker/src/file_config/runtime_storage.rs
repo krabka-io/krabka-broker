@@ -9,8 +9,8 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        positive_i64, positive_ratio, positive_time, positive_u32, positive_usize, whole_bytes_u32,
-        whole_bytes_u64, whole_bytes_usize,
+        kafka_int_bytes, positive_i64, positive_ratio, positive_time, positive_u32, positive_usize,
+        whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
     },
 };
 
@@ -104,6 +104,12 @@ impl RuntimeFileConfig {
             cfg.diskless_wal_flush_max_size,
             whole_bytes_usize
         );
+        set_runtime_size_bytes!(
+            runtime,
+            diskless_wal_hot_tail_max_size,
+            cfg.diskless_wal_hot_tail_max_size,
+            whole_bytes_usize
+        );
         if let Some(value) = runtime.diskless_wal_trim_safety_lag {
             if value.is_negative() {
                 return Err(FileConfigError::InvalidConfig(
@@ -150,6 +156,12 @@ impl RuntimeFileConfig {
             log_segment_bytes,
             cfg.log_config.segment_size,
             whole_bytes_u64
+        );
+        set_runtime_size_bytes!(
+            runtime,
+            message_max_bytes,
+            cfg.log_config.max_message_size,
+            kafka_int_bytes
         );
         set_runtime_time_millis!(
             runtime,
@@ -234,7 +246,10 @@ impl RuntimeFileConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{convert::TimeExt as _, millis};
+    use krabka_units::{
+        convert::{ByteSizeExt as _, TimeExt as _},
+        millis,
+    };
 
     use crate::file_config::FileConfig;
 
@@ -273,6 +288,65 @@ mod tests {
         assert!(cfg.log_config.delivery_clock_uncertainty == millis(750));
         assert!(cfg.log_config.delivery_clock_uncertainty.millis_i64() == 750);
     }
+    #[test]
+    fn message_max_bytes_round_trips_into_the_log_config() {
+        // Kafka's broker-wide `message.max.bytes` is the default behind every
+        // topic's `max.message.bytes`, and in krabka that default is the base
+        // `LogConfig` the produce gate reads when a topic sets none.
+        let file: FileConfig = toml::from_str("[runtime]\nmessage_max_bytes = \"2KiB\"\n")
+            .expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
+    }
+
+    /// The TOML surface takes exactly the values Kafka's `INT` with
+    /// `atLeast(0)` takes.
+    ///
+    /// `apache/kafka:4.3.1` starts on `message.max.bytes=0`, refuses `-1` with
+    /// "Value must be at least 0", and refuses `2147483648` with "Not a number
+    /// of type INT". The zero and the 2 GiB cases are the ones that separate
+    /// this domain from a plain positive-whole-bytes one: a broker that took
+    /// 2 GiB here would hand a topic an effective cap `kafka-configs` could
+    /// not represent, and one that refused 0 would refuse a value Kafka boots
+    /// on.
+    #[test]
+    fn message_max_bytes_takes_kafkas_int_at_least_zero() {
+        for (value, expected) in [
+            ("0B", Some(0)),
+            ("2KiB", Some(2048)),
+            ("2147483647B", Some(2_147_483_647)),
+            ("-1B", None),
+            ("2147483648B", None),
+            ("2GiB", None),
+            ("1.5B", None),
+        ] {
+            let applied = toml::from_str::<FileConfig>(&format!(
+                "[runtime]\nmessage_max_bytes = \"{value}\"\n"
+            ))
+            .ok()
+            .and_then(|file| {
+                let mut cfg = crate::config::BrokerConfig::default();
+                file.apply_to(&mut cfg)
+                    .ok()
+                    .map(|()| cfg.log_config.max_message_size.bytes_u64())
+            });
+            assert!(applied == expected, "message_max_bytes={value}");
+        }
+    }
+
+    #[test]
+    fn omitted_message_max_bytes_keeps_kafkas_1048588() {
+        let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+
+        file.apply_to(&mut cfg).expect("apply runtime config");
+
+        assert!(cfg.log_config.max_message_size.bytes_u64() == 1_048_588);
+    }
+
     #[test]
     fn omitted_log_delivery_clock_uncertainty_keeps_the_quarter_second_default() {
         let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");

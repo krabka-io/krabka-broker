@@ -9,7 +9,13 @@ use krabka_ids::{ApiKey, ApiVersion};
 use krabka_metadata::voters::VoterSet;
 
 use crate::{
-    kraft::{transport::api_key, types::NodeId},
+    kraft::{
+        transport::{
+            api_key,
+            wire::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
+        },
+        types::NodeId,
+    },
     types::controller_endpoint_addr,
 };
 
@@ -22,16 +28,20 @@ pub(super) fn controller_addr(voters: &VoterSet, id: NodeId) -> Option<String> {
     controller_endpoint_addr(&voter.endpoints)
 }
 
-/// KIP-595 api version for each api key. These match the bodies the engine's
-/// transport codec produces: Vote v2, `BeginQuorumEpoch` v1,
-/// `EndQuorumEpoch` v1, and Fetch v17.
-pub(super) fn api_version_for(key: ApiKey) -> ApiVersion {
+/// KIP-595 api version for each api key.
+///
+/// A peer send has to name the version its body was encoded at, and the engine
+/// encodes every KIP-595 body at the single captured version its codec pins. So
+/// this reads those pinned constants rather than restating them: the version on
+/// the header and the version in the bytes cannot drift apart, and neither can
+/// drift from the range the controller listener advertises, which is pinned to
+/// the same constants.
+pub(crate) fn api_version_for(key: ApiKey) -> ApiVersion {
     ApiVersion(match key {
-        ApiKey(api_key::VOTE) => 2,
-        ApiKey(
-            api_key::BEGIN_QUORUM_EPOCH | api_key::END_QUORUM_EPOCH | api_key::FETCH_SNAPSHOT,
-        ) => 1,
-        ApiKey(api_key::FETCH) => 17,
+        ApiKey(api_key::VOTE) => VOTE_VERSION,
+        ApiKey(api_key::BEGIN_QUORUM_EPOCH | api_key::END_QUORUM_EPOCH) => QUORUM_EPOCH_VERSION,
+        ApiKey(api_key::FETCH_SNAPSHOT) => FETCH_SNAPSHOT_VERSION,
+        ApiKey(api_key::FETCH) => FETCH_VERSION,
         _ => 0,
     })
 }

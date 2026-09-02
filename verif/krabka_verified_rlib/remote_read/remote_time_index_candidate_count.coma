@@ -1,0 +1,168 @@
+(* #"/proof-work-220c/crates/verified/src/remote_read.rs" 46 0 46 96 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sremote_read = "/proof-work-220c/crates/verified/src/remote_read.rs" 47 20 47 26
+let%span sremote_read'0 = "/proof-work-220c/crates/verified/src/remote_read.rs" 53 14 53 37
+let%span sremote_read'1 = "/proof-work-220c/crates/verified/src/remote_read.rs" 54 18 54 31
+let%span sremote_read'2 = "/proof-work-220c/crates/verified/src/remote_read.rs" 51 16 52 47
+let%span sremote_read'3 = "/proof-work-220c/crates/verified/src/remote_read.rs" 49 16 50 46
+let%span sremote_read'4 = "/proof-work-220c/crates/verified/src/remote_read.rs" 48 16 48 40
+let%span sremote_read'5 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 19 55 20
+let%span sremote_read'6 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 24 55 38
+let%span sremote_read'7 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 24 55 40
+let%span sremote_read'8 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 60 55 61
+let%span sremote_read'9 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 52 55 61
+let%span sremote_read'10 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 44 55 62
+let%span sremote_read'11 = "/proof-work-220c/crates/verified/src/remote_read.rs" 55 44 55 64
+let%span sremote_read'12 = "/proof-work-220c/crates/verified/src/remote_read.rs" 58 11 58 25
+let%span sremote_read'13 = "/proof-work-220c/crates/verified/src/remote_read.rs" 58 11 58 27
+let%span sremote_read'14 = "/proof-work-220c/crates/verified/src/remote_read.rs" 61 17 61 18
+let%span sremote_read'15 = "/proof-work-220c/crates/verified/src/remote_read.rs" 61 8 61 18
+let%span sremote_read'16 = "/proof-work-220c/crates/verified/src/remote_read.rs" 31 11 33 40
+let%span sremote_read'17 = "/proof-work-220c/crates/verified/src/remote_read.rs" 34 10 34 35
+let%span sremote_read'18 = "/proof-work-220c/crates/verified/src/remote_read.rs" 35 10 36 42
+let%span sremote_read'19 = "/proof-work-220c/crates/verified/src/remote_read.rs" 37 10 38 43
+let%span sremote_read'20 = "/proof-work-220c/crates/verified/src/remote_read.rs" 39 10 41 43
+let%span sremote_read'21 = "/proof-work-220c/crates/verified/src/remote_read.rs" 42 10 44 48
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type tup2_i64_u32 = { f0: Int64.t; f1: UInt32.t }
+
+let len_tup2_i64_u32 (self_: Slice64.slice tup2_i64_u32) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let remote_time_index_candidate_count [#"/proof-work-220c/crates/verified/src/remote_read.rs" 46 0 46 96]
+  (entries: Slice64.slice tup2_i64_u32) (target_timestamp: Int64.t) (return (x: UInt64.t)) =
+{[@stop_split] [@expl:remote_time_index_candidate_count requires] [%#sremote_read'16] forall i: int, j: int. 0 <= i
+      /\ i < j
+      /\ j < Seq.length (Slice64.view entries)
+      /\ (forall k: int. 1 <= k /\ k <= j
+        -> UInt32.t'int (Seq.get (Slice64.view entries) (k - 1)).f1
+        < UInt32.t'int (Seq.get (Slice64.view entries) k).f1)
+    -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0}
+  (! bb0
+  [ bb0 = s0 [ s0 = [ &count <- [%#sremote_read] (0: UInt64.t) ] s1 | s1 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sremote_read'0] Seq.length (Slice64.view entries)
+      - UInt64.t'int count)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sremote_read'4] UInt64.t'int count
+      <= Seq.length (Slice64.view entries)}
+      {[@expl:loop invariant #1] [%#sremote_read'3] forall i: int. 0 <= i /\ i < UInt64.t'int count
+        -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp}
+      {[@expl:loop invariant #2] [%#sremote_read'2] forall i: int. 1 <= i /\ i < UInt64.t'int count
+        -> UInt32.t'int (Seq.get (Slice64.view entries) (i - 1)).f1
+        < UInt32.t'int (Seq.get (Slice64.view entries) i).f1}
+      (! [ &variant_old_bb1 <- [%#sremote_read'0] Seq.length (Slice64.view entries) - UInt64.t'int count ] s0)
+      [ s0 = len_tup2_i64_u32 [%#sremote_read'1] {entries} (fun (_x: UInt64.t) -> [ &_37 <- _x ] s1)
+      | s1 = [ &_35 <- UInt64.lt count _37 ] s2
+      | s2 = any [ br0 -> {_35 = false} (! bb16) | br1 -> {_35} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_40 <- UInt64.gt count ([%#sremote_read'5] (0: UInt64.t)) ] s1
+        | s1 = any [ br0 -> {_40 = false} (! bb11) | br1 -> {_40} (! bb5) ] ]
+      | bb5 = s0
+        [ s0 = [ &_44 <- count ] s1
+        | s1 = [ &_45 <- Slice64.length entries ] s2
+        | s2 = [ &_46 <- UInt64.lt _44 _45 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_read'6] _46} s4
+        | s4 = Slice64.get [%#sremote_read'7] <tup2_i64_u32> {entries} {_44}
+            (fun (r: tup2_i64_u32) -> [ &_43 <- r.f1 ] s5)
+        | s5 = UInt64.sub [%#sremote_read'9] {count} {[%#sremote_read'8] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &_48 <- _x ] s6)
+        | s6 = [ &_50 <- Slice64.length entries ] s7
+        | s7 = [ &_51 <- UInt64.lt _48 _50 ] s8
+        | s8 = {[@expl:index in bounds] [%#sremote_read'10] _51} s9
+        | s9 = Slice64.get [%#sremote_read'11] <tup2_i64_u32> {entries} {_48}
+            (fun (r: tup2_i64_u32) -> [ &_47 <- r.f1 ] s10)
+        | s10 = [ &_42 <- UInt32.le _43 _47 ] s11
+        | s11 = any [ br0 -> {_42 = false} (! bb11) | br1 -> {_42} (! bb16) ] ]
+      | bb11 = s0
+        [ s0 = [ &_56 <- count ] s1
+        | s1 = [ &_57 <- Slice64.length entries ] s2
+        | s2 = [ &_58 <- UInt64.lt _56 _57 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_read'12] _58} s4
+        | s4 = Slice64.get [%#sremote_read'13] <tup2_i64_u32> {entries} {_56}
+            (fun (r: tup2_i64_u32) -> [ &_55 <- r.f0 ] s5)
+        | s5 = [ &_54 <- Int64.ge _55 target_timestamp ] s6
+        | s6 = any [ br0 -> {_54 = false} (! bb14) | br1 -> {_54} (! bb16) ] ]
+      | bb14 = s0
+        [ s0 = UInt64.add [%#sremote_read'15] {count} {[%#sremote_read'14] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &count <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- count ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: UInt64.t = Any.any_l ()
+  | & entries: Slice64.slice tup2_i64_u32 = entries
+  | & target_timestamp: Int64.t = target_timestamp
+  | & count: UInt64.t = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _43: UInt32.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: UInt64.t = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _47: UInt32.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _50: UInt64.t = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _55: Int64.t = Any.any_l ()
+  | & _56: UInt64.t = Any.any_l ()
+  | & _57: UInt64.t = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: UInt64.t) ->
+  {[@stop_split] [@expl:remote_time_index_candidate_count ensures] ([@stop_split] [@expl:remote_time_index_candidate_count ensures #0] [%#sremote_read'17] UInt64.t'int result
+      <= Seq.length (Slice64.view entries))
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #1] [%#sremote_read'18] forall i: int. 0 <= i
+          /\ i < UInt64.t'int result
+        -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target_timestamp)
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #2] [%#sremote_read'19] forall i: int. 1 <= i
+          /\ i < UInt64.t'int result
+        -> UInt32.t'int (Seq.get (Slice64.view entries) (i - 1)).f1
+        < UInt32.t'int (Seq.get (Slice64.view entries) i).f1)
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #3] [%#sremote_read'20] forall j: int. UInt64.t'int result
+            <= j
+          /\ j < Seq.length (Slice64.view entries)
+          /\ (forall k: int. 1 <= k /\ k <= j
+            -> UInt32.t'int (Seq.get (Slice64.view entries) (k - 1)).f1
+            < UInt32.t'int (Seq.get (Slice64.view entries) k).f1)
+        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) j).f0) (Int64.to_int target_timestamp))
+    /\ ([@stop_split] [@expl:remote_time_index_candidate_count ensures #4] [%#sremote_read'21] UInt64.t'int result
+      < Seq.length (Slice64.view entries)
+    -> UInt64.t'int result = 0
+    \/ UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result)).f1
+      <= UInt32.t'int (Seq.get (Slice64.view entries) (UInt64.t'int result - 1)).f1
+    \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int result)).f0) (Int64.to_int target_timestamp))}
+    (! return {result}) ]

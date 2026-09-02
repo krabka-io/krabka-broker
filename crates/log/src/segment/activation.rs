@@ -15,10 +15,8 @@ use crate::error::LogError;
 impl Segment {
     /// Walk forward from `from` and find where the active prefix ends.
     ///
-    /// A batch is active when its `max_timestamp` is at or below
-    /// `active_through_ms`. The caller has already subtracted its
-    /// clock-uncertainty bound from the current time, so this method compares
-    /// two plain instants.
+    /// Every batch decision uses the same proved deadline rule as a remote
+    /// fetch: `max_timestamp + uncertainty_ms <= now_ms` without overflow.
     ///
     /// The walk stops at the first batch that is still waiting and reports
     /// that batch's activation time. Batches are not ordered by timestamp, so
@@ -28,10 +26,11 @@ impl Segment {
     pub(crate) fn scan_activation(
         &self,
         from: Offset,
-        active_through_ms: i64,
+        uncertainty_ms: i64,
+        now_ms: i64,
     ) -> Result<ActivationScan, LogError> {
         let segment_end = (self.last_offset + 1).max(from);
-        if self.is_wholly_active(active_through_ms) {
+        if self.is_wholly_active(uncertainty_ms, now_ms) {
             return Ok(ActivationScan {
                 active_end: segment_end,
                 pending_at: None,
@@ -44,7 +43,12 @@ impl Segment {
             if view.last_offset < from {
                 return ControlFlow::Continue(());
             }
-            if view.max_timestamp > active_through_ms {
+            if !krabka_verified::scheduled_delivery_visible(
+                true,
+                uncertainty_ms,
+                view.max_timestamp,
+                now_ms,
+            ) {
                 pending_at = Some(view.max_timestamp);
                 return ControlFlow::Break(());
             }
@@ -75,10 +79,11 @@ impl Segment {
         &self,
         start: Offset,
         end: Offset,
-        active_through_ms: i64,
+        uncertainty_ms: i64,
+        now_ms: i64,
         out: &mut Vec<(Offset, Offset)>,
     ) -> Result<(), LogError> {
-        if self.is_wholly_active(active_through_ms) {
+        if self.is_wholly_active(uncertainty_ms, now_ms) {
             return Ok(());
         }
         self.walk_batch_headers(self.position_for(start)?, |view| {
@@ -88,7 +93,12 @@ impl Segment {
             if view.base_offset > end {
                 return ControlFlow::Break(());
             }
-            if view.max_timestamp > active_through_ms {
+            if !krabka_verified::scheduled_delivery_visible(
+                true,
+                uncertainty_ms,
+                view.max_timestamp,
+                now_ms,
+            ) {
                 out.push((view.base_offset, view.last_offset));
             }
             ControlFlow::Continue(())
@@ -100,7 +110,7 @@ impl Segment {
     ///
     /// This is what lets a scheduled topic skip whole segments of records
     /// that came due long ago.
-    fn is_wholly_active(&self, active_through_ms: i64) -> bool {
+    fn is_wholly_active(&self, uncertainty_ms: i64, now_ms: i64) -> bool {
         // Emptiness is decided by the file, not by `last_offset`. The same
         // unvalidated open that leaves the maximum unknown also leaves
         // `last_offset` at `base_offset - 1` over a segment full of records,
@@ -112,7 +122,13 @@ impl Segment {
         // segment opened with `validate_on_open` off keeps it while holding
         // real batches, so a shortcut here would serve a batch before its
         // activation time.
-        self.max_timestamp != i64::MIN && self.max_timestamp <= active_through_ms
+        self.max_timestamp != i64::MIN
+            && krabka_verified::scheduled_delivery_visible(
+                true,
+                uncertainty_ms,
+                self.max_timestamp,
+                now_ms,
+            )
     }
 }
 
@@ -146,12 +162,12 @@ mod tests {
         assert2::assert!(seg.max_timestamp == i64::MIN);
 
         // 9_000 is in the future against this clock, so the batch is waiting.
-        let scan = seg.scan_activation(Offset(0), 1_000).unwrap();
+        let scan = seg.scan_activation(Offset(0), 0, 1_000).unwrap();
         assert2::check!(scan.active_end == Offset(0));
         assert2::check!(scan.pending_at == Some(9_000));
 
         let mut pending = Vec::new();
-        seg.pending_activation_ranges_into(Offset(0), Offset(0), 1_000, &mut pending)
+        seg.pending_activation_ranges_into(Offset(0), Offset(0), 0, 1_000, &mut pending)
             .unwrap();
         assert2::check!(pending == vec![(Offset(0), Offset(0))]);
         drop(dir);
@@ -163,11 +179,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let seg = Segment::create(dir.path(), Offset(0)).unwrap();
 
-        let scan = seg.scan_activation(Offset(0), 1_000).unwrap();
+        let scan = seg.scan_activation(Offset(0), 0, 1_000).unwrap();
         assert2::check!(scan.pending_at == None);
 
         let mut pending = Vec::new();
-        seg.pending_activation_ranges_into(Offset(0), Offset(0), 1_000, &mut pending)
+        seg.pending_activation_ranges_into(Offset(0), Offset(0), 0, 1_000, &mut pending)
             .unwrap();
         assert2::check!(pending == Vec::new());
         drop(dir);

@@ -19,7 +19,11 @@ use super::{
     unclean_gate::{consumed_proposal_id, unclean_target},
 };
 use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
+    break_glass::{
+        gate,
+        handlers::audit::{GatedTransition, audit_transition, require_transition},
+        persistence::spend_before_local_action,
+    },
     broker::Broker,
     codes,
     config_keys::RecoveryStrategy,
@@ -72,7 +76,7 @@ pub(super) async fn run_offset_aware_recovery(
             ..Default::default()
         };
     }
-    let proposal = match spend_before_recovery(broker, batch, consumed).await {
+    let proposal = match spend_before_recovery(broker, batch, consumed, &target).await {
         Ok(proposal) => proposal,
         Err(message) => {
             return PartitionResult {
@@ -152,18 +156,19 @@ async fn spend_before_recovery(
     broker: &Broker,
     batch: &mut ElectionBatch,
     consumed: Option<MetadataRecord>,
+    target: &str,
 ) -> Result<Option<Uuid>, String> {
-    let Some(consumed) = consumed else {
-        return Ok(None);
-    };
-    let Some(proposal_id) = consumed_proposal_id(&consumed) else {
-        return Ok(None);
-    };
-    if !batch.spent.insert(proposal_id) {
-        return Ok(Some(proposal_id));
-    }
-    match broker.controller.submit_change(vec![consumed]).await {
-        Ok(_) => Ok(Some(proposal_id)),
+    match spend_before_local_action(
+        broker,
+        &mut batch.spent,
+        consumed,
+        gate::is_gated(&broker.config.break_glass),
+        BreakGlassAction::UncleanElectLeaders,
+        target,
+    )
+    .await
+    {
+        Ok(proposal_id) => Ok(proposal_id),
         Err(error) => {
             tracing::warn!(%error, "elect-leaders could not spend the break-glass approval");
             Err(format!("submit failed: {error}"))

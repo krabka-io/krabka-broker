@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use krabka_metadata::MetadataRecord;
-use krabka_raft::{NodeId, OutboundDialer, RaftError, SubmitChangeResult};
+use krabka_raft::{DelegationTokenMutation, NodeId, OutboundDialer, RaftError, SubmitChangeResult};
 use tokio::sync::watch;
 
 use super::MetadataWriter;
@@ -32,6 +32,7 @@ impl QuorumForwarder {
         &self,
         target: NodeId,
         addr: &str,
+        api_key: i16,
         body: &[u8],
     ) -> Result<krabka_raft::KrabkaSubmitChangeResponse, RaftError> {
         let opts = krabka_client_core::ConnectionOptions {
@@ -46,11 +47,7 @@ impl QuorumForwarder {
             .await
             .map_err(RaftError::Network)?;
         let resp_body = conn
-            .raw_request(
-                krabka_raft::API_KEY_SUBMIT_CHANGE,
-                0,
-                bytes::Bytes::copy_from_slice(body),
-            )
+            .raw_request(api_key, 0, bytes::Bytes::copy_from_slice(body))
             .await
             .map_err(RaftError::Network)?;
         conn.close();
@@ -104,7 +101,10 @@ impl MetadataWriter for QuorumForwarder {
             current_leader: hint,
         };
         for (target, addr) in order {
-            match self.try_submit(target, &addr, &body).await {
+            match self
+                .try_submit(target, &addr, krabka_raft::API_KEY_SUBMIT_CHANGE, &body)
+                .await
+            {
                 Ok(resp) if resp.error_code == 0 => {
                     return <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
                         &resp.result,
@@ -131,6 +131,52 @@ impl MetadataWriter for QuorumForwarder {
             }
         }
         Err(last_err)
+    }
+
+    async fn submit_delegation_token_mutations(
+        &self,
+        mutations: Vec<DelegationTokenMutation>,
+    ) -> Result<SubmitChangeResult, RaftError> {
+        let payload = <serde_wincode::SerdeCompat<Vec<DelegationTokenMutation>> as wincode::Serialize>::serialize(
+            &mutations,
+        )
+        .map_err(RaftError::from)?;
+        let request = krabka_raft::KrabkaSubmitChangeRequest {
+            records: bytes::Bytes::from(payload),
+        };
+        let mut body = Vec::with_capacity(request.records.len() + 4);
+        request.encode_v0(&mut body).map_err(RaftError::Protocol)?;
+
+        let hint = *self.leader.borrow();
+        let mut last_error = RaftError::NotLeader {
+            current_leader: hint,
+        };
+        for (target, addr) in build_forward_order(&self.voters, hint) {
+            match self
+                .try_submit(
+                    target,
+                    &addr,
+                    krabka_raft::API_KEY_DELEGATION_TOKEN_MUTATION,
+                    &body,
+                )
+                .await
+            {
+                Ok(response) if response.error_code == 0 => {
+                    return <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Deserialize>::deserialize(
+                        &response.result,
+                    )
+                    .map_err(RaftError::from);
+                }
+                Ok(response) => {
+                    last_error = RaftError::NotLeader {
+                        current_leader: (response.leader_hint >= 0)
+                            .then(|| NodeId(u64::try_from(response.leader_hint).unwrap_or(0))),
+                    };
+                }
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
     }
 }
 

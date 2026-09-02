@@ -34,9 +34,10 @@
 //!
 //! # Consumption is atomic with the transition
 //!
-//! [`gate::authorize`] returns the consumed proposal record. The caller puts it
-//! in the same `submit_change` call as its own records. That single raft append
-//! is what stops one approval authorizing two transitions across a crash.
+//! [`gate::authorize`] returns the consumed proposal record. A metadata-backed
+//! action puts it in the same `submit_change` call as its own records. A local
+//! action commits it first through [`persistence`]. Both paths prevent the
+//! action from starting while the approval remains reusable.
 
 pub(crate) mod config;
 #[cfg(test)]
@@ -44,6 +45,7 @@ mod cross_spend_model;
 pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod metrics;
+pub(crate) mod persistence;
 pub(crate) mod signing;
 #[cfg(test)]
 mod state_model;
@@ -146,8 +148,12 @@ pub(crate) fn action_targets_partition(action: BreakGlassAction) -> bool {
 #[cfg(test)]
 mod tests {
     use assert2::check;
+    use krabka_metadata::BreakGlassAction;
 
-    use super::*;
+    use super::{
+        ALL_ACTIONS, action_from_name, action_from_wire, action_name, action_targets_partition,
+        action_to_wire,
+    };
 
     #[test]
     fn every_action_round_trips_through_its_wire_value() {

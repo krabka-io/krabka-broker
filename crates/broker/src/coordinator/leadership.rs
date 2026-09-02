@@ -77,7 +77,7 @@ fn spawn_partition_load(
                 return;
             }
             if partitions.contains(OFFSETS_TOPIC, partition) {
-                if let Err(error) = replay_partition(&partitions, &coordinator, partition) {
+                if let Err(error) = replay_partition(&partitions, &coordinator, partition).await {
                     tracing::error!(
                         partition = partition.get(),
                         %error,

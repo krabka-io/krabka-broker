@@ -1,0 +1,80 @@
+(* #"/proof-work/crates/verified/src/raft.rs" 62 0 62 98 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sraft = "/proof-work/crates/verified/src/raft.rs" 63 22 63 30
+let%span sraft'0 = "/proof-work/crates/verified/src/raft.rs" 63 42 63 43
+let%span sraft'1 = "/proof-work/crates/verified/src/raft.rs" 63 22 63 43
+let%span sraft'2 = "/proof-work/crates/verified/src/raft.rs" 64 23 64 24
+let%span sraft'3 = "/proof-work/crates/verified/src/raft.rs" 67 51 67 52
+let%span sraft'4 = "/proof-work/crates/verified/src/raft.rs" 67 35 67 53
+let%span sraft'5 = "/proof-work/crates/verified/src/raft.rs" 46 28 55 1
+
+use creusot.int.Int32
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+constant const_MAX: Int32.t = (2147483647: Int32.t)
+
+type tup2_i32_i32 = { f0: Int32.t; f1: Int32.t }
+
+type t_Option_tup2_i32_i32 = None | Some tup2_i32_i32
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let metadata_record_coordinates [#"/proof-work/crates/verified/src/raft.rs" 62 0 62 98] (record_count: UInt64.t)
+  (record_index: UInt64.t) (return (x: t_Option_tup2_i32_i32)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_7 <- UInt64.of_int (Int32.to_int ([%#sraft] const_MAX)) ] s1
+    | s1 = UInt64.add [%#sraft'1] {_7} {[%#sraft'0] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &max_records <- _x ] s2)
+    | s2 = [ &_8 <- record_count = ([%#sraft'2] (0: UInt64.t)) ] s3
+    | s3 = any [ br0 -> {_8 = false} (! bb2) | br1 -> {_8} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_10 <- UInt64.ge record_index record_count ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb4) | br1 -> {_10} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_13 <- UInt64.gt record_count max_records ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb7) | br1 -> {_13} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_17 <- Int32.of_int (UInt64.t'int record_index) ] s1
+    | s1 = UInt64.sub [%#sraft'4] {record_count} {[%#sraft'3] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &_20 <- _x ] s2)
+    | s2 = [ &_19 <- Int32.of_int (UInt64.t'int _20) ] s3
+    | s3 = [ &_16 <- { f0 = _17; f1 = _19 } ] s4
+    | s4 = [ &_ret <- Some _16 ] s5
+    | s5 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i32_i32 = Any.any_l ()
+  | & record_count: UInt64.t = record_count
+  | & record_index: UInt64.t = record_index
+  | & max_records: UInt64.t = Any.any_l ()
+  | & _7: UInt64.t = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _16: tup2_i32_i32 = Any.any_l ()
+  | & _17: Int32.t = Any.any_l ()
+  | & _19: Int32.t = Any.any_l ()
+  | & _20: UInt64.t = Any.any_l () ])
+  [ return (result: t_Option_tup2_i32_i32) ->
+  {[@stop_split] [@expl:metadata_record_coordinates ensures] [%#sraft'5] match result with
+      | Some {f0 = offset_delta; f1 = last_offset_delta} -> gt_log_Int (UInt64.t'int record_count) 0
+      /\ UInt64.t'int record_index < UInt64.t'int record_count
+      /\ UInt64.t'int record_count <= Int32.to_int const_MAX + 1
+      /\ Int32.to_int offset_delta = UInt64.t'int record_index
+      /\ Int32.to_int last_offset_delta = UInt64.t'int record_count - 1
+      | None -> UInt64.t'int record_count = 0
+      \/ ge_log_Int (UInt64.t'int record_index) (UInt64.t'int record_count)
+      \/ gt_log_Int (UInt64.t'int record_count) (Int32.to_int const_MAX + 1)
+      end}
+    (! return {result}) ]

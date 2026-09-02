@@ -37,6 +37,9 @@ mod request;
 mod response;
 
 #[cfg(test)]
+mod streams_group_model;
+
+#[cfg(test)]
 mod tests;
 
 use self::{
@@ -188,6 +191,7 @@ pub(crate) async fn validate_streams_group_commit(
 /// `StreamsGroupTopologyValue`, and the last-derived partition metadata. The
 /// actor keeps the resolved topology for persistence and reconcile, because
 /// [`StreamsGroupState`] tracks only its presence and epoch.
+#[derive(Clone)]
 struct ActorState {
     state: StreamsGroupState,
     /// The full stored topology. It sits beside `state.topology`, which

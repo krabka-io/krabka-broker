@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_barrier_cut_expired": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.013 }
+    }
+  }
+}

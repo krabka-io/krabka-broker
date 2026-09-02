@@ -34,8 +34,17 @@ use crate::txnver_harness::{NONE, admin_client, create_topic, downgrade_transact
 /// log and checkpoint instead of a re-bootstrap, so the restart uses
 /// `BootstrapMode::Rejoin`. This is the same pattern as
 /// `consumer_group_next_gen_persistence.rs`.
-fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+fn recovery_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir);
+    // Recovery fails closed if any locally led state partition is missing.
+    // This single-transaction fixture materializes and replays one partition.
+    cfg.transaction_state_num_partitions = 1;
+    cfg.transaction_state_replication_factor = 1;
+    cfg
+}
+
+fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+    let mut cfg = recovery_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
 }
@@ -214,7 +223,7 @@ async fn assert_ongoing_txn_survives_restart(case: &RecoveryCase) {
 
     let (pid, epoch);
     {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
+        let broker = Broker::start(recovery_config(log_dir.clone()))
             .await
             .unwrap();
         let bootstrap = broker.listen_addr().to_string();

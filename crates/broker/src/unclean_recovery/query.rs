@@ -113,7 +113,7 @@ mod tests {
     use futures_util::FutureExt as _;
 
     use super::*;
-    use crate::unclean_recovery::select_best_replica;
+    use crate::unclean_recovery::selection::select_best_replica;
 
     fn info(id: u64, leo: i64) -> ReplicaLogInfo {
         ReplicaLogInfo {

@@ -1,0 +1,21 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 311 27 311 32 *)
+
+(* <transaction::TransactionRegistrationIdentityFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TransactionRegistrationIdentityFacts = {
+  transactional_id_matches: bool;
+  staged_identity: bool;
+  producer_identity_matches: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionRegistrationIdentityFacts [#"/workspace/crates/verified/src/transaction.rs" 311 27 311 32]
+  (self: t_TransactionRegistrationIdentityFacts) (return (x: t_TransactionRegistrationIdentityFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionRegistrationIdentityFacts = Any.any_l ()
+  | & self: t_TransactionRegistrationIdentityFacts = self ])
+  [ return (result: t_TransactionRegistrationIdentityFacts) -> (! return {result}) ]

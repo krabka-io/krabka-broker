@@ -1,0 +1,34 @@
+(* #"/workspace/crates/verified/src/list_offsets.rs" 195 27 195 32 *)
+
+(* <list_offsets::ListOffsetsSelectionFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+type t_ListOffsetsSelectionFacts = {
+  kind: t_ListOffsetsKind;
+  candidate_offset: Int64.t;
+  candidate_timestamp: Int64.t;
+  candidate_epoch: Int32.t;
+  last_fetchable: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ListOffsetsSelectionFacts [#"/workspace/crates/verified/src/list_offsets.rs" 195 27 195 32]
+  (self: t_ListOffsetsSelectionFacts) (return (x: t_ListOffsetsSelectionFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionFacts = Any.any_l () | & self: t_ListOffsetsSelectionFacts = self ])
+  [ return (result: t_ListOffsetsSelectionFacts) -> (! return {result}) ]
