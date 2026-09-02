@@ -8,7 +8,7 @@
 //! name the two files spell against that body.
 //!
 //! `docs/operations/metrics-body.txt` is a checked-in copy of the same body.
-//! The CI docs job has no Rust toolchain, so `tools/check-metrics-contract.py`
+//! The CI docs job has no Rust toolchain, so `aspect check-metrics-contract`
 //! reads that copy instead of a live broker. This suite keeps the copy fresh:
 //! it fails when the copy differs from the body a new registry encodes. To
 //! regenerate the copy, run the suite with `KRABKA_METRICS_BODY_OUT` set to
