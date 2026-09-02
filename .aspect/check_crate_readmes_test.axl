@@ -1,7 +1,7 @@
 """Unit tests for `check_crate_readmes.axl`."""
 
 load("./check_crate_readmes.axl", "manifest_name", "problems", "table_row")
-load("./testing.axl", "check_eq", "suite")
+load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _crate(directory, name, has_readme = True):
     return struct(directory = directory, name = name, has_readme = has_readme)
@@ -76,3 +76,5 @@ check_crate_readmes_tests = suite("check-crate-readmes", [
     _test_a_nameless_manifest_is_reported_once,
     _test_table_row,
 ])
+
+test_check_crate_readmes = suite_task(check_crate_readmes_tests)

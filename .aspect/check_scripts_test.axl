@@ -1,7 +1,7 @@
 """Unit tests for `check_scripts.axl`."""
 
 load("./check_scripts.axl", "ALLOWED", "audit", "is_script", "shebang_interpreter")
-load("./testing.axl", "check_eq", "suite")
+load("./testing.axl", "check_eq", "suite", "suite_task")
 
 def _unreadable(path):
     fail("the first line of %s should not have been read" % path)
@@ -81,3 +81,5 @@ check_scripts_tests = suite("check-scripts", [
     _test_a_deleted_allowed_script_is_reported,
     _test_every_reason_says_where_it_runs,
 ])
+
+test_check_scripts = suite_task(check_scripts_tests)
