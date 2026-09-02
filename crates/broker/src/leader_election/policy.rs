@@ -51,17 +51,51 @@ pub(crate) enum FailoverDecision {
 /// Decide the failover action for one partition. `alive` is the controller's
 /// snapshot of live brokers. `witnesses` is the set of data-bearing witness
 /// nodes, which replicate the partition and count toward
-/// `min.insync.replicas` but never lead it. `strategy` and `unclean_enabled`
-/// are the topic's resolved recovery policy.
+/// `min.insync.replicas` but never lead it. `eligible` is the partition's
+/// published KIP-966 eligible-leader-replica set. `strategy` and
+/// `unclean_enabled` are the topic's resolved recovery policy.
 ///
 /// A witness stays in the emitted ISR. It holds every committed record, so it
 /// is what keeps `acks=all` writable after a site loss. Only the leader pick
 /// excludes it.
+///
+/// # The eligible leader replicas are elected before anything is risked
+///
+/// Apache Kafka's `PartitionChangeBuilder.isValidNewLeader`, read out of
+/// `kafka-metadata-4.3.1.jar`, is
+///
+/// ```text
+/// (targetIsr.contains(id) || (targetIsr.isEmpty() && targetElr.contains(id)))
+///     && isAcceptableLeader.test(id)
+/// ```
+///
+/// and `electAnyLeader` takes the first replica in assignment order that
+/// satisfies it, as `ElectionResult(node, false)` -- `false` being `unclean`.
+/// So a partition whose ISR has emptied elects a surviving ELR member, calls
+/// that election clean, and never reaches the last-known-leader branch or the
+/// `Election.UNCLEAN` branch below it. Nothing about that pick consults
+/// `unclean.leader.election.enable`, and Kafka has no
+/// `unclean.recovery.strategy` in front of it either: an ELR member left the
+/// ISR while the partition still had `min.insync.replicas` members, so it
+/// holds every committed record and electing it loses nothing.
+///
+/// [`FailoverAction::ElectFromElr`] is that rung, and it sits above both the
+/// KIP-966 offset-aware recovery and the KIP-841 out-of-ISR election for the
+/// same reason. Kafka's `tryElection` answers it with `targetIsr =
+/// List.of(node)` and leaves `leaderRecoveryState` alone, which is the
+/// singleton ISR and the `unclean: false` returned here.
+///
+/// The published set is enough on its own. Kafka recomputes `targetElr` as
+/// `(elr ∪ isr) - targetIsr - uncleanShutdownReplicas` immediately before the
+/// election, but every id that recomputation adds is one this scan has just
+/// dropped from the live ISR, so it is either `dead` or absent from `alive`
+/// and fails the acceptable-leader half of the test regardless.
 pub(crate) fn failover_one(
     pr: &PartitionRecord,
     dead: NodeId,
     alive: &std::collections::HashSet<NodeId>,
     witnesses: &std::collections::HashSet<NodeId>,
+    eligible: &[i32],
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
 ) -> FailoverDecision {
@@ -75,11 +109,17 @@ pub(crate) fn failover_one(
         .collect();
     // The new leader is the first alive ISR member that can serve clients.
     let electable = alive_isr.iter().copied().find(|n| !witnesses.contains(n));
-    let unclean_candidate = pr
+    // Kafka scans `targetReplicas` in assignment order for both out-of-ISR
+    // picks, so both start from `pr.replicas` and differ only in the test.
+    // This closure is its `isAcceptableLeader`, plus the witness rule krabka
+    // adds to every election path.
+    let acceptable = |n: &NodeId| *n != dead && alive.contains(n) && !witnesses.contains(n);
+    let elr_candidate = pr
         .replicas
         .iter()
-        .find(|n| **n != dead && alive.contains(n) && !witnesses.contains(n))
+        .find(|n| acceptable(n) && i32::try_from(n.0).is_ok_and(|id| eligible.contains(&id)))
         .copied();
+    let unclean_candidate = pr.replicas.iter().find(|n| acceptable(n)).copied();
     let recovery = match strategy {
         RecoveryStrategy::None => FailoverRecovery::None,
         RecoveryStrategy::Balanced => FailoverRecovery::Balanced,
@@ -89,9 +129,9 @@ pub(crate) fn failover_one(
         pr.leader == dead,
         electable.is_some(),
         alive_isr.is_empty(),
+        elr_candidate.is_some(),
         recovery,
-        unclean_enabled,
-        unclean_candidate.is_some(),
+        unclean_enabled && unclean_candidate.is_some(),
         alive_isr.len() < pr.isr.len(),
     ) {
         FailoverAction::ElectClean => {
@@ -101,6 +141,19 @@ pub(crate) fn failover_one(
             FailoverDecision::Elect {
                 leader: new_leader,
                 isr: alive_isr,
+                unclean: false,
+            }
+        }
+        FailoverAction::ElectFromElr => {
+            // KIP-966: the live ISR is empty, but a surviving replica is
+            // published as eligible to lead, so it holds every record the
+            // partition ever acknowledged. Kafka reports this election as
+            // clean and gates it on nothing, and so does this: the ISR
+            // narrows to the winner, and no unclean-election meter moves.
+            let new_leader = elr_candidate.expect("verified ELR election has a candidate");
+            FailoverDecision::Elect {
+                leader: new_leader,
+                isr: vec![new_leader],
                 unclean: false,
             }
         }
@@ -116,8 +169,10 @@ pub(crate) fn failover_one(
             }
         }
         FailoverAction::Unavailable => {
-            // Every alive ISR member is a witness. The partition is
-            // unavailable, and that is the safe answer.
+            // Every alive ISR member is a witness, or nothing above this rung
+            // could elect: no live ISR, no surviving eligible leader replica,
+            // no offset-aware strategy, and no permitted unclean election. The
+            // partition is unavailable, and that is the safe answer.
             //
             // A live witness is a full ISR member, so it holds every committed
             // record. An unclean election, or an offset-aware recovery that
@@ -158,16 +213,30 @@ pub(crate) fn failover_one(
 /// concerned -- that is the precondition the registration was accepted under
 /// -- so it is the same question the dead-broker scan asks, and it deserves
 /// the same answer, up to and including an offset-aware recovery.
+///
+/// `eligible` is the partition's published ELR, and it is read as the image
+/// still holds it: the withdrawal this event also performs takes `returning`
+/// out of every eligible set, and `returning` is the one node
+/// [`failover_one`] will not elect anyway, so the two orders agree.
 pub(crate) fn unclean_restart_one(
     pr: &PartitionRecord,
     returning: NodeId,
     alive: &std::collections::HashSet<NodeId>,
     witnesses: &std::collections::HashSet<NodeId>,
+    eligible: &[i32],
     strategy: RecoveryStrategy,
     unclean_enabled: bool,
 ) -> FailoverDecision {
     if pr.leader == returning {
-        return failover_one(pr, returning, alive, witnesses, strategy, unclean_enabled);
+        return failover_one(
+            pr,
+            returning,
+            alive,
+            witnesses,
+            eligible,
+            strategy,
+            unclean_enabled,
+        );
     }
     if !pr.isr.contains(&returning) {
         return FailoverDecision::NoChange;
@@ -185,13 +254,15 @@ mod tests {
     use super::*;
     use crate::leader_election::test_support::witnesses;
 
-    /// The full failover decision for one partition, with `witnesses` given
-    /// directly. This keeps the witness tests on the pure policy function.
-    fn decide(
+    /// The full failover decision for one partition, with `witnesses` and the
+    /// published eligible-leader-replica set given directly. This keeps the
+    /// witness and ELR tests on the pure policy function.
+    fn decide_with_elr(
         pr: &PartitionRecord,
         dead: u64,
         alive: &[u64],
         witness_ids: &[u64],
+        eligible: &[i32],
         strategy: RecoveryStrategy,
         unclean_enabled: bool,
     ) -> super::FailoverDecision {
@@ -201,9 +272,23 @@ mod tests {
             NodeId(dead),
             &alive,
             &witnesses(witness_ids),
+            eligible,
             strategy,
             unclean_enabled,
         )
+    }
+
+    /// [`decide_with_elr`] for a partition that publishes no ELR at all, which
+    /// is every partition of a healthy cluster.
+    fn decide(
+        pr: &PartitionRecord,
+        dead: u64,
+        alive: &[u64],
+        witness_ids: &[u64],
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+    ) -> super::FailoverDecision {
+        decide_with_elr(pr, dead, alive, witness_ids, &[], strategy, unclean_enabled)
     }
 
     fn partition_record(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
@@ -335,7 +420,141 @@ mod tests {
         );
     }
 
-    /// The full unclean-restart decision for one partition.
+    /// One row of the eligible-leader-replica table.
+    struct ElrCase<'a> {
+        label: &'a str,
+        strategy: RecoveryStrategy,
+        unclean_enabled: bool,
+        expected: super::FailoverDecision,
+    }
+
+    /// KIP-966: a partition whose live ISR has emptied elects a surviving
+    /// eligible leader replica, and that election is clean.
+    ///
+    /// Broker 1 leads and dies; the ISR is `{1}`, so nothing in it survives.
+    /// Broker 3 comes first in the assignment and is alive, but only broker 2
+    /// is published as eligible, so only broker 2 is known to hold every
+    /// committed record. Kafka's `electAnyLeader` takes the first replica that
+    /// `isValidNewLeader` accepts -- for an empty target ISR that is the first
+    /// ELR member -- and returns it as `ElectionResult(node, false)`.
+    ///
+    /// Every row is the same partition under a different recovery policy: the
+    /// pick is above `unclean.leader.election.enable` and above
+    /// `unclean.recovery.strategy`, so all four give the same answer. Without
+    /// the ELR rung, the first row is `Unavailable`, the third and fourth
+    /// defer to the URM, and the second elects broker 3 and drops whatever
+    /// broker 2 held that broker 3 does not.
+    #[test]
+    fn an_eligible_leader_replica_is_elected_cleanly_whatever_the_recovery_policy_says() {
+        let pr = partition_record(/*leader*/ 1, &[1, 3, 2], &[1]);
+        let elected_two = super::FailoverDecision::Elect {
+            leader: NodeId(2),
+            isr: vec![NodeId(2)],
+            unclean: false,
+        };
+        let cases = [
+            ElrCase {
+                label: "unclean election off, no offset-aware strategy",
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: false,
+                expected: elected_two.clone(),
+            },
+            ElrCase {
+                label: "unclean election on: the ELR member outranks replica 3",
+                strategy: RecoveryStrategy::None,
+                unclean_enabled: true,
+                expected: elected_two.clone(),
+            },
+            ElrCase {
+                label: "balanced recovery does not defer to the URM",
+                strategy: RecoveryStrategy::Balanced,
+                unclean_enabled: false,
+                expected: elected_two.clone(),
+            },
+            ElrCase {
+                label: "aggressive recovery does not defer to the URM",
+                strategy: RecoveryStrategy::Aggressive,
+                unclean_enabled: true,
+                expected: elected_two,
+            },
+        ];
+        for case in cases {
+            let decision = decide_with_elr(
+                &pr,
+                /*dead*/ 1,
+                /*alive*/ &[2, 3],
+                /*witness_ids*/ &[],
+                /*eligible*/ &[2],
+                case.strategy,
+                case.unclean_enabled,
+            );
+            assert!(decision == case.expected, "{}", case.label);
+        }
+    }
+
+    /// The ELR rung is reachable only once the live ISR is empty, which is the
+    /// guard Kafka puts on its `targetElr` disjunct. Broker 3 is published as
+    /// eligible here, but brokers 2 and 3 both survive in the ISR, so the
+    /// ordinary clean election decides and keeps them both.
+    #[test]
+    fn a_live_isr_decides_the_election_and_the_published_elr_does_not() {
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+        let decision = decide_with_elr(
+            &pr,
+            /*dead*/ 1,
+            /*alive*/ &[2, 3],
+            /*witness_ids*/ &[],
+            /*eligible*/ &[3],
+            RecoveryStrategy::None,
+            true,
+        );
+        assert!(
+            decision
+                == super::FailoverDecision::Elect {
+                    leader: NodeId(2),
+                    isr: vec![NodeId(2), NodeId(3)],
+                    unclean: false,
+                }
+        );
+    }
+
+    /// An eligible leader replica that cannot serve is no candidate. A dead
+    /// one fails Kafka's `isAcceptableLeader`, and a witness fails the rule
+    /// krabka adds to every election path: it replicates the partition and
+    /// can be published as eligible, but it answers no client. Either way the
+    /// decision falls through to the rung below, which here is the KIP-841
+    /// election of the one replica that is left.
+    #[test]
+    fn an_elr_member_that_cannot_lead_falls_through_to_the_unclean_election() {
+        let pr = partition_record(/*leader*/ 1, &[1, 2, 3], &[1]);
+        let cases: [(&str, &[u64], &[u64]); 2] = [
+            ("the only ELR member is dead", &[3], &[]),
+            ("the only ELR member is a witness", &[2, 3], &[2]),
+        ];
+        for (label, alive, witness_ids) in cases {
+            let decision = decide_with_elr(
+                &pr,
+                /*dead*/ 1,
+                alive,
+                witness_ids,
+                /*eligible*/ &[2],
+                RecoveryStrategy::None,
+                true,
+            );
+            assert!(
+                decision
+                    == super::FailoverDecision::Elect {
+                        leader: NodeId(3),
+                        isr: vec![NodeId(3)],
+                        unclean: true,
+                    },
+                "{label}"
+            );
+        }
+    }
+
+    /// The full unclean-restart decision for one partition, for a partition
+    /// that publishes no ELR.
     fn restart_decide(
         pr: &PartitionRecord,
         returning: u64,
@@ -349,6 +568,7 @@ mod tests {
             NodeId(returning),
             &alive,
             &witnesses(&[]),
+            &[],
             strategy,
             unclean_enabled,
         )

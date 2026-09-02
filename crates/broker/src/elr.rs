@@ -38,11 +38,16 @@
 //! `V1TopicConfig` records that carry the new state.
 //!
 //! The columns are not the only reader. KIP-966's point is that the set is
-//! *elected from*: `unclean_recovery`'s
-//! [`select_leader`](crate::unclean_recovery::select_leader) reads the same
+//! *elected from*, and two paths do. `unclean_recovery`'s
+//! [`select_leader`](crate::unclean_recovery::select_leader) reads this
 //! projection and elects a surviving ELR member ahead of any longer log that
 //! is not one, because only the ELR member is known to hold every committed
-//! record.
+//! record. The failover scans read it first, through
+//! [`failover_one`](crate::leader_election::failover_one): a partition whose
+//! live ISR has emptied elects a surviving ELR member outright and cleanly,
+//! without consulting `unclean.leader.election.enable` or
+//! `unclean.recovery.strategy`, which is Apache Kafka's
+//! `PartitionChangeBuilder.electAnyLeader`.
 //!
 //! That is also why the state has to be withdrawn when it stops being true.
 //! The one event that ends a membership without any partition changing is a

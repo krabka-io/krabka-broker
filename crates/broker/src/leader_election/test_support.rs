@@ -197,8 +197,17 @@ pub fn recovery_handle_for_tests() -> crate::unclean_recovery::UncleanRecoveryHa
 /// Apply a `V1TopicConfig` override on top of an existing image. This
 /// matches the runtime path where `AlterConfigs` writes the record.
 pub fn set_topic_config(img: &mut MetadataImage, topic: &str, key: &str, value: &str) {
-    let mut overrides = BTreeMap::new();
-    overrides.insert(key.into(), value.into());
+    set_topic_configs(img, topic, &[(key, value)]);
+}
+
+/// [`set_topic_config`] for several keys at once. A `V1TopicConfig` record
+/// replaces the topic's whole override map, so a test that needs two keys has
+/// to publish them in one record.
+pub fn set_topic_configs(img: &mut MetadataImage, topic: &str, entries: &[(&str, &str)]) {
+    let overrides: BTreeMap<String, String> = entries
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect();
     img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.into(),
         overrides,
@@ -245,6 +254,25 @@ pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<(u64, bool)> {
             _ => None,
         })
         .collect()
+}
+
+/// The one `PartitionRecord` in a change list that also carries records of
+/// other kinds -- a KIP-966 failover appends the republished ELR beside the
+/// election, so the election cannot be read by position. Panics unless
+/// exactly one partition change is there.
+pub fn elected_partition(changes: &[MetadataRecord]) -> &PartitionRecord {
+    let mut partitions = changes.iter().filter_map(|record| match record {
+        MetadataRecord::V1Partition(pr) => Some(pr),
+        _ => None,
+    });
+    let first = partitions
+        .next()
+        .unwrap_or_else(|| panic!("expected a partition change, got {changes:?}"));
+    assert!(
+        partitions.next().is_none(),
+        "expected exactly one partition change, got {changes:?}"
+    );
+    first
 }
 
 /// Extract the single-element `PartitionRecord` from a one-entry change
