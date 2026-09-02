@@ -4,6 +4,24 @@ krabka uses two formal test tiers. Creusot proves contracts for small,
 executable kernels. Stateright checks all reachable states inside each model's
 stated bounds. Neither tier proves the whole broker.
 
+## Development evidence
+
+A human maintainer and AI coding agents codeveloped krabka-broker. The
+development process does not use authorship as evidence of correctness. Pull
+requests apply the same build, test, proof, model-check, and compatibility gates
+to human and AI changes.
+
+An AI-generated test can repeat the implementation's mistake. krabka therefore
+uses checks with independent failure signals. Mutation testing inserts faults
+that the tests must detect. Creusot sends contracts to automated provers, and
+Stateright explores bounded event orderings. Differential and acceptance suites
+also run live, digest-pinned Kafka brokers as reference systems.
+
+The checks do not prove the whole broker. This catalog states the formal
+boundary in detail. The repository README describes the
+[mutation](../README.md#mutation-testing) and
+[container](../README.md#container-suites) tiers.
+
 ## Catalog Boundary
 
 This catalog covers safety-critical, deterministic decisions implemented in
