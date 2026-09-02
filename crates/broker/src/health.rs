@@ -138,8 +138,9 @@ impl std::fmt::Display for NotReady {
     }
 }
 
-/// The conditions [`readyz`] reports on, shared between the HTTP routes and
-/// the broker startup phases that satisfy them. Cloning shares the state.
+/// The conditions the `/readyz` route reports on, shared between the HTTP
+/// routes and the broker startup phases that satisfy them. Cloning shares the
+/// state.
 #[derive(Clone)]
 pub struct HealthState {
     inner: Arc<Inner>,
