@@ -97,7 +97,7 @@ mod tests {
 
     use super::*;
     use crate::handlers::broker_heartbeat::test_support::{
-        MockSource, image_with_dir_partition, liveness_with,
+        fake_source, image_with_dir_partition, liveness_with,
     };
 
     #[tokio::test]
@@ -114,8 +114,8 @@ mod tests {
             &[krabka_audit::NodeId(1)],
             &[Uuid::nil()],
         );
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1)]).await;
 
         let drained =
@@ -124,7 +124,7 @@ mod tests {
                 .unwrap();
 
         assert!(drained); // untransferable partition is not counted
-        assert!(captured.lock().unwrap().is_empty()); // nothing to transfer
+        assert!(source.submitted_records().is_empty()); // nothing to transfer
     }
 
     #[tokio::test]
@@ -137,8 +137,8 @@ mod tests {
             &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[Uuid::nil(), Uuid::nil()],
         );
-        let (source, captured) = MockSource::new(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(source);
+        let source = fake_source(img);
+        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
 
         let drained =
@@ -147,7 +147,7 @@ mod tests {
                 .unwrap();
 
         assert!(!drained); // still leading a transferable partition pre-submit
-        let changes = captured.lock().unwrap();
+        let changes = source.submitted_records();
         assert!(changes.len() == 1);
         let MetadataRecord::V1Partition(pr) = &changes[0] else {
             panic!("expected V1Partition change")

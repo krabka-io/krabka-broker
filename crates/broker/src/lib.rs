@@ -247,8 +247,9 @@ mod stretch_cluster_model;
 pub mod telemetry;
 /// Shared scaffolding for the per-handler `#[cfg(test)] mod tests` modules
 /// (deny-all authorizer, principal/peer/context builders, wire codec helpers,
-/// temp-dir broker launcher). It consolidates the copies that the
-/// mutant-hardening pass duplicated across ~40 handlers.
+/// temp-dir broker launcher, and the one `MetadataSource` fake this crate's
+/// suites read from). It consolidates the copies that the mutant-hardening
+/// pass duplicated across ~40 handlers.
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod throttle;
