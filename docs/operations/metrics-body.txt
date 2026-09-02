@@ -73,6 +73,15 @@ krabka_broker_replication_bytes_in_total{topic="orders",partition="0"} 0
 # HELP krabka_broker_replication_bytes_out Bytes this broker served to followers as the partition leader (cumulative). Rate(...) for leader-out-to-followers throughput; together with partition_bytes_out (consumer reads) it attributes outbound traffic to its source..
 # TYPE krabka_broker_replication_bytes_out counter
 krabka_broker_replication_bytes_out_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_replica_lag_records Records a follower of a partition this broker leads has yet to fetch: the leader's log end offset minus that follower's last-fetched offset. Where under_replicated_partitions says only that a follower left the ISR, this says how far behind it is while it is still in..
+# TYPE krabka_broker_replica_lag_records gauge
+krabka_broker_replica_lag_records{topic="orders",partition="0",replica="2"} 0
+# HELP krabka_broker_replica_lag_max_records The largest value replica_lag_records carries on this broker, or zero when it leads no partition with a follower. Mirrors Kafka's ReplicaFetcherManager.MaxLag; alert on it rather than aggregating the per-follower family..
+# TYPE krabka_broker_replica_lag_max_records gauge
+krabka_broker_replica_lag_max_records 0
+# HELP krabka_broker_consumer_group_lag_records Records a consumer group this broker coordinates has yet to consume from one partition: the partition's high watermark minus the group's committed offset. Classic and KIP-848 groups both report here..
+# TYPE krabka_broker_consumer_group_lag_records gauge
+krabka_broker_consumer_group_lag_records{group_id="billing",topic="orders",partition="0"} 0
 # HELP krabka_broker_partition_disk_bytes On-disk size of a partition's log directory (gauge). Updated by the broker's periodic disk scanner; suppress if scanner is disabled..
 # TYPE krabka_broker_partition_disk_bytes gauge
 krabka_broker_partition_disk_bytes{topic="orders",partition="0"} 0
@@ -82,6 +91,14 @@ krabka_broker_share_group_backlog{group_id="workers",topic="orders",partition="0
 # HELP krabka_broker_partition_cpu_micros Cumulative handler-thread microseconds spent processing each (topic, partition). Rebalancer-targeted; rate(...) divided by 1_000_000 yields core occupancy..
 # TYPE krabka_broker_partition_cpu_micros counter
 krabka_broker_partition_cpu_micros_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_fetch_response_drain Cumulative count of drained Fetch responses, labelled by the path their records regions took to the socket: sendfile (kernel zero-copy), pread (a file-backed region the drain had to copy through a buffer), or vectored (no file-backed region). rate(...{path="sendfile"}) is how an operator sees that the zero-copy fetch path is carrying traffic..
+# TYPE krabka_broker_fetch_response_drain counter
+krabka_broker_fetch_response_drain_total{path="pread"} 0
+krabka_broker_fetch_response_drain_total{path="sendfile"} 0
+krabka_broker_fetch_response_drain_total{path="vectored"} 0
+# HELP krabka_broker_ktls_enabled 1 when the startup probe found working Linux kTLS and TLS fetch connections drain records through kernel-offloaded sendfile; 0 when they encrypt in userspace, including on a broker with no TLS listener and on every non-Linux target..
+# TYPE krabka_broker_ktls_enabled gauge
+krabka_broker_ktls_enabled 0
 # HELP krabka_broker_incremental_fetch_sessions KIP-227: live incremental-fetch sessions cached by this broker (gauge)..
 # TYPE krabka_broker_incremental_fetch_sessions gauge
 krabka_broker_incremental_fetch_sessions 0
@@ -218,12 +235,12 @@ krabka_broker_fetch_message_conversions_total{topic="orders"} 0
 # HELP krabka_broker_unclean_leader_elections KIP-841: cumulative count of unclean leader elections driven by this broker (as controller leader). An unclean election is one where the new leader was picked from outside the ISR because the partition's ISR was empty at failover time and the topic had unclean.leader.election.enable=true. Each such election accepts possible data loss. Mirrors Kafka's ControllerStats.UncleanLeaderElectionsPerSec; an operator alert on rate(unclean_leader_elections_total[5m]) > 0 flags the data-loss footgun..
 # TYPE krabka_broker_unclean_leader_elections counter
 krabka_broker_unclean_leader_elections_total 0
-# HELP krabka_broker_audit_events_total Cumulative audit records successfully written to the audit topic.
-# TYPE krabka_broker_audit_events_total counter
-krabka_broker_audit_events_total_total 0
-# HELP krabka_broker_audit_write_failures_total Cumulative audit records that failed to write to the audit topic.
-# TYPE krabka_broker_audit_write_failures_total counter
-krabka_broker_audit_write_failures_total_total 0
+# HELP krabka_broker_audit_events Cumulative audit records successfully written to the audit topic.
+# TYPE krabka_broker_audit_events counter
+krabka_broker_audit_events_total 0
+# HELP krabka_broker_audit_write_failures Cumulative audit records that failed to write to the audit topic.
+# TYPE krabka_broker_audit_write_failures counter
+krabka_broker_audit_write_failures_total 0
 # HELP krabka_broker_audit_spool_depth Current count of audit records buffered in the durable spool.
 # TYPE krabka_broker_audit_spool_depth gauge
 krabka_broker_audit_spool_depth 0

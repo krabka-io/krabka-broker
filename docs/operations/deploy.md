@@ -11,7 +11,11 @@ builds it from locked Wolfi packages and loads it into the local daemon as
 `docker.io/krabka-io/krabka-broker:dev`; CI pushes the same image to
 `ghcr.io/krabka-io/krabka-broker`. The image runs as `nonroot` (65532), has
 `/usr/bin/krabka-broker` as its entrypoint and `/var/lib/krabka` as its
-working directory. It carries no shell and no package manager.
+working directory. It carries no shell and no package manager. The operator
+tools ride beside the broker under `/usr/bin`: `krabka-format`,
+`krabka-audit`, `krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and
+`krabka-restore`. A tool that is not in the image cannot run in a container,
+because there is no shell to fetch one with.
 
 To run the binary directly, build it with Bazel and copy it out:
 
@@ -23,6 +27,43 @@ cp bazel-bin/crates/broker/krabka-broker bazel-bin/crates/format/krabka-format /
 Both binaries link glibc and nothing else. The image's Wolfi base supplies
 glibc and the CA bundle.
 
+### Kubernetes
+
+[`packaging/k8s/`](../../packaging/k8s/) holds a reference deployment of the
+image: a three-node StatefulSet, a headless Service with a bootstrap Service,
+and a PodDisruptionBudget. It is a starting point to read and adapt, not a
+chart. Before you apply it, set the image tag and the storage class and
+size. Also replace the two placeholder identities: `KRABKA_CLUSTER_ID` and
+the directory ids in `KRABKA_INITIAL_CONTROLLERS`.
+The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
+later.
+
+```
+kubectl apply -f packaging/k8s/
+```
+
+The parts that carry the design:
+
+- The format step is an init container on the same image. It runs
+  `krabka-format --ignore-formatted` on every start. On the first boot it
+  formats the volume. On every later boot it exits 0 and leaves the identity
+  in place.
+- The pod's ordinal is the node id and the broker id. The
+  `apps.kubernetes.io/pod-index` label supplies it through the downward API.
+- `terminationGracePeriodSeconds` is 60, which outlasts the 20s
+  controlled-shutdown drain.
+- `fsGroup: 65532` gives the `nonroot` user the volume. Without it the format
+  step fails on `meta.properties.json`.
+- The liveness probe polls `/healthz` and the readiness probe polls
+  `/readyz`, both on the `health` port, 9405. See
+  [Health checks](#health-checks).
+- The headless `krabka` Service sets `publishNotReadyAddresses`, so a peer
+  that is not ready yet still resolves and the quorum can reach it. The
+  `krabka-bootstrap` Service honours readiness, so a client's first
+  `Metadata` request never lands on a node that is behind the quorum.
+- The PodDisruptionBudget sets `minAvailable: 2`, the majority of three. Scale
+  the StatefulSet and move the budget with it.
+
 ## Ports
 
 | Port | Listener | Configured by |
@@ -30,6 +71,7 @@ glibc and the CA bundle.
 | 9092 | Kafka client and inter-broker listener | `--listen-addr`, or `[[listeners]]` in the config file |
 | 9093 | KIP-595 controller listener | Always `listen_addr` with the port set to 9093. Under `--config-file` it binds all interfaces. |
 | 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR`. `none` disables it. |
+| 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR`. `none` disables them. |
 
 Every broker in the cluster must reach every other broker's 9093. Clients
 need 9092 only.
@@ -151,9 +193,11 @@ krabka-broker --config-file /etc/krabka/broker.toml \
     --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10
 ```
 
-The broker logs `selected bootstrap mode` with `Bootstrap` on a fresh
-directory and `Rejoin` on one it has run from before. It then logs
-`metrics server listening` once `/metrics` is up. Logs are one JSON object
+The broker logs `health server listening` first, before it opens the log
+directory, so the probes answer through recovery. It then logs
+`selected bootstrap mode`: `Bootstrap` on a fresh directory, `Rejoin` on one
+it has run from before. It logs `metrics server listening` once `/metrics` is
+up. Logs are one JSON object
 per line on stdout; `RUST_LOG` sets the level.
 
 Start the three static voters within a few seconds of each other. The
@@ -180,6 +224,11 @@ led take an election instead of a hand-off.
 Upgrade one broker at a time. The wire protocol is negotiated per
 connection, so a mixed fleet serves clients throughout.
 
+Pick the build first. A release is an annotated `vX.Y.Z` tag, and
+[Releasing](../releasing.md) describes how one is cut and how to verify its
+image signature. The [changelog](../../CHANGELOG.md) records what each tag
+contains.
+
 1. Check the fleet is healthy before you start.
    `krabka_broker_under_replicated_partitions` is zero on every broker and
    `krabka_broker_offline_partitions_count` is zero. Do not roll a cluster
@@ -189,34 +238,76 @@ connection, so a mixed fleet serves clients throughout.
    shutdown, or for `krabka_broker_partitions_led` on it to reach zero.
 3. Replace the binary or the image and start the broker on the same
    `--log-dir`. It boots in `Rejoin` mode, catches up, and rejoins each ISR.
-4. Wait until `krabka_broker_under_replicated_partitions` is zero on every
-   broker again. That is the only signal that the roll can continue.
+   `/readyz` answers 503 until the log directory is recovered, the listeners
+   are bound, and the metadata offset is within
+   `--readiness-max-metadata-lag` of the quorum's committed offset.
+4. Wait until `/readyz` answers 200 and
+   `krabka_broker_under_replicated_partitions` is zero on every broker again.
+   Readiness says the node can serve clients. The gauge says the roll can
+   continue. Wait for both.
 5. Repeat for the next broker. Roll the controller leader last, so the
    quorum changes leader once rather than several times.
 6. When the roll is complete, run a preferred election to move leadership
    back where the assignment puts it:
    `kafka-leader-election --bootstrap-server <broker>:9092 --election-type preferred --all-topic-partitions`.
 
+On Kubernetes the StatefulSet's `RollingUpdate` strategy does steps 2 to 4
+for you. It replaces one pod at a time. It waits for the new pod's `/readyz`
+before it moves to the next, so a restart cannot run ahead of the quorum.
+The PodDisruptionBudget keeps two of three pods available through a node
+drain or a cluster upgrade, so a voluntary disruption cannot take the
+quorum's majority. It does not gate the rolling update itself, and it does
+not watch `krabka_broker_under_replicated_partitions`. Check step 1 before
+you change the image, and step 6 after the last pod is ready.
+
 A rise in `krabka_broker_unsupported_api_requests_total` during the roll is
 a client that learned a new version range from an upgraded broker and sent it
 to an old one. It clears when the roll completes.
 
 krabka is undeployed and has no persisted-state compatibility guarantee
-between builds. Read the release notes for a build before you roll it: a
-build that changes an on-disk format needs a fresh `krabka-format` on every
-node and a restore from the topic data, not a roll.
+between builds. Read the [changelog](../../CHANGELOG.md) entry for a build
+before you roll it. A build that changes an on-disk format needs a fresh
+`krabka-format` on every node and a restore from the topic data, not a roll.
 
 ## Health checks
 
-There is no dedicated health endpoint. Use these:
+The broker serves two HTTP probes on their own listener, port 9405 by
+default. `--health-listen-addr` or `KRABKA_HEALTH_LISTEN_ADDR` moves it, and
+`none` disables both probes. The listener starts before the broker opens the
+log directory. It stays up through the controlled-shutdown drain. An
+orchestrator gets an answer in both windows.
 
-- Liveness: an HTTP `GET /metrics` on port 9404 returns 200 while the process
-  serves requests.
-- Readiness: `krabka_broker_partitions_total` on that broker is greater than
-  zero once it has registered and taken its replicas. A TCP probe on 9092 is
-  too early, because the listener opens before the broker has rejoined its
-  ISRs.
-- Controller: `krabka_broker_active_controller` is 1 on exactly one broker.
+`GET /healthz` is the liveness probe. It answers 200 with the body `ok` for
+as long as the process runs its event loop. It looks at no other condition.
+A broker that replays a large log directory, or that fetches a long metadata
+log, is alive but not yet usable. A liveness failure there would kill the
+node in the middle of a recovery, and the restart would run the same recovery
+again.
+
+`GET /readyz` is the readiness probe. It answers 200 with the body `ready`
+when every condition below holds. Otherwise it answers 503, and the body
+names the first condition that fails, in this order:
+
+| Body starts with | Condition |
+| :--- | :--- |
+| `not ready: log_dir_recovery` | The log directories are not scanned yet, or a recovered partition has no writer yet. |
+| `not ready: listeners_bound` | A data-plane listener is not bound yet, or its accept loop is not running. |
+| `not ready: metadata_quorum_unreached` | The node has not reached the metadata quorum, so it cannot know whether it is caught up. |
+| `not ready: metadata_lag` | The node's `__cluster_metadata` offset trails the quorum's committed offset by more than the bound. The body gives both numbers. |
+
+`--readiness-max-metadata-lag` or `KRABKA_READINESS_MAX_METADATA_LAG` sets
+the bound, in records. The default is 100. A node that is ahead of the
+offset it last heard from the quorum has a lag of zero.
+
+Point a Kubernetes `livenessProbe` at `/healthz` and a `readinessProbe` at
+`/readyz`. Do not use a TCP probe on 9092 for readiness. The listener opens
+before the node has caught up on metadata, and a client that reaches it
+then gets `Metadata` from a stale image. Do not point the liveness probe at
+`/readyz` either, or the kubelet restarts a node that is recovering. A
+readiness failure only takes the pod out of the Service endpoints.
+
+To find the active controller, read `krabka_broker_active_controller` on
+`/metrics`. It is 1 on exactly one broker.
 
 ## Profiles
 

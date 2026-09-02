@@ -30,7 +30,7 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     let p = support::start_with_audit_key(&keypath, "k-test", 1).await;
 
     // Cause some audit events (a create succeeds; super-user path).
-    let audit_before = p.broker.metrics().audit_events_total.get();
+    let audit_before = p.broker.metrics().audit_events.get();
     let _ = p
         .client
         .send(CreateTopicsRequest {
@@ -51,7 +51,7 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     // the counter advances by 2 (chained record + checkpoint) per create.
     p.broker
         .wait_for_metrics("audit checkpoint written", |m| {
-            m.audit_events_total.get() >= audit_before + 2
+            m.audit_events.get() >= audit_before + 2
         })
         .await;
 
@@ -77,7 +77,7 @@ async fn audit_chain_continues_across_restart() {
     // First boot: generate some audit events, then shut down cleanly.
     {
         let (broker, client) = support::start_with_dir(dir.path()).await;
-        let audit_before = broker.metrics().audit_events_total.get();
+        let audit_before = broker.metrics().audit_events.get();
         let _ = client
             .send(CreateTopicsRequest {
                 topics: vec![CreatableTopic {
@@ -94,7 +94,7 @@ async fn audit_chain_continues_across_restart() {
         // Ensure the r1 CreateTopics audit record is durable before shutdown.
         broker
             .wait_for_metrics("audit event written", |m| {
-                m.audit_events_total.get() > audit_before
+                m.audit_events.get() > audit_before
             })
             .await;
         broker.shutdown().await;
@@ -102,7 +102,7 @@ async fn audit_chain_continues_across_restart() {
 
     // Second boot on the SAME data dir: more events.
     let (broker, client) = support::start_with_dir(dir.path()).await;
-    let audit_before = broker.metrics().audit_events_total.get();
+    let audit_before = broker.metrics().audit_events.get();
     let _ = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -119,7 +119,7 @@ async fn audit_chain_continues_across_restart() {
     // Ensure the r2 CreateTopics audit record is durable before consuming.
     broker
         .wait_for_metrics("audit event written", |m| {
-            m.audit_events_total.get() > audit_before
+            m.audit_events.get() > audit_before
         })
         .await;
 

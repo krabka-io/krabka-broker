@@ -58,10 +58,19 @@ invent a label value.
 | `krabka_broker_under_replicated_partitions` | gauge | - | `ReplicaManager,name=UnderReplicatedPartitions` | Partitions this broker leads whose ISR is smaller than the replica set. Alert on `> 0`. [Runbook](runbooks/under-replicated-partitions.md). |
 | `krabka_broker_under_min_isr_partition_count` | gauge | - | `ReplicaManager,name=UnderMinIsrPartitionCount` | Partitions this broker leads whose ISR is below `min.insync.replicas`. They reject `acks=all` with `NOT_ENOUGH_REPLICAS`. Alert on `> 0`. [Runbook](runbooks/under-min-isr-partitions.md). |
 | `krabka_broker_offline_partitions_count` | gauge | - | `ReplicaManager,name=OfflinePartitionsCount` | Partitions with no live leader. Alert on `> 0`. [Runbook](runbooks/offline-partitions.md). |
+| `krabka_broker_replica_lag_records` | gauge | `topic`, `partition`, `replica` | `FetcherLagMetrics,name=ConsumerLag,clientId=ReplicaFetcherThread-*,topic=<t>,partition=<p>` | Records a follower of a partition this broker leads has yet to fetch: the leader's log end offset minus the follower's last-fetched offset. `replica` is the follower's node id. Kafka reports this on the follower; krabka reports it on the leader, one series per follower. Where `under_replicated_partitions` says only that a follower left the ISR, this says how far behind it is while it is still in. [Runbook](runbooks/replica-lag.md). |
+| `krabka_broker_replica_lag_max_records` | gauge | - | `ReplicaFetcherManager,name=MaxLag,clientId=Replica` | The largest value `replica_lag_records` carries on this broker, or zero when it leads no partition with a follower. Alert on this series rather than on an aggregate of the per-follower family. [Runbook](runbooks/replica-lag.md). |
 | `krabka_broker_isr_shrinks_total` | counter | - | `ReplicaManager,name=IsrShrinksPerSec` | ISR shrinks this broker's maintenance loop proposed. |
 | `krabka_broker_isr_expands_total` | counter | - | `ReplicaManager,name=IsrExpandsPerSec` | ISR expands this broker's maintenance loop proposed. |
 | `krabka_broker_leader_site_drift_partitions` | gauge | - | - | Partitions this broker leads from a site other than the stretch cluster's preferred leader site. Zero with no `[stretch]` section. Alert on `> 0`. [Runbook](runbooks/leader-site-drift.md). |
 | `krabka_broker_witness_role` | gauge | - | - | 1 when the metadata image records `broker.witness` for this node. Confirms the role reached the controller. |
+
+The lag families are sampled every 30 seconds, not incremented. The leader
+samples replica lag, and the group coordinator samples consumer-group lag.
+Each pass publishes the whole set of series it can justify and releases the
+rest, so a follower that left the replica set, or a partition this broker no
+longer leads, loses its series at the next pass. Shutdown clears the
+families. The metric comments name no threshold for any of them.
 
 ## Controller
 
@@ -91,6 +100,8 @@ lands under `Unknown`.
 | `krabka_broker_request_throttle_duration_seconds` | histogram | `api_key` | `RequestMetrics,name=ThrottleTimeMs` | Time asleep in the KIP-219 quota throttle or the inline KIP-599 mutation throttle. Observed once per request the broker accounts for, with an explicit zero when no quota applied. |
 | `krabka_broker_quota_throttle_duration_seconds` | histogram | `quota_type` | `kafka.server:type=<Produce,Fetch,Request,ControllerMutation>,name=throttle-time` | Throttle the broker applied, under the quota that produced the largest delay. Unthrottled requests are not observed, so `_count` is the throttled request count. `quota_type` is Kafka's own spelling. |
 | `krabka_broker_in_flight_requests` | gauge | - | `RequestChannel,name=RequestQueueSize` (closest) | Requests being handled now. A sustained climb is a handler stall or a wedged controller. |
+| `krabka_broker_fetch_response_drain_total` | counter | `path` | - | Drained Fetch responses by the path their records took to the socket. `path` is one of `sendfile`, `pread`, `vectored`. All three series exist from startup. On a plaintext cluster, `rate(...{path="sendfile"}[5m]) == 0` is a zero-copy regression. |
+| `krabka_broker_ktls_enabled` | gauge | - | - | 1 when the startup probe found working Linux kTLS, so TLS fetches drain through `sendfile`. 0 with no TLS listener and on every non-Linux target. Constant for the life of the process. |
 
 The three phase families are disjoint and do not cover the total.
 `local + remote + throttle <= request_duration_seconds`. The remainder is the
@@ -146,6 +157,7 @@ any of these.
 
 | Series | Type | Labels | Replaces | Meaning |
 | :--- | :--- | :--- | :--- | :--- |
+| `krabka_broker_consumer_group_lag_records` | gauge | `group_id`, `topic`, `partition` | - | Records a consumer group this broker coordinates has yet to consume from one partition: the high watermark minus the group's committed offset. Classic and KIP-848 groups both report. JVM Kafka does not export this from the broker; it is the `LAG` column `kafka-consumer-groups --describe` computes on the client. A series exists only for a partition the group committed an offset for, and is released when the group is deleted, moves coordinator, or the topic is deleted. [Runbook](runbooks/consumer-group-lag.md). |
 | `krabka_broker_share_group_backlog` | gauge | `group_id`, `topic`, `partition` | - | KIP-932 records waiting for acquisition in the share-group partition. |
 | `krabka_broker_barrier_epochs_started_total` | counter | `group` | - | Barrier epochs the coordinator started. |
 | `krabka_broker_barrier_epochs_committed_total` | counter | `group` | - | Epochs whose marker reached every partition of the group. |
@@ -172,8 +184,8 @@ any of these.
 | `krabka_broker_break_glass_proposals` | gauge | `state` | - | KFC-9 proposals by state: `pending`, `approved`, `expired`, `consumed`. |
 | `krabka_broker_break_glass_refusals_total` | counter | `action` | - | KFC-9 privileged transitions refused for want of an approved proposal. A steady rate is normal. |
 | `krabka_broker_break_glass_bypassed_total` | counter | `action` | - | KFC-9 privileged transitions that ran without an approved proposal. Alert on `rate(...) > 0`. [Runbook](runbooks/break-glass-bypassed.md). |
-| `krabka_broker_audit_events_total_total` | counter | - | - | Audit records written to `__krabka_audit`. The doubled suffix is real: the family is registered as `audit_events_total` and the encoder adds `_total`. |
-| `krabka_broker_audit_write_failures_total_total` | counter | - | - | Audit records that failed to write. Alert on `rate(...) > 0`. [Runbook](runbooks/audit-write-failures.md). |
+| `krabka_broker_audit_events_total` | counter | - | - | Audit records written to `__krabka_audit`. |
+| `krabka_broker_audit_write_failures_total` | counter | - | - | Audit records that failed to write. Alert on `rate(...) > 0`. [Runbook](runbooks/audit-write-failures.md). |
 | `krabka_broker_audit_spool_depth` | gauge | - | - | Audit records buffered in the durable spool. |
 | `krabka_broker_audit_spool_bytes` | gauge | - | - | Bytes buffered in the durable spool. |
 | `krabka_broker_audit_records_spooled_total` | counter | - | - | Records diverted to the spool on a write failure. |
@@ -183,15 +195,6 @@ any of these.
 The `action` label on the break-glass families is one of `thaw_topic_freeze`,
 `unclean_elect_leaders`, `unclean_recovery`, `unregister_broker`,
 `cancel_reassignment`, `delete_topic` and `delete_records`.
-
-## Not yet exported
-
-Kafka's `ReplicaFetcherManager,name=MaxLag` and the consumer-group lag that
-`kafka-consumer-groups --describe` computes have no series here. Read replica
-lag from `kafka-topics --describe --under-replicated-partitions`, and from the
-gap between the leader's `partition_bytes_in` rate and the follower's
-`replication_bytes_in` rate for the same partition. Read consumer lag from
-`kafka-consumer-groups --describe --group <group>`.
 
 ## The contract check
 

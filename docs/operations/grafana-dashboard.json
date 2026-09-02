@@ -1019,6 +1019,136 @@
       }
     },
     {
+      "id": 68,
+      "type": "row",
+      "title": "Lag",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "panels": []
+    },
+    {
+      "id": 69,
+      "type": "timeseries",
+      "title": "Replica lag max",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "krabka_broker_replica_lag_max_records{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Largest follower lag on any partition the broker leads. Alert: > 10000 for 10m."
+    },
+    {
+      "id": 70,
+      "type": "timeseries",
+      "title": "Replica lag (top 10)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 48
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "topk(10, krabka_broker_replica_lag_records{instance=~\"$instance\",topic=~\"$topic\"})",
+          "legendFormat": "{{topic}}-{{partition}} replica {{replica}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Leader log end minus the follower's last-fetched offset, per follower."
+    },
+    {
+      "id": 71,
+      "type": "timeseries",
+      "title": "Consumer group lag (top 10)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 48
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "topk(10, krabka_broker_consumer_group_lag_records{instance=~\"$instance\",topic=~\"$topic\"})",
+          "legendFormat": "{{group_id}} {{topic}}-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "High watermark minus the group's committed offset. Alert: > 10000 for 15m."
+    },
+    {
       "id": 24,
       "type": "row",
       "title": "Requests",
@@ -1027,7 +1157,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 56
       },
       "panels": []
     },
@@ -1043,7 +1173,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 48
+        "y": 57
       },
       "targets": [
         {
@@ -1081,7 +1211,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 48
+        "y": 57
       },
       "targets": [
         {
@@ -1119,7 +1249,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 48
+        "y": 57
       },
       "targets": [
         {
@@ -1167,7 +1297,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 56
+        "y": 65
       },
       "targets": [
         {
@@ -1233,7 +1363,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 56
+        "y": 65
       },
       "targets": [
         {
@@ -1299,7 +1429,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 56
+        "y": 65
       },
       "targets": [
         {
@@ -1338,7 +1468,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 64
+        "y": 73
       },
       "targets": [
         {
@@ -1376,7 +1506,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 64
+        "y": 73
       },
       "targets": [
         {
@@ -1414,7 +1544,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 64
+        "y": 73
       },
       "targets": [
         {
@@ -1453,7 +1583,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 72
+        "y": 81
       },
       "targets": [
         {
@@ -1491,7 +1621,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 72
+        "y": 81
       },
       "targets": [
         {
@@ -1529,7 +1659,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 72
+        "y": 81
       },
       "targets": [
         {
@@ -1582,7 +1712,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 89
       },
       "panels": []
     },
@@ -1598,7 +1728,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 81
+        "y": 90
       },
       "targets": [
         {
@@ -1645,7 +1775,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 81
+        "y": 90
       },
       "targets": [
         {
@@ -1683,7 +1813,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 81
+        "y": 90
       },
       "targets": [
         {
@@ -1727,7 +1857,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 98
       },
       "panels": []
     },
@@ -1743,7 +1873,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 90
+        "y": 99
       },
       "targets": [
         {
@@ -1781,7 +1911,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 90
+        "y": 99
       },
       "targets": [
         {
@@ -1820,7 +1950,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 90
+        "y": 99
       },
       "targets": [
         {
@@ -1867,7 +1997,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 98
+        "y": 107
       },
       "targets": [
         {
@@ -1915,7 +2045,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 98
+        "y": 107
       },
       "targets": [
         {
@@ -1950,7 +2080,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 115
       },
       "panels": []
     },
@@ -1966,7 +2096,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 107
+        "y": 116
       },
       "targets": [
         {
@@ -2005,7 +2135,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 107
+        "y": 116
       },
       "targets": [
         {
@@ -2044,7 +2174,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 107
+        "y": 116
       },
       "targets": [
         {
@@ -2083,7 +2213,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 115
+        "y": 124
       },
       "targets": [
         {
@@ -2130,7 +2260,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 115
+        "y": 124
       },
       "targets": [
         {
@@ -2168,7 +2298,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 115
+        "y": 124
       },
       "targets": [
         {
@@ -2224,7 +2354,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 123
+        "y": 132
       },
       "targets": [
         {
@@ -2269,7 +2399,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 140
       },
       "panels": []
     },
@@ -2285,7 +2415,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 132
+        "y": 141
       },
       "targets": [
         {
@@ -2342,7 +2472,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 132
+        "y": 141
       },
       "targets": [
         {
@@ -2380,7 +2510,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 132
+        "y": 141
       },
       "targets": [
         {
@@ -2436,7 +2566,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 140
+        "y": 149
       },
       "targets": [
         {
@@ -2483,7 +2613,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 140
+        "y": 149
       },
       "targets": [
         {
@@ -2531,7 +2661,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 140
+        "y": 149
       },
       "targets": [
         {
@@ -2569,7 +2699,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 148
+        "y": 157
       },
       "targets": [
         {
@@ -2607,7 +2737,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 148
+        "y": 157
       },
       "targets": [
         {
@@ -2645,7 +2775,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 148
+        "y": 157
       },
       "targets": [
         {
@@ -2692,7 +2822,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 156
+        "y": 165
       },
       "targets": [
         {
@@ -2730,7 +2860,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 156
+        "y": 165
       },
       "targets": [
         {
@@ -2778,7 +2908,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 156
+        "y": 165
       },
       "targets": [
         {
@@ -2787,7 +2917,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "rate(krabka_broker_audit_events_total_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(krabka_broker_audit_events_total{instance=~\"$instance\"}[5m])",
           "legendFormat": "written/s {{instance}}"
         },
         {
@@ -2796,7 +2926,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "B",
-          "expr": "rate(krabka_broker_audit_write_failures_total_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(krabka_broker_audit_write_failures_total{instance=~\"$instance\"}[5m])",
           "legendFormat": "write failures/s {{instance}}"
         },
         {

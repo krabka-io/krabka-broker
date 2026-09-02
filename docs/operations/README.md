@@ -8,8 +8,9 @@ fails the build when the series drift.
 
 ## Guides
 
-- [Deploy](deploy.md): install the image or the binary, format a log
-  directory, write the config file, start, stop and roll a cluster.
+- [Deploy](deploy.md): install the image, the binary or the reference
+  Kubernetes manifests. Format a log directory, write the config file, and
+  start, stop and roll a cluster. Wire the `/healthz` and `/readyz` probes.
 - [Capacity](capacity.md): what a broker spends per partition and per byte,
   how to size disk, network and voters, and how to read the phase families.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
@@ -37,6 +38,8 @@ One per condition the registry tells operators to alert on.
 | `KrabkaLeaderSiteDrift` | [leader-site-drift](runbooks/leader-site-drift.md) |
 | `KrabkaControllerLeaderFlapping` | [controller-leader-flapping](runbooks/controller-leader-flapping.md) |
 | `KrabkaUncleanLeaderElection` | [unclean-leader-election](runbooks/unclean-leader-election.md) |
+| `KrabkaReplicaLag` | [replica-lag](runbooks/replica-lag.md) |
+| `KrabkaConsumerGroupLag` | [consumer-group-lag](runbooks/consumer-group-lag.md) |
 | `KrabkaUnsupportedApiRequests` | [unsupported-api-requests](runbooks/unsupported-api-requests.md) |
 | `KrabkaRequestErrors` | [request-errors](runbooks/request-errors.md) |
 | `KrabkaFailedProduceRequests` | [failed-produce-requests](runbooks/failed-produce-requests.md) |

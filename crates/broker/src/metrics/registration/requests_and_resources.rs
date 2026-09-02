@@ -285,9 +285,9 @@ impl BrokerMetrics {
         );
 
         registry.register(
-            "audit_events_total",
+            "audit_events",
             "Cumulative audit records successfully written to the audit topic",
-            self.audit_events_total.clone(),
+            self.audit_events.clone(),
         );
     }
 }

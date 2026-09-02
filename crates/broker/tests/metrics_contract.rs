@@ -28,9 +28,9 @@ use assert2::assert;
 use krabka_broker::metrics::{
     ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
     BreakGlassStateLabel, BrokerMetrics, ClientSoftwareLabel, ConnectionCloseReason,
-    ConnectionCloseReasonLabel, DirectoryLabel, PartitionLabel, QuotaType, QuotaTypeLabel,
-    SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
-    WalVoterLabel,
+    ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel, QuotaType,
+    QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel,
+    TopicLabel, WalShardLabel, WalVoterLabel,
 };
 use krabka_metadata::BreakGlassAction as GatedAction;
 
@@ -72,7 +72,45 @@ async fn fresh_body() -> String {
     let mut body = String::new();
     let registry = metrics.registry.lock().await;
     prometheus_client::encoding::text::encode(&mut body, &registry).expect("registry encodes");
-    body
+    canonical(&body)
+}
+
+/// `body` with the sample lines of every counter and gauge family sorted.
+///
+/// A `Family` keeps its label sets in a hash map, so a family with more than
+/// one live series, such as the three `path` series `fetch_response_drain`
+/// registers at startup, encodes them in an order that changes from one run
+/// to the next. The checked-in copy needs one order. A histogram's lines are
+/// left as encoded: its `le` buckets are already in a fixed order, and a
+/// lexical sort would scatter them.
+fn canonical(body: &str) -> String {
+    let mut out = String::new();
+    let mut kind = "";
+    let mut samples: Vec<&str> = Vec::new();
+    let flush = |samples: &mut Vec<&str>, kind: &str, out: &mut String| {
+        if kind != "histogram" {
+            samples.sort_unstable();
+        }
+        for line in samples.drain(..) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    };
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("# TYPE ") {
+            flush(&mut samples, kind, &mut out);
+            kind = rest.split_whitespace().nth(1).unwrap_or("");
+        } else if line.starts_with('#') {
+            flush(&mut samples, kind, &mut out);
+        } else {
+            samples.push(line);
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    flush(&mut samples, kind, &mut out);
+    out
 }
 
 /// Gives one label set to every family that shares its label type with
@@ -113,6 +151,9 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         replication_bytes_in,
         replication_bytes_out,
         partition_disk_bytes,
+        replica_lag: _,
+        replica_lag_max: _,
+        consumer_group_lag: _,
         share_group_backlog: _,
         partition_cpu_micros,
         partitions_led: _,
@@ -129,6 +170,8 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         controller_fencing_publications_total: _,
         isr_shrinks_total: _,
         isr_expands_total: _,
+        fetch_response_drain: _,
+        ktls_enabled: _,
         incremental_fetch_sessions: _,
         incremental_fetch_session_evictions_total: _,
         incremental_fetch_partitions_cached: _,
@@ -151,8 +194,8 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         produce_message_conversions,
         fetch_message_conversions,
         unclean_leader_elections_total: _,
-        audit_events_total: _,
-        audit_write_failures_total: _,
+        audit_events: _,
+        audit_write_failures: _,
         audit_spool_depth: _,
         audit_spool_bytes: _,
         audit_records_spooled_total: _,
@@ -193,6 +236,7 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
         diskless_wal_cold_read_hits_total: _,
         diskless_wal_cold_read_misses_total: _,
         diskless_wal_cold_read_errors_total: _,
+        lag_series: _,
     } = metrics;
 
     for family in [
@@ -258,7 +302,24 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
 
 /// Gives one label set to every family whose label type no other family
 /// shares. [`seed_grouped_families`] marks each of these with `_`.
+///
+/// `fetch_response_drain` is also marked `_`, but needs no seed: registration
+/// creates all three of its `path` series at zero.
 fn seed_single_families(metrics: &BrokerMetrics) {
+    drop(metrics.replica_lag.get_or_create(&ReplicaLagLabel {
+        topic: "orders".into(),
+        partition: 0,
+        replica: 2,
+    }));
+    drop(
+        metrics
+            .consumer_group_lag
+            .get_or_create(&ConsumerGroupLabel {
+                group_id: "billing".into(),
+                topic: "orders".into(),
+                partition: 0,
+            }),
+    );
     drop(metrics.share_group_backlog.get_or_create(&ShareGroupLabel {
         group_id: "workers".into(),
         topic: "orders".into(),
@@ -443,6 +504,39 @@ krabka_broker_a_total 1
     .map(str::to_string)
     .collect();
     assert!(exported_sample_names(body) == expected);
+}
+
+/// Counter and gauge samples take one order whatever the encoder's hash map
+/// produced; histogram buckets keep the order the encoder wrote.
+#[test]
+fn canonical_body_sorts_counter_samples_and_keeps_bucket_order() {
+    let body = "\
+# HELP krabka_broker_a A counter.
+# TYPE krabka_broker_a counter
+krabka_broker_a_total{path=\"vectored\"} 0
+krabka_broker_a_total{path=\"pread\"} 0
+# HELP krabka_broker_c A histogram.
+# TYPE krabka_broker_c histogram
+krabka_broker_c_bucket{le=\"0.5\"} 0
+krabka_broker_c_bucket{le=\"+Inf\"} 0
+krabka_broker_c_sum 0.0
+krabka_broker_c_count 0
+# EOF
+";
+    let expected = "\
+# HELP krabka_broker_a A counter.
+# TYPE krabka_broker_a counter
+krabka_broker_a_total{path=\"pread\"} 0
+krabka_broker_a_total{path=\"vectored\"} 0
+# HELP krabka_broker_c A histogram.
+# TYPE krabka_broker_c histogram
+krabka_broker_c_bucket{le=\"0.5\"} 0
+krabka_broker_c_bucket{le=\"+Inf\"} 0
+krabka_broker_c_sum 0.0
+krabka_broker_c_count 0
+# EOF
+";
+    assert!(canonical(body) == expected);
 }
 
 #[test]

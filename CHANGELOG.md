@@ -36,9 +36,24 @@ the `krabka-*` names to crates.io.
   within `--readiness-max-metadata-lag` of the quorum's committed offset, which
   the KRaft engine and the metadata observer now track separately from the
   offset this node has applied.
+- `krabka-broker --print-config-schema` prints the JSON schema of the config
+  file, and [`docs/config-reference.md`](docs/config-reference.md) is
+  generated from it, with example `broker.toml` files under `docs/examples/`.
+- An operator guide under [`docs/operations/`](docs/operations/README.md):
+  deploy, capacity and metrics, a reference Grafana dashboard, Prometheus
+  alert rules, and one runbook per alert.
+- A generated [KIP matrix](docs/KIP_MATRIX.md), and a design document per
+  subsystem under each crate's `docs/`.
+- CI gates for the KFC template, the design documents, the generated config
+  reference and the metrics contract.
+- A README for every crate, `SECURITY.md` and `CODEOWNERS`.
+- The rustdoc set, published to GitHub Pages on every push to `main`.
 
 ### Changed
 
+- The audit counters are exported as `krabka_broker_audit_events_total` and
+  `krabka_broker_audit_write_failures_total`. The doubled `_total_total`
+  suffix is gone.
 - `ListOffsets` is fenced on the request leader epoch. `DescribeConfigs`
   returns typed config metadata, and reads an empty key list as a request for
   every config. Every broker-owned topic is marked internal.

@@ -58,9 +58,9 @@ async fn broker_started_event_is_written_to_audit_topic() {
     let p = support::start().await;
 
     // Wait for the BrokerStarted event to be durably written to the audit topic
-    // (the sink increments `audit_events_total` on each successful produce).
+    // (the sink increments `audit_events` on each successful produce).
     p.broker
-        .wait_for_metrics("audit event written", |m| m.audit_events_total.get() >= 1)
+        .wait_for_metrics("audit event written", |m| m.audit_events.get() >= 1)
         .await;
 
     // Fetch visibility (the high watermark) can lag the durable write, so retry
@@ -81,7 +81,7 @@ async fn broker_started_event_is_written_to_audit_topic() {
 async fn successful_create_topics_is_audited() {
     let p = support::start().await;
 
-    let audit_before = p.broker.metrics().audit_events_total.get();
+    let audit_before = p.broker.metrics().audit_events.get();
     let cr = p
         .client
         .send(CreateTopicsRequest {
@@ -101,7 +101,7 @@ async fn successful_create_topics_is_audited() {
     // Wait for the CreateTopics AdminOperation audit record to be durable.
     p.broker
         .wait_for_metrics("audit event written", |m| {
-            m.audit_events_total.get() > audit_before
+            m.audit_events.get() > audit_before
         })
         .await;
 

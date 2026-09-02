@@ -1,11 +1,7 @@
 # Audit write failures and dropped records
 
-**Alerts:** `KrabkaAuditWriteFailures`, `rate(krabka_broker_audit_write_failures_total_total[5m]) > 0`;
+**Alerts:** `KrabkaAuditWriteFailures`, `rate(krabka_broker_audit_write_failures_total[5m]) > 0`;
 `KrabkaAuditRecordsDropped`, `rate(krabka_broker_audit_records_dropped_total[5m]) > 0`.
-
-Note the doubled suffix. The audit counters are registered as
-`audit_events_total` and `audit_write_failures_total`, and the encoder adds a
-second `_total`. The exported names are what a rule spells.
 
 ## What it means
 

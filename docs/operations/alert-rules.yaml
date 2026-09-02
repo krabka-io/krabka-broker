@@ -71,6 +71,28 @@ groups:
           description: "The controller elected a leader from outside the ISR. Committed records may be lost."
           runbook: docs/operations/runbooks/unclean-leader-election.md
 
+  - name: krabka-broker-lag
+    rules:
+      - alert: KrabkaReplicaLag
+        expr: krabka_broker_replica_lag_max_records > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has a follower {{ $value }} records behind"
+          description: "A follower of a partition this broker leads trails the leader's log end. It is still in the ISR; the metric comment names no threshold, and 10000 records over ten minutes is a starting point."
+          runbook: docs/operations/runbooks/replica-lag.md
+
+      - alert: KrabkaConsumerGroupLag
+        expr: krabka_broker_consumer_group_lag_records > 10000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "group {{ $labels.group_id }} is {{ $value }} records behind on {{ $labels.topic }}-{{ $labels.partition }}"
+          description: "The group's committed offset trails the partition's high watermark. The metric comment names no threshold; 10000 records over fifteen minutes is a starting point, and a busy topic needs a larger number."
+          runbook: docs/operations/runbooks/consumer-group-lag.md
+
   - name: krabka-broker-requests
     rules:
       - alert: KrabkaUnsupportedApiRequests
@@ -125,7 +147,7 @@ groups:
           runbook: docs/operations/runbooks/rlmm-bootstrap-stuck.md
 
       - alert: KrabkaAuditWriteFailures
-        expr: rate(krabka_broker_audit_write_failures_total_total[5m]) > 0
+        expr: rate(krabka_broker_audit_write_failures_total[5m]) > 0
         labels:
           severity: critical
         annotations:
