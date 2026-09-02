@@ -223,3 +223,10 @@ harness = false
 [[bench]]
 name = "fetch_drain"
 harness = false
+
+# The two documented PERF deferrals: the response-framing copies against a
+# chained-`Buf` prototype, and the replicator's extra `encoded_len` walk
+# against the `replicate_batch` it precedes.
+[[bench]]
+name = "perf_deferrals"
+harness = false
