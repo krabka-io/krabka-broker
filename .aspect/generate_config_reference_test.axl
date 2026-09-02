@@ -35,6 +35,7 @@ def _test_cell_escapes_the_column_separator(_ctx):
 def _test_contains_word_respects_word_boundaries(_ctx):
     check_eq("the word alone", contains_word("seconds", "seconds"), True)
     check_eq("between punctuation", contains_word("wait, in seconds.", "seconds"), True)
+
     # `\bseconds\b` is what the original matched, so a longer word that merely
     # ends with it is not a hit -- this is the case that decides the Units
     # column for a key documented in subseconds.
@@ -149,6 +150,7 @@ def _test_units_label_from_the_key(_ctx):
     check_eq("_secs", units_label("retention_secs", {"type": "integer"}), "seconds")
     check_eq("_seconds", units_label("retention_seconds", {"type": "integer"}), "seconds")
     check_eq("_bytes", units_label("max_bytes", {"type": "integer"}), "bytes")
+
     # Every key pattern the original used was anchored at the end of the key,
     # so a unit that opens the name is not one.
     check_eq("a prefix is not a suffix", units_label("ms_first", {"type": "integer"}), "")

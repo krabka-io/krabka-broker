@@ -34,27 +34,14 @@ _SKIPPED_DIRS = [".git", "target", "node_modules"]
 
 # The scripts that stay, and why each one cannot be an `.axl` task.
 ALLOWED = {
-    "bazel/docker_test.sh":
-        "the sh_test body //bazel:defs.bzl wraps every container suite in; it " +
-        "runs inside a Bazel test sandbox",
-    "bazel/images/pinned_digests.sh":
-        "the tool of the //bazel/images:pinned_digests genrule; it runs inside " +
-        "a Bazel action",
-    "crates/broker/tests/fixtures/security/kdc/bootstrap.sh":
-        "the KDC fixture image's entrypoint; it runs inside that container",
-    "packaging/image_binaries_test.sh":
-        "the sh_test body of //packaging:image_binaries_test; it runs inside a " +
-        "Bazel test sandbox",
-    "packaging/image_docker_test.sh":
-        "the sh_test body of //packaging:image_docker_test; it runs inside a " +
-        "Bazel test sandbox",
-    "tools/creusot/build-layer.sh":
-        "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it " +
-        "runs inside a Bazel action",
-    "tools/creusot/install-creusot.sh":
-        "the proof builder image's entrypoint; it runs inside that container",
-    "tools/creusot/prove.sh":
-        "the proof image's entrypoint; it runs inside that container",
+    "bazel/docker_test.sh": "the sh_test body //bazel:defs.bzl wraps every container suite in; it runs inside a Bazel test sandbox",
+    "bazel/images/pinned_digests.sh": "the tool of the //bazel/images:pinned_digests genrule; it runs inside a Bazel action",
+    "crates/broker/tests/fixtures/security/kdc/bootstrap.sh": "the KDC fixture image's entrypoint; it runs inside that container",
+    "packaging/image_binaries_test.sh": "the sh_test body of //packaging:image_binaries_test; it runs inside a Bazel test sandbox",
+    "packaging/image_docker_test.sh": "the sh_test body of //packaging:image_docker_test; it runs inside a Bazel test sandbox",
+    "tools/creusot/build-layer.sh": "the cmd of the //tools/creusot:installed_toolchain_tar genrule; it runs inside a Bazel action",
+    "tools/creusot/install-creusot.sh": "the proof builder image's entrypoint; it runs inside that container",
+    "tools/creusot/prove.sh": "the proof image's entrypoint; it runs inside that container",
 }
 
 def has_script_suffix(path):

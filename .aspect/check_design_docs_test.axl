@@ -347,6 +347,7 @@ def _test_a_document_the_readme_does_not_link_is_reported(ctx):
     outcome = _run(ctx, _tree(extra = {
         "crates/log/README.md": "See the [design](docs/other.md).\n",
     }))
+
     # A crate README is read for the documents it names and nothing else, so
     # the dangling link it carries is not itself a complaint here.
     check_eq(
@@ -418,8 +419,7 @@ def _test_a_crash_model_anchor_is_followed(ctx):
     files = _tree(extra = {
         "crates/broker/README.md": "See the [design](docs/broker-design.md).\n",
         "crates/broker/docs/broker-design.md": "# Broker\n\n## Slice 5: Crash Windows\n\n" + _HEADINGS,
-        "crates/broker/src/diskless_crash_model.rs":
-            "//! [Slice 5]: ../docs/broker-design.md#slice-5-crash-windows\n",
+        "crates/broker/src/diskless_crash_model.rs": "//! [Slice 5]: ../docs/broker-design.md#slice-5-crash-windows\n",
         "docs/style_guides/design_doc_style_guide.md": _GUIDE_TEXT +
                                                        "| [broker](../../crates/broker/docs/broker-design.md) | The broker. |\n",
     })

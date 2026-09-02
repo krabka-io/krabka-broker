@@ -9,12 +9,12 @@ def _crate(directory, name, has_readme = True):
 def _test_manifest_name(_ctx):
     check_eq(
         "the package name",
-        manifest_name(['[package]', 'name = "krabka-log"', 'version = "0.5.4"']),
+        manifest_name(["[package]", 'name = "krabka-log"', 'version = "0.5.4"']),
         "krabka-log",
     )
     check_eq(
         "the first name wins over a dependency's",
-        manifest_name(['name = "krabka-log"', '[dependencies]', 'name = "other"']),
+        manifest_name(['name = "krabka-log"', "[dependencies]", 'name = "other"']),
         "krabka-log",
     )
     check_eq("no name", manifest_name(["[package]", "version = \"0.1.0\""]), "")

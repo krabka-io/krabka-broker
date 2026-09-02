@@ -297,6 +297,7 @@ def report(fs, root):
     `count` the number of design documents read. Nothing stops at the first
     problem: a run reports all of them.
     """
+
     def exists(path):
         return fs.exists(resolve(root, path))
 

@@ -250,8 +250,7 @@ def _test_a_real_cargo_workspace_is_swept_end_to_end(ctx):
     # emits rather than to a fixture recorded once and never revisited.
     files = {
         "workspace/Cargo.toml": '[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n',
-        "creusot-std/Cargo.toml":
-            '[package]\nname = "creusot-std"\nversion = "0.1.0"\nedition = "2024"\n',
+        "creusot-std/Cargo.toml": '[package]\nname = "creusot-std"\nversion = "0.1.0"\nedition = "2024"\n',
         "creusot-std/src/lib.rs": "",
     }
     for crate in [
