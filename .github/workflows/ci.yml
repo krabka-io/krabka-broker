@@ -89,13 +89,33 @@ jobs:
   # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
   # instrumented broker binaries this job would otherwise link and discard.
   #
-  # It shares the `ci` disk-cache namespace. Only `//crates/...` is instrumented
-  # (see `--instrumentation_filter`), so the third-party closure -- which is
-  # most of a cold build -- has identical action keys in both configurations and
-  # this job starts warm off the entry the `ci` job populated. The instrumented
-  # first-party outputs it writes locally are never saved back: the namespace
-  # key is constant, so a restore is an exact hit and the post step skips the
-  # save.
+  # It takes no `--disk_cache`, which is the whole of the disk budget fix. That
+  # cache was the job's largest consumer by a wide margin: on run 33567157672
+  # `~/.cache/bazel-disk` held 61 GB next to a 19 GB output tree, and the job
+  # ended with 33 GB free on a 145 GB disk. About 19 GB of the 61 is what this
+  # build wrote into it -- run 33569559769 restored a 1.2 GB entry and still
+  # finished with 22 GB there -- and none of those writes has a reader. The
+  # `build · lint · format · docgen` job never looks up an instrumented action,
+  # and the key hashes `MODULE.bazel` and every `BUILD.bazel`, so the next
+  # coverage run asks for a different one.
+  #
+  # Nor do the writes stay on the runner. That same key misses whenever a
+  # `BUILD.bazel` changes, and setup-aspect's post step saves on a miss: run
+  # 33569559769 saved a 22 GB instrumented tree under the `ci` namespace, which
+  # `build · lint · format · docgen` and `delivery` then restore and cannot use.
+  # That is the growth #337 measured, and it is why the paragraph this replaces
+  # -- "a restore is an exact hit and the post step skips the save" -- was wrong.
+  #
+  # Bazel 9 has no read-only disk cache to reach for instead:
+  # `--noremote_upload_local_results` and the `no-remote-cache` and
+  # `no-remote-cache-upload` execution tags are defined against remote caches
+  # and leave `--disk_cache` writable (measured on 9.2.0). Not having one is the
+  # only way not to write one.
+  #
+  # The price is the third-party closure, which this job now compiles instead of
+  # restoring: about 17 minutes rather than about 7.5, beside a sibling job that
+  # takes 14 to 21. `repository-cache` stays -- it holds fetched archives rather
+  # than build outputs, so coverage neither bloats it nor diverges from `ci`.
   coverage:
     name: coverage
     if: github.event_name != 'schedule'
@@ -112,21 +132,24 @@ jobs:
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
+          disk-cache: false
           repository-cache: true
 
       - name: coverage
         run: bazel coverage //crates/...
 
-      # `if: always()`, and the two directories by name: when this job does run
-      # the disk out, the failure arrives as a linker `Bus error` or a bare
-      # `No space left on device` that names no consumer. This says whether the
-      # output tree or the disk cache took the space.
+      # `if: always()`, and the three directories by name: when this job does
+      # run the disk out, the failure arrives as a linker `Bus error` or a bare
+      # `No space left on device` that names no consumer. This says which of the
+      # output tree, the repository cache and the disk cache took the space --
+      # together they are the job's whole footprint. `bazel-disk` stays on the
+      # list although this job no longer configures one, because a line
+      # reappearing there is the signal that it has come back.
       - name: disk usage after coverage
         if: always()
         run: |
           df -h /
-          du -sh ~/.cache/bazel ~/.cache/bazel-disk 2>/dev/null || true
+          du -sh ~/.cache/bazel ~/.cache/bazel-repo ~/.cache/bazel-disk 2>/dev/null || true
 
       - uses: codecov/codecov-action@v7
         with:
