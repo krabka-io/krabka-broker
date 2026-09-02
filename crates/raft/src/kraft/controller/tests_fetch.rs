@@ -556,3 +556,100 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
     assert2::assert!(send.peer == 3);
 }
+
+/// A follower clamps its own high watermark to its log end, so that value
+/// alone cannot say how far behind the quorum this node is. The snapshot
+/// therefore carries the leader's watermark separately, and it never goes
+/// backwards when a later response reports a lower one.
+#[tokio::test]
+async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+
+    // A node that has heard from nobody reports its own watermark.
+    assert!(engine.quorum_state_snapshot().quorum_high_watermark == 0);
+
+    // Only a response that clears the leader/epoch fence is admitted, so put
+    // the node behind node 2 at the epoch the responses below carry.
+    become_follower(&mut engine, NodeId(2), 3);
+
+    let response = |hwm: i64| {
+        wire::PeerResponse::Fetch {
+            leader_id: NodeId(2),
+            leader_epoch: 3,
+            diverging: None,
+            snapshot_id: None,
+            hwm,
+            records: bytes::Bytes::new(),
+        }
+        .encode()
+    };
+
+    // The leader has committed 10 000 records and this node has none of them.
+    engine.on_fetch_response(NodeId(2), &response(10_000));
+    let snapshot = engine.quorum_state_snapshot();
+    assert!(snapshot.high_watermark == 0);
+    assert!(snapshot.quorum_high_watermark == 10_000);
+
+    // A stale response cannot walk the quorum's committed offset back: every
+    // watermark a leader reports is committed, so the highest one seen is a
+    // lower bound on what the quorum has.
+    engine.on_fetch_response(NodeId(2), &response(9_000));
+    assert!(engine.quorum_state_snapshot().quorum_high_watermark == 10_000);
+}
+
+/// A node whose fetch offset is below the leader's pruned log start is told to
+/// take a snapshot instead, and that response carries the leader's watermark
+/// like any other. It is also the node furthest behind the quorum, so dropping
+/// the watermark on that path would report the worst laggard as caught up.
+#[tokio::test]
+async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    // Only a response that clears the leader/epoch fence is admitted, so put
+    // the node behind node 2 at the epoch the responses below carry.
+    become_follower(&mut engine, NodeId(2), 3);
+
+    let redirect = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 3,
+        diverging: None,
+        snapshot_id: Some((20_000, 3)),
+        hwm: 20_000,
+        records: bytes::Bytes::new(),
+    }
+    .encode();
+
+    engine.on_fetch_response(NodeId(2), &redirect);
+    let snapshot = engine.quorum_state_snapshot();
+    assert!(snapshot.high_watermark == 0);
+    assert!(snapshot.quorum_high_watermark == 20_000);
+}
+
+/// Every controller serves an observer's metadata fetch, not only the leader,
+/// so the slice says both how far this node has committed -- which bounds the
+/// records it can hand over -- and how far the quorum has. A follower that is
+/// itself catching up would otherwise report its own clamped watermark as the
+/// quorum's, and an observer that drew level with it would call itself ready.
+#[tokio::test]
+async fn a_lagging_follower_serves_the_quorums_committed_offset() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    // Only a response that clears the leader/epoch fence is admitted, so put
+    // the node behind node 2 at the epoch the responses below carry.
+    become_follower(&mut engine, NodeId(2), 3);
+
+    engine.on_fetch_response(
+        NodeId(2),
+        &wire::PeerResponse::Fetch {
+            leader_id: NodeId(2),
+            leader_epoch: 3,
+            diverging: None,
+            snapshot_id: None,
+            hwm: 10_000,
+            records: bytes::Bytes::new(),
+        }
+        .encode(),
+    );
+
+    let slice = engine.metadata_fetch_slice(0, DEFAULT_METADATA_RAFT_FETCH_MAX);
+    assert!(slice.high_watermark == 0);
+    assert!(slice.quorum_high_watermark == 10_000);
+}

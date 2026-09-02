@@ -169,6 +169,15 @@ impl Engine {
         }
         self.peers.remember_peer(from, leader_id);
 
+        // Record the leader's watermark as soon as the response has cleared the
+        // fence above, before any branch below can return: it is the quorum's
+        // committed offset, and the readiness probe needs the gap between it and
+        // where this node has got to. The `Snapshot` and `Discover` arms return
+        // without touching the log, and a node far enough behind to need a
+        // snapshot is the one whose lag matters most -- reading its own clamped
+        // watermark there would report the worst laggard as caught up.
+        self.leader_reported_hwm = self.leader_reported_hwm.max(hwm);
+
         match mutation {
             FetchResponseMutation::Reject => return,
             FetchResponseMutation::Discover => {

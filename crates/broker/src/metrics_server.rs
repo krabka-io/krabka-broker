@@ -1,8 +1,13 @@
 //! Prometheus `/metrics` HTTP server.
 //!
-//! It mirrors the `health` pattern in the operator crate: a small axum app
-//! that exposes one route. It returns `OpenMetrics` text on success, and 500
-//! on an encoder failure.
+//! It is the same shape as [`crate::health`]: a small axum app over one
+//! router. It returns `OpenMetrics` text on success, and 500 on an encoder
+//! failure.
+//!
+//! The two servers stay apart because they answer to different callers on
+//! different schedules. A scrape is periodic and can be skipped; a probe runs
+//! from the moment the process starts, before `Broker::start` has a registry
+//! to serve, and decides whether the node keeps receiving traffic.
 //!
 //! [`crate::Broker::start`] spawns the server when
 //! `BrokerConfig::metrics_listen_addr` is `Some`. The broker's supervisor

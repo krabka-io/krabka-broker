@@ -408,3 +408,61 @@ impl EncodeLabelValue for QuotaType {
 pub struct QuotaTypeLabel {
     pub quota_type: QuotaType,
 }
+
+/// The drain path a fetch response's records regions took to the socket.
+///
+/// Which one a fetch takes is the whole return on the zero-copy fetch writer,
+/// and a regression that quietly routes every fetch onto a copy path moves no
+/// other series. These three are the complete set, so a closed enum bounds the
+/// `fetch_response_drain` family at three series and no connection can invent
+/// a fourth.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum FetchDrainPath {
+    /// The kernel `sendfile(2)` moved at least one records region from the
+    /// page cache to the socket with no userspace copy. A plaintext or kTLS
+    /// connection takes this path for a records run at or above
+    /// `sendfile_min`.
+    Sendfile,
+    /// Every records region left as userspace bytes beside the response
+    /// metadata, the portable Increment-C path. Userspace TLS, Windows, a
+    /// records run below `sendfile_min`, and a `read_committed` read all land
+    /// here.
+    Vectored,
+    /// The response carried a file-backed records region that the drain had to
+    /// `pread` into a buffer, because the stream declared itself
+    /// sendfile-capable but would not hand out a socket. It is the fallback
+    /// arm *inside* the drain, distinct from [`Self::Vectored`], where the
+    /// bytes were already in userspace before the plan was built.
+    Pread,
+}
+
+impl FetchDrainPath {
+    /// Every path. Registration creates all three series at zero from it, so a
+    /// dashboard finds them on a broker that has served no fetch yet, and on a
+    /// target where one of them is unreachable.
+    pub const ALL: [Self; 3] = [Self::Sendfile, Self::Vectored, Self::Pread];
+
+    /// The `path` label value this variant renders as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sendfile => "sendfile",
+            Self::Vectored => "vectored",
+            Self::Pread => "pread",
+        }
+    }
+}
+
+impl EncodeLabelValue for FetchDrainPath {
+    fn encode(&self, encoder: &mut LabelValueEncoder) -> Result<(), fmt::Error> {
+        EncodeLabelValue::encode(&self.as_str(), encoder)
+    }
+}
+
+/// Drain-path label set, paired with the `fetch_response_drain` counter
+/// family. Cardinality is bounded at three, because the field is the closed
+/// [`FetchDrainPath`] enum.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct FetchDrainPathLabel {
+    pub path: FetchDrainPath,
+}

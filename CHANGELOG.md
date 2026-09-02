@@ -30,6 +30,12 @@ the `krabka-*` names to crates.io.
 - Request latency split into its local, remote and throttle phases.
 - Creusot proofs for the remaining safety-critical algorithms, and the catalog
   that records which algorithm each session covers.
+- `/healthz` and `/readyz` on their own listener, and reference Kubernetes
+  manifests under `packaging/k8s/` that wire both probes and the format step.
+  Readiness waits for log-dir recovery, bound listeners, and a metadata offset
+  within `--readiness-max-metadata-lag` of the quorum's committed offset, which
+  the KRaft engine and the metadata observer now track separately from the
+  offset this node has applied.
 
 ### Changed
 

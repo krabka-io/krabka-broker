@@ -156,6 +156,21 @@ impl ControllerHandle {
         }
     }
 
+    /// Highest `__cluster_metadata` offset the quorum has committed, as this
+    /// node last heard it, or `-1` before the first committed record.
+    ///
+    /// This is the offset a readiness probe compares against. It differs from
+    /// [`QuorumState::last_applied_index`] on a follower that is still
+    /// replaying: `last_applied_index` is clamped to what this node has
+    /// applied, while this is what the leader said it had committed.
+    #[must_use]
+    pub fn quorum_committed_offset(&self) -> i64 {
+        self.engine
+            .quorum_snapshot()
+            .quorum_high_watermark
+            .saturating_sub(1)
+    }
+
     /// Directory identity voted for in the current leader epoch, if any.
     #[must_use]
     pub fn voted_directory_id(&self) -> Option<Uuid> {
