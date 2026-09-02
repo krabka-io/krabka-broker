@@ -10,8 +10,8 @@ _SUITE_SCOPE = "//crates/... + //packaging/..."
 
 _IMAGE_SUITE_TARGET = "//packaging:image_docker_test"
 
-# The broker's build inputs. Both branches below key on them: a manifest change
-# is the one that can add a dependency every suite has to re-link against.
+# A change to either selects every broker suite: this is where a dependency the
+# whole crate re-links against comes from.
 _BROKER_MANIFEST_PATHS = ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml"]
 
 # Nothing under `//crates` reaches the image's layer list, so no broker feature
@@ -21,12 +21,6 @@ _BROKER_MANIFEST_PATHS = ["crates/broker/BUILD.bazel", "crates/broker/Cargo.toml
 # directory instead -- everything in it either changes what the image carries or
 # changes what the suite asserts about it.
 _IMAGE_PATH_PREFIXES = ["packaging/"]
-
-# The image suite is the only one that runs the broker and the operator tools
-# under the apko base's own loader and libc, and a manifest is where a new
-# dynamic dependency enters. A `.rs` edit cannot add one, so broker sources keep
-# going through the feature map alone rather than building an image every PR.
-_IMAGE_PATHS = _BROKER_MANIFEST_PATHS
 
 # Rust is one Bazel target at crate granularity, so rdeps turns every broker
 # source change into every broker container suite. These are the narrower
@@ -242,10 +236,16 @@ def _select(paths, available_targets):
     for raw_path in paths:
         path = raw_path.strip().replace("\\", "/")
         if path:
-            if _starts_with_any(path, _IMAGE_PATH_PREFIXES) or path in _IMAGE_PATHS:
+            if _starts_with_any(path, _IMAGE_PATH_PREFIXES):
                 image = True
 
             if path in _BROKER_MANIFEST_PATHS:
+                # The image suite is the only one that runs the broker and the
+                # operator tools under the apko base's own loader and libc, and a
+                # manifest is where a new dynamic dependency enters. A `.rs` edit
+                # cannot add one, so broker sources keep going through the
+                # feature map alone rather than building an image every PR.
+                image = True
                 for suite in broker_suites.keys():
                     suites[suite] = True
             elif _starts_with_any(path, ["crates/broker/tests/support/", "crates/broker/tests/fixtures/"]):
