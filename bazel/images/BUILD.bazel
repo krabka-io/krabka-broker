@@ -49,3 +49,18 @@ IMAGES = {
     )
     for name in IMAGES
 ]
+
+# The digests //MODULE.bazel pins, as a `rustc_env_files` file: one
+# `KRABKA_PINNED_IMAGE_<NAME>=sha256:...` line per image above.
+#
+# A test that records which image a checked-in fixture was derived from can then
+# compare its record against the live pin without reading MODULE.bazel itself --
+# the pin reaches it as compile-time environment. `crates/broker/build.rs` emits
+# the same variables for Cargo.
+genrule(
+    name = "pinned_digests",
+    srcs = ["//:MODULE.bazel"],
+    outs = ["pinned_digests.env"],
+    cmd = "$(execpath :pinned_digests.sh) $(execpath //:MODULE.bazel) > $@",
+    tools = [":pinned_digests.sh"],
+)

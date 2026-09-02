@@ -6,14 +6,39 @@
 //! pinned container image, and every constant is checked against every other
 //! for a collision. A new constant that invents a number therefore fails here
 //! rather than reaching a JVM client.
+//!
+//! The table itself is checked in, so none of this needs a container. What
+//! keeps a checked-in oracle honest is
+//! [`the_error_table_records_the_image_the_build_pins`], which holds its
+//! recorded provenance against the image the build still pins.
 
 mod kafka_error_table;
 
 use assert2::assert;
-use kafka_error_table::KAFKA_ERROR_TABLE;
+use kafka_error_table::{KAFKA_ERROR_TABLE, KAFKA_ERROR_TABLE_IMAGE_DIGEST};
 
 use super::*;
 use crate::error::BrokerError;
+
+/// The digest `//MODULE.bazel` pins for `apache_kafka_4_3_1`.
+///
+/// The build supplies it -- `crates/broker/build.rs` under Cargo,
+/// `//bazel/images:pinned_digests` under Bazel -- so the comparison below is
+/// between two strings this compilation already holds. Reading `MODULE.bazel`
+/// here instead would be a test asserting on the text of a source file, and
+/// would not survive Bazel's sandbox, which hands a test only its declared
+/// inputs.
+const PINNED_KAFKA_ORACLE_IMAGE_DIGEST: &str = env!("KRABKA_PINNED_IMAGE_APACHE_KAFKA_4_3_1");
+
+#[test]
+fn the_error_table_records_the_image_the_build_pins() {
+    assert!(
+        KAFKA_ERROR_TABLE_IMAGE_DIGEST == PINNED_KAFKA_ORACLE_IMAGE_DIGEST,
+        "the Kafka error table was extracted from an image the build no longer \
+         pins; re-derive crates/broker/src/codes/tests/kafka_error_table.rs \
+         from {PINNED_KAFKA_ORACLE_IMAGE_DIGEST} and record that digest there",
+    );
+}
 
 #[test]
 fn every_kafka_range_constant_appears_in_the_kafka_table() {
