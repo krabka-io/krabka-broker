@@ -9,6 +9,34 @@
 //! `every_kafka_range_constant_appears_in_the_kafka_table` checks each
 //! constant in [`crate::codes`] against this table, which is what stops a
 //! later addition inventing a number.
+//!
+//! Re-deriving it needs the image the digest below names, and nothing else:
+//!
+//! ```text
+//! image=mirror.gcr.io/apache/kafka@<KAFKA_ERROR_TABLE_IMAGE_DIGEST>
+//! id=$(docker create "${image}" true)
+//! docker cp "${id}:/opt/kafka/libs/kafka-clients-4.3.1.jar" .
+//! docker cp "${id}:/opt/kafka/libs/slf4j-api-1.7.36.jar" .
+//! # Dump.java: for (Errors e : Errors.values()) print e.name() and e.code().
+//! java -cp 'kafka-clients-4.3.1.jar:slf4j-api-1.7.36.jar' Dump.java
+//! ```
+//!
+//! The image ships a JRE rather than a JDK, so the dump runs on the host's
+//! `java` against the jars copied out of it.
+
+/// The image digest [`KAFKA_ERROR_TABLE`] was extracted from.
+///
+/// `the_error_table_records_the_image_the_build_pins` compares this with the
+/// digest `//MODULE.bazel` pins for `apache_kafka_4_3_1`, which the build hands
+/// the compilation rather than the test reading it from the tree. The table is
+/// hermetic on purpose -- nothing here needs a container -- and this is what
+/// keeps it honest: bumping the pin fails that guard until the table above is
+/// re-derived from the new image.
+///
+/// The jar the recorded extraction read is `kafka-clients-4.3.1.jar`, sha256
+/// `dc3d65e3ac811a446184ea1dca0fe9cf957c2d8984dcb4668d01f4b77fc8f50e`.
+pub(super) const KAFKA_ERROR_TABLE_IMAGE_DIGEST: &str =
+    "sha256:ccd1314e47ec76909e01f86308b4dcf2064f19f7c89759234322314b0e319e26";
 
 /// Name and wire code of every variant of the Apache Kafka `Errors` enum.
 pub(super) const KAFKA_ERROR_TABLE: &[(&str, i16)] = &[

@@ -69,20 +69,30 @@ pub struct MetadataObserver {
 }
 
 impl MetadataObserver {
+    /// The observer state alone, with no fetch loop behind it yet: an empty
+    /// image for `cluster_id`, no leader hint, and no applied offset.
+    ///
+    /// [`Self::start`] spawns the loop over it. A test that drives
+    /// [`run_loop`] itself, so that it can await the loop's own return rather
+    /// than cancelling it, starts from this instead.
+    fn new(cluster_id: uuid::Uuid, shutdown: CancellationToken) -> Arc<Self> {
+        let (image_tx, _) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+        let (leader_tx, _) = watch::channel(None);
+        Arc::new(Self {
+            image: image_tx,
+            leader: leader_tx,
+            metadata_offset: AtomicI64::new(-1),
+            shutdown,
+            task: tokio::sync::Mutex::new(None),
+        })
+    }
+
     /// Starts the observer loop. The image watch begins at an empty image for
     /// `cluster_id`. Callers subscribe with [`Self::watch_image`].
     #[must_use]
     pub fn start(config: ObserverConfig) -> Arc<Self> {
-        let (image_tx, _) = watch::channel(Arc::new(MetadataImage::new(config.cluster_id)));
-        let (leader_tx, _) = watch::channel(None);
         let shutdown = CancellationToken::new();
-        let observer = Arc::new(Self {
-            image: image_tx,
-            leader: leader_tx,
-            metadata_offset: AtomicI64::new(-1),
-            shutdown: shutdown.clone(),
-            task: tokio::sync::Mutex::new(None),
-        });
+        let observer = Self::new(config.cluster_id, shutdown.clone());
         let task = tokio::spawn(run_loop(config, observer.clone(), shutdown));
         if let Ok(mut guard) = observer.task.try_lock() {
             *guard = Some(task);

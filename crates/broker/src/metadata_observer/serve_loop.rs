@@ -99,11 +99,14 @@ mod tests {
     };
     use krabka_raft::OutboundDialer;
     use krabka_units::millis;
-    use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
+    use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
     use uuid::Uuid;
 
     use super::*;
-    use crate::metadata_observer::test_support::TEST_MAX_FETCH_BYTES;
+    use crate::{
+        metadata_observer::test_support::TEST_MAX_FETCH_BYTES,
+        test_support::{BrokenTimer, TimerFailure},
+    };
 
     #[derive(Clone)]
     struct CountingDialer {
@@ -248,6 +251,115 @@ mod tests {
         assert!(dial_count.load(Ordering::SeqCst) == after_first_fetch);
 
         observer.cancel().await;
+        mock.stop();
+    }
+
+    /// Runs the serve loop over `config` until it returns on its own, and
+    /// hands back the observer it wrote to.
+    ///
+    /// The shutdown token is never cancelled, so a loop that returns here
+    /// returned because it gave up on its timer. A hang-guard keeps a loop
+    /// that does not give up from wedging the whole suite.
+    async fn run_until_it_stops(config: ObserverConfig) -> Arc<MetadataObserver> {
+        let shutdown = CancellationToken::new();
+        let observer = MetadataObserver::new(config.cluster_id, shutdown.clone());
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            run_loop(config, Arc::clone(&observer), shutdown),
+        )
+        .await
+        .expect("the serve loop stops once its timer is gone");
+        observer
+    }
+
+    /// An `ObserverConfig` over `voters`, driven by `timer`.
+    fn config_on(voters: Vec<(NodeId, String)>, timer: Arc<dyn Timer>) -> ObserverConfig {
+        ObserverConfig {
+            client_dispatch_queue_capacity:
+                krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+            client_frame_max: krabka_client_core::ClientFrameMax::default(),
+            voters,
+            dialer: Arc::new(krabka_raft::PlaintextDialer),
+            client_id: "dead-timer-test".into(),
+            cluster_id: Uuid::nil(),
+            max_bytes: TEST_MAX_FETCH_BYTES,
+            poll_interval: millis(250),
+            timer,
+        }
+    }
+
+    /// The loopback port nothing listens on, so a dial fails at once rather
+    /// than on a connect timeout.
+    const UNREACHABLE: &str = "127.0.0.1:1";
+
+    #[tokio::test]
+    async fn the_loop_stops_when_a_voterless_park_cannot_be_armed() {
+        // No voters: the loop's only move is to park, and the park cannot be
+        // armed, so it stops instead of spinning through a poll that no longer
+        // waits.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(observer.watch_leader().borrow().is_none());
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_a_voterless_park_is_armed_but_never_completes() {
+        // The other half of the park: the deadline registers and then fails,
+        // which ends the loop the same way a refused registration does.
+        let timer = BrokenTimer::dead(TimerFailure::Completion);
+        let observer = run_until_it_stops(config_on(vec![], timer.injectable())).await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_the_back_off_after_an_unreachable_voter_cannot_be_armed() {
+        // The fetch fails, so the loop rotates to the next voter and backs off
+        // — and the back-off is the park that cannot be armed. It leaves no
+        // leader hint, because no voter answered.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), UNREACHABLE.to_string())],
+            timer.injectable(),
+        ))
+        .await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(observer.watch_leader().borrow().is_none());
+        assert!(timer.registrations() == 1);
+    }
+
+    #[tokio::test]
+    async fn the_loop_stops_when_the_caught_up_park_cannot_be_armed() {
+        // A fetch that returns no records leaves the observer caught up, which
+        // is the third place the loop parks. The record of that answered fetch
+        // — the applied offset and the leader hint — survives the shutdown,
+        // which is what separates this exit from the unreachable-voter one.
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    return Some(metadata_fetch_response_body(Bytes::new()));
+                }
+                None
+            })
+            .await;
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), mock.addr.to_string())],
+            timer.injectable(),
+        ))
+        .await;
+
+        assert!(observer.current_metadata_offset() == -1);
+        assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
+        assert!(timer.registrations() == 1);
         mock.stop();
     }
 }

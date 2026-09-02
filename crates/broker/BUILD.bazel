@@ -154,4 +154,11 @@ crate_tests(
     # the 20.5s test baseline: a full sweep is hours of work however it is split.
     # This is the one crate that needs the longer per-shard bound.
     mutants_timeout = "eternal",
+    # The digest //MODULE.bazel pins for each container image, as compile-time
+    # environment. `src/codes/tests/kafka_error_table.rs` is a checked-in copy of
+    # Kafka's `Errors` enum and records which image it was extracted from; the
+    # guard beside it compares that record with the live pin, so bumping the
+    # image fails the guard until the table is re-derived. `build.rs` emits the
+    # same variables under Cargo.
+    unit_rustc_env_files = ["//bazel/images:pinned_digests"],
 )

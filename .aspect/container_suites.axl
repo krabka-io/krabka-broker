@@ -128,6 +128,41 @@ _FEATURE_RULES = [
         "crates/broker/src/legacy_fetch",
         "crates/broker/src/handlers/offset_fetch/legacy",
     ], ["jvm_acceptance_legacy"]),
+    # The leader/ISR projection `kafka-topics --describe
+    # --unavailable-partitions` reads. The tool keys on
+    # `!hasLeader() || !live.contains(leader.id())`, so the suite has to follow
+    # whatever answers those two columns, not just the offline-replica list.
+    ([
+        "crates/broker/src/handlers/offline_replicas",
+        "crates/broker/src/handlers/metadata",
+        "crates/broker/src/handlers/describe_topic_partitions",
+        # The differential waits on the state these produce before it reads the
+        # leader and ISR columns: a regression here makes the suite time out or
+        # disagree with Kafka, not merely render a wrong column.
+        "crates/broker/src/handlers/broker_heartbeat",
+        "crates/broker/src/log_dir",
+        "crates/broker/src/handlers/describe_log_dirs",
+    ], ["unavailable_partitions_jvm"]),
+    # `kafka-configs --describe --all` renders the synonym chain, the config
+    # source and the config type; all three come out of the DescribeConfigs
+    # entry builder.
+    ([
+        "crates/broker/src/handlers/describe_configs",
+        # `--describe --all` renders defaults, types and the synonym chain out
+        # of the key registry, so a provenance change there is exactly what the
+        # rendered-string assertions catch.
+        "crates/broker/src/config_keys",
+        # The suite's create/describe/delete lifecycle: the successful delete
+        # case is the one production path it protects.
+        "crates/broker/src/handlers/delete_topics",
+        "crates/broker/src/handlers/create_topics",
+        "crates/broker/src/handlers/create_partitions",
+    ], ["jvm_acceptance_cli"]),
+    # Every tool that speaks `--bootstrap-controller` reaches the broker through
+    # this router's SUPPORTED_APIS.
+    ([
+        "crates/broker/src/controller_admin",
+    ], ["jvm_bootstrap_controller"]),
 ]
 
 _UNIFIED_PREFIX = "crates/broker/src/coordinator/unified/"
@@ -251,6 +286,34 @@ def _self_test():
         sorted(_select(["crates/broker/src/handlers/produce/delivery/gate.rs"], available)) ==
         sorted([_target("jvm_acceptance_durability"), _target("jvm_deliver_at_time")]),
         "the produce delivery gate must keep its own suite and gain the durability one",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/offline_replicas.rs"], available) == [_target("unavailable_partitions_jvm")],
+        "the offline-replica projection must select the unavailable-partitions differential",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/describe_topic_partitions.rs"], available) == [_target("unavailable_partitions_jvm")],
+        "the DescribeTopicPartitions projection must select the unavailable-partitions differential",
+    )
+    _check(
+        _select(["crates/broker/src/handlers/describe_configs/entry.rs"], available) == [_target("jvm_acceptance_cli")],
+        "the DescribeConfigs entry builder must select the CLI suite that reads its synonyms",
+    )
+    _check(
+        _target("jvm_bootstrap_controller") in _select(["crates/broker/src/controller_admin.rs"], available),
+        "the controller admin router must select the bootstrap-controller suite",
+    )
+    _check(
+        _target("jvm_acceptance_cli") in _select(["crates/broker/src/handlers/delete_topics.rs"], available),
+        "the DeleteTopics handler must select the CLI suite whose delete case covers it",
+    )
+    _check(
+        _target("jvm_acceptance_cli") in _select(["crates/broker/src/config_keys/registry.rs"], available),
+        "the config-key registry must select the CLI suite that renders its defaults and types",
+    )
+    _check(
+        _target("unavailable_partitions_jvm") in _select(["crates/broker/src/handlers/broker_heartbeat/failover.rs"], available),
+        "the offline-dir failover path must select the unavailable-partitions differential",
     )
     _check(_select(["crates/broker/src/codes.rs"], available) == [], "unmapped broker source must select nothing")
     _check(

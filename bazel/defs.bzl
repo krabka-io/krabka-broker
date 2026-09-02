@@ -151,6 +151,7 @@ def crate_tests(
         docker = {},
         env = {},
         rustc_env = {},
+        unit_rustc_env_files = [],
         manual = [],
         no_harness = [],
         doc_tests = True,
@@ -167,6 +168,11 @@ def crate_tests(
       compile_data: files reachable from `include!`/`include_str!` at compile time.
       env: runtime environment for every test target in the package.
       rustc_env: extra compile-time environment, e.g. `CARGO_MANIFEST_DIR`.
+      unit_rustc_env_files: `NAME=value` files whose contents become compile-time
+        environment for the unit-test target only -- the Bazel counterpart of a
+        `cargo::rustc-env` line from a build script. Unit tests alone, because
+        the values a build produces are for `src/`; an integration suite that
+        needs one can be given `rustc_env` instead.
       manual: test stems to tag `manual` — Docker-driven or otherwise
         non-hermetic suites, the Bazel equivalent of their `#[ignore]`.
       no_harness: test stems declared `harness = false` in Cargo.toml.
@@ -192,6 +198,7 @@ def crate_tests(
         edition = edition(),
         env = env,
         rustc_env = rustc_env,
+        rustc_env_files = unit_rustc_env_files,
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         tags = unit_tags,
         deps = all_crate_deps(normal_dev = True),
