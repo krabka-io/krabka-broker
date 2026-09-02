@@ -1,0 +1,114 @@
+"""Unit tests for `creusot_image_tag.axl`."""
+
+load(
+    "./creusot_image_tag.axl",
+    "DIGEST_LENGTH",
+    "digest_input",
+    "label_path",
+    "lock_label",
+    "missing_pins",
+    "pin_lines",
+    "tag",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_MODULE = [
+    'bazel_dep(name = "rules_img", version = "0.3.19")',
+    'bazel_dep(name = "rules_apko", version = "1.5.56")',
+    "# rules_img used to be pinned lower; see the history.",
+    "    # An indented note about apko_version.",
+    'apko_toolchain.toolchain(apko_version = "v1.2.40")',
+    "",
+    "apk.translate_lock(",
+    '    name = "broker_base_lock",',
+    '    lock = "//packaging:base.apko.lock.json",',
+    ")",
+    "apk.translate_lock(",
+    '    name = "creusot_base_lock",',
+    '    lock = "//tools/creusot:image.apko.lock.json",',
+    ")",
+    'rust_toolchain(version = "1.98.0")',
+]
+
+def _test_pin_lines_selects_the_lines_that_decide_the_image(_ctx):
+    check_eq(
+        "selected lines",
+        pin_lines(_MODULE),
+        [
+            'bazel_dep(name = "rules_img", version = "0.3.19")',
+            'bazel_dep(name = "rules_apko", version = "1.5.56")',
+            'apko_toolchain.toolchain(apko_version = "v1.2.40")',
+            '    name = "creusot_base_lock",',
+            '    lock = "//tools/creusot:image.apko.lock.json",',
+        ],
+    )
+
+def _test_a_comment_never_reaches_the_digest(_ctx):
+    # A comment mentioning a pin would otherwise change the tag whenever it was
+    # reworded, rebuilding an image whose contents did not move.
+    for line in pin_lines(_MODULE):
+        check_eq("%r is not a comment" % line, line.lstrip().startswith("#"), False)
+
+def _test_missing_pins_names_what_the_sweep_lost(_ctx):
+    check_eq("nothing missing", missing_pins(pin_lines(_MODULE)), [])
+    check_eq(
+        "a renamed rule",
+        missing_pins(['apko_toolchain.toolchain(apko_version = "v1")']),
+        ["rules_img", "rules_apko", "creusot_base_lock"],
+    )
+
+def _test_lock_label_reads_the_mapping_that_selects_it(_ctx):
+    check_eq("label", lock_label(_MODULE), "//tools/creusot:image.apko.lock.json")
+
+def _test_another_mappings_lock_is_not_mistaken_for_it(_ctx):
+    # `broker_base_lock` is declared first and carries a `lock` line of its
+    # own; picking the first `lock` line in the file would take that one.
+    without_creusot = _MODULE[:10]
+    check_eq("no creusot mapping", lock_label(without_creusot), "")
+
+def _test_a_mapping_with_no_lock_line_resolves_to_nothing(_ctx):
+    check_eq(
+        "no lock line",
+        lock_label(["apk.translate_lock(", '    name = "creusot_base_lock",', ")"]),
+        "",
+    )
+
+def _test_label_path_resolves_a_root_anchored_label(_ctx):
+    check_eq(
+        "package and name",
+        label_path("//tools/creusot:image.apko.lock.json"),
+        "tools/creusot/image.apko.lock.json",
+    )
+    check_eq("single segment package", label_path("//packaging:base.json"), "packaging/base.json")
+
+def _test_label_path_rejects_a_shape_it_cannot_read(_ctx):
+    for label in ["tools/creusot:x.json", "//tools/creusot", "//:x.json", "//tools:", ""]:
+        check_eq("%r does not resolve" % label, label_path(label), "")
+
+def _test_digest_input_is_the_layout_an_operator_can_reproduce(_ctx):
+    # One pin per line, then `sha256sum`'s own two-space layout, so the same
+    # bytes come out of `sha256sum` on the command line.
+    check_eq(
+        "digest input",
+        digest_input(["pin one", "pin two"], [("a.txt", "aaaa"), ("b/c.txt", "bbbb")]),
+        "pin one\npin two\naaaa  a.txt\nbbbb  b/c.txt\n",
+    )
+
+def _test_tag_truncates_the_digest(_ctx):
+    check_eq("tag", tag("v0.13.0", "0123456789abcdef0123456789abcdef"), "v0.13.0-0123456789abcdef")
+    check_eq("digest length", DIGEST_LENGTH, 16)
+
+creusot_image_tag_tests = suite("creusot-image-tag", [
+    _test_pin_lines_selects_the_lines_that_decide_the_image,
+    _test_a_comment_never_reaches_the_digest,
+    _test_missing_pins_names_what_the_sweep_lost,
+    _test_lock_label_reads_the_mapping_that_selects_it,
+    _test_another_mappings_lock_is_not_mistaken_for_it,
+    _test_a_mapping_with_no_lock_line_resolves_to_nothing,
+    _test_label_path_resolves_a_root_anchored_label,
+    _test_label_path_rejects_a_shape_it_cannot_read,
+    _test_digest_input_is_the_layout_an_operator_can_reproduce,
+    _test_tag_truncates_the_digest,
+])
+
+test_creusot_image_tag = suite_task(creusot_image_tag_tests)

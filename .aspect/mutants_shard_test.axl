@@ -1,0 +1,52 @@
+"""Unit tests for `mutants_shard.axl`."""
+
+load("./mutants_shard.axl", "SHARD_COUNT_VAR", "SHARD_INDEX_VAR", "bazel_argv", "shard_env")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _test_bazel_argv_disables_bazels_own_sharding(_ctx):
+    # Without this flag Bazel shards the test underneath the runner as well, and
+    # each shard then runs a fraction of a fraction.
+    check_eq(
+        "argv",
+        bazel_argv("//crates/raft:raft_mutants"),
+        ["run", "--test_sharding_strategy=disabled", "//crates/raft:raft_mutants"],
+    )
+
+def _test_shard_env_names_bazels_variables(_ctx):
+    environment, problem = shard_env(3, 8)
+    check_eq("no complaint", problem, "")
+    check_eq("environment", environment, {SHARD_INDEX_VAR: "3", SHARD_COUNT_VAR: "8"})
+
+def _test_a_single_shard_is_the_whole_sweep(_ctx):
+    environment, problem = shard_env(0, 1)
+    check_eq("no complaint", problem, "")
+    check_eq("environment", environment, {SHARD_INDEX_VAR: "0", SHARD_COUNT_VAR: "1"})
+
+def _test_an_index_past_the_last_shard_is_rejected(_ctx):
+    # The shell script this replaced passed both through unchecked, so an
+    # off-by-one in a CI matrix ran a shard that covered nothing and still
+    # reported success.
+    environment, problem = shard_env(8, 8)
+    check_eq("no environment", environment, None)
+    check_eq("complaint", problem, "shard index 8 is outside 0..7")
+
+def _test_a_negative_index_is_rejected(_ctx):
+    environment, problem = shard_env(-1, 4)
+    check_eq("no environment", environment, None)
+    check_eq("complaint", problem, "shard index -1 is outside 0..3")
+
+def _test_a_zero_count_is_rejected(_ctx):
+    environment, problem = shard_env(0, 0)
+    check_eq("no environment", environment, None)
+    check_eq("complaint", problem, "shard count must be at least 1, got 0")
+
+mutants_shard_tests = suite("mutants-shard", [
+    _test_bazel_argv_disables_bazels_own_sharding,
+    _test_shard_env_names_bazels_variables,
+    _test_a_single_shard_is_the_whole_sweep,
+    _test_an_index_past_the_last_shard_is_rejected,
+    _test_a_negative_index_is_rejected,
+    _test_a_zero_count_is_rejected,
+])
+
+test_mutants_shard = suite_task(mutants_shard_tests)

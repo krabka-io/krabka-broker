@@ -1,0 +1,193 @@
+"""Print the tag under which this checkout's Creusot proof image is published.
+
+The tag digests everything that decides what the image contains, so a tree that
+has not touched the image resolves to a tag the registry already holds and CI
+pulls it instead of spending eleven minutes installing Creusot, OCaml, Why3 and
+the provers again.
+
+Those inputs are every file in `tools/creusot`, the pinned Creusot release, the
+apko lock the `creusot_base_lock` mapping names, and the `MODULE.bazel` lines
+naming apko, rules_apko, rules_img and that mapping. Everything else in the
+workspace is bind mounted when the image runs and is not baked into it.
+
+Nothing here names a hashed file that a later edit could repoint elsewhere: the
+directory is swept rather than listed, and the lock is read out of the mapping
+that selects it rather than assumed. Hashing a path the build no longer uses is
+how a digest silently stops covering an input.
+
+Over-approximating is free: an unrelated edit to one of those `MODULE.bazel`
+lines costs a single rebuild. Under-approximating is not, because it would run
+proofs against an image that no longer matches the tree, so every step below
+fails loudly rather than quietly hashing less. This file is not itself an
+input: it decides how the tag is computed, not what the image contains, and a
+tag that moved whenever the computation was reworded would rebuild an image
+whose bytes had not.
+
+    aspect creusot-image-tag
+"""
+
+load("@std//hash.axl", "sha256")
+load("./repo.axl", "read_lines", "walk")
+
+# The `MODULE.bazel` substrings whose lines decide what the base image is.
+PIN_SUBSTRINGS = ["rules_img", "rules_apko", "apko_version", "creusot"]
+
+# Each of these must appear among the selected lines. A rename that moves one
+# out from under the sweep has to fail here rather than silently hash less.
+REQUIRED_PINS = ["rules_img", "rules_apko", "apko_version", "creusot_base_lock"]
+
+# The apko lock mapping the proof image's base is built from.
+LOCK_MAPPING_NAME = "creusot_base_lock"
+
+# A file the sweep must reach, so a sweep that found nothing cannot hash an
+# empty set into a stable tag.
+SENTINEL_INPUT = "tools/creusot/BUILD.bazel"
+
+CREUSOT_DIR = "tools/creusot"
+VERSION_FILE = ".creusot-version"
+
+# How many hex characters of the final digest the tag carries.
+DIGEST_LENGTH = 16
+
+_LOCK_PREFIX = 'lock = "'
+_MAPPING_OPEN = "apk.translate_lock("
+_MAPPING_CLOSE = ")"
+
+def pin_lines(module_lines):
+    """The `MODULE.bazel` lines that pin the image's base, comments dropped."""
+    return [
+        line
+        for line in module_lines
+        if _mentions_a_pin(line) and not line.lstrip().startswith("#")
+    ]
+
+def _mentions_a_pin(line):
+    for substring in PIN_SUBSTRINGS:
+        if line.find(substring) >= 0:
+            return True
+    return False
+
+def missing_pins(pins):
+    """The `REQUIRED_PINS` that no selected line names."""
+    text = "\n".join(pins)
+    return [required for required in REQUIRED_PINS if text.find(required) < 0]
+
+def lock_label(module_lines):
+    """The Bazel label of the lock `creusot_base_lock` is built from.
+
+    Read out of the `apk.translate_lock` block that names the mapping rather
+    than assumed, so repointing the mapping moves the hash to the new file
+    instead of leaving it on a file the build stopped reading.
+    """
+    labels = []
+    block = []
+    open_block = False
+    for line in module_lines:
+        if line == _MAPPING_OPEN:
+            block = []
+            open_block = True
+        elif open_block and line == _MAPPING_CLOSE:
+            open_block = False
+            if _names(block, LOCK_MAPPING_NAME):
+                label = _label_of(block)
+                if label:
+                    labels.append(label)
+        elif open_block:
+            block.append(line)
+    if len(labels) > 1:
+        fail("MODULE.bazel declares %s more than once" % LOCK_MAPPING_NAME)
+    return labels[0] if labels else ""
+
+def _names(block, mapping):
+    for line in block:
+        if line.strip() == 'name = "%s",' % mapping:
+            return True
+    return False
+
+def _label_of(block):
+    for line in block:
+        stripped = line.lstrip()
+        if stripped.startswith(_LOCK_PREFIX):
+            rest = stripped[len(_LOCK_PREFIX):]
+            end = rest.find('"')
+            if end >= 0:
+                return rest[:end]
+    return ""
+
+def label_path(label):
+    """The workspace-relative path a `//package:file` label names, or "".
+
+    Only a root-anchored label with both halves present resolves; anything else
+    is a shape this task does not understand, and returning nothing is what
+    makes the caller say so.
+    """
+    if not label.startswith("//"):
+        return ""
+    package, separator, name = label[2:].partition(":")
+    if not separator or not package or not name:
+        return ""
+    return package + "/" + name
+
+def digest_input(pins, hashed):
+    """The exact bytes the tag's digest is taken over.
+
+    `hashed` is `(path, hex digest)` in the order the paths were swept. The
+    layout -- one pin per line, then one `sha256sum`-shaped line per input --
+    is what an operator reproduces by hand when a tag is not the one they
+    expected.
+    """
+    lines = list(pins)
+    for path, digest in hashed:
+        lines.append("%s  %s" % (digest, path))
+    return "\n".join(lines) + "\n"
+
+def tag(version, digest):
+    return "%s-%s" % (version, digest[:DIGEST_LENGTH])
+
+def _sha256_of(text):
+    digest = sha256()
+    digest.update(text)
+    return digest.hexdigest()
+
+def _impl(ctx: TaskContext) -> int:
+    fs = ctx.std.fs
+    root = ctx.std.env.bazel_root_dir()
+
+    module_lines = read_lines(fs, root + "/MODULE.bazel")
+    pins = pin_lines(module_lines)
+    absent = missing_pins(pins)
+    if absent:
+        ctx.std.io.stderr.write(
+            "MODULE.bazel no longer names %s where this task looks\n" % ", ".join(absent),
+        )
+        return 1
+
+    label = lock_label(module_lines)
+    path = label_path(label)
+    if not path:
+        ctx.std.io.stderr.write(
+            "cannot read %s's lock label out of MODULE.bazel\n" % LOCK_MAPPING_NAME,
+        )
+        return 1
+    if not fs.exists(root + "/" + path):
+        ctx.std.io.stderr.write(
+            "%s names %s, which is not a file here\n" % (LOCK_MAPPING_NAME, label),
+        )
+        return 1
+
+    swept = walk(fs, root + "/" + CREUSOT_DIR, relative_to = root)
+    inputs = sorted({p: True for p in [VERSION_FILE, path] + swept})
+    if SENTINEL_INPUT not in inputs:
+        ctx.std.io.stderr.write("the input sweep did not reach %s\n" % CREUSOT_DIR)
+        return 1
+
+    hashed = [(p, _sha256_of(fs.read_to_string(root + "/" + p))) for p in inputs]
+    version = fs.read_to_string(root + "/" + VERSION_FILE).rstrip("\n")
+    ctx.std.io.stdout.write(tag(version, _sha256_of(digest_input(pins, hashed))) + "\n")
+    return 0
+
+creusot_image_tag = task(
+    summary = "Print the tag this checkout's Creusot proof image is published under",
+    implementation = _impl,
+    args = {},
+)
