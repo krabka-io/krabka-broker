@@ -221,6 +221,31 @@ pushes it. The image runs as `nonroot` (65532). The build uses no Dockerfile or
 host package manager. `aspect delivery` skips the push when the image output did
 not change.
 
+A second layer carries the operator tools — `krabka-format`, `krabka-audit`,
+`krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore` —
+beside the broker under `/usr/bin`. The base has no shell, so a tool that is not
+in the image cannot be run in a container at all, and `krabka-format` has to run
+against the log directory before the broker will boot:
+
+```
+mkdir -p krabka-data && chown 65532:65532 krabka-data
+docker run --rm -v "${PWD}/krabka-data:/var/lib/krabka" \
+    --entrypoint /usr/bin/krabka-format krabka-io/krabka-broker:dev \
+    --log-dir /var/lib/krabka --standalone --node-id 1 \
+    --controller-listener 127.0.0.1:9093
+```
+
+The `chown` is not incidental. Both the formatter and the broker run as
+`nonroot`. The apko base does create `/var/lib/krabka` owned by 65532, but a
+bind mount replaces that directory with the host's, and a freshly created host
+directory belongs to root — so the format step fails with `Permission denied`
+before it writes `meta.properties.json`.
+
+`//packaging:image_binaries_test` asserts what those layers carry and that each
+binary answers `--help`; it needs no daemon and runs in `bazel test //...`.
+`bazel test --config=docker //packaging:image_docker_test` repeats the check
+against a loaded image through Docker.
+
 ## Mutation testing
 
 Mutation sweeps run through
