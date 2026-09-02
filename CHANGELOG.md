@@ -5,9 +5,9 @@ names an annotated git tag in this repository, and the tag is what a person
 quotes in an incident. [Releasing](docs/releasing.md) gives the commands that
 cut one.
 
-Krabka versions and tags the whole workspace as one unit. The version comes
+krabka versions and tags the whole workspace as one unit. The version comes
 from `[workspace.package]` in the root `Cargo.toml`, and each crate takes it
-from there, so no crate has a release of its own. Krabka is before 1.0 and it
+from there, so no crate has a release of its own. krabka is before 1.0 and it
 is undeployed, so a minor bump is free to break an interface. Read the entries
 rather than the number.
 
@@ -18,24 +18,37 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-09-02
+
+Milestones 5 and 6: a deployed cluster can now be probed, measured, watched and
+operated without reading the source. Every hot path the design argues about
+carries a benchmark, and metadata-backed metric series are released during
+routine reassignment and topic deletion.
+
 ### Added
 
-- KIP-966 eligible leader replicas. The controller maintains the ELR, elects
-  from it on failover, and `DescribeTopicPartitions` reports its columns from
-  the metadata image. A broker that cannot prove it shut down cleanly drops its
-  membership rather than being re-derived into it from a stale ISR.
-- The Kafka controller listener routes the whole Admin surface, and serves
-  KIP-590 `Envelope`. The broker sends `BrokerHeartbeat` to it.
-- `BROKER_LOGGER` as a config resource, so log levels change without a restart.
-- Request latency split into its local, remote and throttle phases.
-- Creusot proofs for the remaining safety-critical algorithms, and the catalog
-  that records which algorithm each session covers.
 - `/healthz` and `/readyz` on their own listener, and reference Kubernetes
   manifests under `packaging/k8s/` that wire both probes and the format step.
   Readiness waits for log-dir recovery, bound listeners, and a metadata offset
   within `--readiness-max-metadata-lag` of the quorum's committed offset, which
   the KRaft engine and the metadata observer now track separately from the
   offset this node has applied.
+- Per-partition follower lag and per-group consumer lag, for classic and
+  KIP-848 groups, with a max-lag rollup. A stuck consumer is now visible before
+  its data ages out.
+- `krabka_broker_fetch_response_drain_total{path="sendfile"|"vectored"|"pread"}`
+  and a kTLS gauge, so an operator can see which drain path a fetch took rather
+  than inferring it. A regression that routed every fetch onto the copy path
+  used to move no series at all.
+- The container image includes `krabka-format`, `krabka-audit`,
+  `krabka-barrier`, `krabka-guard`, `krabka-worm-verify` and `krabka-restore`.
+  The image could not previously run the one mandatory
+  pre-boot step, and has no shell to work around it with.
+- Benchmarks for the produce hot path, the fetch hand-off, the KIP-227 session
+  cache, the fetch drain's sendfile crossover, the per-observation metric label,
+  and both documented PERF deferrals. Run them with `cargo bench -p krabka-broker`.
+- Creusot proofs for the remaining safety-critical algorithms, and the catalog
+  that records which algorithm each session covers.
 - `krabka-broker --print-config-schema` prints the JSON schema of the config
   file, and [`docs/config-reference.md`](docs/config-reference.md) is
   generated from it, with example `broker.toml` files under `docs/examples/`.
@@ -54,6 +67,46 @@ the `krabka-*` names to crates.io.
 - The audit counters are exported as `krabka_broker_audit_events_total` and
   `krabka_broker_audit_write_failures_total`. The doubled `_total_total`
   suffix is gone.
+- Per-partition and per-topic metric series are released when a reassignment
+  drops this broker from a partition's replica set, or when a topic is deleted.
+  `/metrics` previously grew for the life of the process on any cluster doing
+  routine reassignment.
+- Fetch-session allocation picks its victim in O(1) instead of scanning the
+  whole cache under the global fetch mutex, which on a full cache blocked
+  `classify` for every other in-flight fetch.
+- A fetch hands one read to the thread pool without allocating a task per
+  partition.
+- Metric topic labels are held as `Arc<str>` shared with the partition
+  registry, so a hot-path observation is a hash and a refcount bump rather than
+  two `String` allocations. Those allocations cancelled out the registry's
+  allocation-free design.
+- Both documented PERF deferrals now carry a measured number and an explicit
+  keep-or-fix decision, in the source, beside the code they describe.
+- The broker's fourteen hand-rolled `MetadataSource` test doubles are one
+  shared fake, so new metadata behaviour arrives testable rather than behind
+  fourteen `unimplemented!()`s.
+
+### Fixed
+
+- A node redirected to a snapshot reports the quorum's committed offset rather
+  than its own clamped watermark, so readiness cannot read a lag of zero while
+  it is behind.
+
+## [0.5.3] - 2026-09-01
+
+### Added
+
+- KIP-966 eligible leader replicas. The controller maintains the ELR, elects
+  from it on failover, and `DescribeTopicPartitions` reports its columns from
+  the metadata image. A broker that cannot prove it shut down cleanly drops its
+  membership rather than being re-derived into it from a stale ISR.
+- The Kafka controller listener routes the whole Admin surface, and serves
+  KIP-590 `Envelope`. The broker sends `BrokerHeartbeat` to it.
+- `BROKER_LOGGER` as a config resource, so log levels change without a restart.
+- Request latency split into its local, remote and throttle phases.
+
+### Changed
+
 - `ListOffsets` is fenced on the request leader epoch. `DescribeConfigs`
   returns typed config metadata, and reads an empty key list as a request for
   every config. Every broker-owned topic is marked internal.
@@ -75,6 +128,7 @@ the `krabka-*` names to crates.io.
   past `connections.max.idle.ms` closes.
 - A failed disk's partition reads as leaderless, the way `kafka-topics` reports
   it, and offline replicas appear in `Metadata` and `DescribeTopicPartitions`.
+- The KIP-599 controller-mutation throttle is recorded as well as applied.
 
 ## [0.5.2] - 2026-08-31
 
@@ -161,7 +215,9 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.4
+[0.5.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.3
 [0.5.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.2
 [0.5.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.1
 [0.5.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.0
