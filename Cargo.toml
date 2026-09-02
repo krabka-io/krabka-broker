@@ -111,7 +111,7 @@ prost = "0.14"
 # Enable the `tokio` feature per-crate where async `AsyncSleeper` is needed.
 # 0.9+ replaced this API with wall/monotonic clocks and timers; keep the
 # compatible release line until consumers are migrated to that new API.
-qubit-clock = "~0.8.1"
+qubit-clock = "~0.13.0"
 rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
 refined_type = "0.6"
 # KIP-848: client-supplied `subscribed_topic_regex` matched against the
