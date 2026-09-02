@@ -25,10 +25,13 @@ pub fn parse_roles_arg(roles: &[String]) -> Result<Vec<krabka_broker::config::No
         .collect()
 }
 
-/// Map the `--metrics-listen-addr` CLI value onto an `Option<SocketAddr>`.
-/// An empty string or `none`, in any case, disables the endpoint. Every other
-/// value must parse as a `SocketAddr`.
-pub fn parse_metrics_addr(s: &str) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+/// Map an optional-endpoint CLI value, such as `--metrics-listen-addr` or
+/// `--health-listen-addr`, onto an `Option<SocketAddr>`. An empty string or
+/// `none`, in any case, disables the endpoint. Every other value must parse
+/// as a `SocketAddr`.
+pub fn parse_optional_listen_addr(
+    s: &str,
+) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
     let trimmed = s.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
         return Ok(None);

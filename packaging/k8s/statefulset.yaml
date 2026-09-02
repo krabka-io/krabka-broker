@@ -1,0 +1,193 @@
+# A three-node krabka cluster: one StatefulSet, one image, one pod template.
+#
+# Every per-pod difference comes from the pod's ordinal, which the StatefulSet
+# controller publishes as the `apps.kubernetes.io/pod-index` label. The
+# downward API turns that into KRABKA_POD_INDEX, and Kubernetes expands
+# `$(KRABKA_POD_INDEX)` in `args`, so the node id and the broker id are the
+# ordinal without a shell to compute them in: the apko base the image is built
+# on carries none. That label is what sets the floor on the Kubernetes version
+# these manifests need: it reached beta, and so became set by default, in 1.29.
+# On anything older KRABKA_POD_INDEX resolves to the empty string and the
+# format step fails on `--node-id=`.
+#
+# Kubernetes expands an env value against the variables declared *before* it,
+# so POD_NAMESPACE leads each list that a later value interpolates it into.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: krabka
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  serviceName: krabka
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: krabka
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: krabka
+    spec:
+      # The controlled-shutdown drain hands this node's partition leadership
+      # to its in-sync replicas before the process stops, and defaults to a
+      # 20s budget. The grace period has to outlast that, or SIGKILL lands
+      # mid-hand-off and producers stall until the controller fences the node.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The volume arrives owned by root. Both the formatter and the broker
+        # run as the image's `nonroot` user, so without fsGroup the format
+        # step fails on `meta.properties.json` before it writes a byte.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The broker refuses to boot against an unformatted log directory, so
+        # this runs on every start. `--ignore-formatted` is what makes that
+        # safe: on the first boot it seeds the directory, and on every boot
+        # after it exits 0 without touching the identity already there.
+        - name: format
+          image: docker.io/krabka-io/krabka-broker:dev
+          command: ["/usr/bin/krabka-format"]
+          args:
+            - --log-dir=/var/lib/krabka
+            - --node-id=$(KRABKA_POD_INDEX)
+            - --cluster-id=$(KRABKA_CLUSTER_ID)
+            - --initial-controllers=$(KRABKA_INITIAL_CONTROLLERS)
+            - --ignore-formatted
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KRABKA_POD_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            # One cluster id, shared by all three pods. It has to be passed
+            # explicitly: each pod formats its own volume, and `krabka format`
+            # generates a fresh id when none is given, so three pods would
+            # bootstrap three one-node clusters that cannot recognise each
+            # other's records.
+            #
+            # GENERATE YOUR OWN before you deploy this, the same way you
+            # generate the directory ids below.
+            - name: KRABKA_CLUSTER_ID
+              value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
+            # The KIP-853 seed voter set: `id@host:port:directory-id` per
+            # controller, comma-separated with no spaces. Each node reads its
+            # own directory id back out of this list, which is why one shared
+            # string configures all three.
+            #
+            # GENERATE YOUR OWN directory ids before you deploy this. They are
+            # the replicated identity of a node incarnation, and two clusters
+            # that share them cannot tell each other's nodes apart.
+            - name: KRABKA_INITIAL_CONTROLLERS
+              value: "0@krabka-0.krabka.$(POD_NAMESPACE).svc.cluster.local:9093:5bd0e3ba-9f0e-4a4d-9d1c-2c9a0d2f7a01,1@krabka-1.krabka.$(POD_NAMESPACE).svc.cluster.local:9093:5bd0e3ba-9f0e-4a4d-9d1c-2c9a0d2f7a02,2@krabka-2.krabka.$(POD_NAMESPACE).svc.cluster.local:9093:5bd0e3ba-9f0e-4a4d-9d1c-2c9a0d2f7a03"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/krabka
+      containers:
+        - name: broker
+          image: docker.io/krabka-io/krabka-broker:dev
+          args:
+            - --log-dir=/var/lib/krabka
+            - --broker-id=$(KRABKA_POD_INDEX)
+            - --listen-addr=0.0.0.0:9092
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+            - name: metrics
+              containerPort: 9404
+            - name: health
+              containerPort: 9405
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KRABKA_POD_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            # Clients reach a specific broker, never the bootstrap Service, so
+            # what this node advertises has to be its own pod's stable DNS
+            # name. The headless Service below is what makes that name resolve.
+            - name: KRABKA_ADVERTISED_LISTENER
+              value: "$(POD_NAME).krabka.$(POD_NAMESPACE).svc.cluster.local:9092"
+            # The same id the init container formatted the volume with, so the
+            # metadata image this node serves `DescribeCluster` from names the
+            # cluster rather than the nil UUID the broker falls back to.
+            - name: KRABKA_CLUSTER_ID
+              value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
+            # There is deliberately no KRABKA_CONTROLLER_BOOTSTRAP_SERVERS here.
+            # These three nodes are seeded voters: `--initial-controllers` put
+            # the voter set in the offset-0 checkpoint, so there is no quorum to
+            # discover at cold start. It would also not parse -- the flag takes
+            # `SocketAddr`s, which accept an IP literal and not a Service DNS
+            # name. A node formatted with `--no-initial-controllers` that joins
+            # an existing quorum is the case that needs it, and it needs pod IPs
+            # or a resolved address to express it.
+            - name: KRABKA_METRICS_LISTEN_ADDR
+              value: 0.0.0.0:9404
+            - name: KRABKA_HEALTH_LISTEN_ADDR
+              value: 0.0.0.0:9405
+          # Liveness asks only whether the process is still running its event
+          # loop. It stays green through log-dir recovery and through metadata
+          # catch-up on purpose: those are the phases where a restart is most
+          # expensive, and a liveness probe that failed there would kill the
+          # node and make it start the same recovery over again. Nothing here
+          # needs a startupProbe for the same reason -- there is no slow-start
+          # window in which this probe can fail.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          # Readiness asks whether this node can serve a client correctly: log
+          # dirs recovered, listeners bound, and its `__cluster_metadata`
+          # offset within the configured lag of the quorum's committed offset.
+          # Failing it only removes the pod from the Service endpoints, which
+          # is exactly what should happen to a node that would answer Metadata
+          # from a stale image. A rolling update waits on this, so a restart
+          # cannot run ahead of the quorum.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/krabka
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi

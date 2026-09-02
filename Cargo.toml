@@ -78,15 +78,7 @@ num-traits = "0.2.19"
 # `object_store` is the Apache-stewarded multi-backend object-store client used
 # across the Rust data ecosystem (DataFusion, Polars, Delta-rs). Krabka's
 # S3-compatible and native-GCS RemoteStorageManagers (KIP-405) are built on it.
-#
-# Pinned to 0.13 in lock-step with the datafusion git rev and `parquet 59`: both
-# depend on `object_store ^0.13` and pass its `ObjectStore`/`Path` types across
-# the `ParquetObjectReader` / `register_object_store` boundary in krabka-blockstore.
-# Bumping object_store alone to 0.14 splits the dependency graph (blockstore on
-# 0.14, parquet/datafusion on 0.13) and fails to compile — exactly what the
-# auto-merged renovate bump #644 did to main. Move it only together with the
-# datafusion rev; the renovate rule below holds it to enforce that.
-object_store = { version = "0.13", features = ["aws", "gcp"] }
+object_store = { version = "0.14", features = ["aws", "gcp"] }
 # Slice 42: OTLP distributed tracing. opentelemetry-otlp 0.32 lines up with
 # the tonic 0.14 / prost 0.14 / reqwest 0.13 stack already in the dep graph.
 opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"] }

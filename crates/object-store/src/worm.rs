@@ -207,7 +207,9 @@ async fn get_bucket_xml<T: for<'de> Deserialize<'de>>(
     let mut signed = http::Request::get(url.as_str())
         .body(HttpRequestBody::empty())
         .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    AwsAuthorizer::new(&credential, "s3", &cfg.region).authorize(&mut signed, None);
+    AwsAuthorizer::new(&credential, "s3", &cfg.region)
+        .try_authorize(&mut signed, None)
+        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
     let response = reqwest::Client::new()
         .get(url)
         .headers(signed.into_parts().0.headers)

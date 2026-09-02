@@ -18,8 +18,9 @@ use crate::{
         storage::{StorageStartup, recover_storage_and_groups},
         transport::{StartupTransport, prepare_startup_transport},
     },
-    config::BrokerConfig,
+    config::{BrokerConfig, DEFAULT_READINESS_MAX_METADATA_LAG},
     error::BrokerError,
+    health::HealthState,
 };
 
 impl Broker {
@@ -30,6 +31,26 @@ impl Broker {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub async fn start(config: BrokerConfig) -> Result<BrokerHandle, BrokerError> {
         Self::start_with_listeners(config, None, None).await
+    }
+
+    /// Like [`Self::start`], but marks its readiness conditions on a
+    /// caller-supplied [`HealthState`] as it reaches them.
+    ///
+    /// The process answers `/healthz` and `/readyz` from the moment it starts,
+    /// which is before this call and all the way through it: log-dir recovery
+    /// and metadata catch-up both happen inside it. So the caller creates the
+    /// state, serves [`crate::health::router`] over it, and passes this clone
+    /// in. [`Self::start`] builds its own state instead, which nothing reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when log I/O fails, a record or index is corrupt, or
+    /// the requested offset violates the segment state.
+    pub async fn start_with_health(
+        config: BrokerConfig,
+        health: HealthState,
+    ) -> Result<BrokerHandle, BrokerError> {
+        Self::start_with_listeners_boxed(config, None, Vec::new(), health).await
     }
 
     /// Like [`Self::start`], but adopts a caller-supplied, already-bound
@@ -84,6 +105,7 @@ impl Broker {
             config,
             controller_listener,
             data_plane_listeners.into_iter().collect(),
+            HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG),
         )
         .await
     }
@@ -92,11 +114,13 @@ impl Broker {
         config: BrokerConfig,
         controller_listener: Option<tokio::net::TcpListener>,
         data_plane_listeners: Vec<tokio::net::TcpListener>,
+        health: HealthState,
     ) -> BoxFuture<'static, Result<BrokerHandle, BrokerError>> {
         Box::pin(Self::start_with_listeners_inner(
             config,
             controller_listener,
             data_plane_listeners,
+            health,
         ))
     }
 
@@ -104,6 +128,7 @@ impl Broker {
         mut config: BrokerConfig,
         controller_listener: Option<tokio::net::TcpListener>,
         data_plane_listeners: Vec<tokio::net::TcpListener>,
+        health: HealthState,
     ) -> Result<BrokerHandle, BrokerError> {
         let StartupTransport {
             tls_dynamic,
@@ -185,6 +210,10 @@ impl Broker {
         // Auto-join, leader readiness, registration, and bootstrap submission
         // are completed by `start_metadata_phase`.
 
+        // The metadata authority exists and this node has reached the quorum,
+        // so `/readyz` can compare this node's offset against the quorum's.
+        health.install_metadata_progress(crate::health::metadata_progress(Arc::clone(&controller)));
+
         let StorageStartup {
             log_dir_status,
             log_dir_ids,
@@ -193,6 +222,9 @@ impl Broker {
             group_coordinator,
             producer_ids,
         } = recover_storage_and_groups(&config, &controller, &diskless_runtime).await?;
+        // Every log dir has been scanned and every recovered partition has a
+        // writer, so a Fetch can no longer miss data this node holds.
+        health.mark_log_dir_recovery_complete();
 
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
@@ -295,7 +327,7 @@ impl Broker {
         }
         .spawn();
 
-        finish_broker_startup(
+        let handle = finish_broker_startup(
             config,
             data_plane_listeners,
             (controller, partitions, controller_admin_router),
@@ -315,7 +347,12 @@ impl Broker {
                 diskless: diskless_runtime,
             },
         )
-        .await
+        .await?;
+        // `finish_broker_startup` returns only once every data-plane listener
+        // is bound and its accept loop is running, so the last readiness
+        // condition this node controls on its own is met here.
+        health.mark_listeners_bound();
+        Ok(handle)
     }
 }
 
@@ -340,10 +377,15 @@ mod tests {
             None,
             None,
         );
+        let start_with_health = Broker::start_with_health(
+            BrokerConfig::for_tests(std::path::PathBuf::new()),
+            HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG),
+        );
 
         assert!(std::mem::size_of_val(&start) > boxed_size);
         assert!(std::mem::size_of_val(&start_with_controller_listener) > boxed_size);
         assert!(std::mem::size_of_val(&start_with_listeners) > boxed_size);
+        assert!(std::mem::size_of_val(&start_with_health) > boxed_size);
     }
 
     #[tokio::test]

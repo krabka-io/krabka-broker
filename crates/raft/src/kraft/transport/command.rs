@@ -133,6 +133,13 @@ pub struct MetadataFetchSlice {
     pub records: bytes::Bytes,
     pub log_start_offset: i64,
     pub high_watermark: i64,
+    /// Highest offset the quorum has committed, as this node last heard it.
+    ///
+    /// This node's own `high_watermark` bounds what it can serve; this says
+    /// how much more there is. They differ whenever the node answering the
+    /// fetch is itself a follower that is still catching up, and an observer
+    /// measures its own lag against this one.
+    pub quorum_high_watermark: i64,
 }
 
 /// Which timer fired. The loop interprets the tick against the current role
@@ -158,6 +165,15 @@ pub struct QuorumStateSnapshot {
     pub leader_id: Option<NodeId>,
     pub leader_epoch: Epoch,
     pub high_watermark: i64,
+    /// Highest offset the quorum has committed, as this node last heard it:
+    /// this node's own high watermark on a leader, and the leader-reported
+    /// high watermark on a follower that is still replaying the log.
+    ///
+    /// `high_watermark` alone cannot answer "how far behind is this node",
+    /// because a follower clamps it to its own log end. A follower that has
+    /// replicated 10 of the quorum's 10 000 committed records reports
+    /// `high_watermark == 10` and `quorum_high_watermark == 10_000`.
+    pub quorum_high_watermark: i64,
     pub log_end_offset: i64,
     /// Log-start offset. It rises past 0 once the log has been pruned below a
     /// snapshot under KIP-630.

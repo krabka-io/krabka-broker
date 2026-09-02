@@ -98,7 +98,7 @@ async fn put_outcome_reports_size_and_backend_identifiers() {
         got == PutOutcome {
             size_bytes: 5,
             sha256: None,
-            e_tag: Some("0".to_owned()),
+            e_tag: Some("\"0\"".to_owned()),
             version_id: None,
             create_precondition: false,
         }
@@ -128,7 +128,7 @@ async fn put_with_digest_returns_payload_sha256() {
         got == PutOutcome {
             size_bytes: 5,
             sha256: Some(sha256_of(&payload)),
-            e_tag: Some("0".to_owned()),
+            e_tag: Some("\"0\"".to_owned()),
             version_id: None,
             create_precondition: false,
         }
@@ -214,7 +214,7 @@ async fn put_from_path_digests_the_whole_file_on_both_paths() {
             got == PutOutcome {
                 size_bytes: len as u64,
                 sha256: Some(sha256_of(&payload)),
-                e_tag: Some("0".to_owned()),
+                e_tag: Some("\"0\"".to_owned()),
                 version_id: None,
                 create_precondition: false,
             },
@@ -241,7 +241,7 @@ async fn put_from_path_omits_digest_when_not_requested() {
             got == PutOutcome {
                 size_bytes: len as u64,
                 sha256: None,
-                e_tag: Some("0".to_owned()),
+                e_tag: Some("\"0\"".to_owned()),
                 version_id: None,
                 create_precondition: false,
             },

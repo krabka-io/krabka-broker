@@ -122,99 +122,17 @@ pub(crate) async fn run(params: AutoJoinParams) {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet,
-        net::SocketAddr,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use krabka_metadata::{
         KRaftVersionRange, MetadataImage, MetadataRecord, Voter, VoterEndpoint, VoterSet,
         VotersRecord,
     };
-    use krabka_raft::{
-        AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-        SnapshotRange, UpdateVoter,
-    };
+    use krabka_raft::NodeId;
     use krabka_units::{millis, secs};
-    use tokio::sync::watch;
 
     use super::*;
-
-    struct MockSource {
-        image: Arc<MetadataImage>,
-        current_image_calls: AtomicUsize,
-        controller_bound_addr_calls: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::metadata_source::MetadataSource for MockSource {
-        fn current_image(&self) -> Arc<MetadataImage> {
-            self.current_image_calls.fetch_add(1, Ordering::Relaxed);
-            self.image.clone()
-        }
-
-        fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            let (_tx, rx) = watch::channel(self.image.clone());
-            rx
-        }
-
-        fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-            let (_tx, rx) = watch::channel(None);
-            rx
-        }
-
-        fn quorum_state(&self) -> QuorumState {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn submit_change(
-            &self,
-            _records: Vec<krabka_metadata::MetadataRecord>,
-        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        fn controller_bound_addr(&self) -> SocketAddr {
-            self.controller_bound_addr_calls
-                .fetch_add(1, Ordering::Relaxed);
-            "127.0.0.1:19093".parse().expect("bound controller addr")
-        }
-
-        fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by auto_join tests")
-        }
-
-        async fn cancel(&self) {}
-    }
+    use crate::test_support::FakeMetadataSource;
 
     fn image_with_voter(node_id: NodeId) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
@@ -270,11 +188,12 @@ mod tests {
 
     #[tokio::test]
     async fn run_with_auto_join_true_checks_current_voter_set_before_returning() {
-        let source = Arc::new(MockSource {
-            image: Arc::new(image_with_voter(NodeId(7))),
-            current_image_calls: AtomicUsize::new(0),
-            controller_bound_addr_calls: AtomicUsize::new(0),
-        });
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_with_voter(NodeId(7)))
+                .controller_bound_addr("127.0.0.1:19093".parse().expect("bound controller addr"))
+                .build(),
+        );
         let params = AutoJoinParams {
             auto_join: true,
             retry_backoff: millis(7),
@@ -295,7 +214,7 @@ mod tests {
             .await
             .expect("already-voter auto join returns without dialing");
 
-        assert2::assert!((source.controller_bound_addr_calls.load(Ordering::Relaxed)) == (1));
-        assert2::assert!((source.current_image_calls.load(Ordering::Relaxed)) == (1));
+        assert2::assert!((source.controller_bound_addr_calls()) == (1));
+        assert2::assert!((source.current_image_calls()) == (1));
     }
 }

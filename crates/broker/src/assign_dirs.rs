@@ -165,86 +165,16 @@ fn validate_assign_response(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, net::SocketAddr};
+    use std::net::SocketAddr;
 
     use assert2::{assert, check};
     use krabka_metadata::MetadataImage;
     use krabka_protocol::{Decode, Encode};
-    use krabka_raft::{
-        AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
-        SnapshotRange, UpdateVoter,
-    };
-    use tokio::sync::watch;
+    use krabka_raft::NodeId;
     use uuid::Uuid;
 
     use super::*;
-
-    struct MockSource {
-        image: Arc<MetadataImage>,
-        leader: Option<NodeId>,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::metadata_source::MetadataSource for MockSource {
-        fn current_image(&self) -> Arc<MetadataImage> {
-            self.image.clone()
-        }
-
-        fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            let (_tx, rx) = watch::channel(self.image.clone());
-            rx
-        }
-
-        fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-            let (_tx, rx) = watch::channel(self.leader);
-            rx
-        }
-
-        fn quorum_state(&self) -> QuorumState {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn submit_change(
-            &self,
-            _records: Vec<krabka_metadata::MetadataRecord>,
-        ) -> Result<krabka_raft::SubmitChangeResult, RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn add_learner(&self, _node_id: NodeId, _node: Node) -> Result<(), RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        fn controller_bound_addr(&self) -> SocketAddr {
-            panic!("not used by assign_dirs tests")
-        }
-
-        fn read_snapshot_range(&self, _position: i64, _max_bytes: i32) -> SnapshotRange {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn remove_voter(&self, _req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn update_voter(&self, _req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-            panic!("not used by assign_dirs tests")
-        }
-
-        async fn cancel(&self) {}
-    }
+    use crate::test_support::FakeMetadataSource;
 
     #[test]
     fn build_request_groups_correctly() {
@@ -402,10 +332,12 @@ mod tests {
             ),
         ];
         for (leader, expected) in cases {
-            let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
-                image: Arc::new(MetadataImage::new(uuid::Uuid::nil())),
-                leader,
-            });
+            let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
+                FakeMetadataSource::builder()
+                    .image(MetadataImage::new(uuid::Uuid::nil()))
+                    .leader(leader)
+                    .build(),
+            );
 
             let err = send_assignments(
                 &source,
@@ -431,10 +363,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_assignments_reaches_a_leader_registered_only_as_a_controller() {
         let (broker, controller_addr, _dir) = start_controller().await;
-        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
-            image: Arc::new(voter_only_image(NodeId(1), controller_addr)),
-            leader: Some(NodeId(1)),
-        });
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
+            FakeMetadataSource::builder()
+                .image(voter_only_image(NodeId(1), controller_addr))
+                .leader(Some(NodeId(1)))
+                .build(),
+        );
 
         let sent = send_assignments(
             &source,
@@ -459,10 +393,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_assignments_dials_with_the_controller_listener_security() {
         let (broker, controller_addr, _dir) = start_controller().await;
-        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(MockSource {
-            image: Arc::new(voter_only_image(NodeId(1), controller_addr)),
-            leader: Some(NodeId(1)),
-        });
+        let source: Arc<dyn crate::metadata_source::MetadataSource> = Arc::new(
+            FakeMetadataSource::builder()
+                .image(voter_only_image(NodeId(1), controller_addr))
+                .leader(Some(NodeId(1)))
+                .build(),
+        );
         let mut dialer = plaintext_dialer(Vec::new());
         dialer.listener_protocol = krabka_security::ListenerProtocol::Ssl;
 
