@@ -131,3 +131,6 @@ impl ReplicaSeam {
         self.partition.replicate_batch(batch).await
     }
 }
+
+#[cfg(test)]
+mod tests;

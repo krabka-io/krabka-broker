@@ -62,3 +62,6 @@ pub fn response_header_len(api_key: ApiKeyCode, body_flexible: bool) -> usize {
 pub fn response_header_v1(api_key: ApiKeyCode, body_flexible: bool) -> bool {
     crate::network::response_header_v1(api_key, body_flexible)
 }
+
+#[cfg(test)]
+mod tests;
