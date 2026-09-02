@@ -72,7 +72,11 @@ async fn a_bound_on_a_partition_the_archive_does_not_hold_is_rejected() {
 
     let target = tempfile::tempdir().expect("target tempdir");
     let target_dir = target.path().join("restored");
-    let args = restore_args(archive.path(), &target_dir, &["--to-offset", "orders:3=100"]);
+    let args = restore_args(
+        archive.path(),
+        &target_dir,
+        &["--to-offset", "orders:3=100"],
+    );
 
     let error = restore(&args).await.expect_err("unknown partition");
     assert!(let RestoreError::UnknownPartition { topic, partition } = error);
