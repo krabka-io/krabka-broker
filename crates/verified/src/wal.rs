@@ -5,7 +5,9 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(bases.len() == lasts.len())]
 #[requires(0 <= index && index <= bases.len())]
@@ -81,7 +83,9 @@ pub enum WalFetchAdmission {
     Serve,
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn wal_fetch_authorized(
     authenticated_node: Option<u64>,

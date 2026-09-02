@@ -198,6 +198,23 @@ jobs:
       - name: no crate changelog records a release
         run: python3 tools/lint/crate_changelogs.py
 
+  # cargo-mutants generates mutants syntactically and does not evaluate
+  # #[cfg], so every #[cfg(creusot)] fn in crates/verified/src/ is mutated
+  # anyway and reported as a survivor unless its own definition carries
+  # `#[cfg_attr(test, mutants::skip)]`. This keeps that pairing from silently
+  # dropping off a function as crates/verified grows.
+  creusot-skip:
+    name: creusot mutants::skip
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: check the check
+        run: python3 tools/lint/test_creusot_skip.py
+      - name: every #[cfg(creusot)] fn skips mutation testing
+        run: python3 tools/lint/creusot_skip.py
+
   # Documentation source checks do not use Bazel, so they can stay parallel
   # while the `ci` job renders and uploads rustdoc from its warm output tree.
   docs:
@@ -231,6 +248,9 @@ jobs:
       # Every series the reference dashboard and the alert rules name must be one the broker exports; the metrics_contract suite keeps the body file fresh.
       - name: metrics contract
         run: python3 tools/check-metrics-contract.py docs/operations/metrics-body.txt
+      # An exclude_re entry pinned to a path that a refactor moved or renamed stops matching anything, and the mutant it used to suppress comes back as an unexplained survivor.
+      - name: mutants config
+        run: python3 tools/check-mutants-config.py
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: tools/check-crate-readmes.sh
@@ -526,6 +546,7 @@ jobs:
       - coverage
       - supply-chain
       - changelogs
+      - creusot-skip
       - docs
       - proofs
       - docker-select

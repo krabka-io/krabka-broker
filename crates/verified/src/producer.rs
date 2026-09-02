@@ -26,7 +26,9 @@ pub enum ProducerDecision {
     Fenced,
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn increment_sequence_model(sequence: i32, increment: i32) -> i32 {
     pearlite! { (sequence + increment) & i32::MAX }
@@ -39,7 +41,9 @@ pub fn increment_sequence(sequence: i32, increment: i32) -> i32 {
     sequence.wrapping_add(increment) & i32::MAX
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn decrement_sequence_model(sequence: i32, decrement: i32) -> i32 {
     pearlite! { (sequence - decrement) & i32::MAX }
@@ -52,7 +56,9 @@ pub fn decrement_sequence(sequence: i32, decrement: i32) -> i32 {
     sequence.wrapping_sub(decrement) & i32::MAX
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn matches_last_batch_model(
     last: ProducerBatch,

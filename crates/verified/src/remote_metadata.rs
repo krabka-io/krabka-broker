@@ -5,7 +5,9 @@ use creusot_std::prelude::*;
 const MURMUR2_SEED: u32 = 0x9747_b28c;
 const MURMUR2_M: u32 = 0x5bd1_e995;
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn java_long_hash_model(bits: u64) -> i32 {
     pearlite! { (bits ^ (bits >> 32u32)) as i32 }
@@ -21,7 +23,9 @@ fn java_long_hash(bits: u64) -> i32 {
     (bits ^ (bits >> 32)) as i32
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn java_objects_hash_model(topic_id: u128, user_partition: i32) -> i32 {
     pearlite! {
@@ -55,7 +59,9 @@ fn java_objects_hash(topic_id: u128, user_partition: i32) -> i32 {
     hash.wrapping_mul(31).wrapping_add(user_partition)
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn reverse_bytes_model(value: u32) -> u32 {
     pearlite! {
@@ -71,7 +77,9 @@ fn reverse_bytes(value: u32) -> u32 {
     (value >> 24) | ((value >> 8) & 0x0000_ff00) | ((value << 8) & 0x00ff_0000) | (value << 24)
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn kafka_murmur2_i32_model(value: i32) -> u32 {
     pearlite! {
@@ -104,7 +112,9 @@ fn kafka_murmur2_i32(value: i32) -> u32 {
     hash ^ (hash >> 15)
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn kafka_to_positive_model(hash: u32) -> Int {
     pearlite! { hash@ % 2_147_483_648 }
@@ -121,7 +131,9 @@ fn kafka_to_positive(hash: u32) -> i32 {
     (hash % 0x8000_0000) as i32
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn remote_metadata_partition_model(
     topic_id: u128,

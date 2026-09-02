@@ -417,7 +417,9 @@ pub const fn delete_records_trim_application(
 }
 
 /// Non-negative KIP-932 backlog above the effective share start offset.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[cfg_attr(test, mutants::skip)]
 pub fn effective_share_backlog_model(hwm: i64, spso: i64, log_start: i64) -> Int {
@@ -553,7 +555,9 @@ pub fn unclean_recovery_commit_admission(
 }
 
 /// Java `String.hashCode` over the first `limit` UTF-16 code units.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(0 <= limit && limit <= units.len())]
 #[variant(limit)]
@@ -568,7 +572,9 @@ pub fn java_string_hash_prefix_model(units: Seq<u16>, limit: Int) -> i32 {
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn java_string_abs_model(hash: i32) -> i32 {
     pearlite! {
@@ -582,7 +588,9 @@ fn java_string_abs_model(hash: i32) -> i32 {
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 #[requires(partition_count@ > 0)]
 fn java_string_hash_partition_model(units: Seq<u16>, partition_count: i32) -> Int {

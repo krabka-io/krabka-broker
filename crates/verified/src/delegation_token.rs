@@ -282,7 +282,9 @@ pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecisi
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn chosen_lifetime_model(requested_ms: i64, ceiling_ms: i64) -> Int {
     pearlite! {
@@ -296,7 +298,9 @@ fn chosen_lifetime_model(requested_ms: i64, ceiling_ms: i64) -> Int {
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
 #[logic]
 fn renew_period_model(requested_ms: i64, default_renew_period_ms: i64) -> Int {
     pearlite! {
