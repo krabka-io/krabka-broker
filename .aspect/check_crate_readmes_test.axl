@@ -1,0 +1,78 @@
+"""Unit tests for `check_crate_readmes.axl`."""
+
+load("./check_crate_readmes.axl", "manifest_name", "problems", "table_row")
+load("./testing.axl", "check_eq", "suite")
+
+def _crate(directory, name, has_readme = True):
+    return struct(directory = directory, name = name, has_readme = has_readme)
+
+def _test_manifest_name(_ctx):
+    check_eq(
+        "the package name",
+        manifest_name(['[package]', 'name = "krabka-log"', 'version = "0.5.4"']),
+        "krabka-log",
+    )
+    check_eq(
+        "the first name wins over a dependency's",
+        manifest_name(['name = "krabka-log"', '[dependencies]', 'name = "other"']),
+        "krabka-log",
+    )
+    check_eq("no name", manifest_name(["[package]", "version = \"0.1.0\""]), "")
+
+def _test_a_documented_crate_passes(_ctx):
+    check_eq(
+        "documented",
+        problems([_crate("log", "krabka-log")], ["| `krabka-log` | The log. |"]),
+        [],
+    )
+
+def _test_a_missing_crate_readme_is_reported(_ctx):
+    check_eq(
+        "missing README.md",
+        problems([_crate("log", "krabka-log", has_readme = False)], ["| `krabka-log` | x |"]),
+        ["crates/log has no README.md"],
+    )
+
+def _test_a_missing_table_row_is_reported(_ctx):
+    check_eq(
+        "unlisted crate",
+        problems([_crate("log", "krabka-log")], ["| `krabka-raft` | x |"]),
+        ["README.md crate table does not list krabka-log"],
+    )
+
+def _test_a_prefix_of_another_name_is_not_a_row(_ctx):
+    # `| `krabka-log-index` |` opens with the same characters as the row for
+    # `krabka-log` up to the closing backtick; the pipe is what separates them.
+    check_eq(
+        "a longer name does not stand in for a shorter one",
+        problems([_crate("log", "krabka-log")], ["| `krabka-log-index` | x |"]),
+        ["README.md crate table does not list krabka-log"],
+    )
+
+def _test_an_indented_row_still_counts(_ctx):
+    check_eq(
+        "leading whitespace",
+        problems([_crate("log", "krabka-log")], ["  | `krabka-log` | x |"]),
+        [],
+    )
+
+def _test_a_nameless_manifest_is_reported_once(_ctx):
+    check_eq(
+        "no package name",
+        problems([_crate("log", "", has_readme = False)], []),
+        ["crates/log/Cargo.toml declares no package name"],
+    )
+
+def _test_table_row(_ctx):
+    check_eq("row opening", table_row("krabka-log"), "| `krabka-log` |")
+
+check_crate_readmes_tests = suite("check-crate-readmes", [
+    _test_manifest_name,
+    _test_a_documented_crate_passes,
+    _test_a_missing_crate_readme_is_reported,
+    _test_a_missing_table_row_is_reported,
+    _test_a_prefix_of_another_name_is_not_a_row,
+    _test_an_indented_row_still_counts,
+    _test_a_nameless_manifest_is_reported_once,
+    _test_table_row,
+])

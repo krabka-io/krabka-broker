@@ -1,0 +1,25 @@
+"""Run every `.axl` unit-test suite in this repository.
+
+    aspect axl-tests
+    aspect axl-tests --suite check-scripts
+"""
+
+load("./check_crate_readmes_test.axl", "check_crate_readmes_tests")
+load("./check_scripts_test.axl", "check_scripts_tests")
+load("./testing.axl", "run_suites")
+
+SUITES = [
+    check_crate_readmes_tests,
+    check_scripts_tests,
+]
+
+def _impl(ctx: TaskContext) -> int:
+    return run_suites(ctx, SUITES, only = ctx.args.suite)
+
+axl_tests = task(
+    summary = "Run the unit tests of the .axl tasks",
+    implementation = _impl,
+    args = {
+        "suite": args.string(default = "", description = "Run only this suite."),
+    },
+)

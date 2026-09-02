@@ -1,0 +1,90 @@
+"""Every workspace crate has a README, and the root README's table names it.
+
+The root `README.md` carries one table row per crate, and each crate carries
+its own `README.md`. Neither is generated, so both drift the moment a crate is
+added: this is what notices.
+
+    aspect check-crate-readmes
+"""
+
+load("./repo.axl", "is_file", "read_lines")
+
+# The `name = "..."` line of a Cargo manifest's `[package]` section. The
+# manifests here open with `[package]`, so the first such line is the crate's.
+_NAME_PREFIX = 'name = "'
+
+def manifest_name(lines):
+    """The package name a Cargo manifest declares, or "" when it declares none."""
+    for line in lines:
+        if line.startswith(_NAME_PREFIX) and line.endswith('"'):
+            return line[len(_NAME_PREFIX):-1]
+    return ""
+
+def table_row(name):
+    """The opening of the root README's table row for crate `name`."""
+    return "| `%s` |" % name
+
+def problems(crates, readme_lines):
+    """Every complaint about `crates`, in report order.
+
+    A crate is `struct(directory, name, has_readme)`: the directory under
+    `crates/`, the package name its manifest declares, and whether a
+    `README.md` sits beside that manifest.
+    """
+    listed = {}
+    for line in readme_lines:
+        listed[line.strip()] = True
+
+    found = []
+    for crate in crates:
+        if not crate.name:
+            found.append("crates/%s/Cargo.toml declares no package name" % crate.directory)
+            continue
+        if not crate.has_readme:
+            found.append("crates/%s has no README.md" % crate.directory)
+        row = table_row(crate.name)
+        named = False
+        for line in listed:
+            if line.startswith(row):
+                named = True
+        if not named:
+            found.append("README.md crate table does not list %s" % crate.name)
+    return found
+
+def _crates(fs, root):
+    found = []
+    for entry in fs.read_dir(root + "/crates"):
+        if not entry.is_dir:
+            continue
+        directory = root + "/crates/" + entry.path
+        manifest = directory + "/Cargo.toml"
+        if not is_file(fs, manifest):
+            continue
+        found.append(struct(
+            directory = entry.path,
+            name = manifest_name(read_lines(fs, manifest)),
+            has_readme = is_file(fs, directory + "/README.md"),
+        ))
+    return sorted(found, key = lambda crate: crate.directory)
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    crates = _crates(ctx.std.fs, root)
+    if not crates:
+        ctx.std.io.stderr.write("no crates found under crates/\n")
+        return 1
+
+    found = problems(crates, read_lines(ctx.std.fs, root + "/README.md"))
+    for problem in found:
+        ctx.std.io.stderr.write(problem + "\n")
+    if found:
+        return 1
+
+    ctx.std.io.stdout.write("check-crate-readmes: %d crates documented\n" % len(crates))
+    return 0
+
+check_crate_readmes = task(
+    summary = "Check that every crate has a README and the root table names it",
+    implementation = _impl,
+    args = {},
+)
