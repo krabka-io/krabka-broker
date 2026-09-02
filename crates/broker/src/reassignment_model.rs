@@ -6,7 +6,7 @@
 //! of replica catch-up, broker liveness, and completion ticks, and it asserts
 //! the reassignment-safety invariants. The most important one is that the
 //! replica set never switches off the leader. Design:
-//! `docs/superpowers/specs/2026-06-13-krabka-reassignment-model-design.md`.
+//! `crates/broker/docs/replication-isr-design.md`.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! each run is fenced with `within_boundary` and `target_state_count`. While

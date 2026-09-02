@@ -12,3 +12,7 @@ to disk. The caller injects the time. The core reads the log through the
 on-disk log. The core is a clean leaf with no tokio, no filesystem, and no
 crypto, so it builds for `wasm32-unknown-unknown`. The `sim` feature uses that
 build for the in-browser consensus playground.
+
+## Documentation
+
+- [Design](../raft/docs/design.md) — the KRaft consensus design, which covers this core and the `krabka-raft` engine that drives it.

@@ -2,7 +2,7 @@
 
 Offline point-in-time restore: rebuilds a complete, bootable krabka log directory from a KIP-405 tiered-storage archive.
 
-Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of Apache Kafka.
+Part of [Krabka](../../README.md), a Rust implementation of Apache Kafka. The [KIP compatibility matrix](../../docs/KIP_MATRIX.md) records the KIP-405 archive layout this tool reads and the tests behind it.
 
 ## Overview
 

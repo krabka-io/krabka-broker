@@ -243,10 +243,10 @@ fn tiered_storage_rlmm_bootstrap_attempts_counts_up() {
 #[test]
 fn audit_counters_present() {
     let m = BrokerMetrics::new();
-    m.audit_events_total.inc();
-    m.audit_write_failures_total.inc();
-    assert2::check!(m.audit_events_total.get() == 1);
-    assert2::check!(m.audit_write_failures_total.get() == 1);
+    m.audit_events.inc();
+    m.audit_write_failures.inc();
+    assert2::check!(m.audit_events.get() == 1);
+    assert2::check!(m.audit_write_failures.get() == 1);
 }
 
 #[test]

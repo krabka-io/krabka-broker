@@ -75,7 +75,7 @@ pub struct FileListener {
     /// the broker-wide `connections_max_idle`. Maps to an entry in
     /// [`crate::BrokerConfig::connections_max_idle_overrides`].
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub connections_max_idle: Option<krabka_units::Time>,
 }
 

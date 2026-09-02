@@ -31,7 +31,7 @@ pub struct FileGssapiConfig {
     pub kdc: Option<String>,
     /// Maximum tolerated difference between client and broker clocks.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub max_time_skew: Option<Time>,
 }
 

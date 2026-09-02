@@ -1,0 +1,224 @@
+# Prometheus alert rules for krabka-broker.
+#
+# Every threshold here is the one the metric's doc comment in
+# `crates/broker/src/metrics.rs` recommends. A rule whose comment names no
+# threshold says so in its `description`, and the number it carries is a
+# starting point for the operator to tune. Each rule names the runbook that
+# says what to do when it fires.
+#
+# `tools/check-metrics-contract.py` and the `metrics_contract` suite in
+# `crates/broker/tests/` check that every series an `expr` names is one the
+# broker exports. Load the file with `promtool check rules`.
+groups:
+  - name: krabka-broker-availability
+    rules:
+      - alert: KrabkaUnderReplicatedPartitions
+        expr: krabka_broker_under_replicated_partitions > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} leads {{ $value }} under-replicated partitions"
+          description: "A partition this broker leads has an ISR smaller than its replica set. A stuck follower fails an unclean election later."
+          runbook: docs/operations/runbooks/under-replicated-partitions.md
+
+      - alert: KrabkaUnderMinIsrPartitions
+        expr: krabka_broker_under_min_isr_partition_count > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} leads {{ $value }} partitions below min.insync.replicas"
+          description: "These partitions reject acks=all produces with NOT_ENOUGH_REPLICAS. Writes are blocked."
+          runbook: docs/operations/runbooks/under-min-isr-partitions.md
+
+      - alert: KrabkaOfflinePartitions
+        expr: krabka_broker_offline_partitions_count > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} reports {{ $value }} offline partitions"
+          description: "A partition has no live leader. It is unavailable until an ISR member returns or an unclean election runs."
+          runbook: docs/operations/runbooks/offline-partitions.md
+
+      - alert: KrabkaLeaderSiteDrift
+        expr: krabka_broker_leader_site_drift_partitions > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} leads {{ $value }} partitions away from the preferred site"
+          description: "Leadership drifted off the stretch cluster's preferred leader site and no rebalance has undone it."
+          runbook: docs/operations/runbooks/leader-site-drift.md
+
+      - alert: KrabkaControllerLeaderFlapping
+        expr: rate(krabka_broker_controller_leader_changes_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} keeps observing controller leader changes"
+          description: "The raft leader changed repeatedly over ten minutes. One election is normal; a sustained rate is flapping."
+          runbook: docs/operations/runbooks/controller-leader-flapping.md
+
+      - alert: KrabkaUncleanLeaderElection
+        expr: rate(krabka_broker_unclean_leader_elections_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} drove an unclean leader election"
+          description: "The controller elected a leader from outside the ISR. Committed records may be lost."
+          runbook: docs/operations/runbooks/unclean-leader-election.md
+
+  - name: krabka-broker-lag
+    rules:
+      - alert: KrabkaReplicaLag
+        expr: krabka_broker_replica_lag_max_records > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has a follower {{ $value }} records behind"
+          description: "A follower of a partition this broker leads trails the leader's log end. It is still in the ISR; the metric comment names no threshold, and 10000 records over ten minutes is a starting point."
+          runbook: docs/operations/runbooks/replica-lag.md
+
+      - alert: KrabkaConsumerGroupLag
+        expr: krabka_broker_consumer_group_lag_records > 10000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "group {{ $labels.group_id }} is {{ $value }} records behind on {{ $labels.topic }}-{{ $labels.partition }}"
+          description: "The group's committed offset trails the partition's high watermark. The metric comment names no threshold; 10000 records over fifteen minutes is a starting point, and a busy topic needs a larger number."
+          runbook: docs/operations/runbooks/consumer-group-lag.md
+
+  - name: krabka-broker-requests
+    rules:
+      - alert: KrabkaUnsupportedApiRequests
+        expr: sum by (instance, api_key) (rate(krabka_broker_unsupported_api_requests_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} rejects {{ $labels.api_key }} requests at a version it does not speak"
+          description: "A client sends an api_key and version pair outside the registered range. This is usually upgrade skew or a misconfigured client."
+          runbook: docs/operations/runbooks/unsupported-api-requests.md
+
+      - alert: KrabkaRequestErrors
+        expr: sum by (instance, api_key) (rate(krabka_broker_request_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} handler errors on {{ $labels.api_key }}"
+          description: "A request handler returned an error and the dispatcher closed the connection."
+          runbook: docs/operations/runbooks/request-errors.md
+
+      - alert: KrabkaFailedProduceRequests
+        expr: sum by (instance, topic) (rate(krabka_broker_topic_failed_produce_requests_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} returns Produce errors on {{ $labels.topic }}"
+          description: "Produce partition responses carry a non-zero error code. Quota, ACL and NOT_ENOUGH_REPLICAS storms all land here."
+          runbook: docs/operations/runbooks/failed-produce-requests.md
+
+      - alert: KrabkaIdleConnectionCloses
+        expr: rate(krabka_broker_connection_closes_total{reason="idle"}[5m]) > 1
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }} closes more than one idle connection per second"
+          description: "A peer opens connections and then sends nothing. The metric comment names the signal but no threshold; one per second is a starting point."
+          runbook: docs/operations/runbooks/idle-connection-closes.md
+
+  - name: krabka-broker-subsystems
+    rules:
+      - alert: KrabkaRlmmBootstrapStuck
+        expr: min_over_time(krabka_broker_tiered_storage_rlmm_topic_backed[5m]) == 0 and rate(krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot bootstrap the topic-backed RLMM"
+          description: "The broker keeps retrying the __remote_log_metadata bootstrap and still answers from the fail-closed placeholder. Tiered reads and copies wait."
+          runbook: docs/operations/runbooks/rlmm-bootstrap-stuck.md
+
+      - alert: KrabkaAuditWriteFailures
+        expr: rate(krabka_broker_audit_write_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} fails to write audit records"
+          description: "Produces to __krabka_audit fail. Records divert to the spool until it fills."
+          runbook: docs/operations/runbooks/audit-write-failures.md
+
+      - alert: KrabkaAuditRecordsDropped
+        expr: rate(krabka_broker_audit_records_dropped_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} drops audit records"
+          description: "The audit channel or the spool is full. Every dropped record is a gap in the audit trail."
+          runbook: docs/operations/runbooks/audit-write-failures.md
+
+      - alert: KrabkaBarrierPartialCut
+        expr: rate(krabka_broker_barrier_epochs_published_partial_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "barrier group {{ $labels.group }} published a partial cut"
+          description: "An epoch's cut names a partition that got no marker. The group no longer reaches all of its partitions."
+          runbook: docs/operations/runbooks/barrier-partial-cut.md
+
+      - alert: KrabkaBreakGlassBypassed
+        expr: rate(krabka_broker_break_glass_bypassed_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} ran {{ $labels.action }} without an approved break-glass proposal"
+          description: "A data-losing transition ran past the two-person rule. Read the audit log for the partition it names."
+          runbook: docs/operations/runbooks/break-glass-bypassed.md
+
+  - name: krabka-broker-diskless-wal
+    rules:
+      - alert: KrabkaDisklessWalQuorumLoss
+        expr: rate(krabka_broker_diskless_wal_quorum_loss_events_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} could not form a diskless WAL quorum"
+          description: "A leader-side append could not reach enough WAL voters. acks=all produces to diskless topics fail while this persists."
+          runbook: docs/operations/runbooks/diskless-wal-quorum-loss.md
+
+      - alert: KrabkaDisklessWalFlushFailures
+        expr: rate(krabka_broker_diskless_wal_flush_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} fails to flush diskless WAL objects"
+          description: "Object-store writes fail. The local hot tail grows until the flush succeeds."
+          runbook: docs/operations/runbooks/diskless-wal-flush-failures.md
+
+      - alert: KrabkaDisklessWalColdReadErrors
+        expr: rate(krabka_broker_diskless_wal_cold_read_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} fails diskless WAL cold reads"
+          description: "Reads of trimmed offsets fail in the object store. Consumers behind the trim frontier get errors."
+          runbook: docs/operations/runbooks/diskless-wal-flush-failures.md
+
+      - alert: KrabkaDisklessWalVoterLag
+        expr: krabka_broker_diskless_wal_voter_lag > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WAL voter {{ $labels.voter }} lags shard {{ $labels.topic_id }}/{{ $labels.partition }} by {{ $value }} offsets"
+          description: "A voter's durable offset trails the leader log end. The metric comment names no threshold; 10000 offsets over ten minutes is a starting point."
+          runbook: docs/operations/runbooks/diskless-wal-voter-lag.md

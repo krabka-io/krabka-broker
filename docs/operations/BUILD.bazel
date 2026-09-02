@@ -1,0 +1,23 @@
+"""The operator guide and the metrics contract it publishes.
+
+`//crates/broker:metrics_contract_test` reads the dashboard, the alert rules
+and the checked-in `/metrics` body, so they are exported here for its `data`.
+"""
+
+exports_files(glob([
+    "*.json",
+    "*.md",
+    "*.txt",
+    "*.yaml",
+    "runbooks/*.md",
+]))
+
+filegroup(
+    name = "contract",
+    srcs = [
+        "alert-rules.yaml",
+        "grafana-dashboard.json",
+        "metrics-body.txt",
+    ],
+    visibility = ["//visibility:public"],
+)

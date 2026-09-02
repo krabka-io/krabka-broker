@@ -4,7 +4,7 @@
 //! handler that also persists. This module combines it with the completion
 //! identity selected during Phase 1 into one decision that the handler and the
 //! stateright model can drive. See `decision_model.rs` and the design:
-//! `docs/superpowers/specs/2026-06-14-krabka-txn-coordinator-model-design.md`.
+//! `crates/broker/docs/transaction-coordinator-design.md`.
 
 use krabka_log::ProducerId;
 

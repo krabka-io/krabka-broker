@@ -10,9 +10,9 @@ use crate::metrics::BrokerMetrics;
 impl BrokerMetrics {
     pub(super) fn register_group_5(&self, registry: &mut Registry) {
         registry.register(
-            "audit_write_failures_total",
+            "audit_write_failures",
             "Cumulative audit records that failed to write to the audit topic",
-            self.audit_write_failures_total.clone(),
+            self.audit_write_failures.clone(),
         );
 
         registry.register(

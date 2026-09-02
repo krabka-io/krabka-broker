@@ -27,12 +27,15 @@ use super::{BrokerMetrics, ConsumerGroupLabel, PartitionLabel, ReplicaLagLabel};
 /// The label sets the two lag families currently carry.
 ///
 /// It is a cache of what is in the families, kept in step by being written
-/// only where the families are: [`BrokerMetrics::publish_replica_lag`],
-/// [`BrokerMetrics::publish_consumer_group_lag`], and the eviction entry
+/// only where the families are: `BrokerMetrics::publish_replica_lag`,
+/// `BrokerMetrics::publish_consumer_group_lag`, and the eviction entry
 /// points below. A [`BrokerMetrics`] clone shares one index, as it shares one
 /// registry.
+///
+/// The type is public because [`BrokerMetrics`] exposes its field, but it has
+/// no public method: outside the crate it is an opaque handle.
 #[derive(Clone, Default)]
-pub(crate) struct LagSeriesIndex {
+pub struct LagSeriesIndex {
     replica: Arc<DashSet<ReplicaLagLabel>>,
     group: Arc<DashSet<ConsumerGroupLabel>>,
 }

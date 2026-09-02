@@ -1,0 +1,18 @@
+# Code owners are asked to review every pull request that touches a matching
+# path. The last matching pattern wins. The two handles below are the
+# repository administrators; the krabka-io organization has no teams yet, so
+# they are named directly.
+
+* @robot-head @petermodracee
+
+# Contributor-facing policy and CI. A change here affects every pull request.
+/.github/ @robot-head @petermodracee
+/SECURITY.md @robot-head @petermodracee
+/CONTRIBUTING.md @robot-head @petermodracee
+/CLAUDE.md @robot-head @petermodracee
+
+# The proof sessions and the verified kernels they discharge. A change to a
+# contract changes what the catalog promises.
+/crates/verified/ @robot-head @petermodracee
+/verif/ @robot-head @petermodracee
+/docs/verification.md @robot-head @petermodracee

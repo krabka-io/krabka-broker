@@ -1,0 +1,392 @@
+# HELP krabka_broker_topic_bytes_in Bytes received from producers, per topic (cumulative). Operators compute throughput via rate(...)..
+# TYPE krabka_broker_topic_bytes_in counter
+krabka_broker_topic_bytes_in_total{topic="orders"} 0
+# HELP krabka_broker_topic_bytes_out Bytes delivered to fetchers, per topic (cumulative)..
+# TYPE krabka_broker_topic_bytes_out counter
+krabka_broker_topic_bytes_out_total{topic="orders"} 0
+# HELP krabka_broker_messages_in Cumulative count of records received from producers, per topic. Mirrors Kafka's BrokerTopicMetrics.MessagesInPerSec. Legacy v0/v1 produce payloads are not counted (their per-record body stays opaque on the Produce path); the paired produce_message_conversions counter tracks the legacy-arrival rate so operators can detect under-counting..
+# TYPE krabka_broker_messages_in counter
+krabka_broker_messages_in_total{topic="orders"} 0
+# HELP krabka_broker_topic_produce_requests Produce requests handled, per topic (cumulative). One increment per topic per Produce request..
+# TYPE krabka_broker_topic_produce_requests counter
+krabka_broker_topic_produce_requests_total{topic="orders"} 0
+# HELP krabka_broker_topic_fetch_requests Fetch requests handled, per topic (cumulative). One increment per topic per Fetch request..
+# TYPE krabka_broker_topic_fetch_requests counter
+krabka_broker_topic_fetch_requests_total{topic="orders"} 0
+# HELP krabka_broker_topic_failed_produce_requests Cumulative count of Produce partition responses that returned a non-zero error code, per topic. Mirrors Kafka's BrokerTopicMetrics.FailedProduceRequestsPerSec. Operators alert on rate(...) > 0 to catch quota / ACL / NOT_ENOUGH_REPLICAS storms; the ratio against topic_produce_requests yields the per-topic error rate..
+# TYPE krabka_broker_topic_failed_produce_requests counter
+krabka_broker_topic_failed_produce_requests_total{topic="orders"} 0
+# HELP krabka_broker_topic_failed_fetch_requests Cumulative count of Fetch partition responses that returned a non-zero error code, per topic. Mirrors Kafka's BrokerTopicMetrics.FailedFetchRequestsPerSec. Pairs with topic_fetch_requests for per-topic error rate..
+# TYPE krabka_broker_topic_failed_fetch_requests counter
+krabka_broker_topic_failed_fetch_requests_total{topic="orders"} 0
+# HELP krabka_broker_partitions_led Number of partitions for which this broker is currently leader..
+# TYPE krabka_broker_partitions_led gauge
+krabka_broker_partitions_led 0
+# HELP krabka_broker_partitions_total Total number of partitions (leader + follower replicas) this broker hosts. Mirrors Kafka's ReplicaManager.PartitionCount..
+# TYPE krabka_broker_partitions_total gauge
+krabka_broker_partitions_total 0
+# HELP krabka_broker_under_replicated_partitions Count of partitions this broker leads whose ISR is smaller than the assigned replica set. Mirrors Kafka's ReplicaManager.UnderReplicatedPartitions; alert on > 0 to spot stuck followers before they fail an unclean election..
+# TYPE krabka_broker_under_replicated_partitions gauge
+krabka_broker_under_replicated_partitions 0
+# HELP krabka_broker_under_min_isr_partition_count Count of partitions this broker leads whose ISR is strictly less than the topic's min.insync.replicas. Mirrors Kafka's ReplicaManager.UnderMinIsrPartitionCount; alert on > 0 — these partitions reject acks=all produces with NOT_ENOUGH_REPLICAS..
+# TYPE krabka_broker_under_min_isr_partition_count gauge
+krabka_broker_under_min_isr_partition_count 0
+# HELP krabka_broker_offline_partitions_count Count of partitions this broker leads that have no live leader (leader dead with no eligible ISR replacement). Mirrors Kafka's ReplicaManager.OfflinePartitionsCount; alert on > 0 — these partitions are wholly unavailable until an ISR member returns or an unclean election runs..
+# TYPE krabka_broker_offline_partitions_count gauge
+krabka_broker_offline_partitions_count 0
+# HELP krabka_broker_active_controller 1 if this broker is the raft (controller) leader, 0 otherwise..
+# TYPE krabka_broker_active_controller gauge
+krabka_broker_active_controller 0
+# HELP krabka_broker_ignored_static_voters Configured static controller voters ignored at kraft.version 1..
+# TYPE krabka_broker_ignored_static_voters gauge
+krabka_broker_ignored_static_voters 0
+# HELP krabka_broker_witness_role 1 if this node carries the data-bearing witness role, 0 otherwise. The value comes from the broker.witness config in the metadata image, so it confirms that the role reached the controller..
+# TYPE krabka_broker_witness_role gauge
+krabka_broker_witness_role 0
+# HELP krabka_broker_leader_site_drift_partitions Count of partitions this broker leads from a site other than the stretch cluster's preferred leader site. It stays at zero on a cluster that pins leadership to no site; alert on > 0 to catch leadership that drifted away from the pinned site..
+# TYPE krabka_broker_leader_site_drift_partitions gauge
+krabka_broker_leader_site_drift_partitions 0
+# HELP krabka_broker_voted_directory 1 for the controller directory identity voted for in this epoch..
+# TYPE krabka_broker_voted_directory gauge
+krabka_broker_voted_directory{directory_id="00000000-0000-0000-0000-000000000001"} 0
+# HELP krabka_broker_controller_leader_changes Cumulative count of distinct controller-leader transitions this broker has observed (any change in the raft leader, including this broker becoming or ceasing to be leader). Mirrors Kafka's KafkaController.LeaderElectionRateAndTimeMs; alert on a sustained rate() > 0 to spot flapping raft leadership..
+# TYPE krabka_broker_controller_leader_changes counter
+krabka_broker_controller_leader_changes_total 0
+# HELP krabka_broker_controller_fencing_publications Cumulative count of completed broker-fencing publication passes run by this broker while it holds the controller leadership, whether or not the pass had a difference to write. The pass awaits its own commit, so an increment means the fencing state it decided on is applied rather than in flight..
+# TYPE krabka_broker_controller_fencing_publications counter
+krabka_broker_controller_fencing_publications_total 0
+# HELP krabka_broker_isr_shrinks Cumulative count of ISR shrinks proposed by this broker's ISR-maintenance loop..
+# TYPE krabka_broker_isr_shrinks counter
+krabka_broker_isr_shrinks_total 0
+# HELP krabka_broker_isr_expands Cumulative count of ISR expands proposed by this broker's ISR-maintenance loop..
+# TYPE krabka_broker_isr_expands counter
+krabka_broker_isr_expands_total 0
+# HELP krabka_broker_partition_bytes_in Bytes received from producers, per partition (cumulative). Rebalancer-targeted; rate(...) for throughput..
+# TYPE krabka_broker_partition_bytes_in counter
+krabka_broker_partition_bytes_in_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_partition_bytes_out Bytes served to consumers, per partition (cumulative). Rebalancer-targeted; rate(...) for throughput..
+# TYPE krabka_broker_partition_bytes_out counter
+krabka_broker_partition_bytes_out_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_replication_bytes_in Bytes received from the partition leader by this broker as a follower (cumulative). Rate(...) for follower throughput; plotted alongside partition_bytes_in surfaces ingest vs. replication-driven traffic..
+# TYPE krabka_broker_replication_bytes_in counter
+krabka_broker_replication_bytes_in_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_replication_bytes_out Bytes this broker served to followers as the partition leader (cumulative). Rate(...) for leader-out-to-followers throughput; together with partition_bytes_out (consumer reads) it attributes outbound traffic to its source..
+# TYPE krabka_broker_replication_bytes_out counter
+krabka_broker_replication_bytes_out_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_replica_lag_records Records a follower of a partition this broker leads has yet to fetch: the leader's log end offset minus that follower's last-fetched offset. Where under_replicated_partitions says only that a follower left the ISR, this says how far behind it is while it is still in..
+# TYPE krabka_broker_replica_lag_records gauge
+krabka_broker_replica_lag_records{topic="orders",partition="0",replica="2"} 0
+# HELP krabka_broker_replica_lag_max_records The largest value replica_lag_records carries on this broker, or zero when it leads no partition with a follower. Mirrors Kafka's ReplicaFetcherManager.MaxLag; alert on it rather than aggregating the per-follower family..
+# TYPE krabka_broker_replica_lag_max_records gauge
+krabka_broker_replica_lag_max_records 0
+# HELP krabka_broker_consumer_group_lag_records Records a consumer group this broker coordinates has yet to consume from one partition: the partition's high watermark minus the group's committed offset. Classic and KIP-848 groups both report here..
+# TYPE krabka_broker_consumer_group_lag_records gauge
+krabka_broker_consumer_group_lag_records{group_id="billing",topic="orders",partition="0"} 0
+# HELP krabka_broker_partition_disk_bytes On-disk size of a partition's log directory (gauge). Updated by the broker's periodic disk scanner; suppress if scanner is disabled..
+# TYPE krabka_broker_partition_disk_bytes gauge
+krabka_broker_partition_disk_bytes{topic="orders",partition="0"} 0
+# HELP krabka_broker_share_group_backlog Share-group partition backlog in records, emitted by the group coordinator..
+# TYPE krabka_broker_share_group_backlog gauge
+krabka_broker_share_group_backlog{group_id="workers",topic="orders",partition="0"} 0
+# HELP krabka_broker_partition_cpu_micros Cumulative handler-thread microseconds spent processing each (topic, partition). Rebalancer-targeted; rate(...) divided by 1_000_000 yields core occupancy..
+# TYPE krabka_broker_partition_cpu_micros counter
+krabka_broker_partition_cpu_micros_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_fetch_response_drain Cumulative count of drained Fetch responses, labelled by the path their records regions took to the socket: sendfile (kernel zero-copy), pread (a file-backed region the drain had to copy through a buffer), or vectored (no file-backed region). rate(...{path="sendfile"}) is how an operator sees that the zero-copy fetch path is carrying traffic..
+# TYPE krabka_broker_fetch_response_drain counter
+krabka_broker_fetch_response_drain_total{path="pread"} 0
+krabka_broker_fetch_response_drain_total{path="sendfile"} 0
+krabka_broker_fetch_response_drain_total{path="vectored"} 0
+# HELP krabka_broker_ktls_enabled 1 when the startup probe found working Linux kTLS and TLS fetch connections drain records through kernel-offloaded sendfile; 0 when they encrypt in userspace, including on a broker with no TLS listener and on every non-Linux target..
+# TYPE krabka_broker_ktls_enabled gauge
+krabka_broker_ktls_enabled 0
+# HELP krabka_broker_incremental_fetch_sessions KIP-227: live incremental-fetch sessions cached by this broker (gauge)..
+# TYPE krabka_broker_incremental_fetch_sessions gauge
+krabka_broker_incremental_fetch_sessions 0
+# HELP krabka_broker_incremental_fetch_session_evictions KIP-227: cumulative count of incremental-fetch sessions evicted from the cache to make room for a new allocation..
+# TYPE krabka_broker_incremental_fetch_session_evictions counter
+krabka_broker_incremental_fetch_session_evictions_total 0
+# HELP krabka_broker_incremental_fetch_partitions_cached KIP-227: total (topic, partition) tuples held across every live incremental-fetch session (gauge)..
+# TYPE krabka_broker_incremental_fetch_partitions_cached gauge
+krabka_broker_incremental_fetch_partitions_cached 0
+# HELP krabka_broker_client_software_versions KIP-511: cumulative count of accepted ApiVersions handshakes, labelled by client software name and version. One increment per successful v3+ ApiVersions call..
+# TYPE krabka_broker_client_software_versions counter
+krabka_broker_client_software_versions_total{software_name="apache-kafka-java",software_version="4.0.0"} 0
+# HELP krabka_broker_successful_authentication Cumulative count of SaslAuthenticate frames per mechanism that ended in a successful auth state transition. Mirrors Kafka's kafka.network:type=Selector,name=successful-authentication-total. Labelled by the canonical SASL mechanism wire name (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER). Paired with failed_authentication so rate(...) ratios expose per-mechanism credential-failure rates..
+# TYPE krabka_broker_successful_authentication counter
+krabka_broker_successful_authentication_total{mechanism="SCRAM-SHA-512"} 0
+# HELP krabka_broker_failed_authentication Cumulative count of SaslAuthenticate frames per mechanism that returned a non-zero error code. Mirrors Kafka's failed-authentication-total. ILLEGAL_SASL_STATE rejects (SaslAuthenticate without prior SaslHandshake) land under the `Unknown` mechanism label..
+# TYPE krabka_broker_failed_authentication counter
+krabka_broker_failed_authentication_total{mechanism="SCRAM-SHA-512"} 0
+# HELP krabka_broker_api_requests Cumulative count of dispatched requests per Kafka API key (variant name from the `ApiKey` enum, e.g. Produce / Fetch / DescribeQuorum). Unknown api keys land under the `Unknown` label. Mirrors Kafka's RequestMetrics.RequestsPerSec; rate(...) yields per-API throughput..
+# TYPE krabka_broker_api_requests counter
+krabka_broker_api_requests_total{api_key="Produce"} 0
+# HELP krabka_broker_unsupported_api_requests Cumulative count of requests the dispatcher rejected because the request version was outside the registered range. Labelled with the ApiKey variant name. Alert on rate(...) > 0 to catch upgrade-skew or misconfigured clients..
+# TYPE krabka_broker_unsupported_api_requests counter
+krabka_broker_unsupported_api_requests_total{api_key="Produce"} 0
+# HELP krabka_broker_request_duration_seconds Per-Kafka-API request-handling latency in seconds, observed in the dispatch path around the full handler round-trip (decode → handle → encode). Labelled by the ApiKey variant name. Operators graph histogram_quantile(0.99, rate(..._bucket[5m])) per api to spot tail-latency regressions..
+# TYPE krabka_broker_request_duration_seconds histogram
+krabka_broker_request_duration_seconds_sum{api_key="Produce"} 0.0
+krabka_broker_request_duration_seconds_count{api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.0001",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.0005",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.001",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.005",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.01",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.025",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.05",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.1",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.25",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="0.5",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="1.0",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="10.0",api_key="Produce"} 0
+krabka_broker_request_duration_seconds_bucket{le="+Inf",api_key="Produce"} 0
+# HELP krabka_broker_request_local_duration_seconds Per-Kafka-API seconds one request spent on this broker's own log: the Produce writer round-trip summed over the request's partitions, or the Fetch read of every planned partition. Mirrors Kafka's RequestMetrics.LocalTimeMs. Labelled by the ApiKey variant name, like request_duration_seconds..
+# TYPE krabka_broker_request_local_duration_seconds histogram
+krabka_broker_request_local_duration_seconds_sum{api_key="Produce"} 0.0
+krabka_broker_request_local_duration_seconds_count{api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.0001",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.0005",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.001",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.005",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.01",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.025",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.05",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.1",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.25",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="0.5",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="1.0",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="10.0",api_key="Produce"} 0
+krabka_broker_request_local_duration_seconds_bucket{le="+Inf",api_key="Produce"} 0
+# HELP krabka_broker_request_remote_duration_seconds Per-Kafka-API seconds one request spent waiting on another broker: the acks=all high-watermark gate for Produce, the long poll for Fetch. Mirrors Kafka's RequestMetrics.RemoteTimeMs. High here with a low request_local_duration_seconds is a lagging follower, not a slow disk..
+# TYPE krabka_broker_request_remote_duration_seconds histogram
+krabka_broker_request_remote_duration_seconds_sum{api_key="Produce"} 0.0
+krabka_broker_request_remote_duration_seconds_count{api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.0001",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.0005",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.001",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.005",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.01",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.025",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.05",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.1",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.25",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="0.5",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="1.0",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="10.0",api_key="Produce"} 0
+krabka_broker_request_remote_duration_seconds_bucket{le="+Inf",api_key="Produce"} 0
+# HELP krabka_broker_request_throttle_duration_seconds Per-Kafka-API seconds one request slept in the KIP-219 quota throttle, or in the KIP-599 controller-mutation throttle the topic-mutating admin apis apply inline. Mirrors Kafka's RequestMetrics.ThrottleTimeMs. Observed once per request whose quota the broker accounts for, with an explicit zero when no quota applied. The three phase families are disjoint and sum to at most the total; the remainder is decode, authorization, validation and encode..
+# TYPE krabka_broker_request_throttle_duration_seconds histogram
+krabka_broker_request_throttle_duration_seconds_sum{api_key="Produce"} 0.0
+krabka_broker_request_throttle_duration_seconds_count{api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.0001",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.0005",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.001",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.005",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.01",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.025",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.05",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.1",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.25",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="0.5",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="1.0",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="10.0",api_key="Produce"} 0
+krabka_broker_request_throttle_duration_seconds_bucket{le="+Inf",api_key="Produce"} 0
+# HELP krabka_broker_quota_throttle_duration_seconds Seconds of throttle the broker actually applied, labelled by the client quota that caused it (Produce = producer_byte_rate, Fetch = consumer_byte_rate, Request = request_percentage, ControllerMutation = controller_mutation_rate). A request sleeps for the largest of the delays it is charged, and the sample lands under the quota that produced it — the one an operator would raise to stop the throttle. Unthrottled requests are not observed, so _count is the number of throttled requests..
+# TYPE krabka_broker_quota_throttle_duration_seconds histogram
+krabka_broker_quota_throttle_duration_seconds_sum{quota_type="Produce"} 0.0
+krabka_broker_quota_throttle_duration_seconds_count{quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.0001",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.0005",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.001",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.005",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.01",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.025",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.05",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.1",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.25",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="0.5",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="1.0",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="10.0",quota_type="Produce"} 0
+krabka_broker_quota_throttle_duration_seconds_bucket{le="+Inf",quota_type="Produce"} 0
+# HELP krabka_broker_in_flight_requests Number of requests currently being handled by this broker (gauge). Incremented on dispatch entry, decremented on exit; a sustained climb signals handler stalls..
+# TYPE krabka_broker_in_flight_requests gauge
+krabka_broker_in_flight_requests 0
+# HELP krabka_broker_active_connections Number of client connections currently open to this broker (gauge). Incremented when the per-connection serve loop starts, decremented when it exits (EOF / error / SASL expiry)..
+# TYPE krabka_broker_active_connections gauge
+krabka_broker_active_connections 0
+# HELP krabka_broker_connection_closes Cumulative count of client connections the broker closed on its own, labelled by reason: idle, sasl_session_expired, decode_error, peer_closed. Alert on rate(...{reason="idle"}[5m]) to catch a peer that connects and then sends nothing..
+# TYPE krabka_broker_connection_closes counter
+krabka_broker_connection_closes_total{reason="idle"} 0
+# HELP krabka_broker_request_errors Per-Kafka-API count of requests whose handler returned an error (dispatcher closed the connection). Labelled by the ApiKey variant name; disjoint from unsupported_api_requests. Alert on rate(...) > 0 to catch handler-level faults..
+# TYPE krabka_broker_request_errors counter
+krabka_broker_request_errors_total{api_key="Produce"} 0
+# HELP krabka_broker_tiered_storage_rlmm_topic_backed KIP-405: 1 when this broker is answering remote-log metadata queries from the durable __remote_log_metadata topic (production RLMM); 0 while still on the fail-closed NotReadyRlmm placeholder. Bumped to 1 by the bootstrap task after a successful SwappableRlmm swap; stays at 0 for clusters that never asked for `metadataManager: Topic`..
+# TYPE krabka_broker_tiered_storage_rlmm_topic_backed gauge
+krabka_broker_tiered_storage_rlmm_topic_backed 0
+# HELP krabka_broker_tiered_storage_rlmm_bootstrap_attempts Number of topic-backed RLMM bootstrap attempts; climbs while stuck retrying, flat once tiered_storage_rlmm_topic_backed flips to 1..
+# TYPE krabka_broker_tiered_storage_rlmm_bootstrap_attempts counter
+krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total 0
+# HELP krabka_broker_produce_message_conversions Cumulative count of v0/v1 → v2 record-batch up-conversions on the Produce path, per topic. Mirrors Kafka's BrokerTopicMetrics.ProduceMessageConversionsPerSec; rate(...) lets operators spot the overhead of legacy producers in the cluster..
+# TYPE krabka_broker_produce_message_conversions counter
+krabka_broker_produce_message_conversions_total{topic="orders"} 0
+# HELP krabka_broker_fetch_message_conversions Cumulative count of v2 → v0/v1 record-batch down-conversions on the Fetch path, per topic. Mirrors Kafka's BrokerTopicMetrics.FetchMessageConversionsPerSec; rate(...) lets operators spot the overhead of legacy consumers in the cluster..
+# TYPE krabka_broker_fetch_message_conversions counter
+krabka_broker_fetch_message_conversions_total{topic="orders"} 0
+# HELP krabka_broker_unclean_leader_elections KIP-841: cumulative count of unclean leader elections driven by this broker (as controller leader). An unclean election is one where the new leader was picked from outside the ISR because the partition's ISR was empty at failover time and the topic had unclean.leader.election.enable=true. Each such election accepts possible data loss. Mirrors Kafka's ControllerStats.UncleanLeaderElectionsPerSec; an operator alert on rate(unclean_leader_elections_total[5m]) > 0 flags the data-loss footgun..
+# TYPE krabka_broker_unclean_leader_elections counter
+krabka_broker_unclean_leader_elections_total 0
+# HELP krabka_broker_audit_events Cumulative audit records successfully written to the audit topic.
+# TYPE krabka_broker_audit_events counter
+krabka_broker_audit_events_total 0
+# HELP krabka_broker_audit_write_failures Cumulative audit records that failed to write to the audit topic.
+# TYPE krabka_broker_audit_write_failures counter
+krabka_broker_audit_write_failures_total 0
+# HELP krabka_broker_audit_spool_depth Current count of audit records buffered in the durable spool.
+# TYPE krabka_broker_audit_spool_depth gauge
+krabka_broker_audit_spool_depth 0
+# HELP krabka_broker_audit_spool_bytes Current bytes buffered in the durable audit spool.
+# TYPE krabka_broker_audit_spool_bytes gauge
+krabka_broker_audit_spool_bytes 0
+# HELP krabka_broker_audit_records_spooled Cumulative audit records diverted to the spool on topic-write failure.
+# TYPE krabka_broker_audit_records_spooled counter
+krabka_broker_audit_records_spooled_total 0
+# HELP krabka_broker_audit_records_replayed Cumulative audit records drained from the spool back to the topic.
+# TYPE krabka_broker_audit_records_replayed counter
+krabka_broker_audit_records_replayed_total 0
+# HELP krabka_broker_audit_records_dropped Cumulative audit records lost (channel-full or spool-full).
+# TYPE krabka_broker_audit_records_dropped counter
+krabka_broker_audit_records_dropped_total 0
+# HELP krabka_broker_client_metrics_otlp_dropped Cumulative KIP-714 client-metric batches dropped before OTLP export.
+# TYPE krabka_broker_client_metrics_otlp_dropped counter
+krabka_broker_client_metrics_otlp_dropped_total 0
+# HELP krabka_broker_client_metrics_otlp_failed Cumulative failed KIP-714 client-metric OTLP export attempts.
+# TYPE krabka_broker_client_metrics_otlp_failed counter
+krabka_broker_client_metrics_otlp_failed_total 0
+# HELP krabka_broker_log_cleaner_runs Cumulative count of completed log-compaction sweeps run by this broker's cleaner (one per tick_all pass)..
+# TYPE krabka_broker_log_cleaner_runs counter
+krabka_broker_log_cleaner_runs_total 0
+# HELP krabka_broker_log_compactions Per-partition cumulative count of compaction passes this broker's cleaner completed successfully..
+# TYPE krabka_broker_log_compactions counter
+krabka_broker_log_compactions_total{topic="orders",partition="0"} 0
+# HELP krabka_broker_barrier_epochs_started Per-barrier-group cumulative count of epochs the coordinator started. Bumped when it writes the injection-start record that freezes the target set, before the first marker append..
+# TYPE krabka_broker_barrier_epochs_started counter
+krabka_broker_barrier_epochs_started_total{group="orders-cut"} 0
+# HELP krabka_broker_barrier_epochs_committed Per-barrier-group cumulative count of epochs whose marker reached every partition of the group. The coordinator published a complete cut for each one..
+# TYPE krabka_broker_barrier_epochs_committed counter
+krabka_broker_barrier_epochs_committed_total{group="orders-cut"} 0
+# HELP krabka_broker_barrier_epochs_published_partial Per-barrier-group cumulative count of epochs whose cut names at least one partition that got no marker. The coordinator consumes the epoch either way. Alert on rate(...) > 0 to catch a group that no longer reaches all of its partitions..
+# TYPE krabka_broker_barrier_epochs_published_partial counter
+krabka_broker_barrier_epochs_published_partial_total{group="orders-cut"} 0
+# HELP krabka_broker_barrier_injection_duration_seconds Per-barrier-group wall-clock seconds from the injection-start record to the published cut. Graph histogram_quantile(0.99, rate(..._bucket[5m])) against barrier_injection_timeout to see how much headroom a group has..
+# TYPE krabka_broker_barrier_injection_duration_seconds histogram
+krabka_broker_barrier_injection_duration_seconds_sum{group="orders-cut"} 0.0
+krabka_broker_barrier_injection_duration_seconds_count{group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.005",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.01",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.025",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.05",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.1",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.25",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="0.5",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="1.0",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="2.5",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="5.0",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="10.0",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="30.0",group="orders-cut"} 0
+krabka_broker_barrier_injection_duration_seconds_bucket{le="+Inf",group="orders-cut"} 0
+# HELP krabka_broker_barrier_latest_epoch Per-barrier-group epoch of the newest cut this coordinator published (gauge). A flat value beside a live barrier_min_injection_interval says that injection stopped..
+# TYPE krabka_broker_barrier_latest_epoch gauge
+krabka_broker_barrier_latest_epoch{group="orders-cut"} 0
+# HELP krabka_broker_barrier_markers_written Per-topic cumulative count of barrier markers this broker appended, across every group and every partition it leads..
+# TYPE krabka_broker_barrier_markers_written counter
+krabka_broker_barrier_markers_written_total{topic="orders"} 0
+# HELP krabka_broker_barrier_groups_coordinated Number of barrier groups this broker coordinates (gauge). Zero on a broker that leads no __barrier_state partition..
+# TYPE krabka_broker_barrier_groups_coordinated gauge
+krabka_broker_barrier_groups_coordinated 0
+# HELP krabka_broker_delivery_watermark KFC-1 deliver-at-time watermark of each scheduled partition this broker leads (gauge): the first offset that is not visible to a consumer yet. A partition whose topic delivers immediately reports no series..
+# TYPE krabka_broker_delivery_watermark gauge
+krabka_broker_delivery_watermark{topic="orders",partition="0"} 0
+# HELP krabka_broker_delivery_pending_records KFC-1 records of each scheduled partition that are durable but not visible yet (gauge): the log end offset minus the delivery watermark..
+# TYPE krabka_broker_delivery_pending_records gauge
+krabka_broker_delivery_pending_records{topic="orders",partition="0"} 0
+# HELP krabka_broker_delivery_activation_lateness_seconds KFC-1 seconds from a batch's activation deadline to the moment the broker first made it visible. The deadline is the record timestamp plus the topic's declared clock bound, so this measures the delay beyond that bound and a healthy broker sits at zero. A rising tail says the bound is not honest, or that the scheduler is starved of CPU..
+# TYPE krabka_broker_delivery_activation_lateness_seconds histogram
+krabka_broker_delivery_activation_lateness_seconds_sum 0.0
+krabka_broker_delivery_activation_lateness_seconds_count 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.001"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.005"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.01"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.025"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.05"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.1"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.25"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="0.5"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="1.0"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="2.5"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="10.0"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="30.0"} 0
+krabka_broker_delivery_activation_lateness_seconds_bucket{le="+Inf"} 0
+# HELP krabka_broker_delivery_scheduler_wakeups KFC-1 cumulative count of delivery-scheduler wakeups, whether a deadline came due, a produce re-armed the task, or its idle bound elapsed..
+# TYPE krabka_broker_delivery_scheduler_wakeups counter
+krabka_broker_delivery_scheduler_wakeups_total 0
+# HELP krabka_broker_schema_validation_rejections KFC-7 cumulative count of records rejected by schema validation, per topic and reason. The reason is one of unframed, unknown_id, wrong_subject, body_mismatch, and registry_unavailable. The broker bumps it once per rejected record. Read the split by reason during a rollout to see which producer is at fault..
+# TYPE krabka_broker_schema_validation_rejections counter
+krabka_broker_schema_validation_rejections_total{topic="orders",reason="unframed"} 0
+# HELP krabka_broker_schema_validation_cache_hits KFC-7 cumulative count of schema lookups the broker answered from its local cache, with no call to the registry..
+# TYPE krabka_broker_schema_validation_cache_hits counter
+krabka_broker_schema_validation_cache_hits_total 0
+# HELP krabka_broker_schema_validation_cache_misses KFC-7 cumulative count of schema lookups that cost a registry round trip on the produce path. The ratio against schema_validation_cache_hits is what says whether this feature costs anything at steady state..
+# TYPE krabka_broker_schema_validation_cache_misses counter
+krabka_broker_schema_validation_cache_misses_total 0
+# HELP krabka_broker_delivery_clock_uncertainty_seconds KFC-8 the clock bound this broker declares: the seconds KFC-1 adds to a batch's timestamp before the batch activates. Compare measured clock uncertainty against this series, so an alert tracks the bound the broker relies on instead of a copy of it..
+# TYPE krabka_broker_delivery_clock_uncertainty_seconds gauge
+krabka_broker_delivery_clock_uncertainty_seconds 0.0
+# HELP krabka_broker_topic_freeze_rejections KFC-9 cumulative count of Produce partition rows the broker refused because a freeze covers the topic, per topic. The gate runs before the batch is parsed, so a refused row moves no log end offset..
+# TYPE krabka_broker_topic_freeze_rejections counter
+krabka_broker_topic_freeze_rejections_total{topic="orders"} 0
+# HELP krabka_broker_topic_freezes_active KFC-9 live entries in the freeze registry (gauge). One prefix entry covers a whole namespace, so this counts entries and not frozen topics. The freeze max_entries setting caps it..
+# TYPE krabka_broker_topic_freezes_active gauge
+krabka_broker_topic_freezes_active 0
+# HELP krabka_broker_break_glass_proposals KFC-9 break-glass proposals by state (gauge), where state is one of pending, approved, expired, and consumed. A rise in pending beside a flat approved is an incident where the second person has not answered yet..
+# TYPE krabka_broker_break_glass_proposals gauge
+krabka_broker_break_glass_proposals{state="pending"} 0
+# HELP krabka_broker_break_glass_refusals KFC-9 cumulative count of privileged transitions the broker refused because no approved break-glass proposal covers them, per action. A refusal is the expected answer when an operator runs the tool before the approval lands..
+# TYPE krabka_broker_break_glass_refusals counter
+krabka_broker_break_glass_refusals_total{action="unclean_recovery"} 0
+# HELP krabka_broker_break_glass_bypassed KFC-9 cumulative count of privileged transitions that ran WITHOUT an approved break-glass proposal, per action. This is the series to alert on: it counts data-losing unclean recoveries that no second person approved, which the background policy audit-only permits because that path has no caller to refuse. Any non-zero rate needs an operator to read the audit log for the partition it names..
+# TYPE krabka_broker_break_glass_bypassed counter
+krabka_broker_break_glass_bypassed_total{action="unclean_recovery"} 0
+# HELP krabka_broker_diskless_wal_durable_watermark Quorum-durable offset for each diskless WAL shard led by this broker..
+# TYPE krabka_broker_diskless_wal_durable_watermark gauge
+krabka_broker_diskless_wal_durable_watermark{topic_id="00000000-0000-0000-0000-000000000001",partition="0"} 0
+# HELP krabka_broker_diskless_wal_index_projection_lag Durable offsets not yet represented by the committed diskless WAL object index..
+# TYPE krabka_broker_diskless_wal_index_projection_lag gauge
+krabka_broker_diskless_wal_index_projection_lag{topic_id="00000000-0000-0000-0000-000000000001",partition="0"} 0
+# HELP krabka_broker_diskless_wal_trim_frontier Local log-start offset after trimming a diskless WAL shard..
+# TYPE krabka_broker_diskless_wal_trim_frontier gauge
+krabka_broker_diskless_wal_trim_frontier{topic_id="00000000-0000-0000-0000-000000000001",partition="0"} 0
+# HELP krabka_broker_diskless_wal_voter_lag Leader log-end offset minus each diskless WAL voter's durable offset..
+# TYPE krabka_broker_diskless_wal_voter_lag gauge
+krabka_broker_diskless_wal_voter_lag{topic_id="00000000-0000-0000-0000-000000000001",partition="0",voter="1"} 0
+# HELP krabka_broker_diskless_wal_quorum_loss_events Leader-side diskless WAL acknowledgements that failed to form a quorum..
+# TYPE krabka_broker_diskless_wal_quorum_loss_events counter
+krabka_broker_diskless_wal_quorum_loss_events_total 0
+# HELP krabka_broker_diskless_wal_flush_attempts Non-empty diskless WAL objects submitted to object storage..
+# TYPE krabka_broker_diskless_wal_flush_attempts counter
+krabka_broker_diskless_wal_flush_attempts_total 0
+# HELP krabka_broker_diskless_wal_flush_bytes Bytes successfully written as diskless WAL objects..
+# TYPE krabka_broker_diskless_wal_flush_bytes counter
+krabka_broker_diskless_wal_flush_bytes_total 0
+# HELP krabka_broker_diskless_wal_flush_failures Diskless WAL object flushes that failed after an attempt began..
+# TYPE krabka_broker_diskless_wal_flush_failures counter
+krabka_broker_diskless_wal_flush_failures_total 0
+# HELP krabka_broker_diskless_wal_cold_read_hits Diskless WAL cold reads served from object storage..
+# TYPE krabka_broker_diskless_wal_cold_read_hits counter
+krabka_broker_diskless_wal_cold_read_hits_total 0
+# HELP krabka_broker_diskless_wal_cold_read_misses Diskless WAL cold reads with no matching committed index entry..
+# TYPE krabka_broker_diskless_wal_cold_read_misses counter
+krabka_broker_diskless_wal_cold_read_misses_total 0
+# HELP krabka_broker_diskless_wal_cold_read_errors Diskless WAL cold reads that failed while reading object storage..
+# TYPE krabka_broker_diskless_wal_cold_read_errors counter
+krabka_broker_diskless_wal_cold_read_errors_total 0
+# EOF

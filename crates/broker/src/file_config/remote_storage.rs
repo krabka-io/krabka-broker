@@ -61,26 +61,26 @@ pub struct FileKafkaRlmmConfig {
     pub replication: Option<i32>,
     /// Timeout for provisioning each internal metadata topic.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub topic_create_timeout: Option<Time>,
     /// Maximum wait for each per-partition metadata fetch.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub fetch_max_wait: Option<Time>,
     /// Maximum bytes returned by each per-partition metadata fetch.
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub fetch_max_bytes: Option<ByteSize>,
     /// Backoff after a failed metadata fetch.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub fetch_retry_backoff: Option<Time>,
     /// Capacity of the shared metadata-event delivery queue.
     #[schemars(range(min = 1))]
     pub event_queue_capacity: Option<usize>,
     /// RLMM cache snapshot cadence.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub snapshot_interval: Option<Time>,
     /// Explicit opt-out: run the non-durable in-memory RLMM instead of the
     /// topic-backed default. Tests / single-node dev only.

@@ -76,7 +76,7 @@ pub struct FileFreezeConfig {
     /// controller's clock. Default
     /// [`crate::config::DEFAULT_FREEZE_SIGNATURE_MAX_SKEW`].
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub signature_max_skew: Option<Time>,
 }
 
@@ -100,7 +100,7 @@ pub struct FileBreakGlassConfig {
     /// How long a proposal stays usable. Default
     /// [`crate::config::DEFAULT_BREAK_GLASS_PROPOSAL_TTL`].
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub proposal_ttl: Option<Time>,
     /// Actions whose approvals must also carry a detached operator signature.
     /// Omitted inside a present `[break_glass]` section selects

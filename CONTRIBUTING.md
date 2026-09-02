@@ -67,4 +67,9 @@ Before you open a pull request:
    [`CHANGELOG.md`](CHANGELOG.md). Krabka releases the workspace as one unit, so
    a crate changelog records no release and CI fails when one does. The
    [release process](docs/releasing.md) turns those entries into a tag.
-4. State what changed and list the checks that you ran.
+4. State what changed and list the checks that you ran. The
+   [pull request template](.github/pull_request_template.md) lists the gates
+   as a checklist, and [`CODEOWNERS`](.github/CODEOWNERS) names the reviewers.
+
+Report a vulnerability as [`SECURITY.md`](SECURITY.md) describes, not in a
+public issue.

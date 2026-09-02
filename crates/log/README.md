@@ -6,8 +6,8 @@
 
 Byte-compatible reader and writer for Apache Kafka's on-disk log format.
 
-Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation
-of Apache Kafka-compatible infrastructure and clients.
+Part of [Krabka](../../README.md), a Rust implementation of Apache
+Kafka-compatible infrastructure and clients.
 
 ## Overview
 
@@ -18,6 +18,9 @@ directories. It keeps Kafka's segment naming and index formats.
 The crate works at the single-partition log directory level. Higher layers apply
 broker-level topic configuration, leader/follower ownership, remote-tier
 scheduling, transaction visibility policy, and write serialization.
+
+The [design document](docs/design.md) records the file layout, the recovery,
+retention, and compaction rules, and the decisions behind them.
 
 ## Capabilities
 
@@ -78,9 +81,11 @@ println!("wrote at {base_offset:?}; read {} batches", output.batches.len());
 ## Documentation
 
 - [API documentation](https://docs.rs/krabka-log)
-- [Krabka repository](https://github.com/robot-head/crabka)
+- [Repository README](../../README.md)
+- [KIP compatibility matrix](../../docs/KIP_MATRIX.md), whose on-disk log
+  contract rows this crate's `integration` suite establishes
 
 ## License
 
 Apache-2.0. Derivative work of [Apache Kafka](https://kafka.apache.org); see
-[NOTICE](https://github.com/robot-head/crabka/blob/main/NOTICE).
+[NOTICE](../../NOTICE).

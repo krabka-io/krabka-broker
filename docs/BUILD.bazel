@@ -1,0 +1,9 @@
+# The checked-in generated artifacts that broker tests compare against, and
+# the annotated example configs those tests parse. `//crates/broker` names
+# them in the `data` of its test targets.
+exports_files([
+    "config-schema.json",
+    "examples/broker-single-node.toml",
+    "examples/broker-three-node-quorum.toml",
+    "config-reference.md",
+])

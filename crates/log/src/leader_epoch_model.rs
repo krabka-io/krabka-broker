@@ -3,7 +3,7 @@
 //! truncates to when it rejoins a leader. The follower must keep every record
 //! both sides agree on, the committed common prefix, and drop every divergent
 //! higher-epoch record. See the design spec
-//! `docs/superpowers/specs/2026-06-14-krabka-data-plane-safety-models-design.md`.
+//! `crates/log/docs/design.md`.
 //!
 //! The model enumerates every bounded *authoritative leader* epoch-history,
 //! that is, a history with strictly increasing epoch and `start_offset`, **with

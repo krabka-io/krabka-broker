@@ -62,11 +62,46 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-object-store` | Object-store abstraction shared by the tiered paths. |
 | `krabka-authz` | Authorizer traits, ACL evaluation, and the OPA client. |
 | `krabka-audit` | Audit event model, OCSF serialization, and the `krabka-audit verify` CLI. |
+| `krabka-barrier` | Operator CLI for barrier groups: define a group, trigger and list cuts, verify a cut against the log. |
+| `krabka-guard` | Operator CLI for topic write freezes and break-glass proposals: freeze, thaw, propose, approve. |
 | `krabka-format` | Formats a fresh log directory: `meta.properties.json`, bootstrap records, the singleton `VotersRecord`. |
+| `krabka-restore` | Offline point-in-time restore of a bootable log directory from a KIP-405 archive. |
 | `krabka-throttle` | Quota token buckets (Creusot-verified). |
 | `krabka-verified` | Formally verified pure kernels shared by consensus and log. |
 | `krabka-telemetry` | OTLP pipeline, metrics registry, and the debug/pprof routes. |
 | `krabka-logfmt` | logfmt encoder for structured logs. |
+
+Rustdoc for every crate is published at
+[krabka-io.github.io/krabka-broker](https://krabka-io.github.io/krabka-broker/)
+on each push to `main`.
+
+- [KIP compatibility matrix](docs/KIP_MATRIX.md): generated per-KIP status,
+  owner, tests, Kafka image and client evidence. Regenerate with
+  `python3 tools/generate-kip-matrix.py`; CI diffs it.
+
+## Configuration
+
+`krabka-broker --config-file PATH` reads one TOML document. The
+[configuration reference](docs/config-reference.md) lists every key with its
+type, default, units, and description. It is generated from the schema that
+`krabka-broker --print-config-schema` prints, and CI regenerates and diffs it.
+Two annotated examples, a [single node](docs/examples/broker-single-node.toml)
+and a [three-node quorum](docs/examples/broker-three-node-quorum.toml), are
+parsed and applied by the broker test suite. The
+[crabka-docgen contract](docs/docgen-contract.md) records what the external
+documentation generator reads from this crate and the revision it is pinned at.
+
+## Design documents
+
+Each subsystem with invariants that are hard to reconstruct from the code
+carries a design document inside its crate, in the shape the
+[design-doc style guide](docs/style_guides/design_doc_style_guide.md) defines:
+
+- [Diskless WAL](crates/broker/docs/diskless-wal-design.md)
+- [KRaft consensus and the controller](crates/raft/docs/design.md)
+- [Replication and ISR](crates/broker/docs/replication-isr-design.md)
+- [Log and segment format](crates/log/docs/design.md)
+- [Transaction coordinator](crates/broker/docs/transaction-coordinator-design.md)
 
 ## Build
 
@@ -285,6 +320,17 @@ Three parts of them carry the design, not only the wiring:
   recovery runs, so `AlwaysAllow` would let a drain take a second voter out
   while the budget was already unmet.
 
+## Operations
+
+The operator guide lives in [docs/operations/](docs/operations/README.md):
+[deploy and rolling upgrade](docs/operations/deploy.md),
+[capacity](docs/operations/capacity.md), the
+[metrics contract](docs/operations/metrics.md) with the JMX names each series
+replaces, a reference Grafana dashboard, Prometheus alert rules, and one
+runbook per alert. `tools/check-metrics-contract.py` and the
+`metrics_contract` suite fail the build when the dashboard or the rules name
+a series the registry does not export.
+
 ## Mutation testing
 
 Mutation sweeps run through
@@ -339,3 +385,8 @@ points at robot-head/crabka for the history before the extraction.
 `krabka-log` and the other published names in this tree are released to crates.io
 from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
 publishes no crate; consumers pin it by git revision.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request. Report
+a vulnerability as [SECURITY.md](SECURITY.md) describes, not in a public issue.

@@ -59,7 +59,7 @@ impl KafkaTopicAuditSink {
 impl AuditSink for KafkaTopicAuditSink {
     async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError> {
         let Some(partition) = self.partitions.get(&self.topic, self.partition_index) else {
-            self.metrics.audit_write_failures_total.inc();
+            self.metrics.audit_write_failures.inc();
             return Err(AuditError::Sink(format!(
                 "audit partition {}-{} not local",
                 self.topic, self.partition_index
@@ -67,7 +67,7 @@ impl AuditSink for KafkaTopicAuditSink {
         };
         let leadership = partition.lock_produce_transition().await;
         if leadership.leader_node_id != self.node_id {
-            self.metrics.audit_write_failures_total.inc();
+            self.metrics.audit_write_failures.inc();
             return Err(AuditError::Sink(format!(
                 "audit partition {}-{} is led by node {}, not this node {}",
                 self.topic, self.partition_index, leadership.leader_node_id.0, self.node_id.0
@@ -99,7 +99,7 @@ impl AuditSink for KafkaTopicAuditSink {
             partition.produce_batch_outcome(batch).await
         };
         if let Err(error) = result {
-            self.metrics.audit_write_failures_total.inc();
+            self.metrics.audit_write_failures.inc();
             return Err(match error {
                 crate::partition::ProduceBatchError::Rejected(error) => {
                     AuditError::Sink(error.to_string())
@@ -109,7 +109,7 @@ impl AuditSink for KafkaTopicAuditSink {
                 }
             });
         }
-        self.metrics.audit_events_total.inc();
+        self.metrics.audit_events.inc();
         Ok(())
     }
 }

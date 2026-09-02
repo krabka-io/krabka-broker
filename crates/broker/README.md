@@ -58,12 +58,17 @@ broker restart. Inbound validation uses the existing `[oauthbearer]` policy.
 
 ## Design documents
 
+- [Diskless WAL](docs/diskless-wal-design.md) — the quorum WAL, controller-assigned offsets, the object flusher, and the cold-read path behind `krabka.diskless=true`.
+- [Replication and ISR](docs/replication-isr-design.md) — follower replication, the high watermark, ISR maintenance, and leader failover.
+- [Transaction coordinator](docs/transaction-coordinator-design.md) — the `__transaction_state` coordinator, the `EndTxn` phases, and KIP-939 two-phase commit.
 - [Witness broker role and stretch cluster](../../docs/KFCs/KFC-2-witness-broker-stretch-cluster.md) — the data-bearing witness role, and the three-site profile that keeps `acks=all` writes alive through the loss of any one site.
 - [Consistent cross-topic snapshots](../../docs/KFCs/KFC-4-cross-topic-snapshots.md) — the barrier markers a coordinator injects across a topic set, and the cuts they define.
 
 ## Documentation
 
 Read the API documentation on [docs.rs/krabka-broker](https://docs.rs/krabka-broker). The repository README contains the project-wide setup, development, and release notes.
+
+- [Configuration reference](../../docs/config-reference.md), generated from `krabka-broker --print-config-schema`; examples in [docs/examples/](../../docs/examples/).
 
 ## License
 

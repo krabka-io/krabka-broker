@@ -12,6 +12,8 @@ Coverage reports are **living documents**. Update a report when you add tests. A
 
 Krabka has no formal requirements database. Its "requirements" are the **Kafka compatibility contract**: wire-protocol byte exactness and KIP semantics.
 
+The authoritative per-KIP status is the generated [KIP matrix](../KIP_MATRIX.md). `tools/generate-kip-matrix.py` renders it from `KIP_ANNOTATIONS` in `crates/broker/src/api_catalog.rs`, and CI fails when the two disagree. A coverage report does not restate that status. It cites the matrix row.
+
 A coverage report shows how the tests verify that contract for the surface a crate owns. The methods are unit tests, property tests (round-trip and invariants), byte-exact codec checks against `kafka-clients`, JVM **differential** tests against a live oracle, mutation testing, and line coverage.
 
 ## What Belongs in Coverage Reports
@@ -169,7 +171,7 @@ When a crate delegates verification elsewhere:
 - **Header table**: always use `| :--- | :--- |` alignment.
 - **Date format**: `YYYY-MM-DD`.
 - **Test function names**: use `file::function_name` format (for example, `codec.rs::api_versions_roundtrip`).
-- **KIP references**: bold the ID (for example, `**KIP-848**`) and link to the KIP matrix.
+- **KIP references**: bold the ID (for example, `**KIP-848**`) and link to its row in the [KIP matrix](../KIP_MATRIX.md).
 - **Percentages**: one decimal place for line coverage (for example, 78.2%), zero for scope coverage (for example, 92%).
 - **File paths**: relative to crate `src/` for source, relative to crate root for test files.
 
@@ -191,7 +193,7 @@ Krabka's verification chain runs from the Kafka compatibility contract to indivi
 Kafka compatibility contract
   (wire byte-exactness + KIP semantics)
         │
-  KIP Matrix / README compatibility matrix   ← authoritative status
+  docs/KIP_MATRIX.md (generated)             ← authoritative status
         │
         ├── byte-exact codec checks vs `kafka-clients`
         ├── JVM differential tests vs live cp-kafka / apache-kafka oracle

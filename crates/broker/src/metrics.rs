@@ -38,16 +38,19 @@ mod request;
 mod schema_validation;
 mod traffic;
 
-pub use self::labels::{
-    ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
-    BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason, ConnectionCloseReasonLabel,
-    ConsumerGroupLabel, DirectoryLabel, FetchDrainPath, FetchDrainPathLabel, PartitionLabel,
-    QuotaType, QuotaTypeLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
-    ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
-};
 pub(crate) use self::{
-    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, lag::LagSeriesIndex,
-    phases::RequestPhases,
+    eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
+};
+pub use self::{
+    labels::{
+        ApiKeyLabel, BarrierGroupLabel, BreakGlassAction, BreakGlassActionLabel, BreakGlassState,
+        BreakGlassStateLabel, ClientSoftwareLabel, ConnectionCloseReason,
+        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
+        FetchDrainPathLabel, PartitionLabel, QuotaType, QuotaTypeLabel, ReplicaLagLabel,
+        SaslMechanismLabel, SchemaRejectionLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
+        WalVoterLabel,
+    },
+    lag::LagSeriesIndex,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in
@@ -426,11 +429,11 @@ pub struct BrokerMetrics {
     /// `FedRAMP` MLA: cumulative audit records successfully written to the
     /// audit topic. Incremented by the audit subsystem on each successful
     /// produce to `__krabka_audit`.
-    pub audit_events_total: Counter,
+    pub audit_events: Counter,
     /// `FedRAMP` MLA: cumulative audit records that failed to write to the
     /// audit topic. Incremented on each produce error; operators alert on
     /// `rate(audit_write_failures_total[5m]) > 0`.
-    pub audit_write_failures_total: Counter,
+    pub audit_write_failures: Counter,
     /// Current count of audit records buffered in the durable spool (gauge).
     pub audit_spool_depth: Gauge,
     /// Current bytes buffered in the durable audit spool (gauge).
@@ -619,7 +622,11 @@ pub struct BrokerMetrics {
     /// The label sets [`Self::replica_lag`] and [`Self::consumer_group_lag`]
     /// currently carry, so that a caller holding only part of a lag label set
     /// can still release the series. See [`LagSeriesIndex`].
-    pub(crate) lag_series: LagSeriesIndex,
+    ///
+    /// Public only so that the metrics contract suite can destructure the
+    /// bundle without `..` and fail to compile when a family is added. The
+    /// type is opaque outside the crate.
+    pub lag_series: LagSeriesIndex,
 }
 
 /// Opaque `Debug`, so that a type holding a [`BrokerMetrics`] can still derive

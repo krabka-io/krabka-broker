@@ -1,0 +1,167 @@
+# A single-node krabka-broker configuration.
+#
+# Start it with `krabka-broker --config-file broker-single-node.toml` after
+# `krabka-format --standalone` has prepared the log directory. Every key here
+# is documented in docs/config-reference.md, which is generated from the same
+# schema this file is checked against.
+#
+# Comment conventions: a line that starts with `# ` is prose. A line that
+# starts with `#` and no space is a disabled setting, kept in the file because
+# it needs a key file, a keytab, or a service that this example does not ship.
+# `crates/broker/tests/example_broker_toml.rs` parses this file as written
+# and again with every disabled setting turned on, so both forms stay valid.
+
+broker_id = 1
+log_dir = "/var/lib/krabka/data"
+# More JBOD directories (KIP-113). New partitions spread across all of them.
+extra_log_dirs = ["/mnt/krabka-1", "/mnt/krabka-2"]
+rack = "rack-a"
+replica_selector = "leader"
+
+# Broker liveness and replication timing.
+heartbeat_interval = "2s"
+heartbeat_timeout = "18s"
+replica_lag_time_max = "30s"
+controller_election_timeout = "1s"
+controller_heartbeat_interval = "500ms"
+
+# Connection limits, Kafka `max.connections`, `max.connections.per.ip`, and
+# `connections.max.idle.ms`.
+max_connections = 10000
+max_connections_per_ip = 1000
+connections_max_idle = "10m"
+
+# The listener peers dial for replication and controller traffic.
+inter_broker_listener_name = "INTERNAL"
+controller_listener_protocol = "Plaintext"
+
+# Principals that bypass authorization.
+super_users = ["User:admin"]
+
+# The client-facing listeners. `name` is the Kafka listener name, `protocol`
+# is one of `Plaintext`, `Ssl`, `SaslPlaintext`, or `SaslSsl`.
+[[listeners]]
+name = "INTERNAL"
+bind_addr = "0.0.0.0:9092"
+advertised = "localhost:9092"
+protocol = "Plaintext"
+
+[[listeners]]
+name = "CLIENT"
+bind_addr = "0.0.0.0:9094"
+advertised = "localhost:9094"
+protocol = "SaslSsl"
+# A per-listener `connections.max.idle.ms` that overrides the broker-wide one.
+connections_max_idle = "5m"
+
+# TLS material for the `CLIENT` listener. The paths are read when the listener
+# starts, so the files only have to exist at that point.
+[listeners.tls_config]
+cert_path = "/etc/krabka/tls/broker.crt"
+key_path = "/etc/krabka/tls/broker.key"
+client_ca_path = "/etc/krabka/tls/clients-ca.crt"
+client_auth = "Optional"
+
+# SASL mechanisms the `CLIENT` listener advertises. Wire names, as a client
+# writes them in `sasl.mechanism`.
+[listeners.sasl_config]
+enabled_mechanisms = ["SCRAM-SHA-256", "PLAIN"]
+
+# Kafka `server.properties` keys the broker honours as topic defaults.
+[server_properties]
+"log.retention.hours" = "168"
+"num.partitions" = "3"
+
+# KRaft `process.roles`. A single node is both controller and broker.
+[process]
+roles = ["controller", "broker"]
+
+# Operational policy. Every key is optional; an absent key keeps the broker's
+# built-in value. A present `[runtime]` table is validated as a whole.
+[runtime]
+controlled_shutdown_drain_timeout = "30s"
+log_segment_bytes = "1GiB"
+message_max_bytes = "1MiB"
+metadata_max_snapshot_interval = "1h"
+partition_disk_scan_interval = "1m"
+tls_reload_interval = "30s"
+txn_id_expiration = "168h"
+offsets_topic_replication_factor = 1
+transaction_state_replication_factor = 1
+default_min_insync_replicas = 1
+
+# Tiered storage (KIP-405). A single node keeps the tier on the local
+# filesystem. `[remote_storage.s3]` and `[remote_storage.gcs]` are the object
+# store backends; exactly one backend may be set.
+[remote_storage]
+storage_dir = "/var/lib/krabka/tiered"
+
+# The remote log metadata manager. `in_memory = true` skips the durable
+# `__remote_log_metadata` topic and is for single-node development only.
+[remote_storage.kafka_metadata]
+in_memory = true
+num_partitions = 1
+replication = 1
+
+# The cluster authorizer. `simple` is the ACL authorizer; `allow_all` turns
+# authorization off; `opa` delegates to Open Policy Agent, see the three-node
+# example.
+[authorization]
+type = "simple"
+super_users = ["User:admin"]
+
+# KIP-48 delegation tokens. The HMAC key comes from the environment variable
+# `KRABKA_DELEGATION_TOKEN_SECRET_KEY` when it is set, which is the preferred
+# source; the file key is a fallback.
+[delegation_token]
+max_lifetime_ms = 604800000
+default_renew_period_ms = 86400000
+expiry_check_interval_ms = 3600000
+#secret_key = "replace-with-a-long-random-secret"
+
+# The FedRAMP audit subsystem. `fail-open` keeps serving when the audit topic
+# is unavailable and records the loss later; `fail-closed` refuses privileged
+# actions until their audit record is durable.
+[audit]
+enabled = true
+failure_mode = "fail-open"
+topic = "__krabka_audit"
+
+[audit.spool]
+dir = "/var/lib/krabka/audit-spool"
+max_bytes = 1073741824
+sync_every_n = 1
+
+[audit.checkpoint]
+every_n = 1000
+every_secs = 60
+
+# Ed25519 checkpoint signing needs a PKCS#8 key file.
+#[audit.signing]
+#key_path = "/etc/krabka/audit/checkpoint.pk8"
+#key_id = "audit-2026"
+
+# Topic write freezes. A thaw is always signed when an operator key exists;
+# `require_signature` demands one for the freeze as well, so it needs an
+# `[[operator_keys]]` entry.
+[freeze]
+max_entries = 1000
+signature_max_skew = "5m"
+#require_signature = true
+
+# The two-person rule over privileged transitions. `signed_actions = []` asks
+# for approvals without detached signatures, which is the only valid setting
+# while no `[[operator_keys]]` entry exists.
+[break_glass]
+approvers = ["User:alice", "User:bob"]
+required_approvals = 2
+proposal_ttl = "30m"
+signed_actions = []
+background_unclean_recovery = "audit-only"
+
+# The operator key trust set: raw 32-byte Ed25519 public keys, read at
+# startup. Freeze signatures and break-glass approvals verify against it.
+#[[operator_keys]]
+#key_id = "alice-2026"
+#principal = "User:alice"
+#public_key_path = "/etc/krabka/operator-keys/alice.pub"
