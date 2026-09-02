@@ -28,6 +28,7 @@ use std::{
 use krabka_authz::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
 use krabka_units::{Time, convert::TimeExt as _, fmt::Human as _};
 use lru::LruCache;
+use qubit_clock::WallClock as _;
 
 mod cache;
 #[cfg(test)]
@@ -65,11 +66,11 @@ pub struct OpaAuthorizer {
     expire_after: Time,
     runtime: tokio::runtime::Handle,
     /// Clock backing the decision-cache TTL (the `expires_at_ms` stamp and its
-    /// expiry comparison). Production uses [`qubit_clock::SystemClock`], which
-    /// is wall time. Tests inject a [`qubit_clock::MockClock`] so cache entries
-    /// expire on a controlled timeline instead of a real `sleep`. The clock
-    /// governs *only* cache freshness, never the authorization decision.
-    clock: Arc<dyn qubit_clock::Clock>,
+    /// expiry comparison). Production uses [`qubit_clock::StdWallClock`], which
+    /// is wall time. Tests inject a [`qubit_clock::ManualWallClock`] so cache
+    /// entries expire on a controlled timeline instead of a real `sleep`. The
+    /// clock governs *only* cache freshness, never the authorization decision.
+    clock: Arc<dyn qubit_clock::WallClock>,
 }
 
 impl std::fmt::Debug for OpaAuthorizer {
@@ -118,16 +119,17 @@ impl OpaAuthorizer {
             max_cache_size,
             expire_after,
             http_timeout,
-            Arc::new(qubit_clock::SystemClock::new()),
+            Arc::new(qubit_clock::StdWallClock::new()),
         )
     }
 
     /// Same as [`OpaAuthorizer::new`] but with a caller-supplied
-    /// [`qubit_clock::Clock`] backing the decision-cache TTL. Production uses
-    /// [`OpaAuthorizer::new`] with a [`qubit_clock::SystemClock`]. Tests pass a
-    /// [`qubit_clock::MockClock`] so cached decisions expire on a controlled
-    /// timeline without a real `sleep`. The clock affects *only* cache
-    /// freshness, never the authorization decision.
+    /// [`qubit_clock::WallClock`] backing the decision-cache TTL. Production
+    /// uses [`OpaAuthorizer::new`] with a [`qubit_clock::StdWallClock`]. Tests
+    /// pass a [`qubit_clock::ManualWallClock`], which a
+    /// [`qubit_clock::ManualMonotonicClock`] hands out, so cached decisions
+    /// expire on a controlled timeline without a real `sleep`. The clock
+    /// affects *only* cache freshness, never the authorization decision.
     ///
     /// # Errors
     ///
@@ -139,7 +141,7 @@ impl OpaAuthorizer {
         max_cache_size: usize,
         expire_after: Time,
         http_timeout: Time,
-        clock: Arc<dyn qubit_clock::Clock>,
+        clock: Arc<dyn qubit_clock::WallClock>,
     ) -> Result<Self, OpaConfigError> {
         let http_client = reqwest::Client::builder()
             .timeout(http_timeout.to_std())
@@ -197,8 +199,8 @@ impl Authorizer for OpaAuthorizer {
             host: req.host.ip(),
         };
         // Cache-freshness timestamp only — read from the injected clock so tests
-        // can expire entries on a mock timeline. Not part of the decision.
-        let now = self.clock.millis();
+        // can expire entries on a manual timeline. Not part of the decision.
+        let now = crate::time_util::epoch_millis(self.clock.now());
         {
             let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
             if let Some(cached) = cache.get(&key)

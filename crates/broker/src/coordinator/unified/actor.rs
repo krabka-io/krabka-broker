@@ -13,11 +13,7 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::{
     sync::{mpsc, oneshot},
@@ -59,9 +55,12 @@ pub use self::{
     retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
-use crate::coordinator::unified::{
-    GroupCoordinator, config::NextGenConfig, group::CoordinatorGroup, offsets_log::OffsetsLog,
-    reconciler::ReconcileInput,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator, config::NextGenConfig, group::CoordinatorGroup, offsets_log::OffsetsLog,
+        reconciler::ReconcileInput,
+    },
+    time_util,
 };
 
 /// A Kafka wire `error_code` value, as carried in response `error_code`
@@ -86,6 +85,11 @@ const FALLBACK_REBALANCE_TIMEOUT_MS_I32: i32 = 60_000;
 /// interval. The actor reports it when the configured interval overflows the
 /// wire `i32`.
 const FALLBACK_HEARTBEAT_INTERVAL_MS: i32 = 5_000;
+
+/// Names this actor's session-expiry cadence in the timer-failure logs that
+/// [`time_util::arm`] and [`time_util::fired`] emit, so an operator can tell
+/// which loop lost its ticker.
+const TICK_TASK: &str = "consumer group actor";
 
 /// Which protocol an actor's `Group` speaks. This value is fixed at spawn. The
 /// handle exposes it so that the coordinator can route or reject
@@ -181,15 +185,38 @@ async fn actor_loop(
     // `last_seen`-vs-`session_timeout` comparison, so its cadence only changes
     // how often we check, never the outcome.
     //
-    // Driven through the injected `AsyncSleeper` (production: real time; tests:
-    // a controlled mock timeline). A zero-duration first sleep reproduces
-    // `tokio::time::interval`'s immediate t=0 tick; each subsequent sleep is
-    // re-armed to the configured interval only after the tick body runs
-    // (`MissedTickBehavior::Delay` semantics — a slow tick never bursts). The
-    // future is held across loop iterations so an inbound-message stream never
-    // resets the tick schedule (matching the persistent `Interval`).
-    let sleeper = config.sleeper.clone();
-    let mut tick = sleeper.sleep_for_async(Duration::ZERO);
+    // Driven through the injected `Timer` (production: real time; tests: a
+    // controlled manual timeline). Each deadline is armed to the configured
+    // interval only after the tick body runs (`MissedTickBehavior::Delay`
+    // semantics — a slow tick never bursts). The future is held across loop
+    // iterations so an inbound-message stream never resets the tick schedule
+    // (matching the persistent `Interval`). It owns its registration outright
+    // instead of borrowing the timer, so nothing has to be cloned out of
+    // `config` to keep it alive across the arms.
+    //
+    // The FIRST deadline is a full interval, not the zero-duration one that
+    // would reproduce `tokio::time::interval`'s t=0 tick. A sweep at t=0 can
+    // only read `last_seen` values that predate this actor, which is exactly
+    // the just-replayed group whose members were restored from the log: it
+    // evicts every one of them, empties the group, and reaps the actor before
+    // it has served a single request. Deferring the first sweep by one
+    // interval costs nothing, because as the paragraph above says the cadence
+    // "only changes how often we check, never the outcome" -- a member that is
+    // genuinely past its session timeout is still past it one interval later.
+    //
+    // The previous sleeper hid this. Its `tokio::time::sleep(Duration::ZERO)`
+    // still went through the runtime's timer driver, so the "immediate" tick
+    // actually landed a driver tick later — enough of a window that a caller
+    // reliably got in first. `Timer::after(Duration::ZERO)` returns an
+    // already-complete future instead, which turned that window into a coin
+    // flip against `tokio::select!`'s randomised branch order.
+    let Some(mut tick) = time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK)
+    else {
+        // No ticker, no actor. Take the same exit the loop body takes below,
+        // so the offset-retention clock is stamped once before we go away.
+        group.observe_membership(chrono_now_ms());
+        return;
+    };
     loop {
         let deadline = classic_deadline(&group);
         let keep_running = tokio::select! {
@@ -205,16 +232,30 @@ async fn actor_loop(
                     handle_actor_message(&mut group, &mut parked, services, msg).await
                 }
             },
-            () = &mut tick => {
-                let services = ActorServices {
-                    config: &config,
-                    metadata: &*metadata,
-                    offsets_log: &*offsets_log,
-                    coordinator: &coordinator,
-                };
-                let keep_running = handle_actor_tick(&mut group, &mut parked, services).await;
-                tick = sleeper.sleep_for_async(config.session_expiry_tick);
-                keep_running
+            outcome = &mut tick => {
+                // A ticker that failed, or that cannot be armed again, takes
+                // this actor's session-expiry sweep with it. Report it as
+                // "stop" rather than returning outright: the loop tail still
+                // has to stamp `observe_membership` and break cleanly.
+                if time_util::fired(outcome, TICK_TASK) {
+                    let services = ActorServices {
+                        config: &config,
+                        metadata: &*metadata,
+                        offsets_log: &*offsets_log,
+                        coordinator: &coordinator,
+                    };
+                    let keep_running =
+                        handle_actor_tick(&mut group, &mut parked, services).await;
+                    match time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK) {
+                        Some(next) => {
+                            tick = next;
+                            keep_running
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                }
             }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: complete with whoever is here.
@@ -252,6 +293,22 @@ async fn opt_sleep(deadline: Option<Instant>) {
     }
 }
 
+/// The wall-clock reading this actor subtree stamps records and deadlines
+/// with, in milliseconds since the Unix epoch. It reads `std::time`, not
+/// chrono, which the name predates.
+///
+/// This is deliberately **not** [`crate::time_util::now_ms`], which is
+/// otherwise the same function. The two disagree on one arm: a duration that
+/// overflows `i64` milliseconds saturates to `i64::MAX` there and to `0` here.
+/// Collapsing this into the shared helper would therefore change what the
+/// offset-retention clock reads, so it stays separate until someone decides
+/// which answer that clock wants.
+///
+/// That arm needs a system clock set roughly 292 million years ahead to reach,
+/// and the two answers fail in opposite directions: `0` dates a group to the
+/// epoch, so its offsets expire at once, while `i64::MAX` dates it to now, so
+/// they never expire. The share-group actor keeps its own copy of this same
+/// function, with the same divergence.
 fn chrono_now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

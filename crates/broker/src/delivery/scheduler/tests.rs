@@ -5,7 +5,7 @@ use krabka_ids::{Offset, PartitionIndex};
 use krabka_log::DeliveryPolicy;
 use krabka_metadata::NodeId;
 use krabka_units::{millis, secs};
-use qubit_clock::{Clock, DateTime, MockTime};
+use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, WallClock};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -14,6 +14,7 @@ use crate::delivery::{
     metrics::NoDeliveryMetrics,
     test_support::{
         BOUND_MS, NOW_MS, RecordingMetrics, register, scheduled_partition, wait_parked, wait_until,
+        wall_at,
     },
 };
 
@@ -98,28 +99,31 @@ fn the_sleep_is_capped_by_the_idle_bound_and_floored_by_the_minimum() {
     }
 }
 
-/// A scheduler wired to `time`, with the registry and the recorder a test
-/// asserts on.
+/// A scheduler wired to a manual timeline, with the registry and the recorder
+/// a test asserts on.
+///
+/// `timeline` is the whole of time here: the wall reading the scheduler and
+/// every partition take, and the cadence its ticker parks on, both come out of
+/// it, so advancing it moves the two together.
 struct Harness {
     registry: Arc<PartitionRegistry>,
     metrics: Arc<RecordingMetrics>,
     waker: Arc<DeliveryWaker>,
     shutdown: CancellationToken,
-    time: MockTime,
-    clock: Arc<dyn Clock>,
+    timeline: Arc<ManualMonotonicClock>,
+    clock: Arc<dyn WallClock>,
 }
 
 impl Harness {
     fn new() -> Self {
-        let time =
-            MockTime::at(DateTime::from_timestamp_millis(NOW_MS).expect("a representable instant"));
+        let timeline = ManualMonotonicClock::new_shared();
         Self {
             registry: Arc::new(PartitionRegistry::new()),
             metrics: Arc::new(RecordingMetrics::default()),
             waker: Arc::new(DeliveryWaker::new()),
             shutdown: CancellationToken::new(),
-            clock: Arc::new(time.clock()),
-            time,
+            clock: timeline.new_wall_clock(wall_at(NOW_MS)),
+            timeline,
         }
     }
 
@@ -131,7 +135,7 @@ impl Harness {
                 idle_sleep: secs(1),
                 min_sleep: millis(1),
                 clock: Arc::clone(&self.clock),
-                sleeper: Arc::new(self.time.sleeper()),
+                timer: self.timeline.new_timer(),
             },
             Arc::clone(&self.metrics) as Arc<dyn DeliveryMetrics>,
             Arc::clone(&self.waker),
@@ -156,7 +160,7 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     register(&harness.registry, &partition);
 
     let task = harness.spawn();
-    check!(wait_parked(&harness.time.timeline(), 1).await);
+    check!(wait_parked(&harness.timeline, 1).await);
 
     // The first two records are visible; the pending batch holds the rest.
     check!(partition.delivery_watermark() == Offset(2));
@@ -168,13 +172,16 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
 
     // Cross the activation boundary: the batch is due once the declared clock
     // bound has also elapsed.
-    harness.time.advance(Duration::from_millis(
-        u64::try_from(10_000 + BOUND_MS).expect("positive"),
-    ));
-    // Wait on the watermark itself, not on the park count. A fired sleeper
-    // stays registered on the timeline until the woken task drops it, so a
-    // second `wait_parked` here can be satisfied by the park the advance was
-    // meant to end and return before the sweep has run.
+    harness
+        .timeline
+        .advance(Duration::from_millis(
+            u64::try_from(10_000 + BOUND_MS).expect("positive"),
+        ))
+        .expect("manual time moves forward");
+    // Wait on the watermark itself, not on the park count. A fired timer stays
+    // registered on the timeline until the woken task drops it, so a second
+    // `wait_parked` here can be satisfied by the park the advance was meant to
+    // end and return before the sweep has run.
     let watching = Arc::clone(&partition);
     check!(wait_until(move || watching.delivery_watermark() == Offset(4)).await);
     // A consumer parked at the old watermark was woken rather than left to
@@ -185,7 +192,7 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     check!(lateness.len() == 1, "{lateness:?}");
     check!(
         lateness[0] == 0,
-        "the mock clock lands exactly on the deadline"
+        "the manual timeline lands exactly on the deadline"
     );
 
     harness.shutdown.cancel();
@@ -207,7 +214,7 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
     register(&harness.registry, &immediate);
 
     let task = harness.spawn();
-    check!(wait_parked(&harness.time.timeline(), 1).await);
+    check!(wait_parked(&harness.timeline, 1).await);
 
     // Everything durable is visible, and the partition creates no series.
     check!(immediate.delivery_watermark() == Offset(2));
@@ -233,7 +240,7 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
     register(&harness.registry, &followed);
 
     let task = harness.spawn();
-    check!(wait_parked(&harness.time.timeline(), 1).await);
+    check!(wait_parked(&harness.timeline, 1).await);
 
     check!(harness.metrics.watermarks().is_empty());
     // The scheduler never adopts a partition it does not lead, so an append
@@ -259,7 +266,7 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     register(&harness.registry, &partition);
 
     let task = harness.spawn();
-    check!(wait_parked(&harness.time.timeline(), 1).await);
+    check!(wait_parked(&harness.timeline, 1).await);
 
     // Nothing waits, so the task sleeps on its idle bound and any nearer
     // deadline re-arms it.
@@ -267,7 +274,7 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     let swept = harness.metrics.watermarks().len();
     check!(partition.delivery.wake_scheduler(NOW_MS + 200));
 
-    // The poke drives a sweep of its own, without the mock timeline moving.
+    // The poke drives a sweep of its own, without the manual timeline moving.
     let metrics = Arc::clone(&harness.metrics);
     check!(wait_until(move || metrics.watermarks().len() > swept).await);
 

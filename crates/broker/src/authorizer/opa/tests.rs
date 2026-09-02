@@ -5,13 +5,18 @@
 //! The tests for the Kafka-to-OPA vocabulary mapping live beside that mapping
 //! in [`super::wire`].
 
-use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    time::{Duration, SystemTime},
+};
 
 use assert2::assert;
 use krabka_authz::{AuthorizationRequest, AuthorizationResult, Authorizer};
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_security::{AuthMethod, Principal};
 use krabka_units::{millis, minutes, secs};
+use qubit_clock::ManualMonotonicClock;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -139,9 +144,12 @@ async fn cache_entry_expires_after_ttl() {
         .mount(&mock)
         .await;
 
-    // 10ms decision-cache TTL, driven by an injected mock clock so the entry
+    // 10ms decision-cache TTL, driven by an injected manual clock so the entry
     // expires on a controlled timeline — deterministic, no wall-clock sleep.
-    let clock = Arc::new(qubit_clock::MockClock::new());
+    // `timeline` is the advance handle; the wall clock it hands out is anchored
+    // to it, so advancing one moves the other by the same amount.
+    let timeline = ManualMonotonicClock::new_shared();
+    let clock = timeline.new_wall_clock(SystemTime::now());
     let auth = OpaAuthorizer::with_clock(
         HashSet::new(),
         opa_url(&mock),
@@ -149,7 +157,7 @@ async fn cache_entry_expires_after_ttl() {
         100,
         millis(10),
         secs(5),
-        clock.clone(),
+        clock,
     )
     .unwrap();
     let image = img();
@@ -157,8 +165,10 @@ async fn cache_entry_expires_after_ttl() {
     let h = host();
     // Cache miss -> HTTP call #1; caches the decision with expires_at = now+10ms.
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
-    // Advance the mock clock past the TTL so the cached entry is now stale.
-    clock.advance(Duration::from_millis(50));
+    // Advance the manual clock past the TTL so the cached entry is now stale.
+    timeline
+        .advance(Duration::from_millis(50))
+        .expect("manual time moves forward");
     // Cache entry expired -> HTTP call #2 (verified by the mock's expect(2)).
     assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
 }

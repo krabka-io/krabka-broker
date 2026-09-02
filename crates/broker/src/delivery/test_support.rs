@@ -5,9 +5,12 @@
 //! writer actor: the scheduler never sends the partition a message, so a
 //! closed writer channel is enough.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicI32, AtomicU64},
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicI32, AtomicU64},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use arc_swap::ArcSwap;
@@ -16,7 +19,7 @@ use krabka_ids::PartitionIndex;
 use krabka_log::{DeliveryPolicy, Log, LogConfig};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::{Time, convert::TimeExt as _};
-use qubit_clock::Clock;
+use qubit_clock::{ManualMonotonicClock, WallClock};
 use tokio::sync::{Notify, mpsc};
 
 use crate::{
@@ -31,6 +34,21 @@ pub(crate) const NOW_MS: i64 = 1_700_000_000_000;
 
 /// The default clock-confidence bound, in milliseconds.
 pub(crate) const BOUND_MS: i64 = 250;
+
+/// The wall-clock instant that `epoch_ms` names.
+///
+/// It is the inverse of [`crate::time_util::epoch_millis`] over the constants
+/// these tests are written in. 0.13 of qubit-clock re-exports no date type, so
+/// a fixture that starts from a millisecond literal such as [`NOW_MS`] has to
+/// build the [`SystemTime`] itself.
+///
+/// # Panics
+///
+/// Panics if `epoch_ms` is negative. Every constant here names an instant well
+/// after the epoch.
+pub(crate) fn wall_at(epoch_ms: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(u64::try_from(epoch_ms).expect("a post-epoch instant"))
+}
 
 /// A two-record batch whose activation time is `activation_ms`.
 pub(crate) fn batch_at(activation_ms: i64) -> RecordBatch {
@@ -63,7 +81,7 @@ pub(crate) fn scheduled_partition(
     policy: DeliveryPolicy,
     activations: &[i64],
     leader: u64,
-    clock: &Arc<dyn Clock>,
+    clock: &Arc<dyn WallClock>,
 ) -> Arc<Partition> {
     let partition_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
     std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
@@ -217,19 +235,15 @@ pub(crate) async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
     false
 }
 
-/// Wait, on the mock timeline, until `count` sleepers are parked.
+/// Wait, on `clock`'s manual timeline, until `count` timers are parked on it.
 ///
 /// The wait runs on a blocking thread, so it never stalls the current-thread
-/// runtime that has to drive the scheduler task to its next park.
-pub(crate) async fn wait_parked(timeline: &qubit_clock::MockTimeline, count: usize) -> bool {
-    let timeline = timeline.clone();
-    tokio::task::spawn_blocking(move || {
-        timeline.wait_for_blocked_waiters(
-            qubit_clock::MockWaiterKind::Sleep,
-            count,
-            std::time::Duration::from_secs(5),
-        )
-    })
-    .await
-    .expect("the timeline wait finishes")
+/// runtime that has to drive the scheduler task to its next park. The
+/// five-second bound is a hang guard against a task that never parks, not a
+/// timeout a passing test ever reaches.
+pub(crate) async fn wait_parked(clock: &Arc<ManualMonotonicClock>, count: usize) -> bool {
+    let clock = Arc::clone(clock);
+    tokio::task::spawn_blocking(move || clock.wait_for_waiters(count, Duration::from_secs(5)))
+        .await
+        .expect("the timeline wait finishes")
 }

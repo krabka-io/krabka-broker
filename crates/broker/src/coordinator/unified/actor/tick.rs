@@ -222,20 +222,19 @@ mod tests {
     /// The actor must keep running rather than panic on a kind-mismatched
     /// `expect(...)`.
     ///
-    /// An injected mock sleeper drives the session-expiry tick, so the tick
+    /// An injected manual timer drives the session-expiry tick, so the tick
     /// fires on a controlled timeline instead of a real 1.2 s wall-clock
     /// sleep. The test is therefore deterministic and instant.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actor_tick_does_not_panic_after_in_place_flip() {
-        use qubit_clock::{MockWaiterKind, sleep::MockSleeper};
+        use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
 
-        let sleeper = MockSleeper::new();
-        let timeline = sleeper.timeline();
+        let clock = ManualMonotonicClock::new_shared();
         let log = Arc::new(InMemoryOffsetsLog::default());
         let tick_interval = Duration::from_millis(37);
         let coord = Arc::new(GroupCoordinator::new(
             NextGenConfig {
-                sleeper: Arc::new(sleeper),
+                timer: clock.new_timer(),
                 session_expiry_tick: tick_interval,
                 ..NextGenConfig::default()
             },
@@ -264,24 +263,29 @@ mod tests {
         let _ = rx.await;
 
         // The actor is now parked on the re-armed session-expiry tick sleep.
-        // Confirm the waiter is registered (only advance the timeline once
-        // parked), fire exactly one tick, then confirm the loop re-parks — which
-        // proves the tick body ran to completion on the LIVE consumer kind
-        // without panicking. `wait_for_blocked_waiters` runs on a blocking thread
-        // so it never stalls the runtime driving the actor.
-        let tl = timeline.clone();
+        // The manual clock has a single kind of waiter, so a count of one is
+        // that tick registration and nothing else. Confirm the waiter is
+        // registered (only advance the timeline once parked), fire exactly one
+        // tick, then confirm the loop re-parks — which proves the tick body ran
+        // to completion on the LIVE consumer kind without panicking.
+        // `wait_for_waiters` blocks, so it runs on a blocking thread and never
+        // stalls the runtime driving the actor. Its five-second real-time bound
+        // turns a lost tick into a failure rather than a hung test.
+        let waiting = Arc::clone(&clock);
         let parked = tokio::task::spawn_blocking(move || {
-            tl.wait_for_blocked_waiters(MockWaiterKind::Sleep, 1, Duration::from_secs(5))
+            waiting.wait_for_waiters(1, Duration::from_secs(5))
         })
         .await
         .unwrap();
         assert!(parked, "actor should park on the session-expiry tick sleep");
 
-        timeline.advance(tick_interval);
+        clock
+            .advance(tick_interval)
+            .expect("manual time moves forward");
 
-        let tl = timeline.clone();
+        let waiting = Arc::clone(&clock);
         let reparked = tokio::task::spawn_blocking(move || {
-            tl.wait_for_blocked_waiters(MockWaiterKind::Sleep, 1, Duration::from_secs(5))
+            waiting.wait_for_waiters(1, Duration::from_secs(5))
         })
         .await
         .unwrap();

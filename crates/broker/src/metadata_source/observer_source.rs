@@ -158,7 +158,7 @@ mod tests {
                 cluster_id,
                 max_bytes: krabka_units::mebibytes(1),
                 poll_interval: krabka_units::minutes(1),
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer = Arc::new(RecordingWriter {
@@ -224,7 +224,7 @@ mod tests {
                 cluster_id: Uuid::nil(),
                 max_bytes: krabka_units::mebibytes(1),
                 poll_interval: krabka_units::millis(10),
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer = Arc::new(RecordingWriter {

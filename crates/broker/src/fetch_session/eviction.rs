@@ -8,6 +8,8 @@
 
 use std::{collections::HashMap, sync::atomic::Ordering};
 
+use qubit_clock::MonotonicClock as _;
+
 use super::{
     cache::{FetchSession, FetchSessionCache},
     epoch::{
@@ -50,7 +52,7 @@ impl FetchSessionCache {
                 .sessions
                 .iter()
                 .filter(|(_, s)| if privileged { true } else { !s.privileged })
-                .min_by_key(|(_, s)| s.last_used_nanos)
+                .min_by_key(|(_, s)| s.last_used)
                 .map(|(id, _)| *id);
             match victim {
                 Some(id) => {
@@ -99,7 +101,7 @@ impl FetchSessionCache {
             privileged,
             creator_principal,
             partitions,
-            last_used_nanos: self.clock.nanos(),
+            last_used: self.clock.now().elapsed_since_origin(),
         };
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);
@@ -116,7 +118,7 @@ mod tests {
     use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
     use super::*;
-    use crate::fetch_session::test_support::{TICK, mock_cache};
+    use crate::fetch_session::test_support::{TICK, manual_cache};
 
     #[test]
     fn allocate_returns_nonzero_monotonic_ids() {
@@ -159,13 +161,13 @@ mod tests {
 
     #[test]
     fn lru_eviction_drops_oldest_non_privileged() {
-        let (cache, mock) = mock_cache(2);
+        let (cache, clock) = manual_cache(2);
         let a = cache.try_allocate(false, "a".into(), vec![]);
         // Advance logical time so each session gets a strictly increasing
-        // `last_used_nanos`, making `a` the unambiguous LRU victim — no sleep.
-        mock.advance(TICK);
+        // `last_used`, making `a` the unambiguous LRU victim — no sleep.
+        clock.advance(TICK).expect("manual time moves forward");
         let b = cache.try_allocate(false, "b".into(), vec![]);
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let c = cache.try_allocate(false, "c".into(), vec![]);
         assert!(cache.len() == 2);
         assert!(cache.evictions_total() == 1);
@@ -190,10 +192,10 @@ mod tests {
 
     #[test]
     fn privileged_can_evict_privileged() {
-        let (cache, mock) = mock_cache(1);
+        let (cache, clock) = manual_cache(1);
         let p1 = cache.try_allocate(true, "f1".into(), vec![]);
         // Advance so `f2` is strictly newer than `f1`; `f1` is the LRU victim.
-        mock.advance(TICK);
+        clock.advance(TICK).expect("manual time moves forward");
         let p2 = cache.try_allocate(true, "f2".into(), vec![]);
         // p2 gets the next monotonic id (p1 + 1) after evicting p1.
         check!(p2 == p1 + 1);

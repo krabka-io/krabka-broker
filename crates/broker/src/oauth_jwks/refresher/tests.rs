@@ -4,14 +4,11 @@
 
 use assert2::{assert, check};
 use krabka_units::{millis, minutes};
-use qubit_clock::{
-    MockWaiterKind,
-    sleep::{MockSleeper, SystemSleeper},
-};
+use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer};
 
 use super::*;
 use crate::oauth_jwks::test_support::{
-    JWKS_BODY, await_until, make_signal_refresher, serve_jwks, serve_jwks_counting,
+    JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks, serve_jwks_counting,
     serve_jwks_https, test_refresher,
 };
 
@@ -27,7 +24,9 @@ async fn refresher_populates_handle_then_stops_on_shutdown() {
         millis(50),
         shutdown.clone(),
         None,
-        Arc::new(SystemSleeper::new()),
+        // The production timer, so that one test covers the real thing
+        // driving this loop. `StdTimer` needs no Tokio runtime of its own.
+        Arc::new(StdTimer::new()),
     );
     let task = tokio::spawn(refresher.run());
 
@@ -54,7 +53,9 @@ async fn refresher_fetches_jwks_over_https_with_custom_trust() {
         millis(50),
         shutdown.clone(),
         Some(ca_path),
-        Arc::new(SystemSleeper::new()),
+        // This test asserts on the t=0 fetch alone, so the periodic tick is
+        // parked rather than re-fetching over TLS every 50 ms of real time.
+        dormant_timer(),
     );
     let task = tokio::spawn(refresher.run());
     await_until("first HTTPS JWKS fetch populates handle", || {
@@ -72,9 +73,9 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
     // Server presents cert A; trust bundle is an unrelated cert B. Every
     // refresh fails TLS verification, so the handle must never populate.
     //
-    // Driven on a mock timeline instead of a wall-clock sleep: the first
+    // Driven on a manual timeline instead of a wall-clock timer: the first
     // fetch fires immediately (t=0 tick), then the loop parks on the
-    // refresh-interval sleep. Advancing the timeline fires each subsequent
+    // refresh-interval deadline. Advancing the timeline fires each subsequent
     // fetch deterministically — exact and instant, with no flaky timing.
     let (addr, srv_shutdown, _server_cert_path) = serve_jwks_https(JWKS_BODY).await;
 
@@ -88,40 +89,40 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
     let handle = JwksHandle::default();
     let shutdown = CancellationToken::new();
     let interval = millis(50);
-    let sleeper = MockSleeper::new();
-    let timeline = sleeper.timeline();
+    let clock = ManualMonotonicClock::new_shared();
     let refresher = test_refresher(
         format!("https://127.0.0.1:{}/jwks", addr.port()),
         handle.clone(),
         interval,
         shutdown.clone(),
         Some(bogus_ca),
-        Arc::new(sleeper),
+        clock.new_timer(),
     );
     let task = tokio::spawn(refresher.run());
 
-    // Drive several refresh intervals. Before each advance, block (bounded
-    // real time, hang-guard only) until the loop has parked on the interval
-    // sleep — this confirms the prior fetch attempt completed — then assert
-    // the failing fetch left the handle empty. `wait_for_blocked_waiters`
-    // runs on a blocking thread so it never stalls the current-thread
-    // runtime that must drive the refresher's HTTPS attempt.
+    // Drive several refresh intervals. Each round blocks (bounded real time,
+    // hang-guard only) until the loop has armed the next interval deadline —
+    // which confirms the prior fetch attempt completed — and advances to that
+    // deadline in the same locked step, so a deadline the loop has reached but
+    // not yet polled cannot satisfy the wait on its own. Then assert the
+    // failing fetch left the handle empty. The wait runs on a blocking thread
+    // so it never stalls the current-thread runtime that must drive the
+    // refresher's HTTPS attempt.
     for _ in 0..3 {
-        let tl = timeline.clone();
-        let parked = tokio::task::spawn_blocking(move || {
-            tl.wait_for_blocked_waiters(MockWaiterKind::Sleep, 1, Duration::from_secs(5))
+        let armed = Arc::clone(&clock);
+        let advanced = tokio::task::spawn_blocking(move || {
+            armed.advance_to_next_deadline_after_waiters(1, Duration::from_secs(5))
         })
         .await
         .unwrap();
         assert!(
-            parked,
-            "refresher should park on the interval sleep between fetches",
+            advanced.is_some(),
+            "refresher should park on the interval deadline between fetches",
         );
         assert!(
             handle.load().is_empty(),
             "fetch should fail verification and leave handle empty",
         );
-        timeline.advance(interval.to_std());
     }
 
     shutdown.cancel();
@@ -179,9 +180,14 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
     // happens-after of refresh_and_swap) rather than the timestamp
     // store, which the select! arm performs BEFORE the HTTP call —
     // otherwise CI races between timestamp-set and request-arrival.
+    //
+    // Two requests are expected, not one: the loop's t=0 tick fetches
+    // immediately whatever the timer, and the signal fetches on top of it.
+    // The periodic tick then re-arms on a timer nothing advances, so the
+    // count settles at two and any later increment can only be a signal.
     signal_tx.send(()).await.unwrap();
     for _ in 0..100 {
-        if count.load(Ordering::Relaxed) >= 1 {
+        if count.load(Ordering::Relaxed) >= 2 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -189,7 +195,7 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
     let first_ts = last_on_demand.load(Ordering::Relaxed);
     assert!(first_ts > 0, "first signal must have fired a refresh");
     let count_after_first = count.load(Ordering::Relaxed);
-    assert!(count_after_first >= 1);
+    assert!(count_after_first >= 2);
 
     // Second signal within the 60s pause: dropped.
     signal_tx.send(()).await.unwrap();
@@ -218,9 +224,12 @@ async fn refresher_successful_refresh_updates_last_successful_fetch_timestamp() 
     let endpoint = format!("http://{addr}/jwks");
     let (refresher, signal_tx, last_successful, _last_on_demand, shutdown, _handle) =
         make_signal_refresher(endpoint, <Time as TimeExt>::ZERO);
-    let task = tokio::spawn(refresher.run());
 
+    // Read the sentinel before the loop starts: the t=0 tick is a successful
+    // refresh of its own, and it advances the timestamp as soon as the task
+    // is polled.
     assert!(last_successful.load(Ordering::Relaxed) == 0);
+    let task = tokio::spawn(refresher.run());
     signal_tx.send(()).await.unwrap();
     await_until(
         "successful fetch advances last_successful timestamp",

@@ -138,7 +138,7 @@ mod tests {
             AuditLog, AuditMode,
             test_support::{
                 FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, header, life, params,
-                params_with_timeline, product, test_signer,
+                params_with_clock, product, test_signer,
             },
         },
         spool::Spool,
@@ -153,7 +153,7 @@ mod tests {
         let stats = Arc::new(AuditStats::new());
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (p, timeline) = params_with_timeline(sink.clone(), spool, stats.clone());
+        let (p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         let writer = AuditWriter::new(rx, p);
         let h = tokio::spawn(writer.run());
 
@@ -165,9 +165,11 @@ mod tests {
         check!(stats.depth() >= 3);
         check!(sink.inner.records().is_empty()); // nothing reached the topic yet
 
-        // topic recovers; fire the replay ticker by advancing the mock timeline
+        // topic recovers; fire the replay ticker by advancing the manual clock
         sink.set_fail(false);
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("spool drained after replay", || stats.depth() == 0).await;
 
         drop(log);
@@ -266,12 +268,13 @@ mod tests {
         let sink = Arc::new(FailableSink::default());
         sink.set_indeterminate_after(1);
         let (log, receiver) = AuditLog::new(8);
-        let (params, timeline) =
-            params_with_timeline(sink.clone(), spool, Arc::new(AuditStats::new()));
+        let (params, clock) = params_with_clock(sink.clone(), spool, Arc::new(AuditStats::new()));
         let handle = tokio::spawn(AuditWriter::new(receiver, params).run());
 
         tokio::task::yield_now().await;
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         handle.await.unwrap();
         check!(sink.inner.records().len() == 1);
         check!(matches!(
@@ -290,7 +293,7 @@ mod tests {
         let stats = Arc::new(AuditStats::new());
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (mut p, timeline) = params_with_timeline(sink.clone(), spool, stats.clone());
+        let (mut p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         p.signer = Some(signer);
         p.checkpoint_every_n = 2; // emit a checkpoint after every 2 records
         let writer = AuditWriter::new(rx, p);
@@ -301,7 +304,9 @@ mod tests {
         await_until("2 records + checkpoint spooled", || stats.spooled() >= 3).await;
         check!(sink.inner.records().is_empty()); // nothing on topic yet
         sink.set_fail(false); // recover → replay drains spool in order
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("spool drained after replay", || stats.depth() == 0).await;
         drop(log);
         h.await.unwrap();
@@ -403,7 +408,7 @@ mod tests {
         let stats = Arc::new(AuditStats::new());
         let spool = Spool::open(dir.path(), one).unwrap();
         let (log, receiver) = AuditLog::new_with_mode_and_spool(8, AuditMode::FailOpen, &spool);
-        let (params, timeline) = params_with_timeline(sink.clone(), spool, stats.clone());
+        let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         let writer = AuditWriter::new(receiver, params);
         let handle = tokio::spawn(writer.run());
 
@@ -419,9 +424,13 @@ mod tests {
         );
 
         sink.set_fail(false);
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("record replayed", || sink.inner.records().len() == 1).await;
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("coalesced loss marker replayed", || {
             sink.inner.records().len() == 2
         })
@@ -456,7 +465,7 @@ mod tests {
         let stats = Arc::new(AuditStats::new());
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (p, timeline) = params_with_timeline(sink.clone(), spool, stats.clone());
+        let (p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
         let writer = AuditWriter::new(rx, p);
         let h = tokio::spawn(writer.run());
         log.emit(life(0));
@@ -466,7 +475,9 @@ mod tests {
 
         // allow exactly 2 replay writes, then fail → partial replay
         sink.allow_n(2);
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("2 of 3 replayed", || {
             stats.replayed() == 2 && stats.depth() == 1
         })
@@ -475,7 +486,9 @@ mod tests {
 
         // allow the rest; fire the replay ticker again to drain the remainder
         sink.allow_unlimited();
-        timeline.advance(REPLAY_EVERY.to_std());
+        clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
         await_until("remainder drained", || stats.depth() == 0).await;
 
         drop(log);

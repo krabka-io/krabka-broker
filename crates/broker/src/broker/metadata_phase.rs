@@ -190,7 +190,7 @@ async fn start_metadata_source(
             cluster_id: config.cluster_id.unwrap_or_else(uuid::Uuid::nil),
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
-            sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+            timer: Arc::new(qubit_clock::StdTimer::new()),
         },
     );
     let forwarder = crate::metadata_source::QuorumForwarder {

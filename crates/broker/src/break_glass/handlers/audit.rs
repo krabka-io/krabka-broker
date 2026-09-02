@@ -195,7 +195,7 @@ mod tests {
                 spool: Some(spool),
                 stats: Arc::clone(&stats),
                 replay_every: hours(1),
-                sleeper: Arc::new(qubit_clock::sleep::SystemSleeper::new()),
+                timer: Arc::new(qubit_clock::StdTimer::new()),
             },
         );
         let writer = tokio::spawn(writer.run());
