@@ -24,7 +24,10 @@ pub(super) async fn validate_transactional_produce(
     }
     let transactional_id = coordinator.tid_for_pid(krabka_log::ProducerId(batch.producer_id));
     let Some(transactional_id) = transactional_id else {
-        return Some(codes::INVALID_PRODUCER_ID_MAPPING);
+        // Produce carries no transactional ID. This broker can lead the data
+        // partition while another broker coordinates the transaction, so a
+        // missing local PID mapping is not evidence of an invalid producer.
+        return None;
     };
     let topic_partition = crate::txn::state::TopicPartition {
         topic: topic_name.to_string(),
@@ -120,7 +123,7 @@ pub(super) async fn handle_duplicate(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use assert2::{assert, check};
     use bytes::Bytes;
@@ -128,12 +131,15 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch};
     use uuid::Uuid;
 
-    use super::*;
-    use crate::handlers::produce::{
-        framing::{FramedPartition, PartitionPayload},
-        leadership::BrokerProducePolicy,
-        pipeline::{PartitionInput, PartitionServices, process_partition},
-        test_support::{encode_batch, image_with_topic},
+    use super::{PreparedBatch, validate_transactional_produce};
+    use crate::{
+        codes,
+        handlers::produce::{
+            framing::{FramedPartition, PartitionPayload},
+            leadership::BrokerProducePolicy,
+            pipeline::{PartitionInput, PartitionServices, process_partition},
+            test_support::{encode_batch, image_with_topic},
+        },
     };
 
     fn transactional_batch(producer_id: i64, producer_epoch: i16) -> PreparedBatch {
@@ -149,7 +155,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transactional_produce_rejects_malformed_and_unknown_producers() {
+    async fn transactional_produce_rejects_malformed_producers() {
         let coordinator = crate::txn::coordinator::TxnCoordinator::new(
             krabka_audit::NodeId(1),
             Arc::new(crate::partition_registry::PartitionRegistry::new()),
@@ -159,11 +165,7 @@ mod tests {
         );
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
 
-        for (producer_id, expected) in [
-            (-1, codes::INVALID_PRODUCER_ID_MAPPING),
-            (i64::MIN, codes::INVALID_PRODUCER_ID_MAPPING),
-            (7, codes::INVALID_PRODUCER_ID_MAPPING),
-        ] {
+        for producer_id in [-1, i64::MIN] {
             let code = validate_transactional_produce(
                 &transactional_batch(producer_id, 0),
                 &coordinator,
@@ -172,8 +174,31 @@ mod tests {
                 0,
             )
             .await;
-            check!(code == Some(expected));
+            check!(code == Some(codes::INVALID_PRODUCER_ID_MAPPING));
         }
+    }
+
+    #[tokio::test]
+    async fn transactional_produce_allows_a_remote_coordinator() {
+        let coordinator = crate::txn::coordinator::TxnCoordinator::new(
+            krabka_audit::NodeId(1),
+            Arc::new(crate::partition_registry::PartitionRegistry::new()),
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            krabka_units::mebibytes(1),
+        );
+        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
+
+        let code = validate_transactional_produce(
+            &transactional_batch(7, 0),
+            &coordinator,
+            &image,
+            "orders",
+            0,
+        )
+        .await;
+
+        check!(code.is_none());
     }
 
     #[tokio::test]
