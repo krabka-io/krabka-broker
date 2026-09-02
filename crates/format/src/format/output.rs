@@ -37,7 +37,7 @@ pub(super) fn write_meta_properties(
     });
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| format!("serialize meta.properties.json: {e}"))?;
-    std::fs::write(log_dir.join("meta.properties.json"), bytes)
+    std::fs::write(log_dir.join(super::META_PROPERTIES), bytes)
         .map_err(|e| format!("write meta.properties.json: {e}"))
 }
 

@@ -64,6 +64,11 @@ pub struct MetadataObserver {
     /// Highest metadata-log offset applied to `image`, or `-1` before the
     /// first record. This is the value sent in `BrokerHeartbeat`.
     metadata_offset: AtomicI64,
+    /// Highest `__cluster_metadata` offset the controller quorum reported as
+    /// committed in the last successful fetch, or `-1` before the observer has
+    /// reached a controller. A catching-up observer trails it by the records it
+    /// has yet to fetch, which is the gap the readiness probe bounds.
+    quorum_committed_offset: AtomicI64,
     shutdown: CancellationToken,
     task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
@@ -82,6 +87,7 @@ impl MetadataObserver {
             image: image_tx,
             leader: leader_tx,
             metadata_offset: AtomicI64::new(-1),
+            quorum_committed_offset: AtomicI64::new(-1),
             shutdown,
             task: tokio::sync::Mutex::new(None),
         })
@@ -118,6 +124,14 @@ impl MetadataObserver {
     #[must_use]
     pub fn current_metadata_offset(&self) -> i64 {
         self.metadata_offset.load(Ordering::Acquire)
+    }
+
+    /// Highest `__cluster_metadata` offset the quorum has committed, as the
+    /// last successful fetch reported it, or `-1` before the observer has
+    /// reached a controller.
+    #[must_use]
+    pub fn quorum_committed_offset(&self) -> i64 {
+        self.quorum_committed_offset.load(Ordering::Acquire)
     }
 
     /// Stops the fetch loop and drains the task.

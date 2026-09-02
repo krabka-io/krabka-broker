@@ -111,10 +111,15 @@ impl KraftController {
 
         let (image_tx, image_rx) = watch::channel(Arc::new(image.clone()));
         let (leader_tx, leader_rx) = watch::channel(initial_leader);
+        // Captured before the log moves into `Engine`; it seeds both the first
+        // published snapshot and the engine's `leader_reported_hwm`, which a
+        // node that has heard from no leader yet answers from.
+        let initial_hwm = log.hwm().0;
         let initial_snapshot = QuorumStateSnapshot {
             leader_id: initial_leader,
             leader_epoch: initial_epoch,
-            high_watermark: log.hwm().0,
+            high_watermark: initial_hwm,
+            quorum_high_watermark: initial_hwm,
             log_end_offset: log.log_end_offset().0,
             log_start_offset: log.log_start_offset().0,
             voters: core.quorum_state().voters.clone(),
@@ -174,6 +179,7 @@ impl KraftController {
             installed_snapshot_epoch: None,
             controls,
             replica_fetch_offsets: BTreeMap::new(),
+            leader_reported_hwm: initial_hwm,
             pending_reconfig: None,
         };
 

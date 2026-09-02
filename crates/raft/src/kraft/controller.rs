@@ -210,6 +210,12 @@ struct Engine {
     /// Fetch progress for every replica, including observers not yet present
     /// in the voter set.
     replica_fetch_offsets: BTreeMap<NodeId, i64>,
+    /// Highest high watermark any leader has reported to this node in a Fetch
+    /// response. A follower clamps its own HWM to its log end, so this is the
+    /// only place the quorum's committed offset survives while the follower is
+    /// still catching up. It is monotonic: a leader's HWM is committed by
+    /// definition, so a later leader can never be behind an earlier one.
+    leader_reported_hwm: i64,
     /// At most one voter/version control operation may be uncommitted.
     pending_reconfig: Option<PendingReconfig>,
 }
