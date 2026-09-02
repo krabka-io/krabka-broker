@@ -22,7 +22,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Format, lint, build and render rustdoc in one Bazel output tree.
+  # Format, lint, build, render rustdoc and gate the tests coverage cannot run,
+  # in one Bazel output tree.
   #
   # Coverage is a sibling job rather than a step here. Both configurations build
   # the same ~140 broker integration tests as separate statically linked
@@ -30,8 +31,15 @@ jobs:
   # disk cache -- so running them on one runner put roughly 300 such binaries on
   # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
   # through coverage. On two runners each configuration gets its own disk.
+  #
+  # `coverage`'s `--test_tag_filters=-docker,-timing-sensitive` (`.bazelrc`)
+  # skips six suites whose wall-clock assertions the profiling instrumentation
+  # trips, and `bazel coverage //crates/...` never reaches
+  # `//packaging:image_binaries_test`, which lives outside `//crates`. The
+  # `test` step below is what actually executes those seven targets on every
+  # pull request; nothing else in this workflow does.
   ci:
-    name: build · lint · format · docgen
+    name: build · lint · format · test · docgen
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -68,6 +76,17 @@ jobs:
 
       - name: build
         run: aspect build --bazel-flag=--build_tag_filters=-docker //...
+
+      # The six suites `coverage` excludes as timing-sensitive, plus
+      # `//packaging:image_binaries_test`, which sits outside `//crates` and so
+      # is never reached by `bazel coverage //crates/...` either. Narrowed to
+      # just those rather than a full `bazel test //...`, which would rerun the
+      # ~140 suites `coverage` already executes and roughly double this job's
+      # wall clock for no new signal.
+      - name: test
+        run: |
+          bazel test --test_tag_filters=timing-sensitive //crates/...
+          bazel test //packaging/...
 
       # `aspect build` renders docs for impacted crates. Build the complete set
       # here for the artifact, reusing this runner's Bazel output tree.
