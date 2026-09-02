@@ -13,11 +13,7 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::{
     sync::{mpsc, oneshot},
