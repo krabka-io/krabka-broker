@@ -375,6 +375,45 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
 }
 
 #[tokio::test]
+async fn leaderless_observer_discovers_before_applying_fetch_content() {
+    let (mut observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    assert2::assert!(matches!(
+        observer.core.role(),
+        Role::Observer {
+            leader_id: None,
+            ..
+        }
+    ));
+
+    let body = wire::PeerResponse::Fetch {
+        leader_id: NodeId(2),
+        leader_epoch: 1,
+        diverging: None,
+        snapshot_id: None,
+        hwm: 1,
+        records: encode_batches(&[one_offset_batch(0, 1, b"replicated")]),
+    }
+    .encode();
+
+    // The bootstrap peer redirects us to node 2. Content on this discovery
+    // response is ignored until node 2 answers under the attached fence.
+    observer.on_fetch_response(NodeId(1), &body);
+    assert2::assert!(matches!(
+        observer.core.role(),
+        Role::Observer {
+            leader_id: Some(NodeId(2)),
+            ..
+        }
+    ));
+    assert2::assert!(observer.log.log_end_offset() == Offset(0));
+    assert2::assert!(observer.log.hwm() == Offset(0));
+
+    observer.on_fetch_response(NodeId(2), &body);
+    assert2::assert!(observer.log.log_end_offset() == Offset(1));
+    assert2::assert!(observer.log.hwm() == Offset(1));
+}
+
+#[tokio::test]
 async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged() {
     let body = wire::PeerResponse::Fetch {
         leader_id: NodeId(2),

@@ -11,6 +11,7 @@ use creusot_std::prelude::*;
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum FetchResponseMutation {
     Reject,
+    Discover,
     Snapshot,
     Truncate,
     Append,
@@ -19,34 +20,47 @@ pub enum FetchResponseMutation {
 
 /// Fence a Fetch response against the live role, leader, and epoch, then
 /// select exactly one mutation path.
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Discover) ==
+    (current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3)))]
 #[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject) ==
-    (current.0 != Some(response.0)
-        || current.1 != Some(response.0)
+    (!(current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3)
+        && (current.1 != Some(response.0)
+        || current.2 != Some(response.0)
         || response.1 != response.0
-        || response.2 != current.2)))]
+        || response.2 != current.3))))]
 #[cfg_attr(creusot, ensures(match result {
-    FetchResponseMutation::Snapshot => current.0 == Some(response.0)
-        && current.1 == Some(response.0)
+    FetchResponseMutation::Discover => current.0
+        && current.1 == None
+        && current.2 == None
+        && response.2 >= current.3,
+    FetchResponseMutation::Snapshot => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
         && response.1 == response.0
-        && response.2 == current.2
+        && response.2 == current.3
         && content.0,
-    FetchResponseMutation::Truncate => current.0 == Some(response.0)
-        && current.1 == Some(response.0)
+    FetchResponseMutation::Truncate => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
         && response.1 == response.0
-        && response.2 == current.2
+        && response.2 == current.3
         && !content.0
         && content.1,
-    FetchResponseMutation::Append => current.0 == Some(response.0)
-        && current.1 == Some(response.0)
+    FetchResponseMutation::Append => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
         && response.1 == response.0
-        && response.2 == current.2
+        && response.2 == current.3
         && !content.0
         && !content.1
         && content.2,
-    FetchResponseMutation::HighWatermark => current.0 == Some(response.0)
-        && current.1 == Some(response.0)
+    FetchResponseMutation::HighWatermark => current.1 == Some(response.0)
+        && current.2 == Some(response.0)
         && response.1 == response.0
-        && response.2 == current.2
+        && response.2 == current.3
         && !content.0
         && !content.1
         && !content.2,
@@ -54,14 +68,20 @@ pub enum FetchResponseMutation {
 }))]
 #[must_use]
 pub fn fetch_response_mutation(
-    current: (Option<u64>, Option<u64>, u32),
+    current: (bool, Option<u64>, Option<u64>, u32),
     response: (u64, u64, u32),
     content: (bool, bool, bool),
 ) -> FetchResponseMutation {
-    let (role_leader, current_leader, current_epoch) = current;
+    let (discovering, role_leader, current_leader, current_epoch) = current;
     let (from, response_leader, response_epoch) = response;
     let (has_snapshot, has_divergence, has_records) = content;
-    if role_leader != Some(from)
+    if discovering
+        && role_leader.is_none()
+        && current_leader.is_none()
+        && response_epoch >= current_epoch
+    {
+        FetchResponseMutation::Discover
+    } else if role_leader != Some(from)
         || current_leader != Some(from)
         || response_leader != from
         || response_epoch != current_epoch
@@ -220,23 +240,36 @@ mod tests {
 
     #[test]
     fn fetch_response_is_fenced_before_one_exclusive_mutation() {
-        use FetchResponseMutation::{Append, HighWatermark, Reject, Snapshot, Truncate};
+        use FetchResponseMutation::{Append, Discover, HighWatermark, Reject, Snapshot, Truncate};
 
-        let decide = |role_leader, current_leader, current_epoch, from, leader, epoch, s, d, r| {
+        let decide = |discovering,
+                      role_leader,
+                      current_leader,
+                      current_epoch,
+                      from,
+                      leader,
+                      epoch,
+                      s,
+                      d,
+                      r| {
             fetch_response_mutation(
-                (role_leader, current_leader, current_epoch),
+                (discovering, role_leader, current_leader, current_epoch),
                 (from, leader, epoch),
                 (s, d, r),
             )
         };
-        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);
-        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, true, true) == Truncate);
-        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, false, true) == Append);
-        assert!(decide(Some(2), Some(2), 3, 2, 2, 3, false, false, false) == HighWatermark);
-        assert!(decide(None, Some(2), 3, 2, 2, 3, false, false, true) == Reject);
-        assert!(decide(Some(2), Some(3), 3, 2, 2, 3, false, false, true) == Reject);
-        assert!(decide(Some(2), Some(2), 3, 3, 2, 3, false, false, true) == Reject);
-        assert!(decide(Some(2), Some(2), 3, 2, 3, 3, false, false, true) == Reject);
-        assert!(decide(Some(2), Some(2), 3, 2, 2, 4, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, true, true) == Truncate);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, true) == Append);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, false) == HighWatermark);
+        assert!(decide(true, None, None, 3, 2, 4, 3, false, false, true) == Discover);
+        assert!(decide(true, None, None, 3, 2, 4, 4, true, true, true) == Discover);
+        assert!(decide(true, None, None, 3, 2, 4, 2, false, false, true) == Reject);
+        assert!(decide(false, None, None, 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, None, Some(2), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(3), 3, 2, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 3, 2, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 3, 3, false, false, true) == Reject);
+        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 4, false, false, true) == Reject);
     }
 }

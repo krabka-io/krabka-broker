@@ -142,9 +142,17 @@ impl Engine {
             } => Some(leader_id.0),
             _ => None,
         };
+        let discovering = matches!(
+            self.core.role(),
+            Role::Observer {
+                leader_id: None,
+                ..
+            }
+        );
         let state = self.core.quorum_state();
         let mutation = fetch_response_mutation(
             (
+                discovering,
                 role_leader,
                 state.leader_id.map(|id| id.0),
                 state.leader_epoch,
@@ -163,6 +171,16 @@ impl Engine {
 
         match mutation {
             FetchResponseMutation::Reject => return,
+            FetchResponseMutation::Discover => {
+                // A leaderless observer uses the first successful Fetch only
+                // to attach to the advertised leader. Refetch under the newly
+                // established leader/epoch fence before applying any content.
+                self.on_event(Event::ReceiveBeginQuorumEpoch {
+                    leader_id,
+                    leader_epoch,
+                });
+                return;
+            }
             FetchResponseMutation::Snapshot => {
                 // The leader signalled our fetch offset is below its pruned
                 // log-start. Start or continue a snapshot transfer and do not
