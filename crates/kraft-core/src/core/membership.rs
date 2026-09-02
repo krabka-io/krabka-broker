@@ -40,16 +40,17 @@ impl QuorumStateMachine {
                     replicas.entry(id).or_default();
                 }
             }
-            // A removed voter's fetch cannot count toward the new
-            // configuration's check-quorum majority, so drop it from the
-            // in-flight window rather than let it inflate the next tally.
-            fetched_voters.retain(|id| self.state.voters.contains(*id) && *id != self.me);
-            // Start a fresh window against the new configuration. A sole voter
-            // arms nothing at promotion, so without this the leader of a
+            // Start a fresh check-quorum window against the new configuration,
+            // tally and deadline together. Re-arming matters because a sole
+            // voter arms nothing at promotion, so without it the leader of a
             // cluster that has just grown past one voter would never run
-            // check-quorum for the rest of its epoch. Re-arming here also gives
-            // an added voter a full window to make its first Fetch, rather than
-            // deposing the leader the instant the record applies.
+            // check-quorum again for its epoch; it also gives an added voter a
+            // full window to make its first Fetch rather than deposing the
+            // leader the instant the record applies. Emptying the tally is the
+            // other half: a contact counted before the change belongs to the
+            // window that just ended, and carrying it over would let one stale
+            // fetch plus one fresh one re-arm a window no majority reached.
+            fetched_voters.clear();
             if self.runs_check_quorum() {
                 return vec![Action::ResetTimer {
                     kind: TimerKind::CheckQuorum,

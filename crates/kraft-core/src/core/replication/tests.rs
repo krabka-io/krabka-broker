@@ -642,3 +642,129 @@ fn growing_past_one_voter_starts_the_leader_a_window() {
             }]
     );
 }
+
+/// A leader that an uncommitted `VotersRecord` has already removed keeps
+/// serving Fetch until that record commits, and it is exactly then that it
+/// needs the watchdog most: the one voter that can commit the record is the one
+/// voter that can keep it alive. The single-voter exemption is about a leader
+/// that IS the only voter, not about a one-voter set it has been dropped from.
+#[test]
+fn a_removed_leader_still_runs_check_quorum_over_the_remaining_voter() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2)], SimInstant(2000));
+    // The record that drops us leaves one voter, and we keep leading until it
+    // commits.
+    let applied = m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(2)]),
+        SimInstant(3000),
+    );
+    assert2::assert!(m.role().is_leader());
+    assert2::check!(armed_check_quorum(&applied) == Some(SimInstant(4500)));
+
+    // That remaining voter is now the whole majority, so its fetch re-arms.
+    let fetched = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(3100),
+    );
+    assert2::check!(armed_check_quorum(&fetched) == Some(SimInstant(4600)));
+
+    // And silence from it still deposes us.
+    m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    assert2::assert!(!m.role().is_leader());
+}
+
+/// A membership change starts a whole new window, so the contacts tallied in
+/// the old one must not be carried into it. Otherwise one stale fetch plus one
+/// fresh fetch near the new deadline re-arms the timer even though no majority
+/// reached the leader inside the window that is actually running.
+#[test]
+fn a_membership_change_starts_the_contact_tally_over() {
+    let five = [NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)];
+    let mut m = machine(NodeId(1), &five);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &five[1..], SimInstant(2000));
+    // One of the two followers this configuration needs.
+    let first = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::check!(armed_check_quorum(&first) == None);
+
+    // Swap voter 5 for voter 6: still five voters, still a threshold of two,
+    // but a fresh window.
+    m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(6)]),
+        SimInstant(2200),
+    );
+    // A single fetch inside the new window is one voter, not two.
+    let second = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(3),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2300),
+    );
+    assert2::assert!(armed_check_quorum(&second) == None);
+}
+
+/// A leader already removed from the voter set has no vote to elect with, and
+/// no future leader will announce itself to a node outside the voter set. It
+/// must therefore step down into observer discovery, the way
+/// `finish_local_leader_removal` does, rather than into `Resigned` — where its
+/// election timer is ignored, its fetch timer is cleared, and nothing would ever
+/// reach it again.
+#[test]
+fn a_removed_leader_resigns_into_observer_discovery() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 0,
+        last_epoch: 0,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    m.apply_voter_set(
+        crate::core::test_support::voters(&[NodeId(2), NodeId(3)]),
+        SimInstant(3000),
+    );
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    assert2::assert!(
+        actions
+            == vec![
+                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::PersistQuorumState,
+                Action::TransitionedTo("Observer"),
+                Action::ResetTimer {
+                    kind: TimerKind::Fetch,
+                    deadline: SimInstant(6000),
+                },
+            ]
+    );
+    assert2::assert!(
+        (m.role().clone(), m.quorum_state().leader_id)
+            == (
+                Role::Observer {
+                    leader_id: None,
+                    fetch_deadline: SimInstant(6000),
+                },
+                None
+            )
+    );
+}

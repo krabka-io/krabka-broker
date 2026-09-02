@@ -154,26 +154,46 @@ impl QuorumStateMachine {
     /// leader id is dropped so that `DescribeQuorum`, Metadata and the broker's
     /// controller-leader view all stop naming this node, and so that a peer's
     /// KIP-996 pre-vote (which only grants while no leader is believed in) can
-    /// still be granted here. The election timer then carries this replica into
-    /// the ordinary `start_election` path.
+    /// still be granted here.
+    ///
+    /// Where it lands depends on whether this replica is still a voter. A voter
+    /// becomes `Resigned`, and the election timer carries it into the ordinary
+    /// `start_election` path. A leader an uncommitted `VotersRecord` has already
+    /// removed has no vote to elect with, and no future leader will announce
+    /// itself to a node outside the voter set, so `Resigned` would strand it
+    /// with every timer silent. It becomes a discovering observer instead, which
+    /// is where [`QuorumStateMachine::finish_local_leader_removal`] leaves a
+    /// removal that does commit.
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(node = self.me.0, epoch = self.state.leader_epoch)
+        fields(node = self.me.0, epoch = self.state.leader_epoch, is_voter = self.is_voter())
     )]
     fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
         let epoch = self.state.leader_epoch;
         self.state.leader_id = None;
-        self.role = Role::Resigned;
-        let deadline = self.election_deadline(now);
+        let timer = if self.is_voter() {
+            self.role = Role::Resigned;
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                deadline: self.election_deadline(now),
+            }
+        } else {
+            let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+            self.role = Role::Observer {
+                leader_id: None,
+                fetch_deadline,
+            };
+            Action::ResetTimer {
+                kind: TimerKind::Fetch,
+                deadline: fetch_deadline,
+            }
+        };
         vec![
             Action::SendEndQuorumEpoch { epoch },
             Action::PersistQuorumState,
             Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Election,
-                deadline,
-            },
+            timer,
         ]
     }
 

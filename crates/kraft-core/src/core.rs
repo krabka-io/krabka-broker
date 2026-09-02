@@ -172,11 +172,18 @@ impl QuorumStateMachine {
 
     /// Whether a leader over this voter set runs a check-quorum timer at all.
     ///
-    /// A single-voter quorum has nobody to hear from, so Kafka's
-    /// `timeUntilCheckQuorumExpires` reports `Long.MAX_VALUE` for it and the
-    /// leader never resigns on this path.
+    /// The one exemption is a leader that is *itself* the whole voter set: it
+    /// has nobody to hear from, so Kafka's `timeUntilCheckQuorumExpires`
+    /// reports `Long.MAX_VALUE` and it never resigns on this path.
+    ///
+    /// A one-voter set the leader has been dropped from is the opposite case.
+    /// A KIP-853 removal applies before it commits, and the leader keeps
+    /// serving Fetch until it does, so the single remaining voter is both the
+    /// only node that can commit the record and the only one that can keep this
+    /// leader alive. Exempting that leader would let it advertise itself for as
+    /// long as that voter stayed unreachable.
     pub(super) fn runs_check_quorum(&self) -> bool {
-        self.state.voters.len() > 1
+        self.state.voters.len() > 1 || !self.is_voter()
     }
 
     /// How many *follower* voters must fetch to reset the check-quorum window.
